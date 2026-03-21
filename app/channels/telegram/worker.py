@@ -9,10 +9,6 @@ import logging
 from typing import Any, AsyncIterator
 
 from app import work_queue
-from app.agents.bridge import (
-    summarize_text,
-    telegram_conversation_ref,
-)
 from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
@@ -34,7 +30,8 @@ from app.channels.telegram.session_io import (
     save as save_session,
 )
 from app.channels.telegram.state import TelegramRuntime
-from app.identity import telegram_numeric_id
+from app.formatting import summarize_text
+from app.identity import telegram_conversation_ref, telegram_numeric_id
 from app.runtime.inbound_types import (
     InboundAction,
     InboundCallback,

@@ -13,11 +13,11 @@ from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
     build_registry_message_delivery,
-    conversation_key_for_ref,
     qualify_registry_parent_ref,
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
+from app.identity import conversation_key_for_ref
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices
@@ -158,7 +158,6 @@ async def handle_registry_delivery(
             config,
             delivery,
             dispatcher=runtime.dispatcher,
-            bot=runtime.bot,
         )
 
     payload = delivery.get("payload", {})

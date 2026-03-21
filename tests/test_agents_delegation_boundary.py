@@ -1,4 +1,4 @@
-from app.agents.bridge import telegram_conversation_ref
+from app.identity import telegram_conversation_ref
 from app.agents.delegation import (
     build_delegation_runtime,
     handle_delegation_approve,

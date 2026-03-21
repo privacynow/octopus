@@ -39,7 +39,7 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.agents.bridge import telegram_conversation_ref
+from app.identity import telegram_conversation_ref
 from app.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,

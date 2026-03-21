@@ -8,11 +8,7 @@ import httpx
 import pytest
 
 from app import work_queue
-from app.agents.bridge import (
-    admit_registry_delivery,
-    conversation_key_for_ref,
-    telegram_conversation_ref,
-)
+from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
@@ -20,6 +16,7 @@ from app.agents.state import bot_identity
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.config import derive_agent_slug
+from app.identity import conversation_key_for_ref, telegram_conversation_ref
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary

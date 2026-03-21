@@ -1,7 +1,6 @@
 import pytest
 
-from app.agents.bridge import telegram_conversation_ref
-from app.identity import telegram_actor_key, telegram_conversation_key
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_conversation_ref
 from app.ports.channel import ChannelDescriptor
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (

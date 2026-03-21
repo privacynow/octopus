@@ -9,10 +9,10 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from app.agents.bridge import telegram_conversation_ref
 from app.identity import (
     telegram_actor_key,
     telegram_conversation_key,
+    telegram_conversation_ref,
 )
 from app.runtime.inbound_types import (
     InboundAttachment,

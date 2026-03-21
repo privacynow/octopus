@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable
 
 from telegram.error import BadRequest
 
-from app.agents.bridge import telegram_conversation_ref
 from app.agents.delegation import build_delegation_runtime
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import TelegramConversationRuntime
@@ -19,6 +18,7 @@ from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.credential_validation import validate_credential
 from app.execution_context import ResolvedExecutionContext
+from app.identity import telegram_conversation_ref
 from app.runtime.dispatch import RuntimeDispatchRuntime
 from app.runtime.inbound_types import InboundAttachment
 from app.runtime.session_runtime import resolve_session_context

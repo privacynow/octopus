@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.bridge import conversation_key_for_ref, telegram_conversation_ref
+from app.identity import conversation_key_for_ref, telegram_conversation_ref
 from app.agents.state import save_registry_connection_state
 from app.agents.types import RegistryConnectionState
 from app.agents.delivery import handle_registry_delivery

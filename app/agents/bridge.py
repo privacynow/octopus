@@ -7,7 +7,6 @@ from typing import Any
 
 from app import work_queue
 from app.agents.registry_capabilities import registry_authority_ref
-from app.agents.state import bot_identity
 from app.agents.types import TimelineEvent
 from app.channels.registry.refs import (
     qualify_registry_conversation_ref,
@@ -15,7 +14,7 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.identity import telegram_chat_id_from_ref, telegram_conversation_key
+from app.identity import conversation_key_for_ref
 from app.runtime.inbound_types import (
     InboundAction,
     InboundEnvelope,
@@ -25,21 +24,11 @@ from app.runtime.inbound_types import (
 )
 
 
-def conversation_key_for_ref(conversation_ref: str) -> str:
-    chat_id = telegram_chat_id_from_ref(conversation_ref)
-    if chat_id is not None:
-        return telegram_conversation_key(chat_id)
-    return conversation_ref
-
-
 def qualify_registry_parent_ref(registry_id: str, conversation_ref: str) -> str:
     if not registry_id:
         raise ValueError("Registry parent ref qualification requires an explicit registry_id")
     return qualify_registry_conversation_ref(registry_id, conversation_ref)
 
-
-def telegram_conversation_ref(config: BotConfig, chat_id: int) -> str:
-    return f"telegram:{bot_identity(config.data_dir)}:{chat_id}"
 
 def build_registry_message_delivery(
     *,
@@ -111,7 +100,6 @@ async def admit_registry_delivery(
     delivery: dict[str, Any],
     *,
     dispatcher: Any | None = None,
-    bot: Any | None = None,
 ) -> str:
     """Convert a registry delivery into a normal local work item or control action."""
     kind = str(delivery.get("kind", ""))
@@ -205,10 +193,3 @@ async def admit_registry_delivery(
         return "accepted"
 
     return "rejected"
-
-
-def summarize_text(text: str, limit: int = 240) -> str:
-    clean = " ".join(text.strip().split())
-    if len(clean) <= limit:
-        return clean
-    return clean[: limit - 1] + "…"

@@ -5,8 +5,8 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
-from app.agents.bridge import telegram_conversation_ref
 from app import user_messages as _msg
+from app.identity import resolve_event_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.workflows.recovery.contracts import (
     RecoveryActionOutcome,
@@ -26,15 +26,7 @@ class RecoveryUseCases(RecoveryPort):
 
     @staticmethod
     def _event_conversation_ref(event: InboundMessage, *, config) -> str:
-        if event.conversation_ref:
-            return event.conversation_ref
-        if getattr(event, "source", "telegram") != "telegram":
-            return event.conversation_ref or event.conversation_key
-        try:
-            chat_id = event.chat_id
-        except ValueError:
-            return event.conversation_ref or event.conversation_key
-        return telegram_conversation_ref(config, chat_id)
+        return resolve_event_conversation_ref(config=config, event=event)
 
     def prepare_action(
         self,

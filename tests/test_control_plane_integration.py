@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app import runtime_backend
-from app.agents.bridge import telegram_conversation_ref
+from app.identity import telegram_conversation_ref
 from app.agents.client import RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.registry_capabilities import (

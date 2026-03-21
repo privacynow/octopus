@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from app.agents.bridge import telegram_conversation_ref
+from app.identity import telegram_conversation_ref
 from app.channels.registry.refs import registry_conversation_ref
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress

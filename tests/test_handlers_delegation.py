@@ -1,4 +1,4 @@
-from app.agents.bridge import telegram_conversation_ref
+from app.identity import telegram_conversation_ref
 from app.identity import telegram_conversation_key
 from app.ports.agent_directory import AuthorityResolution
 from app.ports.task_routing import TaskSubmissionResult

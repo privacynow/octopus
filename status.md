@@ -11,6 +11,7 @@
 
 - Phases 1-13 are implemented and closed.
 - Phase 14 is active.
+- Phase 14B landed green: generic ref/text helpers now live on the existing identity/formatting seams, and recovery/inbound ref resolution share one data-driven helper instead of carrying Telegram-specific fallback logic in multiple places.
 - Phase 14A landed green: bridge admission no longer fabricates bot presence for registry `channel_input` refs, while the legitimate registry conversation bind/timeline path remains intact.
 - Phase 13G landed green: the status document now matches the real control-plane/remediation track, uses a present-tense current-state summary, and was verified against a final full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
@@ -23,7 +24,7 @@
 - Registry UI shell routes visible degraded/timed-out status text through human-readable labels instead of exposing raw internal codes.
 - Dead routed-result warning surface has been removed from worker/finalization code.
 - Protected routed-task status coverage now spans the full shared status set across SQLite and Postgres, and rejected protected-state updates cannot append timeline rows.
-- Latest verified full-suite run: `1963 passed, 23 skipped`.
+- Latest verified full-suite run: `1967 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -48,6 +49,23 @@
   - `14E` status/doc closeout
 
 ## Phase 14 Slice Log
+
+- Complete: Phase 14B remediation — extract generic helpers from bridge and make recovery ref resolution data-driven.
+  Scope:
+  - moved `telegram_conversation_ref()` and `conversation_key_for_ref()` into `app/identity.py`
+  - moved `summarize_text()` into `app/formatting.py`
+  - added `resolve_event_conversation_ref(...)` on the identity seam and reused it from both `app/channels/telegram/inbound_context.py` and `app/workflows/recovery/replay.py`
+  - removed the stale `bot` parameter from `admit_registry_delivery()` and updated delivery/runtime callers accordingly
+  - updated Telegram, workflow, registry-ingress, and test imports so non-registry code no longer depends on generic helper exports from `app.agents.bridge`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_worker_workflows.py -k 'event_conversation_ref or recovery_prepare_action or worker_recovery_for_routed_task_skips_bind_and_notice or worker_recovery_for_conversation_still_binds_and_sends_notice or admit_worker_message'`
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_handlers.py tests/test_control_plane_integration.py tests/test_runtime_dispatch_boundary.py tests/test_channel_egress_factory.py tests/test_handlers_delegation.py tests/test_request_flow.py tests/test_simulator_e2e.py -k 'telegram_conversation_ref or conversation_key_for_ref or registry_channel_action_recovery_replay_executes_request or registry_channel_action_recovery_discard_discards_pending_recovery or handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race or execution_runtime_uses_injected_timeline_and_delegation_callbacks or workflow_context_builder_resolves_registry_conversation_metadata or channel_builds_telegram or channel_builds_registry or dispatch_runtime_uses_injected_collaborators'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - bridge now owns only registry-delivery admission helpers; generic ref/text helpers moved to the shared seams that already owned those concerns
+  - shared recovery no longer branches on raw `source == "telegram"` to reconstruct refs
+  - inbound and recovery ref resolution now share the same explicit-priority chain: `conversation_ref` → `chat_id` → numeric `conversation_key` → raw `conversation_key`
+  - full suite status after Phase 14B: `1967 passed, 23 skipped`
 
 - Complete: Phase 14A remediation — remove the stale fake-bot shim from bridge admission.
   Scope:

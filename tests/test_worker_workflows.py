@@ -3,11 +3,17 @@ from types import SimpleNamespace
 import pytest
 
 from app import work_queue
-from app.agents.bridge import telegram_conversation_ref
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.runtime.inbound_types import InboundMessage, InboundUser
+from app.channels.telegram.inbound_context import event_conversation_ref
+from app.identity import (
+    resolve_event_conversation_ref,
+    telegram_actor_key,
+    telegram_conversation_key,
+    telegram_conversation_ref,
+    telegram_event_id,
+)
+from app.runtime.inbound_types import InboundMessage, InboundUser, serialize_inbound
 from app.runtime.work_admission import admit_worker_message
 from app.workflows.recovery.replay import get_recovery_use_cases
 import app.channels.telegram.worker as telegram_worker
@@ -17,6 +23,31 @@ from tests.support.handler_support import (
     current_runtime,
     fresh_env,
 )
+
+
+def _create_pending_recovery(
+    data_dir,
+    *,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
+    payload: str,
+) -> str:
+    _, item_id = work_queue.record_and_enqueue(
+        data_dir,
+        event_id,
+        conversation_key,
+        actor_key,
+        "message",
+        payload=payload,
+    )
+    conn = work_queue.debug_transport_connection(data_dir)
+    conn.execute(
+        "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
+        (item_id,),
+    )
+    conn.commit()
+    return item_id
 
 
 def test_admit_worker_message_fails_unauthorized_telegram_item() -> None:
@@ -112,6 +143,136 @@ def test_admit_worker_message_does_not_auto_allow_unknown_surface() -> None:
         assert result.status == "not_allowed"
         assert row["state"] == "failed"
         assert row["error"] == "not_allowed"
+
+
+def test_event_conversation_ref_uses_chat_id_when_no_ref_or_key_is_present() -> None:
+    with fresh_env() as (_data_dir, cfg, _prov):
+        event = SimpleNamespace(conversation_ref="", conversation_key="", chat_id=12345)
+
+        resolved = event_conversation_ref(config=cfg, event=event)
+
+        assert resolved == telegram_conversation_ref(cfg, 12345)
+        assert resolve_event_conversation_ref(config=cfg, event=event) == resolved
+
+
+def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch) -> None:
+    with fresh_env() as (data_dir, cfg, _prov):
+        captured_refs: list[str] = []
+
+        monkeypatch.setattr(
+            "app.workflows.recovery.replay.trust_tier_for_ref",
+            lambda conversation_ref, user, *, config, dispatcher: (
+                captured_refs.append(conversation_ref) or "trusted"
+            ),
+        )
+
+        event = InboundMessage(
+            user=InboundUser(id=telegram_actor_key(42), username="alice"),
+            conversation_key=telegram_conversation_key(12345),
+            text="recover canonical ref",
+            conversation_ref="telegram:explicit-bot:12345",
+        )
+        _create_pending_recovery(
+            data_dir,
+            event_id=telegram_event_id(9201),
+            conversation_key=telegram_conversation_key(12345),
+            actor_key=telegram_actor_key(42),
+            payload=serialize_inbound(event),
+        )
+
+        outcome = get_recovery_use_cases().prepare_action(
+            data_dir=data_dir,
+            conversation_key=telegram_conversation_key(12345),
+            event_id=telegram_event_id(9201),
+            action="recovery_replay",
+            worker_id="worker-1",
+            config=cfg,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
+
+        assert outcome.status == "replay_ready"
+        assert captured_refs == ["telegram:explicit-bot:12345"]
+
+
+def test_recovery_prepare_action_recovers_telegram_ref_from_numeric_conversation_key(
+    monkeypatch,
+) -> None:
+    with fresh_env() as (data_dir, cfg, _prov):
+        captured_refs: list[str] = []
+
+        monkeypatch.setattr(
+            "app.workflows.recovery.replay.trust_tier_for_ref",
+            lambda conversation_ref, user, *, config, dispatcher: (
+                captured_refs.append(conversation_ref) or "trusted"
+            ),
+        )
+
+        event = InboundMessage(
+            user=InboundUser(id=telegram_actor_key(42), username="alice"),
+            conversation_key=telegram_conversation_key(12345),
+            text="recover telegram key",
+        )
+        _create_pending_recovery(
+            data_dir,
+            event_id=telegram_event_id(9202),
+            conversation_key=telegram_conversation_key(12345),
+            actor_key=telegram_actor_key(42),
+            payload=serialize_inbound(event),
+        )
+
+        outcome = get_recovery_use_cases().prepare_action(
+            data_dir=data_dir,
+            conversation_key=telegram_conversation_key(12345),
+            event_id=telegram_event_id(9202),
+            action="recovery_replay",
+            worker_id="worker-1",
+            config=cfg,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
+
+        assert outcome.status == "replay_ready"
+        assert captured_refs == [telegram_conversation_ref(cfg, 12345)]
+
+
+def test_recovery_prepare_action_uses_raw_conversation_key_for_non_telegram_payload(
+    monkeypatch,
+) -> None:
+    with fresh_env() as (data_dir, cfg, _prov):
+        captured_refs: list[str] = []
+
+        monkeypatch.setattr(
+            "app.workflows.recovery.replay.trust_tier_for_ref",
+            lambda conversation_ref, user, *, config, dispatcher: (
+                captured_refs.append(conversation_ref) or "trusted"
+            ),
+        )
+
+        event = InboundMessage(
+            user=InboundUser(id="future:actor:42", username="alice"),
+            conversation_key="future:workspace:room-1",
+            text="recover future key",
+            source="future",
+        )
+        _create_pending_recovery(
+            data_dir,
+            event_id="future-event-9203",
+            conversation_key="future:workspace:room-1",
+            actor_key="future:actor:42",
+            payload=serialize_inbound(event),
+        )
+
+        outcome = get_recovery_use_cases().prepare_action(
+            data_dir=data_dir,
+            conversation_key="future:workspace:room-1",
+            event_id="future-event-9203",
+            action="recovery_replay",
+            worker_id="worker-1",
+            config=cfg,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
+
+        assert outcome.status == "replay_ready"
+        assert captured_refs == ["future:workspace:room-1"]
 
 
 @pytest.mark.asyncio

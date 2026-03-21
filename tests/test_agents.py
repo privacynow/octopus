@@ -1,6 +1,7 @@
 """Tests for agent-mode config/runtime foundation."""
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import httpx
 import pytest
 
 from app import work_queue
+import app.agents.state as agent_state_module
 import app.agents.runtime as agent_runtime_module
 from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
@@ -121,6 +123,36 @@ def test_save_registry_connection_state_uses_private_file_permissions(tmp_path: 
     assert mode == 0o600
 
 
+def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    original = {
+        "bot_id": "stable-bot-id",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    identity_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_replace(src: Path, dst: Path) -> None:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="rename failed"):
+        agent_state_module._save_bot_identity_state(
+            identity_path,
+            agent_state_module.BotIdentityState(
+                bot_id="new-bot-id",
+                created_at="2026-02-01T00:00:00Z",
+            ),
+        )
+
+    assert json.loads(identity_path.read_text(encoding="utf-8")) == original
+    assert not list(identity_path.parent.glob("*.tmp"))
+
+
 def test_bot_identity_creates_and_reuses_stable_runtime_id(tmp_path: Path):
     first = bot_identity(tmp_path)
     second = bot_identity(tmp_path)
@@ -165,6 +197,40 @@ def test_registry_connection_state_round_trips_per_connection_file(tmp_path: Pat
     assert restored == state
     assert state_path.exists()
     assert state_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_registry_connection_state_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state_path = tmp_path / "agent" / "registries" / "prod.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    original = {
+        "registry_id": "prod",
+        "registry_scope": "full",
+        "agent_id": "agent-1",
+        "agent_token": "token-1",
+    }
+    state_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_replace(src: Path, dst: Path) -> None:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="rename failed"):
+        save_registry_connection_state(
+            tmp_path,
+            RegistryConnectionState(
+                registry_id="prod",
+                registry_scope="coordination",
+                agent_id="agent-2",
+                agent_token="token-2",
+            ),
+        )
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+    assert not list(state_path.parent.glob("*.tmp"))
 
 
 def test_registry_connection_state_uses_defaults_when_missing_or_corrupt(tmp_path: Path, caplog):

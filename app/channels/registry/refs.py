@@ -35,8 +35,6 @@ def registry_ref_external_id(conversation_ref: str) -> str:
 def qualify_registry_conversation_ref(registry_id: str, conversation_ref: str) -> str:
     if not conversation_ref:
         return ""
-    if conversation_ref.startswith("telegram:") or conversation_ref.startswith("registry:"):
-        return conversation_ref
-    if parse_registry_ref(conversation_ref) is not None:
+    if ":" in conversation_ref:
         return conversation_ref
     return registry_conversation_ref(registry_id, conversation_ref)

@@ -14,7 +14,7 @@ from app.ports.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
-from tests.support.handler_support import FakeProvider
+from tests.support.handler_support import FakeMessage, FakeProvider
 
 
 def _services(*, publish=None, task_routing=None) -> BotServices:
@@ -152,6 +152,48 @@ async def test_routed_task_progress_callback_skips_empty_markup() -> None:
     )
 
     routing.update_routed_task_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_progress_throttles_routed_task_callback_and_force_bypasses() -> None:
+    routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    runtime = build_telegram_runtime(
+        make_config(
+            data_dir=Path("/tmp/telegram-progress-routed-task-throttle"),
+            stream_update_interval_seconds=60.0,
+        ),
+        FakeProvider("codex"),
+        services=_services(task_routing=routing),
+    )
+    message = FakeMessage(text="status")
+    progress = telegram_progress.TelegramProgress(
+        message,
+        runtime.config,
+        timeline_callback=lambda html_text, force=False: telegram_progress.routed_task_progress_callback(
+            runtime,
+            "task-1",
+            "registry:ops",
+            html_text,
+            force=force,
+        ),
+    )
+
+    await progress.update("<i>Started</i>")
+    for idx in range(2, 11):
+        await progress.update(f"<i>Step {idx}</i>")
+    await progress.update(_msg.progress_completed(), force=True)
+
+    assert routing.update_routed_task_status.await_count == 2
+    first_kwargs = routing.update_routed_task_status.await_args_list[0].kwargs
+    second_kwargs = routing.update_routed_task_status.await_args_list[1].kwargs
+
+    first_update = first_kwargs["update"]
+    second_update = second_kwargs["update"]
+    assert first_update.status == "running"
+    assert first_update.summary == "Started"
+    assert second_update.status == "running"
+    assert second_update.summary == _msg.progress_completed()
+    assert second_kwargs["authority_ref"] == "registry:ops"
 
 
 @pytest.mark.parametrize(

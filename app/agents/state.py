@@ -84,22 +84,27 @@ def registry_connection_state_path(data_dir: Path, registry_id: str) -> Path:
     return registry_state_dir(data_dir) / f"{registry_id}.json"
 
 
-def load_registry_connection_state(data_dir: Path, registry_id: str) -> RegistryConnectionState:
+def load_registry_connection_state(
+    data_dir: Path,
+    registry_id: str,
+    *,
+    default_scope: str = "full",
+) -> RegistryConnectionState:
     path = registry_connection_state_path(data_dir, registry_id)
     if not path.exists():
-        return RegistryConnectionState(registry_id=registry_id)
+        return RegistryConnectionState(registry_id=registry_id, registry_scope=default_scope)
     try:
         raw = json.loads(path.read_text())
     except Exception:
         log.warning("Registry connection state load failed, using defaults", exc_info=True)
-        return RegistryConnectionState(registry_id=registry_id)
+        return RegistryConnectionState(registry_id=registry_id, registry_scope=default_scope)
     last_error, last_error_detail = normalize_registry_error_state(
         str(raw.get("last_error", "")),
         str(raw.get("last_error_detail", "")),
     )
     return RegistryConnectionState(
         registry_id=str(raw.get("registry_id", registry_id)) or registry_id,
-        registry_scope=str(raw.get("registry_scope", "full")) or "full",
+        registry_scope=str(raw.get("registry_scope", default_scope)) or default_scope,
         agent_id=raw.get("agent_id", ""),
         agent_token=raw.get("agent_token", ""),
         poll_cursor=str(raw.get("poll_cursor", "0")),
@@ -123,7 +128,11 @@ def load_runtime_registry_connection_state(
             registry_id=registry_id,
             registry_scope=registry_scope,
         )
-    state = load_registry_connection_state(data_dir, registry_id)
+    state = load_registry_connection_state(
+        data_dir,
+        registry_id,
+        default_scope=registry_scope,
+    )
     if not state.registry_scope:
         state.registry_scope = registry_scope
     return state

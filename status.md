@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 21 is in progress: the final owner-seam closure pass is executing sequentially with focused regression coverage plus a green full-suite rerun after each slice.
+- Phase 21B landed green: malformed/missing registry scope now fails closed at the helper/store seam, and runtime registry-state loading falls back to the configured scope instead of widening a missing persisted value to `full`.
 - Phase 21A landed green: artifact extraction now uses real path containment instead of a vulnerable string-prefix check, and completion-webhook validation/runtime both fail closed when target host resolution fails.
 - Phase 20 is closed: all remaining security/runtime boundary findings from the repo-wide audit landed sequentially with focused regression coverage plus a green full-suite rerun after each slice.
 - Phase 20Z landed green: the final closeout audit found no remaining open items from the Phase 20 findings list, and `retry_allow_pending()` now returns explicitly on its approved continuation branch instead of relying on fallthrough.
@@ -167,6 +168,22 @@
   - `20Z` closeout audit and final pending-branch consistency cleanup
 
 ## Phase 21 Slice Log
+
+- Complete: Phase 21B remediation — fail closed on registry scope helpers and runtime state fallback.
+  Scope:
+  - changed `app/registry_service/store_base.py` so `registry_scope_for_agent_row(...)` validates the stored scope instead of widening missing/blank values to `full`, and made `delivery_kinds_for_registry_scope(...)` require a valid explicit scope
+  - updated both registry store backends to validate the authenticated token row scope before deriving visible delivery kinds in `poll(...)`
+  - changed `app/agents/state.py` so `load_runtime_registry_connection_state(...)` threads the configured runtime scope into persisted-state loading when an existing file omits `registry_scope`, while keeping explicit persisted scopes authoritative
+  - added direct helper-owner coverage in `tests/test_registry_store_base.py` plus runtime-state regressions in `tests/test_agents.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_store_base.py tests/contracts/test_registry_store_contract.py -k 'scope'`
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'runtime_registry_connection_state'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - malformed authenticated registry scope now fails closed instead of silently widening permissions or delivery visibility
+  - valid `channel` and `coordination` poll scope behavior remains green across the existing SQLite/Postgres contract tests
+  - runtime registry state now falls back to the configured connection scope when a persisted file omits `registry_scope`, while explicit saved scopes still win unchanged
+  - full suite status after Phase 21B: `2139 passed, 23 skipped`
 
 - Complete: Phase 21A remediation — close the remaining artifact/webhook owner-boundary gaps.
   Scope:

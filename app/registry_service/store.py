@@ -38,6 +38,7 @@ from app.registry_service.store_base import (
     effective_connectivity_state,
     ensure_json,
     hash_agent_token,
+    registry_scope_for_agent_row,
     require_registry_scope,
     runtime_health_detail,
     runtime_health_generated_at,
@@ -1089,7 +1090,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            allowed_kinds = delivery_kinds_for_registry_scope(row["registry_scope"])
+            allowed_kinds = delivery_kinds_for_registry_scope(
+                registry_scope_for_agent_row(row)
+            )
             if allowed_kinds is None:
                 deliveries = conn.execute(
                     """

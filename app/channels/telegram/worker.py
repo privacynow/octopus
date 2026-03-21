@@ -481,8 +481,6 @@ async def worker_dispatch(
                 ),
             ),
         )
-        if finalization.routed_result_warning_text and not is_routed_task:
-            await channel_egress.send_text(finalization.routed_result_warning_text)
         return
 
     if isinstance(event, InboundAction):

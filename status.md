@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19B4 landed green: routed results that arrive from the wrong authority still stay accepted/no-op, but operators now get an explicit warning instead of a silent delegation stall.
+- Phase 19C1 landed green: control-plane completed/dead-letter command retention and usage-log retention now run inline on the existing processor/worker cadences instead of depending on process restarts.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -64,8 +64,12 @@
 - Parent-session delegation result application is now storage-owned and atomic on both backends, so concurrent routed results for the same conversation no longer race through a load-modify-save gap in delivery handling.
 - SQLite migration owners now execute migration scripts statement-by-statement inside explicit transactions, so failed session/transport/registry upgrades preserve the previous `schema_version` and leave no partial DDL behind.
 - Mismatched routed-result authority is now visible at the delivery seam through one warning log, while matched results and normal resume handling stay unchanged.
+- Control-plane/resource retention is now loop-owned instead of startup-only:
+  - processor reclaim cycles purge completed/dead-letter bus commands older than 72 hours
+  - worker sweep cycles purge usage-log rows older than 7 days, gated to at most once per hour
+  - both retention seams now have direct SQLite/Postgres contract coverage plus loop-level regression checks
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2063 passed, 23 skipped`.
+- Latest verified full-suite run: `2068 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -111,6 +115,20 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19C1 remediation — move control-plane command and usage-log retention onto the existing processor/worker loops instead of relying on startup-only cleanup.
+  Scope:
+  - added `purge_old_commands(...)` to both control-plane stores plus the async bus facade, then wired `ProcessorRunner` reclaim cycles to purge completed/dead-letter commands older than 72 hours
+  - added `purge_old_usage(...)` to both transport stores plus the work-queue facade, then wired worker sweep cycles to purge usage rows older than 7 days no more than once per hour
+  - added parity coverage in `tests/contracts/test_control_plane_store_contract.py` and `tests/contracts/test_transport_store_contract.py`, plus loop-level regression checks in `tests/test_control_plane_processor_runner.py` and `tests/test_shared_runtime.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_control_plane_store_contract.py tests/contracts/test_transport_store_contract.py tests/test_control_plane_processor_runner.py tests/test_shared_runtime.py -k 'purge or usage_purge or processor_runner_renews_leases'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - long-lived processor/worker processes no longer need a restart before aged control-plane commands and usage rows are cleaned up
+  - pending/claimed control-plane commands stay intact while only completed/dead-letter rows are purged
+  - usage retention remains bounded without running on every sweep iteration
+  - full suite status after Phase 19C1: `2068 passed, 23 skipped`
 
 - Complete: Phase 19B4 remediation — add operator-visible logging for routed results that no longer match any pending delegation task.
   Scope:

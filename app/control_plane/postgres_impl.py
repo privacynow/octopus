@@ -415,6 +415,21 @@ def reclaim_expired(conn) -> int:
     return reclaimed
 
 
+def purge_old_commands(conn, older_than_hours: int = 72) -> int:
+    cutoff = _utcnow() - timedelta(hours=older_than_hours)
+    with _write_tx(conn), _cur(conn) as cur:
+        cur.execute(
+            f"""
+            DELETE FROM {_SCHEMA}.control_plane_commands
+            WHERE state IN ('completed', 'dead_letter')
+              AND completed_at IS NOT NULL
+              AND completed_at < %s
+            """,
+            (cutoff,),
+        )
+        return cur.rowcount
+
+
 def reconcile_orphans(conn, *, allowed_pairs: set[tuple[str, str]]) -> int:
     now = _utcnow()
     dead_lettered = 0
@@ -573,6 +588,11 @@ class PostgresControlPlaneStore:
         del data_dir
         with self._conn() as conn:
             return reclaim_expired(conn)
+
+    def purge_old_commands(self, data_dir: Path, older_than_hours: int = 72) -> int:
+        del data_dir
+        with self._conn() as conn:
+            return purge_old_commands(conn, older_than_hours=older_than_hours)
 
     def reconcile_orphans(
         self,

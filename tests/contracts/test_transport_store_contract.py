@@ -41,6 +41,7 @@ from app.work_queue import (
     record_update,
     record_usage,
     recover_stale_claims,
+    purge_old_usage,
     set_user_access,
     supersede_pending_recovery,
     upsert_worker_heartbeat,
@@ -624,3 +625,54 @@ def test_record_usage_zero_tokens_persists(backend_and_data_dir):
     assert row["prompt_tokens"] == 0
     assert row["completion_tokens"] == 0
     assert row["cost_usd"] == pytest.approx(0.0)
+
+
+def test_purge_old_usage_removes_only_aged_rows(backend_and_data_dir):
+    backend, data_dir = backend_and_data_dir
+    from app import runtime_backend
+
+    record_usage(
+        data_dir,
+        conversation_key=_conv(10),
+        work_item_id="work-old",
+        provider="claude",
+        prompt_tokens=1,
+        completion_tokens=1,
+        cost_usd=0.0,
+    )
+    record_usage(
+        data_dir,
+        conversation_key=_conv(11),
+        work_item_id="work-new",
+        provider="codex",
+        prompt_tokens=2,
+        completion_tokens=2,
+        cost_usd=0.0,
+    )
+
+    if backend == "sqlite":
+        conn = runtime_backend.transport_store().debug_connection(data_dir)
+        conn.execute(
+            "UPDATE usage_log SET recorded_at = ? WHERE work_item_id = ?",
+            (time.time() - (8 * 24 * 3600), "work-old"),
+        )
+        conn.commit()
+    else:
+        store = runtime_backend.transport_store()
+        with store._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE bot_runtime.usage_log
+                    SET recorded_at = NOW() AT TIME ZONE 'utc' - INTERVAL '8 days'
+                    WHERE work_item_id = %s
+                    """,
+                    ("work-old",),
+                )
+            conn.commit()
+
+    purged = purge_old_usage(data_dir, older_than_hours=7 * 24)
+
+    assert purged == 1
+    rows = get_usage_since(data_dir, since_epoch=0.0)
+    assert [row["work_item_id"] for row in rows] == ["work-new"]

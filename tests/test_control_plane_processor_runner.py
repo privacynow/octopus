@@ -45,8 +45,14 @@ class _FakeLeaseBus:
         self.completed: list[tuple[str, str]] = []
         self.failed: list[tuple[str, str, str]] = []
         self.dead_letters: list[tuple[str, str, str]] = []
+        self.purge_calls = 0
 
     async def reclaim_expired(self) -> int:
+        return 0
+
+    async def purge_old_commands(self, older_than_hours: int = 72) -> int:
+        del older_than_hours
+        self.purge_calls += 1
         return 0
 
     async def poll_commands(self, *, allowed_pairs: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
@@ -355,6 +361,7 @@ async def test_processor_runner_renews_leases_for_inflight_commands() -> None:
     assert bus.renewals
     assert bus.renewals[0] == ("cmd-lease", "claim-1", 30.0)
     assert bus.completed == [("cmd-lease", "claim-1")]
+    assert bus.purge_calls >= 1
 
 
 @pytest.mark.asyncio

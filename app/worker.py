@@ -37,6 +37,8 @@ POLL_INTERVAL = 1.0
 SHARED_POLL_INTERVAL = 0.5
 SWEEP_INTERVAL = 60.0
 HEARTBEAT_INTERVAL = 30.0
+USAGE_PURGE_INTERVAL_SECONDS = 3600.0
+USAGE_PURGE_OLDER_THAN_HOURS = 168
 
 # Maximum items to process per poll cycle before yielding.
 BATCH_SIZE = 10
@@ -94,6 +96,7 @@ async def worker_loop(
     last_error = ""
     last_heartbeat = 0.0
     graceful_shutdown = False
+    last_usage_purge = float("-inf")
 
     def _publish_heartbeat(*, force: bool = False) -> None:
         nonlocal last_heartbeat
@@ -146,6 +149,15 @@ async def worker_loop(
                             _publish_heartbeat(force=True)
                     except Exception:
                         log.exception("Stale-claim sweep error")
+                    if now_mono - last_usage_purge >= USAGE_PURGE_INTERVAL_SECONDS:
+                        try:
+                            work_queue.purge_old_usage(
+                                data_dir,
+                                older_than_hours=USAGE_PURGE_OLDER_THAN_HOURS,
+                            )
+                            last_usage_purge = now_mono
+                        except Exception:
+                            log.exception("Usage-log purge error")
                     last_sweep = now_mono
 
                 for _ in range(BATCH_SIZE):

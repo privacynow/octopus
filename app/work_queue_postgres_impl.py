@@ -1188,6 +1188,20 @@ def purge_old(conn, older_than_hours: int = 24) -> int:
         return deleted_items
 
 
+def purge_old_usage(conn, older_than_hours: int = 168) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                DELETE FROM {_SCHEMA}.usage_log
+                WHERE recorded_at < %s
+                """,
+                (cutoff,),
+            )
+            return cur.rowcount
+
+
 def get_user_access_override(conn, actor_key: str) -> str | None:
     """Return 'allowed', 'blocked', or None when no override exists."""
     with _cur(conn) as cur:

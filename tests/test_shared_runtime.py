@@ -449,3 +449,47 @@ async def test_worker_loop_heartbeat_tracks_current_item():
             await asyncio.wait_for(task, timeout=0.5)
 
         assert work_queue.list_worker_heartbeats(data_dir) == []
+
+
+async def test_worker_loop_usage_purge_runs_at_most_hourly():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        stop = asyncio.Event()
+        purge_calls: list[float] = []
+        monotonic_values = iter([0.0, 10.0, 20.0, 3701.0])
+        claim_calls = 0
+
+        def _monotonic() -> float:
+            try:
+                return next(monotonic_values)
+            except StopIteration:
+                return 3701.0
+
+        def _claim_none(*_args, **_kwargs):
+            nonlocal claim_calls
+            claim_calls += 1
+            if claim_calls >= 4:
+                stop.set()
+            return None
+
+        async def dispatch(_kind, _event, _item):
+            raise AssertionError("dispatch should not run in usage-purge test")
+
+        with patch("app.worker.time.monotonic", side_effect=_monotonic), \
+             patch("app.worker.work_queue.claim_next_any", side_effect=_claim_none), \
+             patch("app.worker.work_queue.recover_stale_claims", return_value=0), \
+             patch(
+                 "app.worker.work_queue.purge_old_usage",
+                 side_effect=lambda *_args, **_kwargs: purge_calls.append(time.time()) or 0,
+             ):
+            await worker_loop(
+                data_dir,
+                "usage-purge-worker",
+                dispatch,
+                poll_interval=0.0,
+                sweep_interval=0.0,
+                stop_event=stop,
+            )
+
+        assert len(purge_calls) == 2

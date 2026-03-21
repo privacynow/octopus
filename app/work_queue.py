@@ -46,6 +46,7 @@ __all__ = [
     "list_worker_heartbeats",
     "mark_pending_recovery",
     "purge_old",
+    "purge_old_usage",
     "request_cancel",
     "reclaim_for_replay",
     "record_and_admit_message",
@@ -309,3 +310,7 @@ def recover_stale_claims(
 
 def purge_old(data_dir: Path, older_than_hours: int = 24) -> int:
     return _store().purge_old(data_dir, older_than_hours)
+
+
+def purge_old_usage(data_dir: Path, older_than_hours: int = 168) -> int:
+    return _store().purge_old_usage(data_dir, older_than_hours)

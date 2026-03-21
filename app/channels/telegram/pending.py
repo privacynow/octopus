@@ -98,6 +98,7 @@ async def approve_pending(
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
         request_user_id=outcome.execution_plan.request_user_id,
+        # This exact plan was explicitly approved by the user.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,
@@ -148,6 +149,7 @@ async def retry_allow_pending(
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
         request_user_id=outcome.execution_plan.request_user_id,
+        # This retry is the explicit user-approved continuation path.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,

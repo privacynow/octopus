@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19A1 landed green: Codex security-sensitive input now flows through one shared validator, invalid `CODEX_SANDBOX` values fail fast at config load, stale repo tests now match the live Codex CLI contract, and the README command-section contract was restored after the earlier docs refresh changed the tested heading.
+- Phase 19A2 landed green: `skip_permissions=True` remains owned by the explicit approve/retry grant sites in `app/channels/telegram/pending.py`, the normal handler path still keeps it false, and there are no stray grant sites outside the audited approval/retry seam.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -57,8 +57,9 @@
   - sandbox values are validated against the current CLI contract (`read-only`, `workspace-write`, `danger-full-access`)
   - skill-provided Codex `config_overrides` are restricted to the audited allowlisted key set instead of being appended raw to argv
   - invalid override entries are rejected with warnings instead of silently weakening execution
+  - `skip_permissions=True` is now explicitly documented and regression-guarded as an approval/retry-only grant, not a provider-layer policy
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2047 passed, 23 skipped`.
+- Latest verified full-suite run: `2048 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -104,6 +105,20 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19A2 remediation — audit the `skip_permissions` authorization chain at the grant sites instead of re-implementing policy in provider consumers.
+  Scope:
+  - audited the repo-wide `skip_permissions=True` grant sites and confirmed the only live setters are the explicit approve/retry continuations in `app/channels/telegram/pending.py`
+  - added ownership comments at those two grant calls so future edits do not move the policy into provider consumers by accident
+  - added a narrow secondary guard in `tests/test_handlers_approval.py` proving no other application code path currently grants `skip_permissions=True`
+  - kept the existing behavior-level proof in place: approved plans and allowed retries set the flag, while the normal handler happy path still keeps it false
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_handlers_approval.py tests/test_handlers.py -k 'skip_permissions or approval_flow or denial_retry_flow or happy_path'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - `skip_permissions=True` is still owned by the explicit user-action grant sites rather than being inferred or re-authorized inside provider code
+  - normal request execution remains `skip_permissions=False`
+  - full suite status after Phase 19A2: `2048 passed, 23 skipped`
 
 - Complete: Phase 19A1 remediation — codify the current Codex sandbox/override contract in one shared validator before execution reaches the provider argv builder.
   Scope:

@@ -854,6 +854,18 @@ def test_registry_ui_shell_humanizes_visible_status_labels():
     assert 'timedout: "badge-failed"' in html_text
 
 
+def test_registry_ui_shell_conversation_empty_state_is_channel_neutral():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert "Send a message to your bot to start." in html_text
+    assert "Send a message to your bot in Telegram to start." not in html_text
+
+
 def test_registry_ui_shell_bot_detail_version_falls_back_to_unknown():
     html_text = ui.render_shell_html(
         title_text="Agent Registry",
@@ -863,6 +875,16 @@ def test_registry_ui_shell_bot_detail_version_falls_back_to_unknown():
     )
 
     assert '<strong>Version:</strong> ${escapeHtml(bot.version || "unknown")}' in html_text
+
+
+def test_registry_openapi_title_is_channel_neutral(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json()["info"]["title"] == "Agent Registry"
 
 
 def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():

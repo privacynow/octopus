@@ -4066,3 +4066,126 @@ Strictly sequential: 17A → 17B.
   explicitly audited as constructor conveniences or removed in this
   phase
 - full suite passes after every slice and at final closeout
+
+## Phase 18: Registry Boundary Validation and Audit Closeout
+
+Why this phase exists: the repo-wide post-Phase-17 audit found one more
+class of residual debt that had repeatedly survived earlier slices:
+raw registry HTTP/store boundaries still trusted happy-path callers too
+much, a few UI/recovery seams still accepted weaker shapes than the
+real product/runtime contract, and the remaining shared inbound
+constructor defaults could still hide missing provenance in future
+callers. This phase closes those owning seams directly instead of
+documenting them as acceptable drift.
+
+### Phase 18 Architecture Decisions
+
+- No new infrastructure, ports, or abstraction layers
+- Extend only existing owning seams:
+  - `app/registry_service/store_base.py`
+  - `app/registry_service/store.py`
+  - `app/registry_service/store_postgres.py`
+  - `app/channels/registry/http.py`
+  - `app/channels/registry/ui.py`
+  - `app/runtime/inbound_types.py`
+  - `app/workflows/recovery/replay.py`
+  - `app/channels/telegram/worker.py`
+- Behavior/contract tests remain primary proof; source-shape checks stay
+  secondary only
+- Keep the accepted registry-UI limitation honest: the repo still proves
+  shell/source wiring, not browser-rendered DOM behavior
+
+### Slice 18A: Harden raw registry HTTP/store boundaries
+
+**Statement**: raw agent-facing registry endpoints must validate payloads
+against the owning store contract instead of relying on control-plane
+happy-path callers.
+
+**Owning seams**:
+- `app/registry_service/store_base.py`
+- `app/channels/registry/http.py`
+
+**Fix**:
+- add shared validators for bind/register/heartbeat/timeline/search/
+  routed-task/ack/status/result/message/action payloads
+- require explicit valid `registry_scope` at enroll time
+- make `register()` preserve omitted capacity/card-list fields instead
+  of resetting them
+- require explicit non-empty routed-task `status` on both update
+  methods
+- reject invalid `ack` classifications and blank follow-up
+  message/action payloads
+- map malformed raw HTTP payloads to `422`
+- fix the discovery free-text path to use the current disabled-capability
+  shape
+
+**Commit**:
+- `phase-18 / 18a: harden registry boundary validation`
+
+### Slice 18B: Close UI/recovery/schema audit findings
+
+**Statement**: registry UI shell rendering and recovery/replay error
+paths must match the actual data they receive, and fresh-install
+Postgres must still match the current store contract.
+
+**Owning seams**:
+- `app/channels/registry/ui.py`
+- `app/workflows/recovery/replay.py`
+- `app/channels/telegram/worker.py`
+- `app/db/migrations/postgres/*`
+
+**Fix**:
+- map real timeline/event kinds to badge classes
+- normalize diagnostic CSS classes to the supported set
+- route search snippet rendering through one helper
+- fail replay prep explicitly on missing conversation identity
+- raise on impossible recovery dispatch outcomes instead of returning
+  silently
+- add a fresh-install Postgres bootstrap parity test
+- clarify test fixture intent where a harness intentionally exercises a
+  seam rather than a production-shaped role
+
+**Commit**:
+- `phase-18 / 18b: close registry audit and parity sweep`
+
+### Slice 18C: Remove the remaining shared inbound constructor default
+
+**Statement**: shared inbound event construction must require explicit
+provenance, not silently default to Telegram.
+
+**Owning seam**:
+- `app/runtime/inbound_types.py`
+
+**Fix**:
+- require explicit non-empty `source` in `InboundMessage`,
+  `InboundCommand`, `InboundCallback`, and `InboundAction`
+- update Telegram-owned builders and constructor-heavy tests to pass
+  `source="telegram"` explicitly
+- add direct constructor contract tests proving omitted source is
+  rejected
+- neutralize the remaining shared-workflow/shared-module docstrings that
+  still carried Telegram-first wording
+
+**Commit**:
+- `phase-18 / 18c: close boundary validation cleanup`
+
+### Phase 18 Sequencing
+
+Strictly sequential: 18A → 18B → 18C.
+
+### Phase 18 Exit Gates
+
+- raw registry HTTP endpoints fail malformed payloads with `422`
+  instead of mutating store state through hidden defaults
+- SQLite and Postgres registry stores enforce the same agent-facing
+  payload contract for enroll/register/heartbeat/timeline/search/ack/
+  routed-task/message/action seams
+- registry UI shell handles the current timeline-kind, diagnostic-level,
+  and search-snippet shapes consistently
+- recovery/replay fails explicitly on missing identity or unexpected
+  worker-recovery outcomes
+- fresh-install Postgres bootstrap matches the current store contract
+- shared inbound event constructors require explicit `source`
+- Telegram-owned builders/tests pass `source="telegram"` explicitly
+- accepted static-shell UI proof remains documented honestly
+- full suite passes after every slice and at final closeout

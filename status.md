@@ -10,7 +10,8 @@
 ## Current State
 
 - Phases 1-19 are implemented and closed.
-- Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20 is closed: all remaining security/runtime boundary findings from the repo-wide audit landed sequentially with focused regression coverage plus a green full-suite rerun after each slice.
+- Phase 20Z landed green: the final closeout audit found no remaining open items from the Phase 20 findings list, and `retry_allow_pending()` now returns explicitly on its approved continuation branch instead of relying on fallthrough.
 - Phase 20C4 landed green: durable inbound payloads now preserve transport provenance through the runtime admission seam, including legacy replay fallback for older rows that only carried canonical `source`.
 - Phase 20C3 landed green: the shared provider-dispatch seam now uses injected status/typing collaborators instead of assuming Telegram `reply_text`/`.chat`, and live cancellation keys normalize Telegram numeric ids without colliding with qualified non-Telegram conversation keys.
 - Phase 20C2 landed green: Telegram ingress now rejects oversized attachments before downloading them, and shared-mode unknown slash commands now produce explicit user feedback instead of being silently ignored.
@@ -161,6 +162,7 @@
   - `20C2` Telegram ingress size/unknown-command feedback
   - `20C3` shared runtime Telegram-assumption removal
   - `20C4` durable inbound transport provenance
+  - `20Z` closeout audit and final pending-branch consistency cleanup
 
 ## Phase 20 Slice Log
 
@@ -242,6 +244,19 @@
   - legacy rows that only carried `source` still deserialize with useful transport provenance for replay
   - both Telegram-owned and generic envelope-owned inbound paths now prove the persisted payload carries transport through to deserialization
   - full suite status after Phase 20C4: `2122 passed, 23 skipped`
+
+- Complete: Phase 20Z closeout — close the last cosmetic loose end from the findings list and verify that no Phase 20 issues remain open.
+  Scope:
+  - added the missing explicit `return` in `retry_allow_pending(...)` so the approved retry branch matches the other pending-action branches instead of relying on end-of-function fallthrough
+  - reran the pending/approval regression set plus the full suite after the final audit pass against the original Phase 20 findings list
+  - verified that the earlier Phase 20 security, truthfulness, credential, callback-binding, attachment-size, shared-runtime, and transport-provenance slices collectively cover every remaining finding that reopened this phase
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_pending.py tests/test_handlers_approval.py -k 'retry_allow or retry or approval'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the pending retry-allow branch now returns explicitly like the other callback branches, avoiding a future fallthrough hazard if more logic is added below it
+  - no remaining open findings from the Phase 20 audit list were left behind at closeout
+  - full suite status after Phase 20Z: `2122 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

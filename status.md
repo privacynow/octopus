@@ -10,6 +10,8 @@
 ## Current State
 
 - Phases 1-13 are implemented and closed.
+- Phase 14 is active.
+- Phase 14A landed green: bridge admission no longer fabricates bot presence for registry `channel_input` refs, while the legitimate registry conversation bind/timeline path remains intact.
 - Phase 13G landed green: the status document now matches the real control-plane/remediation track, uses a present-tense current-state summary, and was verified against a final full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Routed-task lifecycle is owned by the task-routing/store seam:
@@ -38,6 +40,29 @@
   - `13E` concern-neutral progress logging
   - `13F` timeline-upsert guard parity
   - `13G` status/doc closeout
+- Phase 14 is the remaining ownership and hygiene cleanup track:
+  - `14A` bridge fake-bot shim removal
+  - `14B` bridge helper extraction and generic recovery ref resolution
+  - `14C` internal version-label removal
+  - `14D` behavior-first guardrail hardening
+  - `14E` status/doc closeout
+
+## Phase 14 Slice Log
+
+- Complete: Phase 14A remediation — remove the stale fake-bot shim from bridge admission.
+  Scope:
+  - deleted `_egress_bot()` from `app/agents/bridge.py`
+  - stopped passing `bot=` into dispatcher egress construction for registry `channel_input` admission
+  - preserved the legitimate registry conversation `sync_binding()` and `publish_timeline()` side effects on registry conversation refs
+  - tightened `tests/test_agents.py` so the primary behavior test now proves the dispatcher sees only the real registry egress kwargs and no fabricated `bot`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'admit_registry_delivery_queued_is_accepted or admit_registry_delivery_rejects_legacy_surface_input_kind or admit_registry_delivery_rejects_missing_registry_id'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - registry `channel_input` admission still binds and publishes timeline on the registry conversation ref
+  - dispatcher egress construction for that path no longer receives a fake bot kwarg
+  - legacy `surface_input` and missing-`registry_id` rejects remain intact
+  - full suite status after Phase 14A: `1963 passed, 23 skipped`
 
 ## Phase 13 Slice Log
 

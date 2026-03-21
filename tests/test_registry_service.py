@@ -764,6 +764,63 @@ def test_registry_bind_conversation_requires_origin_channel(monkeypatch, tmp_pat
     assert conversations.json()["conversations"] == []
 
 
+def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/agents/enroll",
+        json={
+            "enrollment_token": "enroll-secret",
+            "agent_card": {
+                "display_name": "No Scope Bot",
+                "slug": "no-scope-bot",
+                "role": "developer",
+                "capabilities": ["python"],
+                "tags": ["backend"],
+                "description": "Writes code",
+                "provider": "codex",
+                "mode": "registry",
+                "channel_capabilities": ["registry"],
+                "version": "test",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "registry_scope" in response.json()["detail"]
+
+
+def test_registry_register_requires_agent_card(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot-register")
+
+    response = client.post(
+        "/v1/agents/register",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"connectivity_state": "connected"},
+    )
+
+    assert response.status_code == 422
+    assert "agent_card" in response.json()["detail"]
+
+
+def test_registry_search_rejects_invalid_capabilities_shape(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot-search-invalid")
+
+    response = client.post(
+        "/v1/agents/discovery/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"required_state": "connected", "capabilities": "python"},
+    )
+
+    assert response.status_code == 422
+    assert "capabilities" in response.json()["detail"]
+
+
 def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -877,6 +934,24 @@ def test_registry_ui_shell_humanizes_visible_status_labels():
     assert '${escapeHtml(statusLabel(conversation.status || "open"))}' in html_text
     assert '${escapeHtml(statusLabel(state))}' in html_text
     assert 'timedout: "badge-failed"' in html_text
+    assert 'channelinput: "badge-open"' in html_text
+    assert 'delegationready: "badge-pending"' in html_text
+    assert 'delegatedresult: "badge-completed"' in html_text
+
+
+def test_registry_ui_shell_sanitizes_diagnostic_levels_and_search_snippets():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert "function diagnosticClass(level)" in html_text
+    assert 'return map[normalized] || map.info;' in html_text
+    assert '<div class="meta ${diagnosticClass(item.level)}">' in html_text
+    assert "function renderSearchSnippet(snippet)" in html_text
+    assert '.replace(/&lt;b&gt;/g, "<b>")' in html_text
 
 
 def test_registry_ui_shell_conversation_empty_state_is_channel_neutral():
@@ -1148,6 +1223,41 @@ def test_publish_timeline_stores_events(monkeypatch, tmp_path: Path):
     events = timeline.json()["events"]
     assert [event["event_id"] for event in events] == ["evt-1", "evt-2"]
     assert [event["kind"] for event in events] == ["started", "completed"]
+
+
+def test_publish_timeline_requires_required_event_fields(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _agent_id, token = _enroll_and_register(client, "Registry Bot", "registry-bot-invalid-event")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-invalid-event",
+            "title": "Timeline conversation",
+            "origin_channel": "registry",
+        },
+    )
+    assert bind.status_code == 200
+
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-missing-title",
+                    "conversation_id": "conv-invalid-event",
+                    "kind": "started",
+                    "created_at": "2026-03-15T00:00:00+00:00",
+                }
+            ]
+        },
+    )
+
+    assert publish.status_code == 422
+    assert "title" in publish.json()["detail"]
 
 
 def test_ui_bootstrap_includes_timeline_event_count(monkeypatch, tmp_path: Path):
@@ -1542,6 +1652,33 @@ def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     assert deliveries[0]["payload"]["text"] == "Start from the registry UI."
 
 
+def test_ui_follow_up_message_requires_non_empty_text(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _token = _enroll_and_register(client, "Product Bot", "product-bot-message")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Message work",
+            "message_text": "Start from the registry UI.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    message = client.post(
+        f"/v1/ui/conversations/{conversation_id}/messages",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"text": "   "},
+    )
+
+    assert message.status_code == 422
+    assert "message text" in message.json()["detail"]
+
+
 def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1576,6 +1713,33 @@ def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Pat
     assert len(deliveries) == 1
     assert deliveries[0]["payload"]["conversation_ref"] == conversation_id
     assert deliveries[0]["payload"]["action"] == "approve_delegation"
+
+
+def test_ui_action_requires_non_empty_action(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _token = _enroll_and_register(client, "Product Bot", "product-bot-empty-action")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Actionable work",
+            "message_text": "Start this from the registry UI.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    action = client.post(
+        f"/v1/ui/conversations/{conversation_id}/actions",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"action": "   "},
+    )
+
+    assert action.status_code == 422
+    assert "action" in action.json()["detail"]
 
 
 def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_reopen(monkeypatch, tmp_path: Path):
@@ -1753,6 +1917,123 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert origin_poll.status_code == 200
     origin_deliveries = origin_poll.json()["deliveries"]
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
+
+
+def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-invalid-task")
+    target_id, _target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-invalid-task")
+
+    routed = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-invalid",
+            "parent_conversation_id": "conv-1",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "instructions": "Find missing test coverage.",
+        },
+    )
+
+    assert routed.status_code == 422
+    assert "title" in routed.json()["detail"]
+
+
+def test_registry_ack_rejects_invalid_classification(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Ack Bot", "ack-bot")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Ack conversation",
+            "message_text": "Please ack this delivery.",
+        },
+    )
+    assert create.status_code == 201
+
+    poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert poll.status_code == 200
+    delivery_id = poll.json()["deliveries"][0]["delivery_id"]
+
+    ack = client.post(
+        "/v1/agents/ack",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"delivery_ids": [delivery_id], "classification": "later"},
+    )
+
+    assert ack.status_code == 422
+    assert "classification" in ack.json()["detail"]
+
+
+def test_registry_routed_task_status_requires_explicit_status(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-status")
+    target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-status")
+
+    routed = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-status-1",
+            "parent_conversation_id": "conv-1",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Review test plan",
+        },
+    )
+    assert routed.status_code == 200
+
+    status = client.post(
+        "/v1/agents/routed-tasks/task-status-1/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={"summary": "missing status"},
+    )
+
+    assert status.status_code == 422
+    assert "status" in status.json()["detail"]
+
+
+def test_registry_routed_task_result_requires_explicit_status(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-result")
+    target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-result")
+
+    routed = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-result-1",
+            "parent_conversation_id": "conv-1",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Review test plan",
+        },
+    )
+    assert routed.status_code == 200
+
+    result = client.post(
+        "/v1/agents/routed-tasks/task-result-1/result",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={"summary": "missing status"},
+    )
+
+    assert result.status_code == 422
+    assert "status" in result.json()["detail"]
 
 
 def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_columns(tmp_path: Path):

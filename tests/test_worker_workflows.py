@@ -170,6 +170,7 @@ def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch)
             user=InboundUser(id=telegram_actor_key(42), username="alice"),
             conversation_key=telegram_conversation_key(12345),
             text="recover canonical ref",
+            source="telegram",
             conversation_ref="telegram:explicit-bot:12345",
         )
         _create_pending_recovery(
@@ -211,6 +212,7 @@ def test_recovery_prepare_action_recovers_telegram_ref_from_numeric_conversation
             user=InboundUser(id=telegram_actor_key(42), username="alice"),
             conversation_key=telegram_conversation_key(12345),
             text="recover telegram key",
+            source="telegram",
         )
         _create_pending_recovery(
             data_dir,
@@ -273,6 +275,28 @@ def test_recovery_prepare_action_uses_raw_conversation_key_for_non_telegram_payl
 
         assert outcome.status == "replay_ready"
         assert captured_refs == ["future:workspace:room-1"]
+
+
+def test_resolve_event_conversation_ref_rejects_blank_event_identity() -> None:
+    with fresh_env() as (_data_dir, cfg, _prov):
+        event = SimpleNamespace(conversation_ref="", conversation_key="")
+
+        with pytest.raises(ValueError, match="conversation_ref/conversation_key"):
+            resolve_event_conversation_ref(config=cfg, event=event)
+
+
+def test_resolve_event_conversation_ref_propagates_chat_id_property_errors() -> None:
+    class _BrokenEvent:
+        conversation_ref = ""
+        conversation_key = ""
+
+        @property
+        def chat_id(self):
+            raise ValueError("broken property")
+
+    with fresh_env() as (_data_dir, cfg, _prov):
+        with pytest.raises(ValueError, match="broken property"):
+            resolve_event_conversation_ref(config=cfg, event=_BrokenEvent())
 
 
 @pytest.mark.asyncio
@@ -351,7 +375,7 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
                     update_id=0,
                 )
             )
-            return SimpleNamespace(status="handled")
+            return SimpleNamespace(status="pending_recovery")
 
         monkeypatch.setattr(
             telegram_worker,
@@ -386,13 +410,14 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
             "dispatch_mode": "recovery",
         }
 
-        await telegram_worker.worker_dispatch(
-            "message",
-            event,
-            item,
-            runtime=current_runtime(),
-            execution_runtime=current_execution_runtime(),
-        )
+        with pytest.raises(work_queue.PendingRecovery):
+            await telegram_worker.worker_dispatch(
+                "message",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
         assert calls == []
 
@@ -414,7 +439,7 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
                     update_id=8102,
                 )
             )
-            return SimpleNamespace(status="handled")
+            return SimpleNamespace(status="pending_recovery")
 
         monkeypatch.setattr(
             telegram_worker,
@@ -452,12 +477,49 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
             "dispatch_mode": "recovery",
         }
 
-        await telegram_worker.worker_dispatch(
-            "message",
-            event,
-            item,
-            runtime=current_runtime(),
-            execution_runtime=current_execution_runtime(),
-        )
+        with pytest.raises(work_queue.PendingRecovery):
+            await telegram_worker.worker_dispatch(
+                "message",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
         assert calls == ["bind", "send"]
+
+
+@pytest.mark.asyncio
+async def test_worker_recovery_raises_on_unexpected_recovery_outcome(monkeypatch) -> None:
+    with fresh_env() as (_data_dir, _cfg, _prov):
+        async def fake_dispatch_worker_recovery(**kwargs):
+            del kwargs
+            return SimpleNamespace(status="handled")
+
+        monkeypatch.setattr(
+            telegram_worker,
+            "get_recovery_use_cases",
+            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+        )
+
+        event = InboundMessage(
+            user=InboundUser(id=telegram_actor_key(42), username="telegram"),
+            conversation_key=telegram_conversation_key(12345),
+            text="recover telegram conversation",
+            source="telegram",
+        )
+        item = {
+            "id": "conversation-recovery-item-2",
+            "conversation_key": telegram_conversation_key(12345),
+            "event_id": telegram_event_id(8104),
+            "dispatch_mode": "recovery",
+        }
+
+        with pytest.raises(RuntimeError, match="Unexpected recovery outcome"):
+            await telegram_worker.worker_dispatch(
+                "message",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )

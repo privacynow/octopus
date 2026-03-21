@@ -13,7 +13,6 @@ from typing import Any
 
 from app.agents.types import TimelineEvent
 from app.capability_service import (
-    declared_capabilities,
     query_capabilities,
     requested_routed_capabilities,
 )
@@ -21,6 +20,18 @@ from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
+    validated_ack_request,
+    validated_agent_card_payload,
+    validated_bind_conversation_payload,
+    validated_conversation_action,
+    validated_conversation_message_text,
+    validated_heartbeat_payload,
+    validated_register_payload,
+    validated_routed_task_request,
+    validated_routed_task_result_payload,
+    validated_routed_task_status_payload,
+    validated_search_query,
+    validated_timeline_events,
     conversation_status_for_event,
     decode_json_field,
     delivery_kinds_for_registry_scope,
@@ -32,7 +43,7 @@ from app.registry_service.store_base import (
     runtime_health_generated_at,
     runtime_health_summary,
     utcnow_iso,
-    validated_bind_conversation_payload,
+    validated_registry_scope,
 )
 
 _SCHEMA_VERSION = 6
@@ -549,8 +560,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
         agent_token_hash = hash_agent_token(agent_token)
+        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         with self._connect() as conn:
-            slug = self._ensure_unique_slug(conn, requested_card.get("slug") or "agent")
+            slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
             conn.execute(
                 """
                 INSERT INTO agents (
@@ -563,20 +575,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 (
                     agent_id,
                     agent_token_hash,
-                    requested_card.get("display_name") or slug,
+                    card.get("display_name") or slug,
                     slug,
-                    requested_card.get("role", ""),
-                    requested_card.get("registry_scope", "full") or "full",
-                    ensure_json(declared_capabilities(requested_card)),
-                    ensure_json(requested_card.get("tags", [])),
-                    requested_card.get("description", ""),
-                    requested_card.get("provider", ""),
-                    requested_card.get("mode", "registry"),
-                    requested_card.get("connectivity_state", "degraded"),
-                    int(requested_card.get("current_capacity", 0)),
-                    max(1, int(requested_card.get("max_capacity", 1))),
-                    ensure_json(requested_card.get("channel_capabilities", [])),
-                    requested_card.get("version", ""),
+                    card.get("role", ""),
+                    validated_registry_scope(card.get("registry_scope")),
+                    ensure_json(card.get("capabilities", [])),
+                    ensure_json(card.get("tags", [])),
+                    card.get("description", ""),
+                    card.get("provider", ""),
+                    card.get("mode", "registry"),
+                    card.get("connectivity_state", "degraded"),
+                    card.get("current_capacity", 0),
+                    card.get("max_capacity", 1),
+                    ensure_json(card.get("channel_capabilities", [])),
+                    card.get("version", ""),
                     now,
                     now,
                     now,
@@ -598,16 +610,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
-        card = payload["agent_card"]
+        register_payload = validated_register_payload(payload)
+        card = register_payload["agent_card"]
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            current_skills = decode_json_field(row["skills_json"], [])
+            current_tags = decode_json_field(row["tags_json"], [])
+            current_channel_capabilities = decode_json_field(row["channel_capabilities_json"], [])
             conn.execute(
                 """
                 UPDATE agents
-                SET display_name = ?, role = ?, skills_json = ?, tags_json = ?,
+                SET display_name = ?, role = ?, registry_scope = ?, skills_json = ?, tags_json = ?,
                     description = ?, provider = ?, mode = ?, connectivity_state = ?,
                     current_capacity = ?, max_capacity = ?, channel_capabilities_json = ?,
                     version = ?, updated_at = ?, last_heartbeat_at = ?
@@ -616,15 +632,16 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 (
                     card.get("display_name", row["display_name"]),
                     card.get("role", row["role"]),
-                    ensure_json(declared_capabilities(card)),
-                    ensure_json(card.get("tags", [])),
+                    card.get("registry_scope", row["registry_scope"]),
+                    ensure_json(card.get("capabilities", current_skills)),
+                    ensure_json(card.get("tags", current_tags)),
                     card.get("description", row["description"]),
                     card.get("provider", row["provider"]),
                     card.get("mode", row["mode"]),
-                    payload.get("connectivity_state", row["connectivity_state"]),
-                    int(payload.get("current_capacity", 0)),
-                    max(1, int(payload.get("max_capacity", 1))),
-                    ensure_json(card.get("channel_capabilities", [])),
+                    register_payload.get("connectivity_state", row["connectivity_state"]),
+                    register_payload.get("current_capacity", row["current_capacity"]),
+                    register_payload.get("max_capacity", row["max_capacity"]),
+                    ensure_json(card.get("channel_capabilities", current_channel_capabilities)),
                     card.get("version", row["version"]),
                     now,
                     now,
@@ -638,11 +655,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
+        heartbeat_payload = validated_heartbeat_payload(payload)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            runtime_health_payload = payload.get("runtime_health")
+            runtime_health_payload = heartbeat_payload.get("runtime_health")
             conn.execute(
                 """
                 UPDATE agents
@@ -652,9 +670,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 WHERE agent_token = ?
                 """,
                 (
-                    payload.get("connectivity_state", row["connectivity_state"]),
-                    int(payload.get("current_capacity", row["current_capacity"])),
-                    max(1, int(payload.get("max_capacity", row["max_capacity"]))),
+                    heartbeat_payload.get("connectivity_state", row["connectivity_state"]),
+                    heartbeat_payload.get("current_capacity", row["current_capacity"]),
+                    heartbeat_payload.get("max_capacity", row["max_capacity"]),
                     now,
                     now,
                     (
@@ -680,12 +698,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             }
 
     def publish_timeline(self, agent_token: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        validated_events = validated_timeline_events(events)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, {"channel", "full"})
-            for event in events:
+            for event in validated_events:
                 conversation_id = event["conversation_id"]
                 conversation = conn.execute(
                     """
@@ -854,16 +873,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         return {str(row["skill_name"]).lower() for row in rows}
 
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
-        role = query.get("role", "").strip().lower()
-        required_state = query.get("required_state", "connected")
-        capabilities = query_capabilities(query)
-        tags = {s.lower() for s in query.get("tags", []) if s}
-        free_text = query.get("free_text", "").strip().lower()
-        exclude = sorted(set(query.get("exclude_agent_ids", [])))
+        validated_query = validated_search_query(query)
+        role = validated_query.get("role", "").strip().lower()
+        required_state = validated_query.get("required_state", "connected")
+        capabilities = query_capabilities(validated_query)
+        tags = {s.lower() for s in validated_query.get("tags", []) if s}
+        free_text = validated_query.get("free_text", "").strip().lower()
+        exclude = sorted(set(validated_query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
             disabled_capabilities = self._disabled_capabilities(conn)
             capabilities = capabilities - disabled_capabilities
-            if (query.get("capabilities") or query.get("skills")) and not capabilities:
+            if (validated_query.get("capabilities") or validated_query.get("skills")) and not capabilities:
                 return []
             sql = [
                 """
@@ -922,13 +942,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         WHERE lower(je.value) LIKE ?
                     )
                 """
-                if disabled_skills:
+                if disabled_capabilities:
                     skill_clause = f"""
                         EXISTS (
                             SELECT 1
                             FROM json_each(agent_rows.skills_json) AS je
                             WHERE lower(je.value) LIKE ?
-                              AND lower(je.value) NOT IN ({','.join('?' for _ in disabled_skills)})
+                              AND lower(je.value) NOT IN ({','.join('?' for _ in disabled_capabilities)})
                         )
                     """
                 sql.append(
@@ -947,8 +967,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """
                 )
                 params.extend([like, like, like, like])
-                if disabled_skills:
-                    params.extend(sorted(disabled_skills))
+                if disabled_capabilities:
+                    params.extend(sorted(disabled_capabilities))
                 params.append(like)
             sql.append(" ORDER BY lower(display_name)")
             rows = conn.execute("".join(sql), params).fetchall()
@@ -995,9 +1015,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        validated_request = validated_routed_task_request(request)
         with self._connect() as conn:
             disabled_capabilities = self._disabled_capabilities(conn)
-            for capability in requested_routed_capabilities(request):
+            for capability in requested_routed_capabilities(validated_request):
                 if capability.lower() in disabled_capabilities:
                     raise CapabilityDisabledError(capability)
             conn.execute(
@@ -1017,26 +1038,26 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     updated_at = excluded.updated_at
                 """,
                 (
-                    request["routed_task_id"],
-                    request["parent_conversation_id"],
-                    request["origin_agent_id"],
-                    request["target_agent_id"],
-                    request["title"],
-                    ensure_json(request),
+                    validated_request["routed_task_id"],
+                    validated_request["parent_conversation_id"],
+                    validated_request["origin_agent_id"],
+                    validated_request["target_agent_id"],
+                    validated_request["title"],
+                    ensure_json(validated_request),
                     now,
                     now,
                 ),
             )
             delivery = self._create_delivery(
                 conn,
-                target_agent_id=request["target_agent_id"],
+                target_agent_id=validated_request["target_agent_id"],
                 kind="routed_task",
-                payload=request,
+                payload=validated_request,
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
         return {
-            "routed_task_id": request["routed_task_id"],
+            "routed_task_id": validated_request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
         }
 
@@ -1102,16 +1123,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> dict[str, Any]:
         now = utcnow_iso()
+        validated_ids, validated_classification = validated_ack_request(
+            delivery_ids=delivery_ids,
+            classification=classification,
+        )
         next_state = {
             "accepted": "acked",
             "rejected": "dead_letter",
             "retry_later": "queued",
-        }.get(classification, "queued")
+        }[validated_classification]
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            for delivery_id in delivery_ids:
+            for delivery_id in validated_ids:
                 conn.execute(
                     """
                     UPDATE deliveries
@@ -1127,11 +1152,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         row["agent_id"],
                     ),
                 )
-        return {"updated": len(delivery_ids), "classification": classification}
+        return {"updated": len(validated_ids), "classification": validated_classification}
 
     def update_routed_task_status(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         protected_status_placeholders = ", ".join("?" for _ in PROTECTED_ROUTED_TASK_STATUSES)
+        validated_payload = validated_routed_task_status_payload(payload)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1145,15 +1171,15 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                   AND status NOT IN ({protected_status_placeholders})
                 """,
                 (
-                    payload.get("status", ""),
-                    payload.get("summary", ""),
+                    validated_payload["status"],
+                    validated_payload["summary"],
                     now,
                     routed_task_id,
                     *PROTECTED_ROUTED_TASK_STATUSES,
                 ),
             )
             if cursor.rowcount > 0:
-                for event in payload.get("timeline_events", []):
+                for event in validated_payload["timeline_events"]:
                     self._upsert_timeline_event(
                         conn,
                         event_id=event["event_id"],
@@ -1168,10 +1194,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         metadata=event.get("metadata", {}),
                         created_at=event["created_at"],
                     )
-        return {"routed_task_id": routed_task_id, "status": payload.get("status", "")}
+        return {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
 
     def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        validated_payload = validated_routed_task_result_payload(payload)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1190,9 +1217,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 WHERE routed_task_id = ?
                 """,
                 (
-                    payload.get("status", "completed"),
-                    payload.get("summary", ""),
-                    ensure_json(payload),
+                    validated_payload["status"],
+                    validated_payload["summary"],
+                    ensure_json(validated_payload),
                     now,
                     routed_task_id,
                 ),
@@ -1204,12 +1231,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 payload={
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": task["parent_conversation_id"],
-                    "result": payload,
+                    "result": validated_payload,
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-        return {"routed_task_id": routed_task_id, "status": payload.get("status", "completed")}
+        return {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
 
     def deregister(self, agent_token: str) -> dict[str, Any]:
         now = utcnow_iso()
@@ -1451,6 +1478,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         return [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows]
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+        validated_text = validated_conversation_message_text(text)
         with self._connect() as conn:
             conversation = conn.execute(
                 "SELECT target_agent_id, title FROM conversations WHERE conversation_id = ?",
@@ -1466,7 +1494,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 payload={
                     "conversation_id": conversation_id,
                     "title": conversation["title"],
-                    "text": text,
+                    "text": validated_text,
                     "channel": "registry",
                 },
                 now=now,
@@ -1476,13 +1504,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 conn,
                 conversation_id=conversation_id,
                 title="User message",
-                body=text,
+                body=validated_text,
                 kind="channel_input",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def add_conversation_action(self, conversation_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        action_payload = payload or {}
+        validated_action, action_payload = validated_conversation_action(action, payload)
         with self._connect() as conn:
             conversation = conn.execute(
                 "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
@@ -1498,18 +1526,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 payload={
                     "conversation_id": conversation_id,
                     "conversation_ref": conversation_id,
-                    "action": action,
+                    "action": validated_action,
                     "payload": action_payload,
                     "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-            is_cancel = action == "cancel_conversation"
+            is_cancel = validated_action == "cancel_conversation"
             self._publish_ui_timeline_conn(
                 conn,
                 conversation_id=conversation_id,
-                title="Cancel requested" if is_cancel else f"Action: {action}",
+                title="Cancel requested" if is_cancel else f"Action: {validated_action}",
                 body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
                 kind="control" if is_cancel else "channel_action",
             )

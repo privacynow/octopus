@@ -62,6 +62,7 @@ from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
     RegistryScopeError,
+    validated_routed_task_request,
 )
 from app.session_state import session_to_dict
 
@@ -180,8 +181,10 @@ def enroll(payload: dict[str, Any], store: AbstractRegistryStore = Depends(get_s
     enroll_tok = payload.get("enrollment_token") or ""
     if not hmac.compare_digest(enroll_tok, settings.enroll_token):
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
-    agent_card = payload.get("agent_card") or {}
-    return store.enroll(agent_card)
+    try:
+        return store.enroll(payload.get("agent_card"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/register")
@@ -194,6 +197,8 @@ def register(
         return store.register(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/heartbeat")
@@ -206,6 +211,8 @@ def heartbeat(
         return store.heartbeat(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/timeline")
@@ -215,9 +222,11 @@ def publish_timeline(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        return store.publish_timeline(agent_token, payload.get("events", []))
+        return store.publish_timeline(agent_token, payload.get("events"))
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/conversations/bind")
@@ -242,10 +251,14 @@ def search_agents(
 ) -> dict[str, Any]:
     try:
         store.assert_agent_scope(agent_token, {"coordination", "full"})
-        store.heartbeat(agent_token, {"connectivity_state": "connected"})
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
-    return {"agents": store.search_agents(payload)}
+    try:
+        agents = store.search_agents(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store.heartbeat(agent_token, {"connectivity_state": "connected"})
+    return {"agents": agents}
 
 
 @app.post("/v1/agents/routed-tasks")
@@ -256,12 +269,15 @@ def create_routed_task(
 ) -> dict[str, Any]:
     try:
         store.assert_agent_scope(agent_token, {"coordination", "full"})
+        validated_request = validated_routed_task_request(payload)
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
-        return store.create_routed_task(payload)
+        return store.create_routed_task(validated_request)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except CapabilityDisabledError as exc:
         raise HTTPException(status_code=409, detail="capability_disabled") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/agents/poll")
@@ -288,11 +304,13 @@ def ack(
     try:
         return store.ack(
             agent_token,
-            delivery_ids=list(payload.get("delivery_ids", [])),
-            classification=payload.get("classification", "accepted"),
+            delivery_ids=payload.get("delivery_ids"),
+            classification=payload.get("classification"),
         )
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/status")
@@ -306,6 +324,8 @@ def routed_task_status(
         return store.update_routed_task_status(agent_token, routed_task_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/result")
@@ -319,6 +339,8 @@ def routed_task_result(
         return store.update_routed_task_result(agent_token, routed_task_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
 
@@ -918,7 +940,12 @@ def ui_add_conversation_message(
     _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return store.add_conversation_message(conversation_id, payload.get("text", ""))
+    try:
+        return store.add_conversation_message(conversation_id, payload.get("text", ""))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/ui/conversations/{conversation_id}/actions")
@@ -928,11 +955,16 @@ def ui_add_conversation_action(
     _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return store.add_conversation_action(
-        conversation_id,
-        payload.get("action", ""),
-        payload.get("payload", {}),
-    )
+    try:
+        return store.add_conversation_action(
+            conversation_id,
+            payload.get("action", ""),
+            payload.get("payload", {}),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/ui/tasks")

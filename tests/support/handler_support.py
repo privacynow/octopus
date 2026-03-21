@@ -483,7 +483,14 @@ class MinimalFakeBot:
 
 
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
-    """Install explicit Telegram channel state for tests via bootstrap wiring."""
+    """Install explicit Telegram channel state for tests via bootstrap wiring.
+
+    The services decision intentionally mirrors production `main.py`: when
+    registries are configured, the harness builds bus-backed services even for
+    tests that later drive Telegram-owned handlers. Higher-level tests are still
+    responsible for deciding whether they are asserting production-shape startup
+    or a narrower seam in isolation.
+    """
     reset_handler_test_runtime()
     global _TEST_RUNTIME, _TEST_APPLICATION
     import app.content_store as _cs

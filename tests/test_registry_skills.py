@@ -17,6 +17,7 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabil
             "display_name": name,
             "slug": slug,
             "role": "developer",
+            "registry_scope": "full",
             "capabilities": capabilities,
             "tags": ["registry"],
             "description": f"{name} description",
@@ -34,6 +35,7 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabil
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
+                "registry_scope": "full",
                 "capabilities": capabilities,
                 "tags": ["registry"],
                 "description": f"{name} description",
@@ -78,7 +80,18 @@ def test_list_capabilities_aggregates_declared(tmp_path: Path):
     assert capabilities["code_exec"]["declared_by_agents"] == ["alpha-bot"]
     assert capabilities["file_read"]["declared_by_agents"] == ["beta-bot"]
     assert capabilities["web_search"]["declared_by_agents"] == ["alpha-bot", "beta-bot"]
-    assert capabilities["web_search"]["enabled"] is None
+
+
+def test_search_agents_free_text_handles_disabled_capabilities(tmp_path: Path):
+    store = _store(tmp_path)
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+
+    hits = store.search_agents({"free_text": "web", "required_state": "connected"})
+    store.set_capability_override("web_search", enabled=False)
+    misses = store.search_agents({"free_text": "web", "required_state": "connected"})
+
+    assert [item["slug"] for item in hits] == ["alpha-bot"]
+    assert misses == []
 
 
 def test_set_and_get_override(tmp_path: Path):

@@ -417,7 +417,9 @@ async def worker_dispatch(
             )
             if recovery_outcome.status == "pending_recovery":
                 raise work_queue.PendingRecovery(item["id"])
-            return
+            raise RuntimeError(
+                f"Unexpected recovery outcome: {recovery_outcome.status}"
+            )
 
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id

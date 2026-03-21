@@ -646,7 +646,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
       function formatTime(value) {{
         if (!value) return "";
         const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return value;
+        if (Number.isNaN(date.getTime())) return "(invalid date)";
         return date.toLocaleString();
       }}
 

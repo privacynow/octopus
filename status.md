@@ -10,6 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
+- Phase 19E3 landed green: invalid registry UI timestamps now fall back to a stable placeholder instead of echoing raw malformed values back into the shell.
 - Phase 19E1 landed green: provider-error output is now sanitized at the shared execution seam before it reaches any channel renderer.
 - Phase 19D3 landed green: partial delegation submission now tells the user exactly what was already sent and what a retry will resend.
 - Phase 19D2 landed green: delegation plans now pre-validate target ownership through the existing agent-directory seam before the user approves them.
@@ -91,8 +92,11 @@
   - absolute filesystem paths are redacted from short, summarized, and truncated fallback errors
   - token/password/API-key style assignments are redacted instead of being shown back to the user
   - Telegram handler output now proves the sanitized text reaches the user-visible progress/update surface
+- Registry UI timestamp formatting now degrades safely on malformed data:
+  - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
+  - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2083 passed, 23 skipped`.
+- Latest verified full-suite run: `2084 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -138,6 +142,18 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19E3 remediation — make malformed registry UI timestamps fall back to a safe placeholder instead of echoing raw invalid values.
+  Scope:
+  - updated `formatTime(...)` in `app/channels/registry/ui.py` to return `(invalid date)` when `Date.parse` fails
+  - updated the registry UI shell test contract in `tests/test_registry_service.py` to prove the new safe fallback is wired into the rendered shell source
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_service.py -k 'humanizes_visible_status_labels or invalid_timestamp_fallback or sanitizes_diagnostic_levels_and_search_snippets'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - malformed timestamps no longer echo raw strings back into the registry UI shell
+  - the accepted static-shell UI limitation remains explicit while the source-level contract now reflects the safer fallback
+  - full suite status after Phase 19E3: `2084 passed, 23 skipped`
 
 - Complete: Phase 19E1 remediation — sanitize provider error output at the shared execution seam instead of leaking paths or secret-like values through user-visible failure text.
   Scope:

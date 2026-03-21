@@ -941,6 +941,18 @@ def test_registry_ui_shell_humanizes_visible_status_labels():
     assert 'delegatedresult: "badge-completed"' in html_text
 
 
+def test_registry_ui_shell_uses_safe_invalid_timestamp_fallback():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert 'if (Number.isNaN(date.getTime())) return "(invalid date)";' in html_text
+    assert 'if (Number.isNaN(date.getTime())) return value;' not in html_text
+
+
 def test_registry_ui_shell_sanitizes_diagnostic_levels_and_search_snippets():
     html_text = ui.render_shell_html(
         title_text="Agent Registry",

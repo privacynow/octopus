@@ -1,3 +1,5 @@
+import time
+
 from app.workflows.delegation.coordination import (
     all_tasks_terminal,
     any_task_failed,
@@ -5,6 +7,7 @@ from app.workflows.delegation.coordination import (
     build_delegation_completion_message,
     build_delegation_plan,
     expire_stale_delegations,
+    mark_task_submitted,
 )
 from app.agents.types import RoutedTaskResult
 
@@ -293,6 +296,82 @@ def test_expire_stale_delegations_transitions_submitted_tasks_to_failed():
     assert outcome.pending.status == "partial_failed"
     assert [task.status for task in outcome.pending.tasks] == ["failed", "failed"]
     assert "delegation timed out" in outcome.pending.tasks[0].summary
+
+
+def test_mark_task_submitted_stamps_submission_time():
+    plan = build_delegation_plan(
+        "registry:conv-submit",
+        "Spec delegation",
+        "Resume when child tasks return.",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Implement",
+                "target_agent_id": "developer-1",
+                "instructions": "Build it.",
+            }
+        ],
+    )
+
+    outcome = mark_task_submitted(
+        plan,
+        routed_task_id="task-1",
+    )
+
+    assert outcome.matched is True
+    assert outcome.pending is not None
+    assert outcome.pending.tasks[0].status == "submitted"
+    assert outcome.pending.tasks[0].submitted_at
+
+
+def test_expire_stale_delegations_uses_submission_time_for_submitted_tasks():
+    plan = build_delegation_plan(
+        "registry:conv-submitted-at",
+        "Spec delegation",
+        "Resume when child tasks return.",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Implement",
+                "target_agent_id": "developer-1",
+                "instructions": "Build it.",
+            }
+        ],
+    )
+    now = time.time()
+    plan.created_at = now - 10_000
+    plan.tasks[0].status = "submitted"
+    plan.tasks[0].submitted_at = now - 10
+
+    outcome = expire_stale_delegations(plan, timeout_seconds=3600)
+
+    assert outcome.expired is False
+    assert outcome.pending is plan
+
+
+def test_expire_stale_delegations_uses_creation_time_for_unsubmitted_tasks():
+    plan = build_delegation_plan(
+        "registry:conv-approval-expiry",
+        "Spec delegation",
+        "Resume when child tasks return.",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Implement",
+                "target_agent_id": "developer-1",
+                "instructions": "Build it.",
+            }
+        ],
+    )
+    plan.created_at = 0.0
+
+    outcome = expire_stale_delegations(plan, timeout_seconds=3600)
+
+    assert outcome.expired is True
+    assert outcome.expired_kind == "approval_expired"
+    assert outcome.pending is not None
+    assert outcome.pending.tasks[0].status == "failed"
+    assert "approval expired" in outcome.pending.tasks[0].summary
 
 
 def test_expire_stale_delegations_within_timeout_leaves_pending_unchanged():

@@ -26,6 +26,7 @@ def test_delegated_task_instructions_round_trips():
                     target_agent_id="reviewer-1",
                     instructions="Review for correctness and risk.",
                     status="submitted",
+                    submitted_at=123.45,
                 ),
             ],
         ),
@@ -43,6 +44,7 @@ def test_delegated_task_instructions_round_trips():
         "registry:prod",
         "registry:ops",
     ]
+    assert restored.pending_delegation.tasks[1].submitted_at == 123.45
 
 
 def test_pending_delegation_status_round_trips():

@@ -83,6 +83,7 @@ class DelegatedTask:
     full_text: str = ""
     follow_up_questions: list[str] = field(default_factory=list)
     completed_at: str = ""
+    submitted_at: float | str = 0.0
 
 
 @dataclass

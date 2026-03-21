@@ -10,6 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
+- Phase 19E1 landed green: provider-error output is now sanitized at the shared execution seam before it reaches any channel renderer.
 - Phase 19D3 landed green: partial delegation submission now tells the user exactly what was already sent and what a retry will resend.
 - Phase 19D2 landed green: delegation plans now pre-validate target ownership through the existing agent-directory seam before the user approves them.
 - Phase 19D1 landed green: stale delegations now expire through the existing delegation machine instead of lingering forever in submitted/proposed state.
@@ -86,8 +87,12 @@
   - partial approval failures name which targets were already sent
   - the remaining proposed targets are called out explicitly
   - retry messaging now matches the actual state machine: only unsent tasks are retried
+- Provider error output now gets one shared sanitization pass before channel rendering:
+  - absolute filesystem paths are redacted from short, summarized, and truncated fallback errors
+  - token/password/API-key style assignments are redacted instead of being shown back to the user
+  - Telegram handler output now proves the sanitized text reaches the user-visible progress/update surface
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2078 passed, 23 skipped`.
+- Latest verified full-suite run: `2083 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -133,6 +138,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19E1 remediation — sanitize provider error output at the shared execution seam instead of leaking paths or secret-like values through user-visible failure text.
+  Scope:
+  - added shared provider-error sanitization in `app/summarize.py`, reusing existing startup secret redaction and extending it for absolute paths plus token/password/API-key style assignments
+  - applied the sanitizer to all three provider-error paths: direct short errors, summarized long errors, and truncated fallback errors
+  - added unit coverage in `tests/test_summarize.py` plus a handler-level regression in `tests/test_handlers_codex.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_summarize.py tests/test_runtime_dispatch_boundary.py tests/test_handlers_codex.py -k 'provider_error or sanitize or redacts_paths_and_secrets or error_text'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - user-visible provider errors no longer echo absolute paths or secret-like assignment values back into chat output
+  - the shared plain-text provider error contract remained intact while redaction now applies uniformly across short, summarized, and fallback error paths
+  - full suite status after Phase 19E1: `2083 passed, 23 skipped`
 
 - Complete: Phase 19D3 remediation — make partial delegation submission failures describe the real submitted-vs-unsent task state instead of collapsing to one generic retry error.
   Scope:

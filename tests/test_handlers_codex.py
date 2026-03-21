@@ -247,6 +247,45 @@ async def test_codex_error_text_is_html_escaped():
         )
 
 
+async def test_codex_error_output_redacts_paths_and_secrets():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", {"thread_id": None}, "off")
+        save_session(data_dir, telegram_conversation_key(12345), session)
+        prov.run_results = [
+            RunResult(
+                text=(
+                    "Failure in /Users/tinker/output/bots/private/run.log "
+                    "with password=hunter2 and token: abcdef1234567890"
+                ),
+                returncode=2,
+            )
+        ]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="do something")
+
+        import app.channels.telegram.ingress as th
+
+        await th.handle_message(
+            FakeUpdate(message=msg, user=user, chat=chat),
+            FakeContext(),
+        )
+        await drain_one_worker_item(data_dir)
+
+        all_bot_text = " ".join(
+            (m.get("text") or m.get("edit_text") or "") for m in current_bot_instance().sent_messages
+        )
+        assert "/Users/tinker/output/bots/private/run.log" not in all_bot_text
+        assert "hunter2" not in all_bot_text
+        assert "abcdef1234567890" not in all_bot_text
+        assert "&lt;path&gt;" in all_bot_text or "<path>" in all_bot_text
+
+
 async def test_codex_boot_id_clears_stale_thread():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")

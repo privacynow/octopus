@@ -1,11 +1,17 @@
 """Tests for claude provider — command building, session state."""
 
+import json
 import os
+import stat
 from pathlib import Path
 
+import pytest
+
+from app.providers.base import RunContext
 from app.providers.base import RunResult
 from app.providers.claude import ClaudeProvider
 from tests.support.config_support import make_config
+from tests.support.handler_support import FakeProgress
 
 
 def test_new_provider_state():
@@ -123,7 +129,6 @@ def test_effective_model_in_preflight_cmd():
 
 def test_file_policy_inspect_appends_system_prompt():
     """file_policy=inspect should add a read-only instruction to the system prompt."""
-    from app.providers.base import RunContext
     p = ClaudeProvider(make_config())
     state = {"session_id": "abc-123", "started": False}
     cmd = p._build_run_cmd(state, "analyze the code")
@@ -146,6 +151,117 @@ def test_file_policy_inspect_appends_system_prompt():
     assert "INSPECT" in combined
     assert "read-only" in combined
     assert "You are a reviewer." in combined
+
+
+async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+    seen: dict[str, str] = {}
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del progress, timeout, extra_env, working_dir, cancel
+        idx = cmd.index("--mcp-config")
+        path = cmd[idx + 1]
+        seen["path"] = path
+        assert os.path.exists(path)
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert data == {
+            "mcpServers": {
+                "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]}
+            }
+        }
+        return "", {"result": "ok"}, 0, ""
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        {"session_id": "abc-123", "started": False},
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config={
+                "mcp_servers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-github"],
+                    }
+                }
+            },
+            credential_env={},
+        ),
+    )
+
+    assert result.text == "ok"
+    assert not os.path.exists(seen["path"])
+
+
+async def test_mcp_temp_file_is_removed_after_timeout_result():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+    seen: dict[str, str] = {}
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del progress, timeout, extra_env, working_dir, cancel
+        idx = cmd.index("--mcp-config")
+        path = cmd[idx + 1]
+        seen["path"] = path
+        assert os.path.exists(path)
+        return "", {}, -1, ""
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        {"session_id": "abc-123", "started": False},
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config={"mcp_servers": {"github": {"command": "npx", "args": []}}},
+            credential_env={},
+        ),
+    )
+
+    assert result.timed_out is True
+    assert not os.path.exists(seen["path"])
+
+
+async def test_mcp_temp_file_is_removed_after_run_exception():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+    seen: dict[str, str] = {}
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del progress, timeout, extra_env, working_dir, cancel
+        idx = cmd.index("--mcp-config")
+        path = cmd[idx + 1]
+        seen["path"] = path
+        assert os.path.exists(path)
+        raise RuntimeError("boom")
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await provider.run(
+            {"session_id": "abc-123", "started": False},
+            "hello",
+            [],
+            progress,
+            context=RunContext(
+                extra_dirs=[],
+                system_prompt="",
+                capability_summary="",
+                provider_config={"mcp_servers": {"github": {"command": "npx", "args": []}}},
+                credential_env={},
+            ),
+        )
+
+    assert not os.path.exists(seen["path"])
 
 
 # -- Claude command safety (from test_high_risk.py) --

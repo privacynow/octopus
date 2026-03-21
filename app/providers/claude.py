@@ -327,6 +327,7 @@ class ClaudeProvider:
             json.dump(mcp_data, f)
             f.close()
             mcp_tmp = f.name
+            os.chmod(mcp_tmp, 0o600)
             idx = cmd.index("--")
             cmd[idx:idx] = ["--mcp-config", mcp_tmp]
 
@@ -374,22 +375,22 @@ class ClaudeProvider:
         if context and context.provider_config:
             mcp_tmp = self._apply_provider_config(cmd, context.provider_config)
 
-        # Inject credential env
-        extra_env = context.credential_env if context else {}
+        try:
+            # Inject credential env
+            extra_env = context.credential_env if context else {}
 
-        working_dir = context.working_dir if context else ""
-        is_resume = provider_state.get("started", False)
-        accumulated, result_data, rc, stderr = await self._run_process(
-            cmd, progress, extra_env=extra_env, working_dir=working_dir,
-            cancel=cancel,
-        )
-
-        # Cleanup temp MCP config
-        if mcp_tmp:
-            try:
-                os.unlink(mcp_tmp)
-            except OSError:
-                pass
+            working_dir = context.working_dir if context else ""
+            is_resume = provider_state.get("started", False)
+            accumulated, result_data, rc, stderr = await self._run_process(
+                cmd, progress, extra_env=extra_env, working_dir=working_dir,
+                cancel=cancel,
+            )
+        finally:
+            if mcp_tmp:
+                try:
+                    os.unlink(mcp_tmp)
+                except OSError:
+                    pass
 
         # User-initiated cancel: _consume_stream killed the process.
         if cancel is not None and cancel.is_set():

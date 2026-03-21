@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19A2 landed green: `skip_permissions=True` remains owned by the explicit approve/retry grant sites in `app/channels/telegram/pending.py`, the normal handler path still keeps it false, and there are no stray grant sites outside the audited approval/retry seam.
+- Phase 19A3 landed green: Claude MCP temp files now get restrictive permissions at creation time and are cleaned up in a `finally` on success, timeout, and exception paths, without overclaiming crash/SIGKILL safety.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -58,8 +58,9 @@
   - skill-provided Codex `config_overrides` are restricted to the audited allowlisted key set instead of being appended raw to argv
   - invalid override entries are rejected with warnings instead of silently weakening execution
   - `skip_permissions=True` is now explicitly documented and regression-guarded as an approval/retry-only grant, not a provider-layer policy
+- Claude provider MCP setup now cleans up temporary config files on all normal return/exception/timeout paths and no longer leaves those files world-readable by default.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2048 passed, 23 skipped`.
+- Latest verified full-suite run: `2051 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -105,6 +106,20 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19A3 remediation — harden the Claude MCP temp-file lifecycle at the provider seam.
+  Scope:
+  - updated `app/providers/claude.py` so MCP config temp files are created with `0600` permissions
+  - moved MCP temp-file cleanup into a `finally` around provider execution so normal success, timeout, and exception paths all unlink the file
+  - added provider-level tests in `tests/test_claude_provider.py` proving the file exists while needed, carries the expected JSON payload and permissions, and is removed on success, timeout, and raised exceptions
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_claude_provider.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - Claude MCP temp files are no longer left behind on ordinary exception/timeout paths
+  - temp files are created with restrictive permissions instead of inheriting broader defaults
+  - the slice does not overclaim crash/SIGKILL cleanup guarantees
+  - full suite status after Phase 19A3: `2051 passed, 23 skipped`
 
 - Complete: Phase 19A2 remediation — audit the `skip_permissions` authorization chain at the grant sites instead of re-implementing policy in provider consumers.
   Scope:

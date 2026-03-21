@@ -21,9 +21,13 @@ from app.identity import conversation_key_for_ref
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.runtime.session_runtime import (
+    apply_runtime_delegation_result,
+    load_runtime_session,
+    save_runtime_session,
+)
 from app.skill_activation_service import get_skill_activation_service
-from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
+from app.workflows.delegation.coordination import send_delegation_completion_message
 
 log = logging.getLogger(__name__)
 
@@ -247,17 +251,15 @@ async def handle_registry_delivery(
         ):
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
-        session = _load_session(config, runtime, conversation_key)
-        applied = apply_routed_result(
-            session.pending_delegation,
+        applied = apply_runtime_delegation_result(
+            config.data_dir,
+            conversation_key,
             routed_task_id=routed_task_id,
             authority_ref=registry_authority_ref(registry_id),
             result=routed_result,
         )
         if not applied.matched:
             return "accepted"
-        session.pending_delegation = applied.pending
-        _save_session(config, conversation_key, session)
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
         continuation_text = applied.resume_prompt

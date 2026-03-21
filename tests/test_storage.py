@@ -5,7 +5,9 @@ import tempfile
 import threading
 from pathlib import Path
 
+from app.agents.types import RoutedTaskResult
 from app.identity import telegram_conversation_key
+from app.storage_sqlite import SQLiteSessionStore
 from app.storage import (
     build_upload_path,
     default_session,
@@ -153,6 +155,140 @@ def test_session_store_uses_thread_local_sqlite_connections():
         assert error_from_thread == []
         assert loaded_from_thread["provider"] == "claude"
         assert loaded_from_thread["provider_state"]["session_id"] == "abc"
+
+
+def _delegation_session(provider_name: str = "claude") -> dict:
+    session = default_session(provider_name, {"session_id": "abc", "started": False}, "on")
+    session["pending_delegation"] = {
+        "conversation_ref": "telegram:agent:12345",
+        "title": "Delegation plan",
+        "resume_instruction": "Resume when all child tasks complete.",
+        "status": "submitted",
+        "created_at": 1.0,
+        "tasks": [
+            {
+                "routed_task_id": "task-1",
+                "authority_ref": "registry:prod",
+                "title": "Task one",
+                "target_agent_id": "agent-1",
+                "instructions": "Do task one.",
+                "status": "submitted",
+            },
+            {
+                "routed_task_id": "task-2",
+                "authority_ref": "registry:prod",
+                "title": "Task two",
+                "target_agent_id": "agent-2",
+                "instructions": "Do task two.",
+                "status": "submitted",
+            },
+        ],
+    }
+    return session
+
+
+def test_apply_delegation_result_atomically_merges_concurrent_updates_for_same_conversation():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        conversation_key = telegram_conversation_key(5150)
+        initial_store = SQLiteSessionStore()
+        initial_store.save_session(data_dir, conversation_key, _delegation_session())
+        initial_store.close_all_db()
+
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def _apply(task_id: str, summary: str) -> None:
+            worker_store = SQLiteSessionStore()
+            try:
+                barrier.wait()
+                outcome = worker_store.apply_delegation_result_atomically(
+                    data_dir,
+                    conversation_key,
+                    routed_task_id=task_id,
+                    authority_ref="registry:prod",
+                    result=RoutedTaskResult(
+                        routed_task_id=task_id,
+                        status="completed",
+                        summary=summary,
+                    ),
+                )
+                assert outcome.matched is True
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                worker_store.close_all_db()
+
+        first = threading.Thread(target=_apply, args=("task-1", "first done"))
+        second = threading.Thread(target=_apply, args=("task-2", "second done"))
+        first.start()
+        second.start()
+        first.join()
+        second.join()
+
+        assert errors == []
+        verify_store = SQLiteSessionStore()
+        loaded = verify_store.load_session(
+            data_dir,
+            conversation_key,
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
+        pending = loaded["pending_delegation"]
+        assert pending is not None
+        assert pending["status"] == "completed"
+        assert {task["routed_task_id"]: task["status"] for task in pending["tasks"]} == {
+            "task-1": "completed",
+            "task-2": "completed",
+        }
+        assert {task["routed_task_id"]: task["summary"] for task in pending["tasks"]} == {
+            "task-1": "first done",
+            "task-2": "second done",
+        }
+        verify_store.close_all_db()
+
+
+def test_apply_delegation_result_atomically_does_not_touch_other_conversations():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        store = SQLiteSessionStore()
+        first_key = telegram_conversation_key(7001)
+        second_key = telegram_conversation_key(7002)
+        store.save_session(data_dir, first_key, _delegation_session())
+        store.save_session(data_dir, second_key, _delegation_session())
+
+        store.apply_delegation_result_atomically(
+            data_dir,
+            first_key,
+            routed_task_id="task-1",
+            authority_ref="registry:prod",
+            result=RoutedTaskResult(
+                routed_task_id="task-1",
+                status="completed",
+                summary="updated",
+            ),
+        )
+
+        changed = store.load_session(
+            data_dir,
+            first_key,
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
+        unchanged = store.load_session(
+            data_dir,
+            second_key,
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
+        assert changed["pending_delegation"]["tasks"][0]["summary"] == "updated"
+        assert unchanged["pending_delegation"]["tasks"][0].get("summary", "") == ""
+        store.close_all_db()
 
 
 # -- resolve_allowed_path --

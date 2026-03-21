@@ -1,5 +1,8 @@
 """Tests for Postgres-backed session store (Phase 12). Require Postgres harness."""
 
+import threading
+
+from app.agents.types import RoutedTaskResult
 from app import storage_postgres
 from app.identity import telegram_conversation_key
 from app.session_defaults import default_session
@@ -7,6 +10,36 @@ from app.session_defaults import default_session
 
 def _provider_state_factory():
     return {}
+
+
+def _delegation_session() -> dict:
+    session = default_session("claude", _provider_state_factory(), "on")
+    session["pending_delegation"] = {
+        "conversation_ref": "telegram:agent:12345",
+        "title": "Delegation plan",
+        "resume_instruction": "Resume when all child tasks complete.",
+        "status": "submitted",
+        "created_at": 1.0,
+        "tasks": [
+            {
+                "routed_task_id": "task-1",
+                "authority_ref": "registry:prod",
+                "title": "Task one",
+                "target_agent_id": "agent-1",
+                "instructions": "Do task one.",
+                "status": "submitted",
+            },
+            {
+                "routed_task_id": "task-2",
+                "authority_ref": "registry:prod",
+                "title": "Task two",
+                "target_agent_id": "agent-2",
+                "instructions": "Do task two.",
+                "status": "submitted",
+            },
+        ],
+    }
+    return session
 
 
 def test_session_exists_false_when_empty(postgres_truncated):
@@ -92,6 +125,93 @@ def test_list_sessions_after_save(postgres_truncated):
         telegram_conversation_key(111),
         telegram_conversation_key(222),
     }
+
+
+def test_apply_delegation_result_atomically_merges_concurrent_updates(postgres_truncated):
+    from app.db.postgres import get_connection
+
+    conversation_key = telegram_conversation_key(5150)
+    with get_connection(postgres_truncated) as conn:
+        storage_postgres.save_session(conn, conversation_key, _delegation_session())
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _apply(task_id: str, summary: str) -> None:
+        try:
+            barrier.wait()
+            with get_connection(postgres_truncated) as conn:
+                outcome = storage_postgres.apply_delegation_result_atomically(
+                    conn,
+                    conversation_key,
+                    routed_task_id=task_id,
+                    authority_ref="registry:prod",
+                    result=RoutedTaskResult(
+                        routed_task_id=task_id,
+                        status="completed",
+                        summary=summary,
+                    ),
+                )
+                assert outcome.matched is True
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = threading.Thread(target=_apply, args=("task-1", "first done"))
+    second = threading.Thread(target=_apply, args=("task-2", "second done"))
+    first.start()
+    second.start()
+    first.join()
+    second.join()
+
+    assert errors == []
+    with get_connection(postgres_truncated) as conn:
+        loaded = storage_postgres.load_session(
+            conn, conversation_key, "claude", _provider_state_factory, "on"
+        )
+    pending = loaded["pending_delegation"]
+    assert pending is not None
+    assert pending["status"] == "completed"
+    assert {task["routed_task_id"]: task["status"] for task in pending["tasks"]} == {
+        "task-1": "completed",
+        "task-2": "completed",
+    }
+    assert {task["routed_task_id"]: task["summary"] for task in pending["tasks"]} == {
+        "task-1": "first done",
+        "task-2": "second done",
+    }
+
+
+def test_apply_delegation_result_atomically_does_not_touch_other_conversations(postgres_truncated):
+    from app.db.postgres import get_connection
+
+    first_key = telegram_conversation_key(7001)
+    second_key = telegram_conversation_key(7002)
+    with get_connection(postgres_truncated) as conn:
+        storage_postgres.save_session(conn, first_key, _delegation_session())
+        storage_postgres.save_session(conn, second_key, _delegation_session())
+
+    with get_connection(postgres_truncated) as conn:
+        storage_postgres.apply_delegation_result_atomically(
+            conn,
+            first_key,
+            routed_task_id="task-1",
+            authority_ref="registry:prod",
+            result=RoutedTaskResult(
+                routed_task_id="task-1",
+                status="completed",
+                summary="updated",
+            ),
+        )
+
+    with get_connection(postgres_truncated) as conn:
+        changed = storage_postgres.load_session(
+            conn, first_key, "claude", _provider_state_factory, "on"
+        )
+        unchanged = storage_postgres.load_session(
+            conn, second_key, "claude", _provider_state_factory, "on"
+        )
+    assert changed["pending_delegation"]["tasks"][0]["summary"] == "updated"
+    assert unchanged["pending_delegation"]["tasks"][0].get("summary", "") == ""
 
 
 def test_created_at_preserved_on_resave(postgres_truncated):

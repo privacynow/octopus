@@ -8,8 +8,12 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from app.agents.types import RoutedTaskResult
 from app.identity import telegram_conversation_key
+from app.session_state import session_from_dict, session_to_dict
 from app.session_defaults import default_session
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
+from app.workflows.delegation.coordination import apply_routed_result
 
 _SCHEMA_VERSION = 2
 
@@ -227,6 +231,46 @@ class SQLiteSessionStore:
         conn = self._db(data_dir)
         self._upsert(conn, conversation_key, session)
         conn.commit()
+
+    def apply_delegation_result_atomically(
+        self,
+        data_dir: Path,
+        conversation_key: str,
+        *,
+        routed_task_id: str,
+        authority_ref: str,
+        result: RoutedTaskResult,
+    ) -> DelegationUpdateOutcome:
+        conn = self._db(data_dir)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT data FROM sessions WHERE conversation_key = ?",
+                (conversation_key,),
+            ).fetchone()
+            raw: dict[str, Any] = {}
+            if row is not None:
+                try:
+                    decoded = json.loads(row[0])
+                    if isinstance(decoded, dict):
+                        raw = decoded
+                except json.JSONDecodeError:
+                    raw = {}
+            session = session_from_dict(raw)
+            applied = apply_routed_result(
+                session.pending_delegation,
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=result,
+            )
+            if applied.matched:
+                session.pending_delegation = applied.pending
+                self._upsert(conn, conversation_key, session_to_dict(session))
+            conn.commit()
+            return applied
+        except Exception:
+            conn.rollback()
+            raise
 
     def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         conn = self._db(data_dir)

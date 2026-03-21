@@ -4189,3 +4189,449 @@ Strictly sequential: 18A → 18B → 18C.
 - Telegram-owned builders/tests pass `source="telegram"` explicitly
 - accepted static-shell UI proof remains documented honestly
 - full suite passes after every slice and at final closeout
+
+## Phase 19: Remediation Tracks A-E
+
+Why this phase exists: the post-Phase-18 repo-wide audit found a new
+class of follow-on work that is smaller than the earlier architecture
+rollout but still material: provider security seams still trust too
+much input, a few durability/resource paths are not hardened to the
+same bar as the rest of the repo, delegation staleness is still
+operator-hostile, and some remaining user-visible/provider-error polish
+is weaker than the product bar. This phase closes those seams directly
+instead of treating them as vague cleanup debt.
+
+### Phase 19 Process Rules
+
+- Track A is blocking. No other track starts until `19A1` lands green.
+- Every slice starts by naming the invariant being closed and the owning
+  seam(s).
+- Behavior tests are primary proof. Narrow grep/source checks remain
+  secondary tripwires only.
+- Store changes follow the repo parity rule:
+  - if a registry/control-plane/store facade changes, land both SQLite
+    and Postgres implementations in the same slice when that seam has
+    both backends
+  - SQLite-only runtime stores are labelled as such in the slice text
+    instead of pretending backend symmetry that does not exist
+- Durable/session transactions must stay short:
+  - no awaits inside a database transaction
+  - no network/provider work inside a database transaction
+- No new infrastructure, frameworks, or external dependencies.
+- No new generic validation framework; reuse `pydantic`, existing store
+  validators, existing CAS/lease patterns, and existing runner loops.
+
+### Phase 19 Architecture Decisions
+
+- Extend existing seams only:
+  - `app/providers/codex.py`
+  - `app/providers/claude.py`
+  - `app/config.py`
+  - `app/credential_store.py`
+  - `octopus`
+  - `app/state.py`
+  - `app/storage_sqlite.py`
+  - `app/storage_postgres.py`
+  - `app/work_queue_sqlite_impl.py`
+  - `app/registry_service/store.py`
+  - `app/control_plane/*`
+  - `app/runtime/dispatch.py`
+  - `app/agents/delivery.py`
+  - `app/workflows/delegation/*`
+  - `app/channels/telegram/pending.py`
+  - `app/channels/registry/ui.py`
+- `19A1` must begin with a repo sweep of current Codex sandbox values
+  and `config_overrides` usage. The allowlists are derived from audited
+  current repo usage and current Codex contract, not guessed examples.
+- `19B3` is a SQLite migration-ladder hardening slice:
+  - `app/work_queue_sqlite_impl.py`
+  - `app/storage_sqlite.py`
+  - `app/registry_service/store.py`
+  Postgres parity for those seams is verified by behavior/contract
+  tests, not by pretending the implementation change lands identically
+  in SQL migration files.
+- `19C1` purge is periodic inline cleanup, not startup-only cleanup.
+- `19D1` delegation staleness is lazy expiration-on-next-touch:
+  approval and worker-dispatch paths expire stale delegation state when
+  the conversation is touched again. No timer/daemon is added.
+- `19D1` must use the existing delegation machine vocabulary
+  (`submitted -> failed`), not invent a new `timed_out` status.
+- `19A4` must not double-log the credential-key fallback condition:
+  upgrade the existing warning path or otherwise suppress duplicate
+  startup/runtime messaging.
+
+### Track A: Security Hardening
+
+#### Slice 19A1: Shared Codex security validator
+
+**Statement**: Codex sandbox selection and skill-provided config
+overrides must be validated against one shared security contract before
+they reach the CLI argv builder.
+
+**Owning seams**:
+- `app/providers/codex.py`
+- `app/config.py`
+
+**Fix**:
+- audit all current repo uses of Codex sandbox values and
+  `config_overrides`
+- add one shared Codex validator/helper that owns:
+  - allowed sandbox values
+  - allowed override keys
+  - rejection of override values that begin with `-`
+- validate `CODEX_SANDBOX` at config load time against the same helper
+- reject unknown or unsafe override entries before argv construction
+
+**Commit**:
+- `phase-19 / 19a1: shared codex security validator`
+
+#### Slice 19A2: Audit `skip_permissions` grant sites
+
+**Statement**: `skip_permissions=True` must only be granted by explicit
+user-approved/retry flows, and that policy must be proved at the grant
+sites rather than re-implemented in provider consumers.
+
+**Owning seams**:
+- `app/channels/telegram/pending.py`
+- `app/workflows/execution/requests.py`
+
+**Fix**:
+- audit all code paths that grant `skip_permissions=True`
+- keep provider modules as consumers only
+- add grant-site behavior tests proving approval/retry flows set the
+  flag and non-approved flows do not
+- add a narrow sweep ensuring no stray grant sites remain
+
+**Commit**:
+- `phase-19 / 19a2: audit skip-permissions grant sites`
+
+#### Slice 19A3: Harden Claude MCP temp-file lifecycle
+
+**Statement**: Claude MCP config temp files must be cleaned up on all
+normal exception/timeout paths and created with restrictive
+permissions.
+
+**Owning seam**:
+- `app/providers/claude.py`
+
+**Fix**:
+- move cleanup into a `finally` around subprocess execution
+- set restrictive file permissions on the temp file
+- prove cleanup on success, exception, and timeout paths
+- do not overclaim crash/SIGKILL cleanup guarantees
+
+**Commit**:
+- `phase-19 / 19a3: harden mcp temp-file lifecycle`
+
+#### Slice 19A4: Generate active credential key for new installs
+
+**Statement**: new installs must not start on the Telegram-token
+credential-key fallback, and legacy fallback use must surface one clear
+operator-facing diagnostic.
+
+**Owning seams**:
+- `octopus`
+- `app/credential_store.py`
+- startup composition in `app/main.py`
+
+**Fix**:
+- generate and write an active `BOT_CREDENTIAL_KEY` in guided env setup
+- upgrade the existing fallback warning path to one clear stronger
+  diagnostic without duplicate logs
+- keep runtime fallback behavior for legacy/manual configs
+
+**Commit**:
+- `phase-19 / 19a4: generate credential key for new installs`
+
+### Track B: Durability and Data Integrity
+
+#### Slice 19B1: Atomic state-file writes
+
+**Statement**: local state files must never be partially overwritten by
+crash/interruption during persistence.
+
+**Owning seam**:
+- `app/state.py`
+
+**Fix**:
+- replace direct `write_text()` persistence with same-directory temp
+  write + `os.replace()`
+- cover all state-file save paths that use the shared helpers
+
+**Commit**:
+- `phase-19 / 19b1: atomic state file writes`
+
+#### Slice 19B2: Atomic delegation-result session update
+
+**Statement**: delivery-side routed-result application must not lose
+parent-session delegation state when it races with other same-
+conversation session writes outside the Telegram chat lock.
+
+**Owning seams**:
+- `app/agents/delivery.py`
+- runtime session stores
+
+**Fix**:
+- add a narrow storage-owned helper that:
+  - loads the session
+  - applies the routed-result mutation
+  - saves the session
+  - all inside one short transaction
+- scope this helper to the proven delivery-side delegation-result race
+  only; do not add blanket transactional wrappers for unrelated
+  session transitions
+- land both SQLite and Postgres implementations if the session facade
+  supports both
+
+**Commit**:
+- `phase-19 / 19b2: atomic delegation-result session update`
+
+#### Slice 19B3: SQLite migration-ladder hardening
+
+**Statement**: in-process SQLite migration ladders must update schema
+  version atomically with their migration steps so crashes cannot replay
+  partially applied migrations.
+
+**Owning seams**:
+- `app/work_queue_sqlite_impl.py`
+- `app/storage_sqlite.py`
+- `app/registry_service/store.py`
+
+**Fix**:
+- convert migration ladders that currently run statements and then write
+  version state separately into transaction-scoped migration steps
+- keep historical migration fidelity: migrations refer to the schema as
+  it existed at that version
+- do not widen this slice to the control-plane store, which still has
+  no migration ladder
+
+**Commit**:
+- `phase-19 / 19b3: harden sqlite migration ladders`
+
+#### Slice 19B4: Log mismatched routed-result authority
+
+**Statement**: authority mismatches on routed results must be visible to
+operators instead of silently returning accepted/no-op.
+
+**Owning seam**:
+- `app/agents/delivery.py`
+
+**Fix**:
+- add warning-level logging when a routed result is valid but does not
+  match any pending delegation task for the expected authority
+- keep behavior unchanged otherwise
+
+**Commit**:
+- `phase-19 / 19b4: log mismatched routed-result authority`
+
+### Track C: Resource Lifecycle
+
+#### Slice 19C1: Periodic inline purge for control-plane commands and usage log
+
+**Statement**: completed/dead-letter control-plane commands and old
+usage-log rows must not accumulate forever in long-lived processes.
+
+**Owning seams**:
+- `app/control_plane/*`
+- `app/work_queue_sqlite_impl.py`
+- `app/work_queue_postgres_impl.py`
+- startup/runner composition in `app/main.py`
+
+**Fix**:
+- add periodic command purge on the processor runner’s existing reclaim
+  cadence
+- add periodic usage purge on the worker loop’s existing sweep cadence,
+  gated so it does not run on every sweep
+- keep purge inline with existing loops; no daemon/background cleanup
+  service
+
+**Commit**:
+- `phase-19 / 19c1: periodic inline purge for bus and usage`
+
+#### Slice 19C3: Processor-runner logging
+
+**Statement**: processor crashes and dead-letter decisions must be
+visible in logs.
+
+**Owning seam**:
+- `app/control_plane/processor_runner.py`
+
+**Fix**:
+- add module logger
+- log processor exceptions at error level with stack traces
+- log dead-letter and unregistered-pair outcomes at warning level
+
+**Commit**:
+- `phase-19 / 19c3: add processor runner logging`
+
+### Track D: Delegation Correctness
+
+#### Slice 19D1: Machine-owned delegation staleness expiration
+
+**Statement**: stale pending delegations must expire through the
+existing delegation machine on next touch instead of living forever or
+introducing new status vocabulary.
+
+**Owning seams**:
+- `app/workflows/delegation/coordination.py`
+- `app/workflows/delegation/machine.py`
+- approval and worker-dispatch call sites
+
+**Fix**:
+- add a coordination helper that lazily expires stale delegations on
+  approval/next-dispatch touch
+- transition remaining submitted child tasks through the existing
+  `submitted -> failed` machine path with a timeout summary
+- do not invent a `timed_out` delegation status
+
+**Commit**:
+- `phase-19 / 19d1: expire stale delegations through machine`
+
+#### Slice 19D2: Pre-validate delegation target discovery
+
+**Statement**: delegation proposals should tell the user up front when
+target agents cannot currently be resolved instead of waiting until
+approval-time failure.
+
+**Owning seams**:
+- `app/agents/delegation.py`
+- `app/ports/agent_directory.py`
+
+**Fix**:
+- resolve target authorities at proposal time
+- surface resolvable vs unresolvable targets in the proposal
+- keep approval-time resolution as the final safety net
+
+**Commit**:
+- `phase-19 / 19d2: prevalidate delegation targets`
+
+#### Slice 19D3: Clear partial-submission messaging
+
+**Statement**: partial delegation submission must tell the user exactly
+what succeeded and what still failed/requires retry.
+
+**Owning seam**:
+- `app/agents/delegation.py`
+
+**Fix**:
+- improve the partial-failure message to name submitted vs failed
+  targets
+- keep the existing semi-committed retry behavior, which is already the
+  correct durable contract
+
+**Commit**:
+- `phase-19 / 19d3: clarify partial delegation messaging`
+
+### Track E: Error Handling and Polish
+
+#### Slice 19E1: Sanitize provider error output
+
+**Statement**: provider error text shown to users must preserve
+meaningful failure information without leaking internal paths, tokens,
+or debug noise.
+
+**Owning seam**:
+- `app/workflows/execution/requests.py`
+
+**Fix**:
+- extend the existing provider-error formatting pipeline with a final
+  sanitization pass for absolute paths and credential-like fragments
+- keep actionable error summaries intact
+
+**Commit**:
+- `phase-19 / 19e1: sanitize provider errors`
+
+#### Slice 19E3: Safe invalid-date fallback in registry UI
+
+**Statement**: malformed timestamps in registry UI rendering should
+fail to a stable placeholder instead of echoing raw invalid values.
+
+**Owning seam**:
+- `app/channels/registry/ui.py`
+
+**Fix**:
+- change the UI time formatter fallback from raw invalid input to a
+  safe placeholder
+
+**Commit**:
+- `phase-19 / 19e3: safe invalid date fallback`
+
+### Phase 19 Sequencing
+
+Strictly sequential:
+
+- Track A: `19A1 → 19A2 → 19A3 → 19A4`
+- Track B: `19B1 → 19B2 → 19B3 → 19B4` (after `19A1`)
+- Track C: `19C1 → 19C3` (after `19A1`)
+- Track D: `19D1 → 19D2 → 19D3` (after `19B2`)
+- Track E: `19E1 → 19E3` (last)
+
+### Phase 19 Exit Gates
+
+- Codex sandbox/config-override input is validated through one shared
+  security seam and `CODEX_SANDBOX` invalid values fail fast at config
+  load
+- `skip_permissions` grant sites are audited and covered by behavior
+  tests
+- Claude MCP temp files are restricted and cleaned up on normal
+  success/exception/timeout paths
+- new installs receive an active `BOT_CREDENTIAL_KEY` and fallback
+  diagnostics do not double-log
+- local state-file writes are atomic
+- delivery-side routed-result session application is atomic at the
+  proven race seam
+- SQLite migration ladders for work queue, session store, and registry
+  store update schema version atomically
+- routed-result authority mismatches emit operator-visible warnings
+- old control-plane commands and usage rows are purged periodically in
+  long-lived processes
+- processor-runner failures and dead-letter decisions are logged
+- stale delegations expire lazily through the existing delegation
+  machine on next touch
+- delegation proposals pre-validate targets and partial-submission
+  messaging is explicit
+- provider error output is sanitized for user-facing surfaces
+- invalid registry UI timestamps render a safe placeholder
+- full suite passes after every slice and at final closeout
+
+### What Not To Do (Phase 19)
+
+- Do not add a new validation framework.
+- Do not add a background cleanup daemon.
+- Do not add blanket transactional wrappers across awaited work.
+- Do not evict active chat locks.
+- Do not invent new delegation statuses.
+- Do not overclaim browser-rendered registry-UI proof while the repo
+  still only has static-shell tests for that surface.
+
+### Phase 19 Execution Prompt
+
+Implement Phase 19: remediation tracks A-E for
+`telegram-agent-bot`.
+
+Read first:
+- `PLAN-control-plane-bus.md`
+- `status.md`
+- backup guidance in `backups/telegram-agent-bot-internal-cleanup-20260316-221803/`
+
+Key constraints:
+- `19A1` starts with a repo sweep of current Codex sandbox values and
+  `config_overrides` usage before codifying allowlists
+- `19A2` tests the grant sites where `skip_permissions=True` is set,
+  not the provider consumers
+- `19A4` must avoid duplicate fallback warning/error logs
+- `19B2` is limited to the proven delegation-result session race and
+  must use short DB transactions only
+- `19B3` is a SQLite migration-ladder hardening slice, not a fake
+  symmetric both-backends rewrite
+- `19C1` purge is periodic inline cleanup on existing loops
+- `19D1` is lazy expiration-on-next-touch through the existing machine
+  vocabulary
+
+Hard rules:
+1. No new frameworks or dependencies
+2. Security fixes are blocking — Track A first
+3. Store/facade changes land with the appropriate backend parity for
+   that seam and with contract/behavior tests
+4. Behavior tests are primary proof
+5. Each slice is one commit and leaves the repo green

@@ -199,6 +199,27 @@ def test_validate_config_codex_mutual_exclusion():
     assert any("CODEX_FULL_AUTO" in e for e in errors6)
 
 
+def test_validate_config_rejects_invalid_codex_sandbox():
+    errors = validate_config(make_config(codex_sandbox="off"))
+    assert any("CODEX_SANDBOX" in e for e in errors)
+
+
+def test_load_config_rejects_invalid_codex_sandbox(tmp_path: Path):
+    env_path = tmp_path / "invalid-codex.env"
+    env_path.write_text(
+        "TELEGRAM_BOT_TOKEN=test-token\n"
+        "BOT_PROVIDER=codex\n"
+        "BOT_ALLOW_OPEN=1\n"
+        "CODEX_SANDBOX=off\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.config.env_path_for_instance", return_value=env_path):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(SystemExit, match="CODEX_SANDBOX"):
+                load_config("test-invalid-codex")
+
+
 # -- BOT_SKILLS validation --
 
 def test_validate_config_unknown_skill():

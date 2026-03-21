@@ -15,6 +15,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 from app.agents.types import RegistryConnectionConfig
 from app.identity import parse_actor_key, telegram_numeric_id
+from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
@@ -342,6 +343,13 @@ def load_config(instance: str | None = None) -> BotConfig:
         except ValueError:
             raise SystemExit(f"CONFIG ERROR: {key} must be a number, got '{raw}'")
 
+    def get_codex_sandbox(key: str, default: str) -> str:
+        raw = get(key, default)
+        try:
+            return validate_codex_sandbox(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
+
     default_data = Path.home() / ".octopus-agent" / instance
 
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -425,7 +433,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         typing_interval_seconds=get_float(
             "BOT_TYPING_INTERVAL", "4.0"
         ),
-        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_sandbox=get_codex_sandbox("CODEX_SANDBOX", "workspace-write"),
         codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
@@ -501,6 +509,13 @@ def load_config_provider_health() -> BotConfig:
         except ValueError:
             return float(default)
 
+    def get_codex_sandbox(key: str, default: str) -> str:
+        raw = get(key, default)
+        try:
+            return validate_codex_sandbox(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
+
     instance = get("BOT_INSTANCE", "default")
     default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -525,7 +540,7 @@ def load_config_provider_health() -> BotConfig:
         default_skills=(),
         stream_update_interval_seconds=get_float("BOT_STREAM_UPDATE_INTERVAL", "1.0"),
         typing_interval_seconds=get_float("BOT_TYPING_INTERVAL", "4.0"),
-        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_sandbox=get_codex_sandbox("CODEX_SANDBOX", "workspace-write"),
         codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
@@ -620,6 +635,10 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
+    try:
+        validate_codex_sandbox(config.codex_sandbox)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     if config.bot_mode not in BotMode._value2member_map_:
         errors.append(

@@ -105,12 +105,8 @@ from app import work_queue
 from app.workflows.recovery.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
-
-
 class ClaimBlocked(Exception):
     """Raised when a worker already owns the claimed item for this chat."""
-
-
 def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRuntime:
     if context is not None:
         runtime = getattr(context, "telegram_runtime", None)
@@ -123,8 +119,6 @@ def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRunti
             if isinstance(runtime, TelegramRuntime):
                 return runtime
     raise RuntimeError("Telegram runtime is not attached to the handler context")
-
-
 @contextlib.asynccontextmanager
 async def _chat_lock(
     runtime: TelegramRuntime,
@@ -1104,7 +1098,11 @@ async def handle_message(
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
-    msg = await telegram_normalization.normalize_message(update, context, runtime.config.data_dir)
+    try:
+        msg = await telegram_normalization.normalize_message(update, context, runtime.config.data_dir)
+    except telegram_normalization.TelegramAttachmentTooLarge as exc:
+        await update.effective_message.reply_text(str(exc))
+        return
     if msg is None:
         return
 

@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app import access
+from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import (
     TelegramConversationRuntime,
@@ -329,6 +330,10 @@ async def shared_command_dispatch(
                 runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
             )
             return
+        rendered = telegram_presenters.pending_plain_outcome_message(
+            _msg.unknown_command(command),
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     if _action_requires_public_guard(action.action) and await _public_guard(runtime, event, update):

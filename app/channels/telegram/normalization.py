@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+from app import user_messages as _msg
 from app.identity import (
     telegram_actor_key,
     telegram_conversation_key,
@@ -22,6 +23,24 @@ from app.runtime.inbound_types import (
     InboundUser,
 )
 from app.storage import build_upload_path, is_image_path
+
+
+MAX_TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+class TelegramAttachmentTooLarge(ValueError):
+    """Raised when a Telegram attachment exceeds the local download limit."""
+
+    def __init__(self, original_name: str, file_size: int, *, max_bytes: int) -> None:
+        self.original_name = original_name
+        self.file_size = file_size
+        self.max_bytes = max_bytes
+        super().__init__(
+            _msg.attachment_too_large(
+                original_name,
+                max_mebibytes=max_bytes // (1024 * 1024),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +60,19 @@ def normalize_user(tg_user) -> InboundUser | None:
     )
 
 
+def _validate_attachment_size(original_name: str, file_size: object) -> None:
+    try:
+        size = int(file_size or 0)
+    except (TypeError, ValueError):
+        return
+    if size > MAX_TELEGRAM_DOWNLOAD_BYTES:
+        raise TelegramAttachmentTooLarge(
+            original_name,
+            size,
+            max_bytes=MAX_TELEGRAM_DOWNLOAD_BYTES,
+        )
+
+
 async def download_attachments(
     update, conversation_key: str, data_dir: Path,
 ) -> list[InboundAttachment]:
@@ -53,6 +85,7 @@ async def download_attachments(
 
     if message.photo:
         photo = message.photo[-1]
+        _validate_attachment_size("photo.jpg", getattr(photo, "file_size", 0))
         path = build_upload_path(data_dir, conversation_key, "photo.jpg")
         tf = await photo.get_file()
         await tf.download_to_drive(custom_path=str(path))
@@ -64,6 +97,7 @@ async def download_attachments(
     if message.document:
         doc = message.document
         name = doc.file_name or "document"
+        _validate_attachment_size(name, getattr(doc, "file_size", 0))
         path = build_upload_path(data_dir, conversation_key, name)
         tf = await doc.get_file()
         await tf.download_to_drive(custom_path=str(path))

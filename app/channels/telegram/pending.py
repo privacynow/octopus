@@ -111,7 +111,7 @@ async def approve_pending(
         rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
         await message.reply_text(rendered.text, **rendered.kwargs())
         return
-    await runtime.execute_request(
+    return await runtime.execute_request(
         chat_id,
         outcome.execution_plan.prompt,
         list(outcome.execution_plan.image_paths),

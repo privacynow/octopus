@@ -173,6 +173,7 @@ async def test_registry_search_does_not_block_event_loop():
             user=InboundUser(id=telegram_actor_key(42), username=user.username),
             conversation_key=telegram_conversation_key(12345),
             command="skills",
+            source="telegram",
         )
 
         @contextlib.asynccontextmanager
@@ -804,6 +805,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
                 conversation_key=_conv(12345),
                 text="replay this message",
                 attachments=(),
+                source="telegram",
             )
             item = {
                 "conversation_key": _conv(12345),
@@ -1774,6 +1776,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
                 conversation_key=_conv(12345),
                 text="replay this",
                 attachments=(),
+                source="telegram",
             )
             item = {
                 "conversation_key": _conv(12345),
@@ -1815,6 +1818,7 @@ async def test_worker_dispatch_command_still_notifies():
                 conversation_key=_conv(12345),
                 command="new",
                 args="",
+                source="telegram",
             )
             item = {
                 "conversation_key": _conv(12345),

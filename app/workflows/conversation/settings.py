@@ -15,7 +15,7 @@ from app.session_state import SessionState
 
 
 class ConversationSettingsUseCases(ConversationSettingsPort):
-    """Canonical conversation settings flows shared by Telegram and registry actions."""
+    """Canonical conversation settings flows shared across channel entrypoints."""
 
     def model_profile_state(
         self,

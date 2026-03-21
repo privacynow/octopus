@@ -17,6 +17,7 @@ async def test_guidance_command_admin_gate_runs_from_explicit_boundary():
         conversation_key=telegram_conversation_key(chat.id),
         command="guidance",
         args=["approve", "claude"],
+        source="telegram",
     )
 
     await handle_guidance_command(event, update, is_admin=False)

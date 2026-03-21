@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 
 class RuntimeSkillImportUseCases(RuntimeSkillImportPort):
-    """Canonical import/update operations shared by Telegram and registry."""
+    """Canonical import/update operations shared across channel entrypoints."""
 
     def _imports(self):
         return get_skill_import_service()

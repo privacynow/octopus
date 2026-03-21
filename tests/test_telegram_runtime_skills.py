@@ -42,6 +42,7 @@ async def test_runtime_skills_show_runs_from_explicit_runtime_boundary():
                 user=InboundUser(id=telegram_actor_key(42), username="testuser"),
                 conversation_key=telegram_conversation_key(chat.id),
                 command="skills",
+                source="telegram",
             )
             runtime = TelegramRuntimeSkillsRuntime(
                 state=current_runtime(),
@@ -72,6 +73,7 @@ async def test_runtime_skills_command_usage_runs_from_explicit_runtime_boundary(
                 conversation_key=telegram_conversation_key(chat.id),
                 command="skills",
                 args=["nonsense"],
+                source="telegram",
             )
             runtime = TelegramRuntimeSkillsRuntime(
                 state=current_runtime(),
@@ -102,6 +104,7 @@ async def test_runtime_skills_install_hides_raw_registry_exception(monkeypatch):
                 conversation_key=telegram_conversation_key(chat.id),
                 command="skills",
                 args=["install", "helper"],
+                source="telegram",
             )
             runtime = TelegramRuntimeSkillsRuntime(
                 state=current_runtime(),

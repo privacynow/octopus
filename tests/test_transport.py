@@ -294,6 +294,7 @@ def test_inbound_message_skip_approval_defaults_false():
             user=InboundUser(id=telegram_actor_key(8), username="telegram"),
             conversation_key=telegram_conversation_key(99),
             text="normal message",
+            source="telegram",
         )
     )
 
@@ -359,6 +360,7 @@ def test_command_default_args_are_tuple():
         user=InboundUser(id=telegram_actor_key(1)),
         conversation_key=telegram_conversation_key(1),
         command="start",
+        source="telegram",
     )
     assert isinstance(cmd.args, tuple)
     assert cmd.args == ()
@@ -370,6 +372,7 @@ def test_message_default_attachments_are_tuple():
         user=InboundUser(id=telegram_actor_key(1)),
         conversation_key=telegram_conversation_key(1),
         text="hi",
+        source="telegram",
     )
     assert isinstance(msg.attachments, tuple)
     assert msg.attachments == ()

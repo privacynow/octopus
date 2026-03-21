@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20C2 landed green: Telegram ingress now rejects oversized attachments before downloading them, and shared-mode unknown slash commands now produce explicit user feedback instead of being silently ignored.
 - Phase 20C1 landed green: Telegram approval/retry buttons now carry a durable per-request callback token, and stale callback presses no longer approve or retry whatever request happens to be pending now.
 - Phase 20B2 landed green: delegation approval expiry still uses proposal age, but post-submission child-result expiry is now anchored to each task's own `submitted_at` timestamp instead of the original proposal timestamp.
 - Phase 20B1 landed green: the control-plane processor loop now logs and survives transient reclaim/purge/poll failures, and parent `delegated_result` timeline events are only published after a routed result is actually ready and matched to a pending delegation.
@@ -104,7 +105,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2114 passed, 23 skipped`.
+- Latest verified full-suite run: `2117 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -191,6 +192,22 @@
   - stale or replayed bare callback presses no longer approve the current pending request
   - command-driven `/approve` and `/reject` behavior remains unchanged
   - full suite status after Phase 20C1: `2114 passed, 23 skipped`
+
+- Complete: Phase 20C2 remediation — make Telegram ingress fail loudly on oversized attachments and unknown slash commands instead of silently discarding operator intent.
+  Scope:
+  - added a Telegram-owned attachment size guard in `app/channels/telegram/normalization.py` with an explicit `TelegramAttachmentTooLarge` error before any photo/document download begins
+  - updated `app/channels/telegram/ingress.py` to catch the size error and reply with a user-facing message rather than enqueueing partial work
+  - added an unknown-command fallback in `app/channels/telegram/shared_mode_dispatch.py` so unrecognized slash commands now reply with `/help` guidance instead of returning silently
+  - added transport/shared-runtime regression coverage and kept `app/channels/telegram/ingress.py` below the repo’s hard line-count cap after the new user-facing guard
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_transport.py tests/test_shared_runtime.py`
+  - `./.venv/bin/python -m pytest -q tests/test_transport.py tests/test_shared_runtime.py tests/test_zero_import_gates.py -k 'telegram_ingress_line_count_stays_below_hard_cap or unknown_commands or oversized or attachment or shared_command_dispatch_replies_to_unknown_commands'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - oversized Telegram documents are rejected before download with user-visible feedback
+  - unknown shared-mode slash commands no longer disappear silently
+  - the ingress structural guard stays green after the new normalization/error path
+  - full suite status after Phase 20C2: `2117 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

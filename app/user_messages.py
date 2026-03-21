@@ -219,6 +219,18 @@ def retry_button_skip() -> str:
     return "Skip retry"
 
 
+def unknown_command(command: str) -> str:
+    """Fallback when a slash command is not recognized."""
+    rendered = f"/{command.lstrip('/')}" if command else "That command"
+    return f"{rendered} isn't recognized. Use /help to see available commands."
+
+
+def attachment_too_large(original_name: str, *, max_mebibytes: int) -> str:
+    """When a Telegram attachment exceeds the local safety limit."""
+    label = original_name or "This attachment"
+    return f"{label} is too large to download here. Send a file up to {max_mebibytes} MB."
+
+
 # ---------------------------------------------------------------------------
 # Progress (status line and renderer)
 # ---------------------------------------------------------------------------
@@ -522,4 +534,3 @@ def cancel_live_completed() -> str:
 def cancel_queued_superseded() -> str:
     """When a queued plain message is dropped because /cancel was processed (no later run)."""
     return "This request was superseded by a cancellation."
-

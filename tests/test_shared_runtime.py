@@ -117,6 +117,27 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
 
 
+async def test_shared_command_dispatch_replies_to_unknown_commands():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        message = FakeMessage(chat=chat, text="/definitelynotacommand")
+        update = FakeUpdate(message=message, user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+        assert prov.run_calls == []
+        assert "isn't recognized" in message.replies[-1]["text"]
+
+
 async def test_shared_callback_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
         chat = FakeChat(12345)

@@ -259,6 +259,11 @@ async def handle_registry_delivery(
             result=routed_result,
         )
         if not applied.matched:
+            log.warning(
+                "Routed result for task %s from authority %s did not match any pending delegation task",
+                routed_task_id,
+                registry_authority_ref(registry_id),
+            )
             return "accepted"
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"

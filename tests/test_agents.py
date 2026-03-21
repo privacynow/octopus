@@ -23,6 +23,7 @@ from app.identity import conversation_key_for_ref, telegram_conversation_ref
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
 from app.agents.state import (
     load_bot_identity_state,
     load_registry_connection_state,
@@ -1219,3 +1220,118 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             },
             runtime=runtime,
         ) == "rejected"
+
+
+async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del conversation_ref, config, kwargs
+                return True
+
+        monkeypatch.setattr(
+            "app.agents.delivery.apply_runtime_delegation_result",
+            lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
+        )
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_noop_bot_services(),
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            outcome = await handle_registry_delivery(
+                cfg,
+                {
+                    "delivery_id": "d-mismatch-result",
+                    "registry_id": "prod",
+                    "kind": "routed_result",
+                    "payload": {
+                        "routed_task_id": "task-1",
+                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "result": {
+                            "status": "completed",
+                            "summary": "done",
+                            "full_text": "Delegated task completed successfully.",
+                        },
+                    },
+                },
+                runtime=runtime,
+            )
+
+        assert outcome == "accepted"
+        assert any(
+            "Routed result for task task-1 from authority registry:prod did not match"
+            in record.message
+            for record in caplog.records
+        )
+
+
+async def test_handle_registry_routed_result_does_not_log_warning_when_result_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del conversation_ref, config, kwargs
+                return True
+
+        monkeypatch.setattr(
+            "app.agents.delivery.apply_runtime_delegation_result",
+            lambda *args, **kwargs: DelegationUpdateOutcome(
+                status="submitted",
+                matched=True,
+                ready_to_resume=False,
+            ),
+        )
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_noop_bot_services(),
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            outcome = await handle_registry_delivery(
+                cfg,
+                {
+                    "delivery_id": "d-match-result",
+                    "registry_id": "prod",
+                    "kind": "routed_result",
+                    "payload": {
+                        "routed_task_id": "task-1",
+                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "result": {
+                            "status": "completed",
+                            "summary": "done",
+                            "full_text": "Delegated task completed successfully.",
+                        },
+                    },
+                },
+                runtime=runtime,
+            )
+
+        assert outcome == "accepted"
+        assert not any(
+            "did not match any pending delegation task" in record.message
+            for record in caplog.records
+        )

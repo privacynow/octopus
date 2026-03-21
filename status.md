@@ -36,12 +36,66 @@
 - Phase 11C landed green: dispatcher readiness now uses the channel
   seam directly and no longer constructs full Telegram egress objects
   for probes.
-- Status should now be read as: rollout and remediation complete
-  through Phase 11.
-- Full suite status after the verified Phase 11 completion:
-  `1940 passed, 23 skipped`.
+- A deeper post-Phase-11 lifecycle review found additional routed-task
+  correctness gaps that were not closed by Phase 11:
+  - late progress updates can still regress degraded or terminal task
+    state
+  - result-report failure does not leave durable degraded task state
+  - routed tasks still leak through the generic completion webhook and
+    recovery egress callbacks
+  - the suite does not yet prove routed-task progress throttling at
+    the real callback boundary
+- Phase 12 is now the active remediation track. Status should be read
+  as: rollout complete through Phase 11, but routed-task lifecycle
+  remediation is still open until Phase 12 lands.
+- Phase 12A landed green: routed-task status updates can no longer
+  overwrite protected completed/degraded task states in either store
+  backend, and later successful routed-task results remain
+  authoritative over degraded fallback state.
+- Current status should now be read as: rollout complete through
+  Phase 11, Phase 12 remediation in progress with 12A complete.
+- Full-suite status after Phase 12A:
+  `1946 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 12A remediation — guard terminal and degraded routed-task state in both stores.
+  Scope:
+  - added one shared protected routed-task status set on the existing
+    registry-store seam in
+    `app/registry_service/store_base.py`
+  - updated both SQLite and Postgres `update_routed_task_status()`
+    implementations so late in-flight updates cannot overwrite
+    `completed`, `failed`, `cancelled`, `timed_out`, or
+    `partialfailed`
+  - preserved final result ownership by leaving
+    `update_routed_task_result()` authoritative over earlier degraded
+    fallback state
+  - added contract coverage for both backends proving:
+    completed status is protected, degraded `partialfailed` is
+    protected, and a later routed-task result can still overwrite the
+    degraded state
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_registry_store_contract.py -k 'enroll_hashes_agent_token_at_rest or routed_task_status_updates_do_not_overwrite_completed_result or routed_task_status_updates_do_not_overwrite_partialfailed or routed_task_result_can_overwrite_partialfailed or create_routed_task_and_lookup'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified SQLite and Postgres both source the protected status set
+    from the shared store seam rather than duplicating unrelated local
+    lists
+  - verified the new contract tests cover both the false positive
+    boundary (late `running`) and the recovery path (later successful
+    final result overwrite)
+  Review:
+  - this slice stayed within the durable-state seam and did not invent
+    a new lifecycle model; it just made the existing task/result
+    ownership contract enforceable in both backends
+  - the first full-suite run exposed a helper regression in the new
+    Postgres contract test code; fixing that before commit kept the
+    slice honest and left the production store code unchanged
+  Verified:
+  - late routed-task progress no longer regresses protected task state
+  - a later successful routed-task result still repairs degraded state
+  - full suite status after Phase 12A: `1946 passed, 23 skipped`
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

@@ -1,6 +1,7 @@
 """Handler integration tests for approval and pending-request flows."""
 
 import time
+from pathlib import Path
 
 from app.providers.base import PreflightContext, RunResult
 from app.storage import default_session, save_session
@@ -89,6 +90,18 @@ async def test_approval_flow():
         assert approved_ctx.skip_permissions is True
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+def test_skip_permissions_grant_sites_are_limited_to_pending_approval_paths():
+    repo = Path(__file__).resolve().parent.parent
+    app_dir = repo / "app"
+    hits: list[str] = []
+    for path in app_dir.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "skip_permissions=True" in text:
+            hits.append(str(path.relative_to(repo)))
+
+    assert hits == ["app/channels/telegram/pending.py"]
 
 
 async def test_approval_wording():

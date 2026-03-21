@@ -30,6 +30,10 @@
 - Phase 13E landed green: Telegram progress callback failures now log
   against the concern-neutral “progress callback” seam instead of the
   old timeline-only wording.
+- Phase 13F landed green: routed-task timeline events are now gated by
+  the same protected-status update guard as task status changes, so a
+  rejected late progress update cannot append task timeline rows after
+  the task has already reached a protected state.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -106,8 +110,44 @@
   `1960 passed, 23 skipped`.
 - Full-suite status after Phase 13E:
   `1961 passed, 23 skipped`.
+- Full-suite status after Phase 13F:
+  `1963 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13F remediation — guard routed-task timeline-event
+  upserts behind the protected status-update guard.
+  Scope:
+  - updated `app/registry_service/store.py` so
+    `update_routed_task_status(...)` only upserts
+    `timeline_events` when the guarded routed-task `UPDATE` actually
+    affects a row
+  - mirrored the same guard in
+    `app/registry_service/store_postgres.py` so SQLite and Postgres
+    keep identical status/timeline semantics
+  - added a contract regression in
+    `tests/contracts/test_registry_store_contract.py` proving that a
+    rejected late `running` update cannot write timeline rows after a
+    task reaches a protected state through `update_routed_task_result()`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_registry_store_contract.py -k 'status_rejection_does_not_upsert_timeline_events or routed_task_status_updates_do_not_overwrite_protected_status or routed_task_result_can_overwrite_partialfailed'`
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_integration.py -k 'routed_task_status_update_persists_timeline_events_and_progress'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the guarded status update still preserves the existing
+    positive path: accepted routed-task progress updates continue to
+    persist timeline events and progress payloads
+  - verified the new contract test asserts both halves of the
+    invariant: protected status is unchanged and no timeline rows are
+    written when the guarded update is rejected
+  Review:
+  - this slice closed the last mismatch between protected routed-task
+    status semantics and timeline side effects without introducing a
+    new store path or new status vocabulary
+  Verified:
+  - rejected routed-task status updates can no longer append timeline
+    rows after a task reaches a protected state
+  - full suite status after Phase 13F: `1963 passed, 23 skipped`
 
 - Complete: Phase 13E remediation — make progress callback logging
   concern-neutral.

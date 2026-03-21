@@ -376,6 +376,53 @@ def test_routed_task_result_can_overwrite_partialfailed(store):
     assert "Recovered result" in str(task["result_json"])
 
 
+def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
+    routed_task_id = "task-status-no-timeline-upsert"
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id=routed_task_id
+    )
+
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "Final result",
+        },
+    )
+
+    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+
+    store.update_routed_task_status(
+        target_token,
+        routed_task_id,
+        {
+            "status": "running",
+            "summary": "late progress",
+            "timeline_events": [
+                {
+                    "event_id": "evt-blocked-timeline",
+                    "conversation_id": "conv-blocked-timeline",
+                    "kind": "progress",
+                    "title": "Late progress",
+                    "body": "This should not land.",
+                    "status": "running",
+                    "progress": None,
+                    "metadata": {},
+                    "created_at": "2026-03-16T00:00:05+00:00",
+                }
+            ],
+        },
+    )
+
+    task = _routed_task_row(store, routed_task_id)
+
+    assert task["status"] == "completed"
+    assert "Final result" in str(task["result_json"])
+    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+
+
 def test_assert_agent_scope_rejects_wrong_scope(store):
     _, agent_token = _enroll(store, "channel-bot", registry_scope="channel")
 

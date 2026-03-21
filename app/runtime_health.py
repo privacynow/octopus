@@ -383,7 +383,10 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
 
             credential_service = get_credential_service()
 
-            user_credentials = credential_service.load(session_context.user_id)
+            user_credentials = credential_service.load_for_skills(
+                session_context.user_id,
+                list(session_context.resolved_active_skills),
+            )
             for skill_name in session_context.resolved_active_skills:
                 missing = credential_service.missing_requirements(
                     get_skill_catalog_service().requirements(skill_name),

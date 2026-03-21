@@ -18,6 +18,12 @@ class CredentialService:
     def load(self, actor_key: str) -> CredentialMap:
         return self._store().load(actor_key)
 
+    def load_for_skills(self, actor_key: str, skill_names: list[str]) -> CredentialMap:
+        normalized = [name for name in dict.fromkeys(skill_names) if name]
+        if not normalized:
+            return {}
+        return self._store().load_for_skills(actor_key, normalized)
+
     def save(
         self,
         actor_key: str,

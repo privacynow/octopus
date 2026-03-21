@@ -302,6 +302,8 @@ def test_context_builders():
     assert isinstance(pf_ctx, PreflightContext)
     assert not isinstance(pf_ctx, RunContext)
     assert pf_ctx.extra_dirs == ["/tmp/uploads/123"]
+    assert "Active runtime skills: Code Review." in pf_ctx.system_prompt
+    assert "## Code Review" not in pf_ctx.system_prompt
 
 
 # =====================================================================

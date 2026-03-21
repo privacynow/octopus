@@ -132,7 +132,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 credential_env={},
             )
 
-        user_creds = self._credentials().load(user_id)
+        user_creds = self._credentials().load_for_skills(user_id, active_skills)
         all_missing: list[tuple[str, list[SkillRequirement]]] = []
         for skill_name in active_skills:
             requirements = self._catalog().requirements(skill_name)

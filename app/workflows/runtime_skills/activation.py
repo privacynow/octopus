@@ -80,7 +80,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
 
         requirements = self._catalog().requirements(skill_name)
         if requirements:
-            user_creds = self._credentials().load(user_id)
+            user_creds = self._credentials().load_for_skills(user_id, [skill_name])
             missing = self._credentials().missing_requirements(
                 requirements,
                 user_creds.get(skill_name, {}),

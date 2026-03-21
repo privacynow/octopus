@@ -396,6 +396,7 @@ class CodexProvider:
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            limit=1024 * 1024,
         )
 
         thread_id: str | None = None

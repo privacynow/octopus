@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20C4 landed green: durable inbound payloads now preserve transport provenance through the runtime admission seam, including legacy replay fallback for older rows that only carried canonical `source`.
 - Phase 20C3 landed green: the shared provider-dispatch seam now uses injected status/typing collaborators instead of assuming Telegram `reply_text`/`.chat`, and live cancellation keys normalize Telegram numeric ids without colliding with qualified non-Telegram conversation keys.
 - Phase 20C2 landed green: Telegram ingress now rejects oversized attachments before downloading them, and shared-mode unknown slash commands now produce explicit user feedback instead of being silently ignored.
 - Phase 20C1 landed green: Telegram approval/retry buttons now carry a durable per-request callback token, and stale callback presses no longer approve or retry whatever request happens to be pending now.
@@ -106,7 +107,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2120 passed, 23 skipped`.
+- Latest verified full-suite run: `2122 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -225,6 +226,22 @@
   - Telegram numeric cancel keys and qualified Telegram refs resolve to the same live cancel event while qualified non-Telegram keys stay disjoint
   - non-Telegram inbound events no longer crash when shared code asks for `chat_id`
   - full suite status after Phase 20C3: `2120 passed, 23 skipped`
+
+- Complete: Phase 20C4 remediation — preserve transport provenance on durable inbound payloads instead of dropping it at the runtime admission seam.
+  Scope:
+  - extended `InboundMessage` / `InboundCommand` / `InboundCallback` / `InboundAction` with an explicit `transport` field at the durable payload contract
+  - updated `serialize_inbound(...)` plus the runtime-owned work-admission helpers to persist envelope transport, while leaving the event-level contract backward-compatible for callers that already know their transport
+  - updated Telegram normalization/shared-dispatch builders and registry bridge builders to stamp transport explicitly where the owning channel/runtime already knows it
+  - updated `deserialize_inbound(...)` to round-trip explicit transport and to fall back to canonical `source` for legacy stored payloads created before the new field existed
+  - added direct regression coverage for explicit registry transport round-trips, legacy payload fallback, Telegram shared-runtime message/action persistence, and generic envelope-owned persistence with a non-Telegram transport id
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_inbound_types.py tests/test_shared_runtime.py tests/test_transport.py tests/test_work_queue.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - runtime admission/replay now preserves the original transport provenance instead of dropping it from durable payloads
+  - legacy rows that only carried `source` still deserialize with useful transport provenance for replay
+  - both Telegram-owned and generic envelope-owned inbound paths now prove the persisted payload carries transport through to deserialization
+  - full suite status after Phase 20C4: `2122 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

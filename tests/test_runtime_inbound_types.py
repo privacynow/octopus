@@ -42,6 +42,7 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             conversation_key="registry:prod:task:task-1",
             text="hello",
             source="registry",
+            transport="registry",
             conversation_ref="registry:prod:task:task-1",
             routed_task_id="task-1",
             authority_ref="registry:prod",
@@ -54,6 +55,7 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             action="delegation_approve",
             params={"ok": True},
             source="registry",
+            transport="registry",
             conversation_ref="registry:prod:conversation:conv-1",
             authority_ref="registry:prod",
         )
@@ -66,6 +68,8 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert isinstance(action, InboundAction)
     assert message.authority_ref == "registry:prod"
     assert action.authority_ref == "registry:prod"
+    assert message.transport == "registry"
+    assert action.transport == "registry"
 
 
 def test_non_telegram_inbound_chat_id_falls_back_to_conversation_key() -> None:
@@ -78,6 +82,18 @@ def test_non_telegram_inbound_chat_id_falls_back_to_conversation_key() -> None:
     )
 
     assert event.chat_id == "registry:prod:conversation:conv-1"
+
+
+def test_deserialize_inbound_legacy_payload_falls_back_transport_to_source() -> None:
+    payload = (
+        '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
+        '"text":"hello","source":"telegram","attachments":[]}'
+    )
+
+    event = deserialize_inbound("message", payload)
+
+    assert isinstance(event, InboundMessage)
+    assert event.transport == "telegram"
 
 
 def test_deserialize_inbound_rejects_non_canonical_identity_payloads() -> None:

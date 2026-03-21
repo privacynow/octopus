@@ -52,6 +52,7 @@ def build_registry_message_delivery(
             text=text,
             attachments=(),
             source="registry",
+            transport="registry",
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
             authority_ref=registry_authority_ref(registry_id),
@@ -81,6 +82,7 @@ def build_registry_action_envelope(
         action=action,
         params=dict(action_payload),
         source="registry",
+        transport="registry",
         conversation_ref=conversation_ref,
         authority_ref=registry_authority_ref(registry_id),
     )

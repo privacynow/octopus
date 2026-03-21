@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app import work_queue
@@ -13,7 +14,8 @@ from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_d
 from app.channels.telegram.session_io import event_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.runtime.inbound_types import deserialize_inbound
+from app.runtime.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
+from app.runtime.work_admission import record_inbound_envelope
 from tests.support.handler_support import (
     current_boot_id,
     current_shared_runtime_builders,
@@ -87,6 +89,10 @@ async def test_shared_message_path_remains_persist_first():
         assert prov.run_calls == []
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
         assert any(item["kind"] == "message" and item["state"] == "queued" for item in items)
+        message_payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
+        assert message_payload is not None
+        message_event = deserialize_inbound("message", message_payload)
+        assert message_event.transport == "telegram"
 
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
@@ -113,8 +119,34 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
+        assert event.transport == "telegram"
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
+
+
+def test_record_inbound_envelope_persists_transport_from_envelope() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        event = InboundAction(
+            user=InboundUser(id="slack:alice", username="alice"),
+            conversation_key="slack:C123",
+            action="approve_pending",
+            params={},
+            source="slack",
+        )
+        envelope = InboundEnvelope(
+            transport="slack-webhook",
+            event_id="evt-slack-1",
+            conversation_key="slack:C123",
+            actor_key="slack:alice",
+            received_at=datetime.now(timezone.utc),
+            event=event,
+        )
+
+        assert record_inbound_envelope(data_dir, envelope) is True
+        payload = work_queue.get_update_payload(data_dir, "evt-slack-1")
+        restored = deserialize_inbound("action", payload)
+
+        assert restored.transport == "slack-webhook"
 
 
 async def test_shared_command_dispatch_replies_to_unknown_commands():

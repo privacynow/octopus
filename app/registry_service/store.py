@@ -1135,7 +1135,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if row is None:
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, {"coordination", "full"})
-            conn.execute(
+            cursor = conn.execute(
                 f"""
                 UPDATE routed_tasks
                 SET status = ?, summary = ?, updated_at = ?
@@ -1150,21 +1150,22 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     *PROTECTED_ROUTED_TASK_STATUSES,
                 ),
             )
-            for event in payload.get("timeline_events", []):
-                self._upsert_timeline_event(
-                    conn,
-                    event_id=event["event_id"],
-                    conversation_id=event["conversation_id"],
-                    routed_task_id=routed_task_id,
-                    agent_id=row["agent_id"],
-                    kind=event["kind"],
-                    title=event["title"],
-                    body=event.get("body", ""),
-                    status=event.get("status", ""),
-                    progress=event.get("progress"),
-                    metadata=event.get("metadata", {}),
-                    created_at=event["created_at"],
-                )
+            if cursor.rowcount > 0:
+                for event in payload.get("timeline_events", []):
+                    self._upsert_timeline_event(
+                        conn,
+                        event_id=event["event_id"],
+                        conversation_id=event["conversation_id"],
+                        routed_task_id=routed_task_id,
+                        agent_id=row["agent_id"],
+                        kind=event["kind"],
+                        title=event["title"],
+                        body=event.get("body", ""),
+                        status=event.get("status", ""),
+                        progress=event.get("progress"),
+                        metadata=event.get("metadata", {}),
+                        created_at=event["created_at"],
+                    )
         return {"routed_task_id": routed_task_id, "status": payload.get("status", "")}
 
     def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:

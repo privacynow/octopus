@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19B3 landed green: the SQLite session, transport, and registry migration ladders now advance schema version inside the same transaction as each migration step, so failed upgrades roll back cleanly instead of leaving replayable half-state behind.
+- Phase 19B4 landed green: routed results that arrive from the wrong authority still stay accepted/no-op, but operators now get an explicit warning instead of a silent delegation stall.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -63,8 +63,9 @@
 - Local agent state persistence now uses atomic same-directory replace writes for both stable bot identity and registry connection state, preserving the last good file if a rename fails mid-save.
 - Parent-session delegation result application is now storage-owned and atomic on both backends, so concurrent routed results for the same conversation no longer race through a load-modify-save gap in delivery handling.
 - SQLite migration owners now execute migration scripts statement-by-statement inside explicit transactions, so failed session/transport/registry upgrades preserve the previous `schema_version` and leave no partial DDL behind.
+- Mismatched routed-result authority is now visible at the delivery seam through one warning log, while matched results and normal resume handling stay unchanged.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2061 passed, 23 skipped`.
+- Latest verified full-suite run: `2063 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -110,6 +111,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19B4 remediation — add operator-visible logging for routed results that no longer match any pending delegation task.
+  Scope:
+  - updated `app/agents/delivery.py` so authority-mismatched routed results now emit one warning before returning the existing `"accepted"` no-op outcome
+  - added regression tests in `tests/test_agents.py` proving the mismatched path logs and the matched path stays quiet
+  - closed Track B after the full-suite rerun stayed green
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'routed_result'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - operators now get visibility into delegated results that were valid deliveries but no longer apply to any pending parent delegation task
+  - matched routed results still avoid spurious warning noise
+  - full suite status after Phase 19B4: `2063 passed, 23 skipped`
 
 - Complete: Phase 19B3 remediation — make the SQLite migration ladders atomic with their schema-version updates instead of committing steps separately.
   Scope:

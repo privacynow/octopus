@@ -20,6 +20,7 @@ from app.capability_service import (
 from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
+    PROTECTED_ROUTED_TASK_STATUSES,
     conversation_status_for_event,
     decode_json_field,
     delivery_kinds_for_registry_scope,
@@ -1128,18 +1129,26 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def update_routed_task_status(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        protected_status_placeholders = ", ".join("?" for _ in PROTECTED_ROUTED_TASK_STATUSES)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, {"coordination", "full"})
             conn.execute(
-                """
+                f"""
                 UPDATE routed_tasks
                 SET status = ?, summary = ?, updated_at = ?
                 WHERE routed_task_id = ?
+                  AND status NOT IN ({protected_status_placeholders})
                 """,
-                (payload.get("status", ""), payload.get("summary", ""), now, routed_task_id),
+                (
+                    payload.get("status", ""),
+                    payload.get("summary", ""),
+                    now,
+                    routed_task_id,
+                    *PROTECTED_ROUTED_TASK_STATUSES,
+                ),
             )
             for event in payload.get("timeline_events", []):
                 self._upsert_timeline_event(

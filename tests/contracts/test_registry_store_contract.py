@@ -127,10 +127,11 @@ def _stored_agent_token(store, agent_id: str) -> str:
         return str(row["agent_token"])
 
     from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
     with store._connect() as conn:
-        cur = conn.cursor()
+        cur = conn.cursor(row_factory=dict_row)
         try:
             cur.execute(
                 f"SELECT agent_token FROM {_SCHEMA}.agents WHERE agent_id = %s",
@@ -140,7 +141,56 @@ def _stored_agent_token(store, agent_id: str) -> str:
         finally:
             cur.close()
     assert row is not None
-    return str(row[0])
+    return str(row["agent_token"])
+
+
+def _routed_task_row(store, routed_task_id: str):
+    if isinstance(store, RegistrySQLiteStore):
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
+                (routed_task_id,),
+            ).fetchone()
+        assert row is not None
+        return row
+
+    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from psycopg.rows import dict_row
+
+    assert isinstance(store, RegistryPostgresStore)
+    with store._connect() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            cur.execute(
+                f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    assert row is not None
+    return row
+
+
+def _create_routed_task(store, *, routed_task_id: str = "task-1") -> tuple[dict, str, str, str]:
+    origin_id, _origin_token = _enroll(store, f"origin-{routed_task_id}")
+    target_id, target_token = _enroll(store, f"target-{routed_task_id}", ["reviewer"])
+    routed = store.create_routed_task(
+        {
+            "routed_task_id": routed_task_id,
+            "parent_conversation_id": f"conv-{routed_task_id}",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Review task",
+            "instructions": "Review the spec.",
+            "context": {},
+            "constraints": {},
+            "requested_capabilities": ["reviewer"],
+            "priority": "normal",
+            "created_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    return routed, origin_id, target_id, target_token
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -234,23 +284,8 @@ def test_search_agents_excludes_offline(store):
 
 
 def test_create_routed_task_and_lookup(store):
-    origin_id, _ = _enroll(store, "origin-bot")
-    target_id, target_token = _enroll(store, "target-bot", ["reviewer"])
-
-    routed = store.create_routed_task(
-        {
-            "routed_task_id": "task-1",
-            "parent_conversation_id": "conv-1",
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Review task",
-            "instructions": "Review the spec.",
-            "context": {},
-            "constraints": {},
-            "requested_capabilities": ["reviewer"],
-            "priority": "normal",
-            "created_at": "2026-03-16T00:00:00+00:00",
-        }
+    routed, origin_id, target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-1"
     )
 
     deliveries = store.poll(target_token, cursor=0, limit=20)["deliveries"]
@@ -259,6 +294,101 @@ def test_create_routed_task_and_lookup(store):
     assert routed["delivery_id"]
     assert len(deliveries) == 1
     assert deliveries[0]["kind"] == "routed_task"
+
+
+def test_routed_task_status_updates_do_not_overwrite_completed_result(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-completed"
+    )
+
+    store.update_routed_task_result(
+        target_token,
+        "task-status-completed",
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "Full result",
+        },
+    )
+
+    store.update_routed_task_status(
+        target_token,
+        "task-status-completed",
+        {
+            "status": "running",
+            "summary": "late progress",
+            "timeline_events": [],
+        },
+    )
+
+    task = _routed_task_row(store, "task-status-completed")
+
+    assert task["status"] == "completed"
+    assert task["summary"] == "done"
+    assert "Full result" in str(task["result_json"])
+
+
+def test_routed_task_status_updates_do_not_overwrite_partialfailed(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-partialfailed"
+    )
+
+    store.update_routed_task_status(
+        target_token,
+        "task-status-partialfailed",
+        {
+            "status": "partialfailed",
+            "summary": "delivery failed",
+            "timeline_events": [],
+        },
+    )
+
+    store.update_routed_task_status(
+        target_token,
+        "task-status-partialfailed",
+        {
+            "status": "running",
+            "summary": "late progress",
+            "timeline_events": [],
+        },
+    )
+
+    task = _routed_task_row(store, "task-status-partialfailed")
+
+    assert task["status"] == "partialfailed"
+    assert task["summary"] == "delivery failed"
+
+
+def test_routed_task_result_can_overwrite_partialfailed(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-recovered"
+    )
+
+    store.update_routed_task_status(
+        target_token,
+        "task-status-recovered",
+        {
+            "status": "partialfailed",
+            "summary": "delivery failed",
+            "timeline_events": [],
+        },
+    )
+
+    store.update_routed_task_result(
+        target_token,
+        "task-status-recovered",
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "Recovered result",
+        },
+    )
+
+    task = _routed_task_row(store, "task-status-recovered")
+
+    assert task["status"] == "completed"
+    assert task["summary"] == "done"
+    assert "Recovered result" in str(task["result_json"])
 
 
 def test_assert_agent_scope_rejects_wrong_scope(store):

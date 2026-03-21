@@ -11,6 +11,13 @@ from typing import Any, Protocol
 from app.runtime_health import report_from_dict, report_to_dict
 
 _OFFLINE_AFTER_SECONDS = 60
+PROTECTED_ROUTED_TASK_STATUSES = (
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "partialfailed",
+)
 
 
 def hash_agent_token(token: str) -> str:

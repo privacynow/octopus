@@ -22,6 +22,7 @@ from app.db.postgres import get_connection
 from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
+    PROTECTED_ROUTED_TASK_STATUSES,
     conversation_status_for_event,
     decode_json_field,
     delivery_kinds_for_registry_scope,
@@ -911,8 +912,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     UPDATE {_SCHEMA}.routed_tasks
                     SET status = %s, summary = %s, updated_at = %s
                     WHERE routed_task_id = %s
+                      AND status != ALL(%s)
                     """,
-                    (payload.get("status", ""), payload.get("summary", ""), now, routed_task_id),
+                    (
+                        payload.get("status", ""),
+                        payload.get("summary", ""),
+                        now,
+                        routed_task_id,
+                        list(PROTECTED_ROUTED_TASK_STATUSES),
+                    ),
                 )
             for event in payload.get("timeline_events", []):
                 self._upsert_timeline_event(

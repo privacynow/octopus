@@ -67,9 +67,13 @@
   proven at the real `TelegramProgress.update()` callback boundary,
   including forced bypass and the invariant that terminal-looking
   labels still publish in-flight `running` task state.
+- Phase 12 landed green and closed the routed-task lifecycle
+  remediation track.
 - Current status should now be read as: rollout complete through
-  Phase 11, Phase 12 remediation in progress with 12A-12E complete.
-- Full-suite status after Phase 12E:
+  Phase 12, with routed-task lifecycle correctness and durable
+  degraded-state recovery closed on the existing task-routing/store/UI
+  seams.
+- Full-suite status after Phase 12 closeout:
   `1953 passed, 23 skipped`.
 
 ## Slice Log
@@ -234,6 +238,30 @@
   - forced updates still bypass the throttle
   - terminal-looking labels remain in-flight only
   - full suite status after Phase 12E: `1953 passed, 23 skipped`
+
+- Complete: Phase 12F remediation — status, guardrails, and final closeout.
+  Scope:
+  - updated this status document so it no longer overclaims older
+    completion states or leaves Phase 12 open after the code/test work
+    actually landed
+  - closed the routed-task lifecycle remediation track on the basis of
+    the contract, integration, worker-entry, and progress-boundary
+    tests added across Phases 12A-12E rather than on brittle grep
+    rules
+  Tests:
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the final routed-task lifecycle model stays concern-owned:
+    task routing/store own routed-task state, recovery no longer leaks
+    through task-ref egress, and the generic completion webhook stays
+    conversation-only
+  Review:
+  - this closeout only marks the track complete because the prior
+    slices already closed the correctness gaps at the real seams; it
+    does not rely on a docs-only declaration of success
+  Verified:
+  - Phase 12 remediation is complete and the docs match the runtime
+    behavior
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

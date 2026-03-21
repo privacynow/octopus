@@ -9,8 +9,8 @@
 
 ## Current State
 
-- Phases 1-17 are implemented and closed.
-- Phase 17B landed green: the shared inbound provenance cleanup pass is complete after the deserializer contract fix, live-path regression coverage, constructor-default audit, and final full-suite rerun.
+- Phases 1-18 are implemented and closed.
+- Phase 18C landed green: the repo-wide boundary-validation and seam-audit pass is complete after raw registry HTTP/store contract hardening, UI/recovery parity fixes, explicit inbound-source enforcement, and the final full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -30,10 +30,31 @@
 - Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
 - Registry bind persistence no longer invents `origin_channel="telegram"` when callers omit the field; invalid bind payloads now fail at the owning store seam and are surfaced as `422` at the raw registry HTTP edge.
 - Registry binding now uses `binding_external_id_for_ref(...)`, making the helper contract explicit: registry refs yield parsed external ids and non-registry refs preserve their original qualified ref for binding.
-- Shared inbound deserialization no longer invents Telegram provenance for malformed payloads: durable inbound payloads must now carry explicit canonical `source`, and malformed queued items missing it fail as `deserialize_error` instead of dispatching.
-- The remaining `source="telegram"` defaults on runtime inbound dataclasses were re-audited after Phase 17A and left in place only as constructor conveniences used by Telegram-owned event builders; no remaining owner-boundary provenance fallback was found after the deserializer fix.
+- Raw registry agent endpoints now validate their payloads against the store contract instead of relying on happy-path callers:
+  - enroll/register/heartbeat/timeline/search/routed-task/ack/status/result all fail malformed payloads with `422`
+  - routed-task status/result updates now require explicit non-empty `status`
+  - bind/enroll/register no longer hide stale scope/channel/capacity defaults at the owning persistence seam
+- Registry store validation is now explicit and consistent across SQLite and Postgres:
+  - `register()` preserves omitted capacity and card-list fields instead of resetting them
+  - `enroll()` requires an explicit valid `registry_scope`
+  - `ack()` rejects invalid classifications instead of coercing them
+  - conversation follow-up message/action writes reject blank values
+  - discovery search rejects malformed list filters and the free-text path no longer references the old `disabled_skills` name
+- Registry UI shell now normalizes more of the actual data it receives:
+  - real timeline/event kinds map to badge classes instead of rendering as unstyled plain text
+  - diagnostic levels are normalized to the supported CSS set
+  - search snippet rendering is routed through one HTML-safe helper instead of inline escape/unescape fragments
+- Recovery/replay hardening now covers the sibling edge cases found during the repo-wide audit:
+  - blank conversation identity resolves as a typed failure instead of slipping through replay prep
+  - unexpected worker-recovery outcomes now raise instead of returning silently
+  - fresh-install Postgres bootstrap is checked directly against the current registry store schema contract
+- Shared inbound events no longer rely on Telegram constructor defaults:
+  - durable deserialization still requires explicit canonical `source`
+  - `InboundMessage` / `InboundCommand` / `InboundCallback` / `InboundAction` now require explicit source at construction time
+  - Telegram-owned builders and runtime tests pass `source="telegram"` explicitly instead of inheriting it implicitly
+- Shared workflow/doc surfaces no longer keep the stale Telegram-first framing in generic ownership/docstrings.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2001 passed, 23 skipped`.
+- Latest verified full-suite run: `2040 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -67,6 +88,58 @@
 - Phase 17 is the shared inbound provenance closure track:
   - `17A` shared inbound provenance invariant closure
   - `17B` closeout and constructor-default audit
+- Phase 18 is the registry-boundary and audit-closeout track:
+  - `18A` registry HTTP/store contract hardening
+  - `18B` UI/recovery/schema parity sweep
+  - `18C` explicit inbound-source enforcement and closeout
+
+## Phase 18 Slice Log
+
+- Complete: Phase 18C closeout — remove the last shared inbound constructor default, neutralize the remaining shared Telegram-first doc wording, and only then close the audit pass.
+  Scope:
+  - changed `app/runtime/inbound_types.py` so inbound event constructors require explicit non-empty `source` instead of silently defaulting to `"telegram"`
+  - updated Telegram-owned builders and constructor-heavy runtime/worker tests to pass `source="telegram"` explicitly
+  - added direct constructor contract coverage in `tests/test_runtime_inbound_types.py`
+  - neutralized the remaining shared-workflow/shared-module docstrings that were still describing generic seams as Telegram-specific
+  - kept the accepted static-shell UI-test limitation explicit because the repo still does not carry a browser test harness
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_inbound_types.py tests/test_work_queue.py tests/test_transport.py tests/test_handlers.py tests/test_worker_workflows.py tests/test_invariants.py tests/test_telegram_guidance.py tests/test_telegram_runtime_skills.py tests/test_workitem_integration.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - shared inbound event construction no longer hides missing provenance behind a Telegram default
+  - Telegram-owned builders remain explicit and green after the constructor contract tightens
+  - shared doc surfaces no longer encode stale Telegram-first ownership language
+  - final full suite status after Phase 18C: `2040 passed, 23 skipped`
+
+- Complete: Phase 18B remediation — close the repo-wide audit findings around UI rendering, recovery edge handling, migration parity, and fixture clarity.
+  Scope:
+  - expanded `app/channels/registry/ui.py` badge-class handling for real timeline kinds, normalized diagnostic CSS classes, and routed search snippet rendering through a single helper
+  - hardened `app/workflows/recovery/replay.py` and `app/channels/telegram/worker.py` so missing conversation identity and unexpected recovery outcomes fail explicitly instead of slipping through
+  - added a fresh-install Postgres bootstrap parity check in `tests/test_db_postgres.py`
+  - clarified the registry processor/runtime fixture intent in `tests/test_control_plane_integration.py` and `tests/support/handler_support.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_service.py tests/test_worker_workflows.py tests/test_db_postgres.py tests/test_control_plane_integration.py`
+  Verified:
+  - registry UI shell handles the actual event-kind/diagnostic/snippet shapes produced by the store more consistently
+  - recovery/replay failure paths now fail loudly on malformed identity or impossible dispatch outcomes
+  - Postgres fresh-install bootstrap still matches the current registry store contract
+
+- Complete: Phase 18A remediation — harden the raw registry HTTP/store boundary instead of relying on control-plane happy-path callers.
+  Scope:
+  - added explicit payload validators in `app/registry_service/store_base.py` for bind/register/heartbeat/timeline/search/routed-task/ack/status/result/message/action seams
+  - updated both registry store backends so stale defaults no longer hide bad inputs:
+    - `register()` preserves omitted capacity/card-list fields
+    - `enroll()` requires explicit valid `registry_scope`
+    - routed-task status/result updates require explicit non-empty `status`
+    - `ack()` rejects invalid classifications
+    - UI follow-up message/action writes reject blank inputs
+  - updated `app/channels/registry/http.py` so malformed raw payloads return `422` instead of surfacing as `500` or silently mutating store state
+  - fixed the discovery free-text search path to use the current disabled-capability shape
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_registry_skills.py`
+  Verified:
+  - malformed raw registry requests now fail at the owning boundary instead of corrupting state through store defaults
+  - SQLite and Postgres now enforce the same agent-facing payload rules on these seams
 
 ## Phase 17 Slice Log
 

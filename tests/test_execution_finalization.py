@@ -193,6 +193,47 @@ async def test_finalization_reports_routed_task_result_through_explicit_authorit
 
 
 @pytest.mark.asyncio
+async def test_finalization_skips_completion_webhook_for_routed_task() -> None:
+    webhook_calls: list[dict[str, object]] = []
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del authority_ref, result
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+    async def fake_webhook(url, **kwargs):
+        webhook_calls.append({"url": url, **kwargs})
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(status="completed", reply_text="done"),
+        context=FinalizationContext(
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "https://hooks.example.com/completed",
+                },
+            )(),
+            item_id="item-3c",
+            conversation_key="registry:prod:task:task-3c",
+            runtime_chat="registry:prod:task:task-3c",
+            conversation_ref="registry:prod:task:task-3c",
+            routed_task_id="task-3c",
+            authority_ref=registry_authority_ref("prod"),
+            task_routing=FakeTaskRouting(),
+            completion_webhook_sender=fake_webhook,
+        ),
+    )
+    await asyncio.sleep(0)
+
+    assert result.routed_result_status == "reported"
+    assert result.webhook_status == "skipped"
+    assert webhook_calls == []
+
+
+@pytest.mark.asyncio
 async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
     timeline_calls: list[dict[str, object]] = []
 

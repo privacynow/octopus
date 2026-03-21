@@ -57,10 +57,13 @@
   task-routing/store seam, and the registry UI/test surface treats
   that degraded state intentionally instead of as an accidental badge
   leftover.
+- Phase 12C landed green: routed tasks no longer schedule the generic
+  `conversation_completed` webhook, while normal conversation webhook
+  behavior remains unchanged.
 - Current status should now be read as: rollout complete through
-  Phase 11, Phase 12 remediation in progress with 12A-12B complete.
-- Full-suite status after Phase 12B:
-  `1948 passed, 23 skipped`.
+  Phase 11, Phase 12 remediation in progress with 12A-12C complete.
+- Full-suite status after Phase 12C:
+  `1950 passed, 23 skipped`.
 
 ## Slice Log
 
@@ -138,6 +141,34 @@
     state
   - no direct Telegram/raw channel notification path was introduced
   - full suite status after Phase 12B: `1948 passed, 23 skipped`
+
+- Complete: Phase 12C remediation — skip the generic completion webhook for routed tasks.
+  Scope:
+  - updated `finalize_execution()` so the generic completion webhook is
+    gated off whenever `routed_task_id` is present
+  - added direct finalization coverage proving routed-task completion
+    still reports through task routing while the webhook remains
+    skipped
+  - added a real worker-entry regression test proving routed-task
+    execution does not schedule the generic conversation webhook, while
+    the existing non-routed positive/negative webhook tests stay green
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_execution_finalization.py::test_finalization_records_usage_publishes_timeline_and_schedules_webhook tests/test_execution_finalization.py::test_finalization_skips_completion_webhook_for_routed_task tests/test_handlers.py::test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome tests/test_handlers.py::test_worker_dispatch_skips_completion_webhook_for_delegation_proposed tests/test_handlers.py::test_worker_dispatch_skips_completion_webhook_for_routed_task`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified routed-task finalization still reports through
+    `TaskRoutingPort.report_routed_task_result()` while leaving
+    `webhook_status="skipped"`
+  - verified normal conversation webhook scheduling still works end to
+    end through worker dispatch
+  Review:
+  - this slice stays aligned with the concern boundary: the generic
+    webhook remains conversation-owned, and routed-task completion is
+    not smuggled through it as a fake conversation contract
+  Verified:
+  - routed tasks no longer fire the generic completion webhook
+  - non-routed webhook behavior is unchanged
+  - full suite status after Phase 12C: `1950 passed, 23 skipped`
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

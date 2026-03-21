@@ -26,6 +26,8 @@ class RuntimeDispatchRuntime:
     boot_id: str
     cancellations: MutableMapping[int | str, asyncio.Event]
     progress_factory: Callable[..., Any]
+    send_status: Callable[[Any, str], Awaitable[Any]]
+    typing_target: Callable[[Any], Any]
     keep_typing: Callable[..., Awaitable[None]]
     heartbeat: Callable[..., Awaitable[None]]
     format_provider_error: Callable[[str, int], Awaitable[str]]
@@ -48,7 +50,7 @@ async def _run_provider_call(
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None,
     invoke: Callable[[Any, asyncio.Event], Awaitable[Any]],
 ) -> ProviderDispatchOutcome:
-    status_msg = await message.reply_text(label)
+    status_msg = await runtime.send_status(message, label)
     progress = runtime.progress_factory(
         status_msg,
         runtime.config,
@@ -56,7 +58,7 @@ async def _run_provider_call(
     )
     content_started = asyncio.Event()
     progress.content_started = content_started
-    typing_task = asyncio.create_task(runtime.keep_typing(message.chat))
+    typing_task = asyncio.create_task(runtime.keep_typing(runtime.typing_target(message)))
     heartbeat_task = asyncio.create_task(runtime.heartbeat(progress, content_started))
 
     local_cancel_event = cancel_event or asyncio.Event()

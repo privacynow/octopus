@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_conversation_ref
@@ -13,6 +15,7 @@ from app.channels.telegram.execution import (
 )
 from app.summarize import format_provider_error
 from app.runtime.dispatch import (
+    RuntimeDispatchRuntime,
     run_provider_preflight,
     run_provider_request,
 )
@@ -39,6 +42,20 @@ async def _no_op(*args, **kwargs):
     return None
 
 
+class _GenericStatusHandle:
+    pass
+
+
+class _GenericProgress:
+    def __init__(self, status_message, timeline_callback):
+        self.status_message = status_message
+        self.timeline_callback = timeline_callback
+        self.content_started = None
+
+    async def update(self, *_args, **_kwargs):
+        return None
+
+
 async def test_run_provider_request_uses_explicit_runtime_plumbing():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
@@ -58,6 +75,76 @@ async def test_run_provider_request_uses_explicit_runtime_plumbing():
 
         assert outcome.result.text == "default response"
         assert len(prov.run_calls) == 1
+
+
+async def test_run_provider_request_does_not_require_telegram_message_api():
+    typing_targets: list[object] = []
+    typing_started = asyncio.Event()
+
+    async def fake_send_status(message, label: str):
+        message.labels.append(label)
+        return _GenericStatusHandle()
+
+    async def fake_keep_typing(target):
+        typing_targets.append(target)
+        typing_started.set()
+        await asyncio.sleep(0)
+
+    with fresh_env() as (_data_dir, cfg, prov):
+        target = object()
+        original_run = prov.run
+
+        async def delayed_run(provider_state, prompt, image_paths, progress, context=None, cancel=None):
+            await typing_started.wait()
+            return await original_run(
+                provider_state,
+                prompt,
+                image_paths,
+                progress,
+                context=context,
+                cancel=cancel,
+            )
+
+        prov.run = delayed_run
+
+        class GenericMessage:
+            def __init__(self):
+                self.labels: list[str] = []
+                self.target = target
+
+        runtime = RuntimeDispatchRuntime(
+            config=cfg,
+            provider=prov,
+            boot_id="dispatch-test",
+            cancellations={},
+            progress_factory=lambda status_message, _cfg, timeline_callback=None: _GenericProgress(
+                status_message,
+                timeline_callback,
+            ),
+            send_status=fake_send_status,
+            typing_target=lambda message: message.target,
+            keep_typing=fake_keep_typing,
+            heartbeat=_no_op,
+            format_provider_error=current_execution_runtime().dispatch.format_provider_error,
+            run_result_was_interrupted=lambda _returncode: False,
+        )
+        message = GenericMessage()
+
+        outcome = await run_provider_request(
+            "registry:prod:conversation:conv-1",
+            prompt="test prompt",
+            image_paths=[],
+            message=message,
+            provider_state={},
+            context=object(),
+            label="Working",
+            runtime=runtime,
+        )
+
+        assert outcome.result.text == "default response"
+        assert message.labels == ["Working"]
+        assert typing_targets == [target]
+        assert runtime.cancellations == {}
 
 
 def test_dispatch_runtime_uses_injected_collaborators() -> None:

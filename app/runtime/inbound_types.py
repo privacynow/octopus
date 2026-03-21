@@ -59,11 +59,9 @@ class InboundMessage:
         object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -81,11 +79,9 @@ class InboundCommand:
         object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -102,11 +98,9 @@ class InboundCallback:
         object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -125,11 +119,9 @@ class InboundAction:
         object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)

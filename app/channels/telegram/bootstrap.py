@@ -14,8 +14,10 @@ from telegram.ext import (
     filters,
 )
 
+from app import user_messages as _msg
 from app.channels.telegram import ingress
 from app.channels.telegram import execution as telegram_execution
+from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram import progress as telegram_progress
 from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram import worker as telegram_worker
@@ -59,6 +61,21 @@ def _execution_runtime(runtime: TelegramRuntime):
         runtime,
         collaborators=execution_collaborators,
     )
+
+
+async def handle_unknown_command(update, context, *, runtime: TelegramRuntime | None = None) -> None:
+    runtime = runtime or ingress._context_runtime(context)
+    user = ingress.telegram_normalization.normalize_user(update.effective_user)
+    if user is None or not ingress.is_allowed(runtime, user):
+        return
+    message = update.effective_message
+    if message is None:
+        return
+    command = str(getattr(message, "text", "") or "").strip().split()[0].lstrip("/")
+    rendered = telegram_presenters.pending_plain_outcome_message(
+        _msg.unknown_command(command),
+    )
+    await message.reply_text(rendered.text, **rendered.kwargs())
 
 
 def build_application(runtime: TelegramRuntime) -> Application:
@@ -180,6 +197,7 @@ def build_application(runtime: TelegramRuntime) -> Application:
         app.add_handler(CallbackQueryHandler(ingress.handle_skill_add_callback, pattern=r"^skill_add_"))
         app.add_handler(CallbackQueryHandler(ingress.handle_skill_update_callback, pattern=r"^skill_update_"))
         app.add_handler(CallbackQueryHandler(ingress.handle_clear_cred_callback, pattern=r"^clear_cred_"))
+    app.add_handler(MessageHandler(filters.COMMAND, handle_unknown_command))
     app.add_handler(
         MessageHandler(
             (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,

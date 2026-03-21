@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 21 is in progress: the final owner-seam closure pass is executing sequentially with focused regression coverage plus a green full-suite rerun after each slice.
+- Phase 21C landed green: standalone Telegram mode now replies to mistyped slash commands with the canonical help-oriented message, and the live bootstrap wiring stays under the ingress line-count cap.
 - Phase 21B landed green: malformed/missing registry scope now fails closed at the helper/store seam, and runtime registry-state loading falls back to the configured scope instead of widening a missing persisted value to `full`.
 - Phase 21A landed green: artifact extraction now uses real path containment instead of a vulnerable string-prefix check, and completion-webhook validation/runtime both fail closed when target host resolution fails.
 - Phase 20 is closed: all remaining security/runtime boundary findings from the repo-wide audit landed sequentially with focused regression coverage plus a green full-suite rerun after each slice.
@@ -168,6 +169,22 @@
   - `20Z` closeout audit and final pending-branch consistency cleanup
 
 ## Phase 21 Slice Log
+
+- Complete: Phase 21C remediation — close the remaining standalone unknown-command parity gap.
+  Scope:
+  - added a Telegram-bootstrap-owned `handle_unknown_command(...)` callback that reuses the canonical unknown-command copy from `app/user_messages.py`
+  - registered a `filters.COMMAND` catch-all in `app/channels/telegram/bootstrap.py` behind the explicit known-command handlers so mistyped slash commands now get feedback in live standalone mode
+  - moved the handler out of `ingress.py` to preserve the repo’s ingress line-count hard cap while keeping the behavior on the Telegram-owned surface seam
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py -k 'unknown_command or registers_unknown_command_handler'`
+  - `./.venv/bin/python -m pytest -q tests/test_shared_runtime.py -k 'unknown_commands'`
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py -k 'telegram_ingress_line_count_stays_below_hard_cap'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - standalone Telegram mode now replies to unrecognized slash commands with the same canonical help-oriented wording already used by the shared runtime path
+  - known command routing remains owned by the explicit command handlers because the catch-all is registered after them
+  - the ingress hard-cap invariant remains green after moving the catch-all handler to bootstrap ownership
+  - full suite status after Phase 21C: `2141 passed, 23 skipped`
 
 - Complete: Phase 21B remediation — fail closed on registry scope helpers and runtime state fallback.
   Scope:

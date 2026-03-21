@@ -2011,6 +2011,45 @@ def test_bucket_b_command_registration_parity():
         assert not missing, f"Bucket B main commands must be registered; missing: {missing}"
 
 
+def test_build_application_registers_unknown_command_handler():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        import app.channels.telegram.bootstrap as telegram_bootstrap
+        from telegram.ext import MessageHandler
+
+        app = build_bootstrap(cfg, prov).application
+
+        assert any(
+            isinstance(handler, MessageHandler) and handler.callback == telegram_bootstrap.handle_unknown_command
+            for group_handlers in app.handlers.values()
+            for handler in group_handlers
+        )
+
+
+async def test_standalone_unknown_command_replies_with_canonical_message():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.channels.telegram.bootstrap as telegram_bootstrap
+        from app.user_messages import unknown_command
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="/doesnotexist")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await telegram_bootstrap.handle_unknown_command(
+            update,
+            FakeContext(),
+            runtime=current_runtime(),
+        )
+
+        assert last_reply(msg) == unknown_command("doesnotexist")
+
+
 def test_build_application_sequential_updates():
     """build_application uses sequential update processing; live runs are worker-owned so /cancel works."""
     with fresh_env() as (_, cfg, prov):

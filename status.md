@@ -63,10 +63,14 @@
 - Phase 12D landed green: routed-task recovery no longer routes
   `bind()` or recovery-notice callbacks through task-ref egress, while
   normal conversation recovery behavior remains unchanged.
+- Phase 12E landed green: routed-task progress throttling is now
+  proven at the real `TelegramProgress.update()` callback boundary,
+  including forced bypass and the invariant that terminal-looking
+  labels still publish in-flight `running` task state.
 - Current status should now be read as: rollout complete through
-  Phase 11, Phase 12 remediation in progress with 12A-12D complete.
-- Full-suite status after Phase 12D:
-  `1952 passed, 23 skipped`.
+  Phase 11, Phase 12 remediation in progress with 12A-12E complete.
+- Full-suite status after Phase 12E:
+  `1953 passed, 23 skipped`.
 
 ## Slice Log
 
@@ -201,6 +205,35 @@
     side effects
   - non-routed recovery behavior is unchanged
   - full suite status after Phase 12D: `1952 passed, 23 skipped`
+
+- Complete: Phase 12E remediation — prove routed-task progress throttling at the real callback boundary.
+  Scope:
+  - added a real `TelegramProgress.update()` test with the routed-task
+    callback wired through the existing runtime/task-routing seam
+  - proved rapid non-forced routed-task progress updates do not invoke
+    `update_routed_task_status()` one-for-one
+  - proved `force=True` still bypasses the interval gate and that even
+    terminal-looking progress labels remain in-flight `running`
+    updates rather than silently claiming terminal task ownership
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_progress_module.py -k 'routed_task_progress_callback_updates_task_status_via_port or routed_task_progress_callback_skips_empty_markup or telegram_progress_throttles_routed_task_callback_and_force_bypasses or routed_task_progress_callback_keeps_terminal_progress_label_in_flight'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the throttling proof sits at the real invocation point
+    (`TelegramProgress.update()`), not in a fake helper around the
+    callback
+  - verified forced progress bypass still reaches the routed-task
+    status seam and continues to publish `status="running"`
+  Review:
+  - this slice closed the last missing proof from the Phase 12 plan
+    without inventing another throttle abstraction or moving the rate
+    limit away from the existing progress owner
+  Verified:
+  - routed-task progress callback invocation is rate-limited at the
+    real boundary
+  - forced updates still bypass the throttle
+  - terminal-looking labels remain in-flight only
+  - full suite status after Phase 12E: `1953 passed, 23 skipped`
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

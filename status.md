@@ -9,9 +9,8 @@
 
 ## Current State
 
-- Phases 1-15 are implemented and closed.
-- Phase 16 is active.
-- Phase 16B landed green: the registry external-id helper contract now matches its name without changing the runtime behavior that current registry binding paths rely on.
+- Phases 1-16 are implemented and closed.
+- Phase 16C landed green: the boundary validation and helper-contract cleanup pass is complete after the final fallback/helper-name sweep and full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -65,6 +64,20 @@
   - `16C` closeout
 
 ## Phase 16 Slice Log
+
+- Complete: Phase 16C closeout — rerun the seam sweep, keep the accepted limitations honest, and only then close the phase.
+  Scope:
+  - reran the targeted sweep for hidden `origin_channel="telegram"` defaults and verified no production or test code still contains the old store fallback
+  - reran the helper-name sweep and verified no production or test code still references `registry_ref_external_id(...)`
+  - confirmed the only remaining older-name hits are historical status notes documenting the 16B rename
+  - closed the phase only after a final full-suite rerun
+  Tests:
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the bind/origin-channel invariant remains closed across both store backends and the raw registry HTTP edge
+  - the external-id helper contract/name cleanup is fully propagated through production code and tests
+  - the accepted static-shell UI-test limitation remains documented accurately and is not being overclaimed
+  - final full suite status after Phase 16C: `1998 passed, 23 skipped`
 
 - Complete: Phase 16B remediation — make the registry external-id helper contract honest without changing the runtime behavior current binding flows depend on.
   Scope:

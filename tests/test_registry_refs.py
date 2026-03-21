@@ -1,9 +1,9 @@
 """Contract tests for registry ref helper invariants."""
 
 from app.channels.registry.refs import (
+    binding_external_id_for_ref,
     parse_registry_ref,
     qualify_registry_conversation_ref,
-    registry_ref_external_id,
 )
 
 
@@ -71,9 +71,13 @@ def test_parse_registry_ref_returns_none_for_malformed_registry_ref() -> None:
     assert parse_registry_ref("registry:prod:invalid") is None
 
 
-def test_registry_ref_external_id_returns_parsed_external_id() -> None:
-    assert registry_ref_external_id("registry:prod:conversation:conv-1") == "conv-1"
+def test_binding_external_id_for_ref_returns_parsed_external_id_for_conversation_ref() -> None:
+    assert binding_external_id_for_ref("registry:prod:conversation:conv-1") == "conv-1"
 
 
-def test_registry_ref_external_id_returns_original_for_unknown_ref() -> None:
-    assert registry_ref_external_id("slack:eng:C0123ABC") == "slack:eng:C0123ABC"
+def test_binding_external_id_for_ref_returns_parsed_external_id_for_task_ref() -> None:
+    assert binding_external_id_for_ref("registry:prod:task:task-1") == "task-1"
+
+
+def test_binding_external_id_for_ref_returns_original_for_non_registry_ref() -> None:
+    assert binding_external_id_for_ref("slack:eng:C0123ABC") == "slack:eng:C0123ABC"

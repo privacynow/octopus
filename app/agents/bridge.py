@@ -9,8 +9,8 @@ from app import work_queue
 from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.types import TimelineEvent
 from app.channels.registry.refs import (
+    binding_external_id_for_ref,
     qualify_registry_conversation_ref,
-    registry_ref_external_id,
     registry_task_ref,
 )
 from app.config import BotConfig
@@ -141,7 +141,7 @@ async def admit_registry_delivery(
                     "conversation_ref": conversation_ref,
                     "title": payload.get("title", "Registry conversation"),
                     "origin_channel": "registry",
-                    "external_id": registry_ref_external_id(conversation_ref),
+                    "external_id": binding_external_id_for_ref(conversation_ref),
                 }
             )
             await channel_egress.publish_timeline(

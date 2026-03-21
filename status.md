@@ -11,7 +11,7 @@
 
 - Phases 1-15 are implemented and closed.
 - Phase 16 is active.
-- Phase 16A landed green: the registry bind/origin-channel invariant is now closed at the store seam and the raw registry HTTP bind endpoint returns `422` for invalid payloads instead of persisting an implicit Telegram default.
+- Phase 16B landed green: the registry external-id helper contract now matches its name without changing the runtime behavior that current registry binding paths rely on.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -30,8 +30,9 @@
 - Registry ref qualification now treats already-qualified refs generically instead of hardcoding Telegram/registry prefixes, and the helper seam has direct contract coverage plus live caller regressions for registry `channel_action` and `routed_result`.
 - Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
 - Registry bind persistence no longer invents `origin_channel="telegram"` when callers omit the field; invalid bind payloads now fail at the owning store seam and are surfaced as `422` at the raw registry HTTP edge.
+- Registry binding now uses `binding_external_id_for_ref(...)`, making the helper contract explicit: registry refs yield parsed external ids and non-registry refs preserve their original qualified ref for binding.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `1996 passed, 23 skipped`.
+- Latest verified full-suite run: `1998 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -64,6 +65,23 @@
   - `16C` closeout
 
 ## Phase 16 Slice Log
+
+- Complete: Phase 16B remediation — make the registry external-id helper contract honest without changing the runtime behavior current binding flows depend on.
+  Scope:
+  - renamed `registry_ref_external_id(...)` to `binding_external_id_for_ref(...)` in `app/channels/registry/refs.py`
+  - updated `app/channels/registry/channel.py`, `app/channels/registry/egress.py`, and `app/agents/bridge.py` to use the renamed helper
+  - expanded `tests/test_registry_refs.py` so the contract is explicit for registry conversation refs, registry task refs, and non-registry qualified refs
+  - added a live-path regression in `tests/test_agents.py` proving registry `channel_input` delivery preserves a qualified non-registry ref as the binding external id
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_refs.py`
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'preserves_external_id_for_qualified_non_registry_ref or admit_registry_delivery_queued_is_accepted'`
+  - `./.venv/bin/python -m pytest -q tests/test_registry_adapter.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the helper name now matches the actual contract instead of implying registry-only extraction semantics
+  - current registry binding flows still preserve qualified non-registry refs unchanged where that behavior is required
+  - no production code references to the old helper name remain
+  - full suite status after Phase 16B: `1998 passed, 23 skipped`
 
 - Complete: Phase 16A remediation — close the bind/origin-channel invariant at the owning store seam instead of letting caller discipline hide a bad default.
   Scope:
@@ -117,7 +135,7 @@
 - Complete: Phase 15A remediation — close the ref-qualification invariant at the owning seam instead of only at caller paths.
   Scope:
   - changed `app/channels/registry/refs.py:qualify_registry_conversation_ref()` to preserve any already-qualified ref generically via `":" in conversation_ref` instead of a hardcoded Telegram/registry prefix list
-  - added a dedicated helper contract suite in `tests/test_registry_refs.py` covering bare ids, empty input, Telegram refs, registry conversation refs, registry task refs, future-surface refs, `parse_registry_ref()`, and `registry_ref_external_id()`
+  - added a dedicated helper contract suite in `tests/test_registry_refs.py` covering bare ids, empty input, Telegram refs, registry conversation refs, registry task refs, future-surface refs, `parse_registry_ref()`, and the external-id helper contract
   - added live caller regressions in `tests/test_agents.py` proving qualified future-surface refs remain unchanged through both registry `channel_action` and registry `routed_result` handling
   Tests:
   - `./.venv/bin/python -m pytest -q tests/test_registry_refs.py tests/test_agents.py -k 'registry_ref or preserves_already_qualified_future_surface_ref or handle_registry_channel_action_and_control_dispatch or routed_result_publishes_parent_timeline_before_retry_on_startup_race'`

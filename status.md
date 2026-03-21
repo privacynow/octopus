@@ -10,6 +10,8 @@
 ## Current State
 
 - Phases 1-19 are implemented and closed.
+- Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20A1 landed green: webhook config/runtime now reject insecure remote webhook targets, and completion-webhook delivery refuses private/metadata destinations before posting any payload.
 - Phase 19 is closed: Tracks A-E landed sequentially with focused regression coverage plus a green final full-suite rerun.
 - Phase 19E3 landed green: invalid registry UI timestamps now fall back to a stable placeholder instead of echoing raw malformed values back into the shell.
 - Phase 19E1 landed green: provider-error output is now sanitized at the shared execution seam before it reaches any channel renderer.
@@ -97,7 +99,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2084 passed, 23 skipped`.
+- Latest verified full-suite run: `2090 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -141,6 +143,32 @@
   - Track C resource-lifecycle cleanup
   - Track D delegation correctness
   - Track E error-handling and polish
+- Phase 20 is the security and boundary closure track:
+  - `20A1` webhook target hardening
+  - `20A2` registry auth boundary hardening
+  - `20A3` credential/preflight minimization
+  - `20B1` processor/routed-result truthfulness
+  - `20B2` submission-time delegation expiry
+  - `20C1` request-bound approval/retry callbacks
+  - `20C2` Telegram ingress size/unknown-command feedback
+  - `20C3` shared runtime Telegram-assumption removal
+  - `20C4` durable inbound transport provenance
+
+## Phase 20 Slice Log
+
+- Complete: Phase 20A1 remediation — harden outgoing completion-webhook targets and incoming webhook URL policy at the shared config/runtime seam.
+  Scope:
+  - added shared webhook-target policy helpers in `app/config.py` so both `BOT_WEBHOOK_URL` and `BOT_COMPLETION_WEBHOOK_URL` now fail validation when they are malformed or use remote plain HTTP
+  - added completion-webhook runtime blocking in `app/webhook.py` so private, link-local, reserved, and metadata destinations are rejected before any HTTP POST attempt, while explicit local loopback development targets still work
+  - expanded config/webhook regression coverage in `tests/test_config.py` and `tests/test_webhook.py` for malformed URLs, remote plain HTTP, private IPs, metadata IPs, and loopback development targets
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_config.py tests/test_webhook.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - remote webhook targets now require HTTPS at config load
+  - completion-webhook delivery no longer posts to blocked private/metadata addresses
+  - local loopback completion webhooks remain usable for explicit development targets
+  - full suite status after Phase 20A1: `2090 passed, 23 skipped`
 
 ## Phase 19 Slice Log
 

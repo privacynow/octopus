@@ -65,6 +65,67 @@ async def test_fire_skips_when_url_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fire_blocks_private_ip_targets(monkeypatch, caplog):
+    import app.webhook as wh
+
+    calls: list[dict] = []
+    _install_async_client(monkeypatch, [_response(200)], calls)
+
+    with caplog.at_level("WARNING"):
+        await wh.fire_completion_webhook(
+            "https://10.0.0.15/completed",
+            chat_id=123,
+            conversation_ref="conv-1",
+            status="completed",
+            summary="done",
+            completed_at="2026-03-16T00:00:00Z",
+        )
+
+    assert calls == []
+    assert any("Completion webhook blocked" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fire_blocks_metadata_targets(monkeypatch, caplog):
+    import app.webhook as wh
+
+    calls: list[dict] = []
+    _install_async_client(monkeypatch, [_response(200)], calls)
+
+    with caplog.at_level("WARNING"):
+        await wh.fire_completion_webhook(
+            "https://169.254.169.254/latest/meta-data",
+            chat_id=123,
+            conversation_ref="conv-1",
+            status="completed",
+            summary="done",
+            completed_at="2026-03-16T00:00:00Z",
+        )
+
+    assert calls == []
+    assert any("Completion webhook blocked" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fire_allows_loopback_dev_target(monkeypatch):
+    import app.webhook as wh
+
+    calls: list[dict] = []
+    _install_async_client(monkeypatch, [_response(200)], calls)
+
+    await wh.fire_completion_webhook(
+        "http://127.0.0.1:9999/completed",
+        chat_id=123,
+        conversation_ref="conv-1",
+        status="completed",
+        summary="done",
+        completed_at="2026-03-16T00:00:00Z",
+    )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_fire_delivers_on_success(monkeypatch):
     import app.webhook as wh
 

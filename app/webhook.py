@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential, wait_random
 
+from app.config import completion_webhook_target_block_reason
 from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
@@ -93,6 +94,14 @@ async def fire_completion_webhook(
 ) -> None:
     """POST completion payload with retry/backoff and a per-process circuit breaker."""
     if not url:
+        return
+    if reason := completion_webhook_target_block_reason(url):
+        log.warning(
+            "Completion webhook blocked for %s: %s via %s",
+            conversation_ref,
+            reason,
+            sanitize_url_for_logging(url),
+        )
         return
     if not _breaker.allow_request():
         log.debug("Completion webhook circuit open, skipping for %s", conversation_ref)

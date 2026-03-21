@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20A2 landed green: registry enroll/login now throttle repeated failed auth attempts per client host, UI session signing no longer regenerates per process when `REGISTRY_SESSION_SECRET` is unset, and `/healthz` now exposes only the minimal liveness contract.
 - Phase 20A1 landed green: webhook config/runtime now reject insecure remote webhook targets, and completion-webhook delivery refuses private/metadata destinations before posting any payload.
 - Phase 19 is closed: Tracks A-E landed sequentially with focused regression coverage plus a green final full-suite rerun.
 - Phase 19E3 landed green: invalid registry UI timestamps now fall back to a stable placeholder instead of echoing raw malformed values back into the shell.
@@ -99,7 +100,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2090 passed, 23 skipped`.
+- Latest verified full-suite run: `2097 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -155,6 +156,23 @@
   - `20C4` durable inbound transport provenance
 
 ## Phase 20 Slice Log
+
+- Complete: Phase 20A2 remediation — harden the registry auth/session boundary instead of relying on static secrets and unlimited retries at the raw HTTP edge.
+  Scope:
+  - added small in-process failed-auth throttling in `app/channels/registry/auth.py` and `app/channels/registry/http.py`, keyed by client host plus auth endpoint for `/v1/agents/enroll` and `/ui/login`
+  - kept successful auth flows forgiving by clearing prior failed-attempt state after a correct enrollment token or UI password
+  - replaced the random per-process `REGISTRY_SESSION_SECRET` fallback with a stable derived session secret rooted in `REGISTRY_UI_TOKEN`, while keeping an explicit `REGISTRY_SESSION_SECRET` override when operators provide one
+  - reduced `/healthz` to the intended unauthenticated liveness contract without bot-count disclosure
+  - expanded `tests/test_registry_service.py` with repeated-failure `429` coverage, success-clears-throttle coverage, stable-secret fallback coverage, explicit-secret override coverage, and the minimal-healthz response contract
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_service.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - repeated failed enroll/login attempts now saturate to `429` instead of accepting unlimited brute-force retries from one client host
+  - successful enrollment/login flows remain unchanged below the limit and clear prior failed-attempt state
+  - registry UI session signing no longer changes every process boot when `REGISTRY_SESSION_SECRET` is unset
+  - `/healthz` now exposes only `{\"ok\": true}`
+  - full suite status after Phase 20A2: `2097 passed, 23 skipped`
 
 - Complete: Phase 20A1 remediation — harden outgoing completion-webhook targets and incoming webhook URL policy at the shared config/runtime seam.
   Scope:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
@@ -12,9 +13,12 @@ from pathlib import Path
 from fastapi import Depends, Header, HTTPException, Request
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.ratelimit import RateLimiter
+
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
 _KNOWN_DEFAULT_TOKENS = {"dev-enroll-token", "dev-ui-token", "changeme"}
+_AUTH_ATTEMPT_LIMITER = RateLimiter(per_minute=5, per_hour=30)
 
 
 @dataclass(frozen=True)
@@ -64,13 +68,45 @@ def validate_settings(settings: RegistrySettings | None = None) -> RegistrySetti
     return current
 
 
+def _auth_attempt_key(request: Request, endpoint: str) -> str:
+    client = request.client
+    host = str(client.host if client and client.host else "unknown")
+    return f"{endpoint}:{host}"
+
+
+def enforce_auth_attempt_limit(request: Request, endpoint: str) -> None:
+    allowed, retry_after = _AUTH_ATTEMPT_LIMITER.check(_auth_attempt_key(request, endpoint))
+    if allowed:
+        return
+    raise HTTPException(
+        status_code=429,
+        detail="Too many authentication attempts. Try again later.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def clear_auth_attempt_limit(request: Request, endpoint: str) -> None:
+    _AUTH_ATTEMPT_LIMITER.clear(_auth_attempt_key(request, endpoint))
+
+
+def reset_auth_attempt_limits_for_test() -> None:
+    _AUTH_ATTEMPT_LIMITER.clear()
+
+
+def session_secret(*, settings: RegistrySettings | None = None) -> str:
+    explicit = os.environ.get("REGISTRY_SESSION_SECRET", "").strip()
+    if explicit:
+        return explicit
+    current = settings or load_settings()
+    seed = f"registry-session:{current.ui_token}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
 def configure_session_middleware(app) -> None:
     settings = load_settings()
-    # Dev fallback only: without REGISTRY_SESSION_SECRET, sessions reset on every
-    # registry restart and are not portable across multiple registry instances.
     app.add_middleware(
         SessionMiddleware,
-        secret_key=os.environ.get("REGISTRY_SESSION_SECRET", secrets.token_hex(32)),
+        secret_key=session_secret(settings=settings),
         session_cookie="registry_session",
         same_site="strict",
         max_age=_SESSION_TTL_SECONDS,

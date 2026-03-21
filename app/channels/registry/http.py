@@ -13,9 +13,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app.channels.registry.auth import (
+    clear_auth_attempt_limit,
     clear_ui_session,
     configure_session_middleware,
     current_ui_csrf_token,
+    enforce_auth_attempt_limit,
     load_settings,
     mark_ui_session_authenticated,
     require_agent_token,
@@ -171,16 +173,22 @@ def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
 
 
 @app.get("/healthz")
-def healthz(store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
-    return {"ok": True, "bots": len(store.list_agents())}
+def healthz() -> dict[str, Any]:
+    return {"ok": True}
 
 
 @app.post("/v1/agents/enroll")
-def enroll(payload: dict[str, Any], store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
+def enroll(
+    request: Request,
+    payload: dict[str, Any],
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
     settings = load_settings()
+    enforce_auth_attempt_limit(request, "registry-enroll")
     enroll_tok = payload.get("enrollment_token") or ""
     if not hmac.compare_digest(enroll_tok, settings.enroll_token):
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
+    clear_auth_attempt_limit(request, "registry-enroll")
     try:
         return store.enroll(payload.get("agent_card"))
     except ValueError as exc:
@@ -709,10 +717,12 @@ async def ui_login(request: Request, password: str = Form(default="")):
     settings = load_settings()
     if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
+    enforce_auth_attempt_limit(request, "registry-ui-login")
     if not ui_password_matches(password, settings=settings):
         return _secure_html_response(
             ui.render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
         )
+    clear_auth_attempt_limit(request, "registry-ui-login")
     mark_ui_session_authenticated(request)
     return RedirectResponse("/ui", status_code=303)
 

@@ -44,6 +44,7 @@ from app.workflows.execution.contracts import ExecutionRuntime
 from app.workflows.execution.contracts import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
+from app.workflows.delegation.coordination import expire_stale_delegations
 from app.workflows.recovery.replay import get_recovery_use_cases
 from app.worker import poll_interval_for_runtime
 
@@ -429,6 +430,14 @@ async def worker_dispatch(
         try:
             async with _worker_chat_lock(runtime, runtime_chat, worker_item=item):
                 outcome = None
+                session = load_session(runtime, runtime_chat)
+                expiration = expire_stale_delegations(
+                    session.pending_delegation,
+                    timeout_seconds=runtime.config.delegation_timeout_seconds,
+                )
+                if expiration.expired:
+                    session.pending_delegation = expiration.pending
+                    save_session(runtime, runtime_chat, session)
                 approval_mode = load_approval_mode(runtime_chat, runtime=execution_runtime)
 
                 async def _run_message(cancel_event: asyncio.Event | None):

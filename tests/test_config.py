@@ -1010,6 +1010,16 @@ def test_claim_sweep_interval_must_be_positive():
     assert any("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0" in e for e in errors)
 
 
+def test_delegation_timeout_defaults_to_3600():
+    cfg = make_config()
+    assert cfg.delegation_timeout_seconds == 3600
+
+
+def test_delegation_timeout_must_be_positive():
+    errors = validate_config(make_config(delegation_timeout_seconds=0))
+    assert any("BOT_DELEGATION_TIMEOUT_SECONDS must be greater than 0" in e for e in errors)
+
+
 def test_validate_config_rejects_invalid_telegram_api_base_url():
     errors = validate_config(make_config(telegram_api_base_url="ftp://telegram-api-stub:8081/bot"))
     assert any("BOT_TELEGRAM_API_BASE_URL" in e for e in errors)

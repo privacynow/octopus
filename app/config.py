@@ -183,6 +183,7 @@ class BotConfig:
     process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
     claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
     claim_sweep_interval_seconds: float  # BOT_CLAIM_SWEEP_INTERVAL_SECONDS, periodic stale-claim sweep cadence
+    delegation_timeout_seconds: int  # BOT_DELEGATION_TIMEOUT_SECONDS, max age for pending delegations before expiry
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
@@ -475,6 +476,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
         claim_sweep_interval_seconds=max(0.1, get_float("BOT_CLAIM_SWEEP_INTERVAL_SECONDS", "60.0")),
+        delegation_timeout_seconds=get_int("BOT_DELEGATION_TIMEOUT_SECONDS", "3600"),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
@@ -580,6 +582,7 @@ def load_config_provider_health() -> BotConfig:
         process_role="all",
         claim_lease_ttl_seconds=300,
         claim_sweep_interval_seconds=60.0,
+        delegation_timeout_seconds=3600,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -681,6 +684,9 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.claim_sweep_interval_seconds <= 0:
         errors.append("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0")
+
+    if config.delegation_timeout_seconds <= 0:
+        errors.append("BOT_DELEGATION_TIMEOUT_SECONDS must be greater than 0")
 
     if config.runtime_mode == RuntimeMode.SHARED.value:
         if config.bot_mode != BotMode.WEBHOOK.value:

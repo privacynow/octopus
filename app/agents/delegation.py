@@ -16,6 +16,7 @@ from app.ports.task_routing import TaskRoutingPort
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.workflows.delegation.coordination import (
     cancel_delegation,
+    expire_stale_delegations,
     mark_task_submitted,
     prepare_delegation_approval,
 )
@@ -75,6 +76,12 @@ def _coordination_unavailable_message(*, error: str = "") -> str:
     )
 
 
+def _expired_delegation_message(expired_kind: str) -> str:
+    if expired_kind == "approval_expired":
+        return "Delegation plan expired before approval. Please ask me to delegate again."
+    return "Delegation timed out while waiting for delegated results. Please ask me to delegate again if you still need that work."
+
+
 async def handle_delegation_approve(
     chat_id: int | str,
     conversation_ref: str,
@@ -86,6 +93,15 @@ async def handle_delegation_approve(
     """Approve a pending delegation plan on any conversation channel."""
 
     session = _load_session(runtime, chat_id)
+    expiration = expire_stale_delegations(
+        session.pending_delegation,
+        timeout_seconds=runtime.config.delegation_timeout_seconds,
+    )
+    if expiration.expired:
+        session.pending_delegation = expiration.pending
+        _save_session(runtime, chat_id, session)
+        await channel_egress.send_text(_expired_delegation_message(expiration.expired_kind))
+        return
     approval = prepare_delegation_approval(
         session.pending_delegation,
         conversation_ref=conversation_ref,

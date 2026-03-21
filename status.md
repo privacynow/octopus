@@ -60,10 +60,13 @@
 - Phase 12C landed green: routed tasks no longer schedule the generic
   `conversation_completed` webhook, while normal conversation webhook
   behavior remains unchanged.
+- Phase 12D landed green: routed-task recovery no longer routes
+  `bind()` or recovery-notice callbacks through task-ref egress, while
+  normal conversation recovery behavior remains unchanged.
 - Current status should now be read as: rollout complete through
-  Phase 11, Phase 12 remediation in progress with 12A-12C complete.
-- Full-suite status after Phase 12C:
-  `1950 passed, 23 skipped`.
+  Phase 11, Phase 12 remediation in progress with 12A-12D complete.
+- Full-suite status after Phase 12D:
+  `1952 passed, 23 skipped`.
 
 ## Slice Log
 
@@ -169,6 +172,35 @@
   - routed tasks no longer fire the generic completion webhook
   - non-routed webhook behavior is unchanged
   - full suite status after Phase 12C: `1950 passed, 23 skipped`
+
+- Complete: Phase 12D remediation — suppress routed-task recovery egress callbacks.
+  Scope:
+  - updated `worker_dispatch()` so recovery-mode routed tasks pass
+    explicit no-op async callbacks for both `bind_egress` and
+    `send_notice`
+  - kept non-routed recovery on the existing egress path without
+    inventing a second recovery owner or a task-specific recovery
+    surface
+  - added worker-entry tests proving routed-task recovery no longer
+    calls task-ref `bind()` or `send_recovery_notice()`, while normal
+    conversation recovery still exercises both callbacks
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_worker_workflows.py -k 'recovery_workflow_binds_and_sends_notice_before_marking_pending_recovery or worker_recovery_for_routed_task_skips_bind_and_notice or worker_recovery_for_conversation_still_binds_and_sends_notice'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the routed-task recovery callback seam is now fully
+    closed: neither bind nor notice can reach task-ref egress
+  - verified the normal conversation recovery flow still binds first
+    and then sends the recovery notice
+  Review:
+  - this slice stayed inside the existing recovery seam and removed the
+    wrong task-ref side effects instead of inventing a routed-task
+    recovery UX that the product does not currently own
+  Verified:
+  - routed-task recovery no longer emits projected task-ref recovery
+    side effects
+  - non-routed recovery behavior is unchanged
+  - full suite status after Phase 12D: `1952 passed, 23 skipped`
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

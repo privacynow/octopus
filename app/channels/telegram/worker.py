@@ -63,6 +63,10 @@ def _routed_task_requires_interactive_failure() -> RequestExecutionOutcome:
     )
 
 
+async def _noop_async(*args: Any, **kwargs: Any) -> None:
+    del args, kwargs
+
+
 def _channel_dispatcher(runtime: TelegramRuntime):
     dispatcher = getattr(runtime, "channel_dispatcher", None)
     if dispatcher is None:
@@ -395,13 +399,23 @@ async def worker_dispatch(
                 item_id=item["id"],
                 original_text=event.text or "",
                 update_id=update_id,
-                bind_egress=lambda: channel_egress.bind(title=title, config=runtime.config),
-                send_notice=lambda notice: channel_egress.send_recovery_notice(
-                    preview=notice.preview,
-                    prompt=notice.prompt,
-                    run_again_label=notice.run_again_label,
-                    skip_label=notice.skip_label,
-                    update_id=notice.update_id,
+                bind_egress=(
+                    (lambda: channel_egress.bind(title=title, config=runtime.config))
+                    if not is_routed_task
+                    else _noop_async
+                ),
+                send_notice=(
+                    (
+                        lambda notice: channel_egress.send_recovery_notice(
+                            preview=notice.preview,
+                            prompt=notice.prompt,
+                            run_again_label=notice.run_again_label,
+                            skip_label=notice.skip_label,
+                            update_id=notice.update_id,
+                        )
+                    )
+                    if not is_routed_task
+                    else (lambda notice: _noop_async(notice))
                 ),
             )
             if recovery_outcome.status == "pending_recovery":

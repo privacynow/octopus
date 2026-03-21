@@ -1,14 +1,19 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app import work_queue
 from app.agents.bridge import telegram_conversation_ref
+from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.runtime.inbound_types import InboundUser
+from app.runtime.inbound_types import InboundMessage, InboundUser
 from app.runtime.work_admission import admit_worker_message
 from app.workflows.recovery.replay import get_recovery_use_cases
+import app.channels.telegram.worker as telegram_worker
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
+    current_execution_runtime,
     current_runtime,
     fresh_env,
 )
@@ -161,3 +166,137 @@ async def test_recovery_workflow_binds_and_sends_notice_before_marking_pending_r
         assert result.status == "pending_recovery"
         assert calls == ["bind:claimed", "send:claimed"]
         assert row["state"] == "pending_recovery"
+
+
+@pytest.mark.asyncio
+async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch) -> None:
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, _cfg, _prov):
+        calls: list[str] = []
+
+        async def fake_dispatch_worker_recovery(*, bind_egress, send_notice, **kwargs):
+            del kwargs
+            await bind_egress()
+            await send_notice(
+                SimpleNamespace(
+                    preview="recover me",
+                    prompt="Recover?",
+                    run_again_label="Run again",
+                    skip_label="Skip",
+                    update_id=0,
+                )
+            )
+            return SimpleNamespace(status="handled")
+
+        monkeypatch.setattr(
+            telegram_worker,
+            "get_recovery_use_cases",
+            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+        )
+
+        async def fake_bind(self, *, title, config):
+            del title, config
+            calls.append("bind")
+
+        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, update_id):
+            del preview, prompt, run_again_label, skip_label, update_id
+            calls.append("send")
+
+        monkeypatch.setattr(RegistryChannelEgress, "bind", fake_bind)
+        monkeypatch.setattr(RegistryChannelEgress, "send_recovery_notice", fake_send_recovery_notice)
+
+        event = InboundMessage(
+            user=InboundUser(id="registry:actor", username="registry"),
+            conversation_key="registry:default:task:routed-task-recovery-1",
+            text="recover routed task",
+            source="registry",
+            conversation_ref="registry:default:task:routed-task-recovery-1",
+            routed_task_id="routed-task-recovery-1",
+            authority_ref="registry:default",
+        )
+        item = {
+            "id": "routed-task-recovery-item-1",
+            "conversation_key": "registry:default:task:routed-task-recovery-1",
+            "event_id": "recovery-event-1",
+            "dispatch_mode": "recovery",
+        }
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(monkeypatch) -> None:
+    with fresh_env() as (_data_dir, _cfg, _prov):
+        calls: list[str] = []
+
+        async def fake_dispatch_worker_recovery(*, bind_egress, send_notice, **kwargs):
+            del kwargs
+            await bind_egress()
+            await send_notice(
+                SimpleNamespace(
+                    preview="recover me",
+                    prompt="Recover?",
+                    run_again_label="Run again",
+                    skip_label="Skip",
+                    update_id=8102,
+                )
+            )
+            return SimpleNamespace(status="handled")
+
+        monkeypatch.setattr(
+            telegram_worker,
+            "get_recovery_use_cases",
+            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+        )
+
+        async def fake_bind(self, *, title, config):
+            del title, config
+            calls.append("bind")
+
+        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, update_id):
+            del preview, prompt, run_again_label, skip_label, update_id
+            calls.append("send")
+
+        monkeypatch.setattr(
+            "app.channels.telegram.egress.TelegramChannelEgress.bind",
+            fake_bind,
+        )
+        monkeypatch.setattr(
+            "app.channels.telegram.egress.TelegramChannelEgress.send_recovery_notice",
+            fake_send_recovery_notice,
+        )
+
+        event = InboundMessage(
+            user=InboundUser(id=telegram_actor_key(42), username="telegram"),
+            conversation_key=telegram_conversation_key(12345),
+            text="recover telegram conversation",
+            source="telegram",
+        )
+        item = {
+            "id": "conversation-recovery-item-1",
+            "conversation_key": telegram_conversation_key(12345),
+            "event_id": telegram_event_id(8103),
+            "dispatch_mode": "recovery",
+        }
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        assert calls == ["bind", "send"]

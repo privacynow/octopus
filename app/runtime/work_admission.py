@@ -79,7 +79,7 @@ def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str,
     This is the authoritative request seam: all fresh plain-message admission
     goes through the project-owned envelope type.
     """
-    payload = serialize_inbound(envelope.event)
+    payload = serialize_inbound(envelope.event, transport=envelope.transport)
     return work_queue.record_and_admit_message(
         data_dir,
         envelope.event_id,
@@ -98,7 +98,7 @@ def enqueue_inbound_envelope(
 ) -> tuple[bool, str | None]:
     """Record and enqueue a normalized non-message interaction for worker execution."""
 
-    payload = serialize_inbound(envelope.event)
+    payload = serialize_inbound(envelope.event, transport=envelope.transport)
     return work_queue.record_and_enqueue(
         data_dir,
         envelope.event_id,
@@ -113,7 +113,7 @@ def enqueue_inbound_envelope(
 def record_inbound_envelope(data_dir: Path, envelope: InboundEnvelope) -> bool:
     """Record a normalized interaction without enqueueing it for worker execution."""
 
-    payload = serialize_inbound(envelope.event)
+    payload = serialize_inbound(envelope.event, transport=envelope.transport)
     return work_queue.record_update(
         data_dir,
         envelope.event_id,

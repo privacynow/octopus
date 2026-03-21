@@ -99,6 +99,7 @@ def _telegram_action(event, action: str, *, params: dict[str, Any] | None = None
         action,
         params={} if params is None else params,
         source="telegram",
+        transport="telegram",
     )
 
 

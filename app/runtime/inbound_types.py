@@ -54,6 +54,7 @@ class InboundMessage:
     routed_task_id: str = ""
     authority_ref: str = ""
     skip_approval: bool = False
+    transport: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
@@ -74,6 +75,7 @@ class InboundCommand:
     args: tuple[str, ...] = ()
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    transport: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
@@ -93,6 +95,7 @@ class InboundCallback:
     data: str
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    transport: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
@@ -114,6 +117,7 @@ class InboundAction:
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     authority_ref: str = ""
+    transport: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
@@ -149,9 +153,14 @@ class InboundEnvelope:
         return "unknown"
 
 
-def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback | InboundAction) -> str:
+def serialize_inbound(
+    event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+    *,
+    transport: str = "",
+) -> str:
     """Serialize a normalized inbound event to durable JSON."""
 
+    resolved_transport = str(transport or getattr(event, "transport", "") or "")
     if isinstance(event, InboundMessage):
         return json.dumps(
             {
@@ -160,6 +169,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "conversation_key": event.conversation_key,
                 "text": event.text,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
                 "routed_task_id": event.routed_task_id,
                 "authority_ref": event.authority_ref,
@@ -184,6 +194,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "command": event.command,
                 "args": list(event.args),
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
             }
         )
@@ -195,6 +206,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "conversation_key": event.conversation_key,
                 "data": event.data,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
             }
         )
@@ -207,6 +219,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "action": event.action,
                 "params": event.params,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
                 "authority_ref": event.authority_ref,
             }
@@ -232,6 +245,10 @@ def deserialize_inbound(
     source = str(data.get("source", "") or "").strip()
     if not source:
         raise ValueError("Inbound payload missing canonical source")
+    # Legacy durable payloads predate explicit transport serialization. Fall
+    # back to the canonical source so replay keeps the best available
+    # provenance instead of dropping to blank forever.
+    transport = str(data.get("transport", "") or source).strip()
     conversation_ref = str(data.get("conversation_ref", "") or "")
     authority_ref = str(data.get("authority_ref", "") or "")
     if source == "registry" and kind in {"message", "action"} and not authority_ref:
@@ -252,6 +269,7 @@ def deserialize_inbound(
             text=data.get("text", ""),
             attachments=attachments,
             source=source,
+            transport=transport,
             conversation_ref=conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
             authority_ref=authority_ref,
@@ -264,6 +282,7 @@ def deserialize_inbound(
             command=data["command"],
             args=tuple(data.get("args", [])),
             source=source,
+            transport=transport,
             conversation_ref=conversation_ref,
         )
     if kind == "callback":
@@ -272,6 +291,7 @@ def deserialize_inbound(
             conversation_key=conversation_key,
             data=data.get("data", ""),
             source=source,
+            transport=transport,
             conversation_ref=conversation_ref,
         )
     if kind == "action":
@@ -284,6 +304,7 @@ def deserialize_inbound(
             action=data.get("action", ""),
             params=dict(params),
             source=source,
+            transport=transport,
             conversation_ref=conversation_ref,
             authority_ref=authority_ref,
         )

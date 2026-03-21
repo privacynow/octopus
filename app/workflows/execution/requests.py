@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from pathlib import Path
 
@@ -280,11 +281,16 @@ async def execute_request(
             image_paths=image_paths,
             context_hash=context_hash,
             denials=result.denials,
+            callback_token=secrets.token_hex(6),
             trust_tier=trust_tier,
             created_at=time.time(),
         )
         _save(runtime, chat_id, session)
-        await runtime.send_retry_prompt(message, tuple(result.denials))
+        await runtime.send_retry_prompt(
+            message,
+            tuple(result.denials),
+            session.pending_retry.callback_token,
+        )
         cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
             await runtime.send_formatted_reply(message, cleaned_reply)
@@ -459,6 +465,7 @@ async def request_approval(
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
         context_hash=context_hash,
+        callback_token=secrets.token_hex(6),
         trust_tier=trust_tier,
         created_at=time.time(),
     )
@@ -468,4 +475,4 @@ async def request_approval(
     plan_text = plan_result.text or "[empty plan]"
     save_raw(runtime.dispatch.config.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
     await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
-    await runtime.send_approval_prompt(message)
+    await runtime.send_approval_prompt(message, session.pending_approval.callback_token)

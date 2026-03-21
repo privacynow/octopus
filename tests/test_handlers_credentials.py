@@ -455,9 +455,10 @@ async def test_cross_user_credential_isolation():
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["pending_approval"]["request_user_id"] == telegram_actor_key(100)
+        callback_token = session["pending_approval"]["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         update = FakeUpdate(user=bob, chat=chat, callback_query=query)
         update.effective_message = cb_msg
         await _th.handle_callback(update, FakeContext())

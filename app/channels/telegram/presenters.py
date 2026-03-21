@@ -68,10 +68,44 @@ def _escaped_html_message(text: str) -> TelegramRenderedMessage:
     return _html_message(html.escape(text))
 
 
-def retry_prompt(denials: Iterable[dict[str, Any]]) -> TelegramRenderedMessage:
+_PENDING_CALLBACK_ACTIONS = frozenset({
+    "approval_approve",
+    "approval_reject",
+    "retry_allow",
+    "retry_skip",
+})
+
+
+def pending_callback_data(action: str, callback_token: str = "") -> str:
+    if action not in _PENDING_CALLBACK_ACTIONS:
+        raise ValueError(f"Unknown pending callback action: {action}")
+    token = str(callback_token or "").strip()
+    return f"{action}:{token}" if token else action
+
+
+def parse_pending_callback_data(data: str) -> tuple[str, str] | None:
+    text = str(data or "").strip()
+    if text in _PENDING_CALLBACK_ACTIONS:
+        return (text, "")
+    action, sep, callback_token = text.partition(":")
+    if not sep or action not in _PENDING_CALLBACK_ACTIONS:
+        return None
+    callback_token = callback_token.strip()
+    if not callback_token:
+        return None
+    return (action, callback_token)
+
+
+def retry_prompt(denials: Iterable[dict[str, Any]], callback_token: str = "") -> TelegramRenderedMessage:
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
-        InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
+        InlineKeyboardButton(
+            "\u2705 " + _msg.retry_button_grant(),
+            callback_data=pending_callback_data("retry_allow", callback_token),
+        ),
+        InlineKeyboardButton(
+            "\u274c " + _msg.retry_button_skip(),
+            callback_data=pending_callback_data("retry_skip", callback_token),
+        ),
     ]])
     return TelegramRenderedMessage(
         text=(
@@ -84,10 +118,16 @@ def retry_prompt(denials: Iterable[dict[str, Any]]) -> TelegramRenderedMessage:
     )
 
 
-def approval_prompt() -> TelegramRenderedMessage:
+def approval_prompt(callback_token: str = "") -> TelegramRenderedMessage:
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
-        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
+        InlineKeyboardButton(
+            "\u2705 " + _msg.approval_button_approve(),
+            callback_data=pending_callback_data("approval_approve", callback_token),
+        ),
+        InlineKeyboardButton(
+            "\u274c " + _msg.approval_button_reject(),
+            callback_data=pending_callback_data("approval_reject", callback_token),
+        ),
     ]])
     return TelegramRenderedMessage(
         text=_msg.approval_plan_question(),

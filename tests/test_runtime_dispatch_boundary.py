@@ -155,8 +155,8 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
 async def test_request_approval_runs_from_explicit_execution_runtime():
     approval_prompts: list[str] = []
 
-    async def send_approval_prompt(_message) -> None:
-        approval_prompts.append("approval")
+    async def send_approval_prompt(_message, callback_token: str) -> None:
+        approval_prompts.append(callback_token)
 
     with fresh_env() as (data_dir, _cfg, prov):
         chat = FakeChat(12345)
@@ -201,7 +201,8 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert session.get("pending_approval") is not None
         assert len(prov.preflight_calls) == 1
-        assert approval_prompts == ["approval"]
+        assert len(approval_prompts) == 1
+        assert approval_prompts[0]
 
 
 def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:

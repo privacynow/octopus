@@ -133,10 +133,12 @@ async def test_approval_hash_round_trip(combo):
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
+        session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        callback_token = session["pending_approval"]["callback_token"]
 
         # Approve immediately — must NOT say "Context changed"
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())
@@ -195,10 +197,12 @@ async def test_retry_hash_round_trip(combo):
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
+        session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        callback_token = session["pending_retry"]["callback_token"]
 
         # Retry immediately
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        query = FakeCallbackQuery(f"retry_allow:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())

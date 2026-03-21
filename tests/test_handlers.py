@@ -1578,7 +1578,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
         chat_id = 12345
         _, item_id = work_queue.record_and_enqueue(
             data_dir, _event(601), _conv(chat_id), _actor(42), "message",
-            payload='{"actor_key": "tg:42", "username": "alice", "conversation_key": "tg:12345", "text": "replay me", "attachments": []}',
+            payload='{"actor_key": "tg:42", "username": "alice", "conversation_key": "tg:12345", "text": "replay me", "source": "telegram", "attachments": []}',
         )
         conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(

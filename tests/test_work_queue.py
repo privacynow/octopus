@@ -778,6 +778,51 @@ async def test_worker_loop_handles_bad_payload(data_dir):
     assert row["error"] == "deserialize_error"
 
 
+async def test_worker_loop_rejects_payload_missing_canonical_source(data_dir):
+    """Worker loop fails malformed payloads that omit canonical provenance."""
+    from app.worker import worker_loop
+
+    record_update(
+        data_dir,
+        _event(1602),
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        kind="message",
+        payload=(
+            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
+            '"text":"hello","attachments":[]}'
+        ),
+    )
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1602))
+
+    dispatched: list[str] = []
+
+    async def dispatch(kind, event, item):
+        del event, item
+        dispatched.append(kind)
+
+    stop = asyncio.Event()
+
+    async def run_then_stop():
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    assert dispatched == []
+
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT state, error FROM work_items WHERE event_id = ?",
+        (_event(1602),),
+    ).fetchone()
+    assert row["state"] == "failed"
+    assert row["error"] == "deserialize_error"
+
+
 async def test_worker_loop_notifies_on_deserialize_failure(data_dir):
     from app.worker import worker_loop
 

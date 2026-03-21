@@ -216,7 +216,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         chat_id = 12345
         payload = (
             '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
-            '"text":"long running","attachments":[]}'
+            '"text":"long running","source":"telegram","attachments":[]}'
         )
         status, _item_id = work_queue.record_and_admit_message(
             data_dir,
@@ -410,7 +410,7 @@ async def test_worker_loop_heartbeat_tracks_current_item():
             _conv(12345),
             "tg:42",
             "message",
-            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345","text":"hello","attachments":[]}',
+            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345","text":"hello","source":"telegram","attachments":[]}',
         )
         assert status == "admitted"
 

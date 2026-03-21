@@ -210,7 +210,12 @@ def deserialize_inbound(
     if not actor_key or not conversation_key:
         raise ValueError("Inbound payload missing canonical actor_key/conversation_key")
     user = InboundUser(id=actor_key, username=data.get("username", ""))
-    source = str(data.get("source", "telegram") or "telegram")
+    # Shared runtime payloads must carry explicit provenance. Silently
+    # inventing Telegram here lets malformed registry payloads bypass the
+    # canonical authority_ref check below.
+    source = str(data.get("source", "") or "").strip()
+    if not source:
+        raise ValueError("Inbound payload missing canonical source")
     conversation_ref = str(data.get("conversation_ref", "") or "")
     authority_ref = str(data.get("authority_ref", "") or "")
     if source == "registry" and kind in {"message", "action"} and not authority_ref:

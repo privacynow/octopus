@@ -40,6 +40,8 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
+    monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
+    registry_auth.reset_auth_attempt_limits_for_test()
 
 
 def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
@@ -855,6 +857,103 @@ def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_p
     assert "Incorrect password." in response.text
 
 
+def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    payload = {
+        "enrollment_token": "wrong-secret",
+        "agent_card": {
+            "display_name": "Dev Bot",
+            "slug": "dev-bot",
+            "role": "developer",
+            "registry_scope": "full",
+            "capabilities": ["python"],
+            "provider": "codex",
+            "mode": "registry",
+        },
+    }
+
+    for _ in range(5):
+        response = client.post("/v1/agents/enroll", json=payload)
+        assert response.status_code == 401
+
+    limited = client.post("/v1/agents/enroll", json=payload)
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"]
+
+
+def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    bad_payload = {
+        "enrollment_token": "wrong-secret",
+        "agent_card": {
+            "display_name": "Dev Bot",
+            "slug": "dev-bot",
+            "role": "developer",
+            "registry_scope": "full",
+            "capabilities": ["python"],
+            "provider": "codex",
+            "mode": "registry",
+        },
+    }
+
+    for _ in range(4):
+        response = client.post("/v1/agents/enroll", json=bad_payload)
+        assert response.status_code == 401
+
+    good = client.post(
+        "/v1/agents/enroll",
+        json={
+            "enrollment_token": "enroll-secret",
+            "agent_card": {
+                "display_name": "Dev Bot",
+                "slug": "dev-bot",
+                "role": "developer",
+                "registry_scope": "full",
+                "capabilities": ["python"],
+                "provider": "codex",
+                "mode": "registry",
+            },
+        },
+    )
+
+    assert good.status_code == 200
+
+    response = client.post("/v1/agents/enroll", json=bad_payload)
+    assert response.status_code == 401
+
+
+def test_ui_login_rate_limits_repeated_failed_attempts(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    for _ in range(5):
+        response = client.post("/ui/login", data={"password": "wrong-secret"})
+        assert response.status_code == 200
+
+    limited = client.post("/ui/login", data={"password": "wrong-secret"})
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"]
+
+
+def test_ui_login_success_clears_failed_attempt_throttle(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    for _ in range(4):
+        response = client.post("/ui/login", data={"password": "wrong-secret"})
+        assert response.status_code == 200
+
+    good = client.post("/ui/login", data={"password": "ui-secret"}, follow_redirects=False)
+    assert good.status_code == 303
+
+    response = client.post("/ui/login", data={"password": "wrong-secret"})
+    assert response.status_code == 200
+
+
 def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1097,6 +1196,33 @@ def test_registry_auth_session_cookie_can_allow_http_for_local_dev(monkeypatch, 
     assert local_app.user_middleware[0].kwargs["https_only"] is False
 
 
+def test_registry_auth_session_secret_fallback_is_stable(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
+
+    settings = registry_auth.load_settings()
+
+    assert registry_auth.session_secret(settings=settings) == registry_auth.session_secret(settings=settings)
+
+    app_one = FastAPI()
+    app_two = FastAPI()
+    registry_auth.configure_session_middleware(app_one)
+    registry_auth.configure_session_middleware(app_two)
+
+    assert app_one.user_middleware[0].kwargs["secret_key"] == app_two.user_middleware[0].kwargs["secret_key"]
+
+
+def test_registry_auth_explicit_session_secret_overrides_fallback(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.setenv("REGISTRY_SESSION_SECRET", "explicit-secret")
+
+    assert registry_auth.session_secret() == "explicit-secret"
+
+
 def test_registry_login_page_has_security_headers(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1106,6 +1232,16 @@ def test_registry_login_page_has_security_headers(monkeypatch, tmp_path: Path):
     assert response.status_code == 200
     assert "default-src 'self'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_registry_healthz_is_minimal_liveness_contract(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
 
 def test_registry_http_module_delegates_auth_helpers() -> None:

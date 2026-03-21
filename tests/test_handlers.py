@@ -231,6 +231,70 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         assert called == []
 
 
+async def test_worker_dispatch_skips_completion_webhook_for_routed_task(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "completion_webhook_url": "https://hooks.example.com/completed",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, _cfg, prov):
+        called: list[dict[str, object]] = []
+
+        async def fake_fire(url, *, chat_id, conversation_ref, status, summary, completed_at):
+            called.append(
+                {
+                    "url": url,
+                    "chat_id": chat_id,
+                    "conversation_ref": conversation_ref,
+                    "status": status,
+                    "summary": summary,
+                    "completed_at": completed_at,
+                }
+            )
+
+        async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+            del authority_ref, result
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+        monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "report_routed_task_result",
+            fake_report_routed_task_result,
+        )
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="origin-bot"),
+            conversation_key=_reg_task("routed-task-webhook-1"),
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref=_reg_task("routed-task-webhook-1"),
+            routed_task_id="routed-task-webhook-1",
+            authority_ref="registry:default",
+        )
+        item = {
+            "id": "registry-item-webhook-1",
+            "conversation_key": _reg_task("routed-task-webhook-1"),
+            "event_id": _event(7004),
+            "dispatch_mode": "fresh",
+        }
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+        await asyncio.sleep(0)
+
+        assert len(prov.run_calls) == 1
+        assert called == []
+
+
 async def test_help_and_start_include_discover_in_registry_mode():
     with fresh_data_dir() as data_dir:
         cfg = make_config(

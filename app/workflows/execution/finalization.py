@@ -226,7 +226,11 @@ async def finalize_execution(
                 log.warning("Failed to publish usage timeline event", exc_info=True)
 
     webhook_status = "skipped"
-    if context.config.completion_webhook_url and outcome.status != "delegation_proposed":
+    if (
+        context.config.completion_webhook_url
+        and outcome.status != "delegation_proposed"
+        and not context.routed_task_id
+    ):
         sender = context.completion_webhook_sender
         if sender is None:
             from app.webhook import fire_completion_webhook as sender

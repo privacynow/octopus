@@ -65,32 +65,38 @@ class ProcessorRunner:
 
         try:
             while not self._should_stop(stop_event):
-                now = monotonic()
-                if now - last_reclaim >= self._reclaim_interval_seconds:
-                    await self._bus.reclaim_expired()
-                    await self._bus.purge_old_commands()
-                    last_reclaim = now
+                try:
+                    now = monotonic()
+                    if now - last_reclaim >= self._reclaim_interval_seconds:
+                        await self._bus.reclaim_expired()
+                        await self._bus.purge_old_commands()
+                        last_reclaim = now
 
-                available_slots = self._claim_limit - len(self._inflight)
-                if available_slots > 0:
-                    claimed = await self._bus.poll_commands(
-                        allowed_pairs=set(self._processor_by_pair.keys()),
-                        limit=available_slots,
-                    )
-                    for command in claimed:
-                        task = asyncio.create_task(self._run_command(command))
-                        self._inflight[command.command_id] = task
-                        task.add_done_callback(
-                            lambda done, command_id=command.command_id: self._inflight.pop(
-                                command_id,
-                                None,
-                            )
+                    available_slots = self._claim_limit - len(self._inflight)
+                    if available_slots > 0:
+                        claimed = await self._bus.poll_commands(
+                            allowed_pairs=set(self._processor_by_pair.keys()),
+                            limit=available_slots,
                         )
-                    if claimed:
-                        await asyncio.sleep(0)
-                        continue
+                        for command in claimed:
+                            task = asyncio.create_task(self._run_command(command))
+                            self._inflight[command.command_id] = task
+                            task.add_done_callback(
+                                lambda done, command_id=command.command_id: self._inflight.pop(
+                                    command_id,
+                                    None,
+                                )
+                            )
+                        if claimed:
+                            await asyncio.sleep(0)
+                            continue
 
-                await self._wait_for_stop(stop_event, timeout=self._poll_interval_seconds)
+                    await self._wait_for_stop(stop_event, timeout=self._poll_interval_seconds)
+                except Exception:
+                    log.exception("Control-plane processor loop iteration failed")
+                    if self._should_stop(stop_event):
+                        break
+                    await self._wait_for_stop(stop_event, timeout=self._poll_interval_seconds)
         finally:
             if self._inflight:
                 await asyncio.gather(*self._inflight.values(), return_exceptions=True)

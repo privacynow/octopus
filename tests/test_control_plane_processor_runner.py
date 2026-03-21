@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import logging
 import tempfile
 from pathlib import Path
@@ -88,6 +89,32 @@ class _FakeLeaseBus:
 
     async def dead_letter(self, command_id: str, *, claimed_at: str, reason: str) -> None:
         self.dead_letters.append((command_id, claimed_at, reason))
+
+
+class _FlakyLoopBus:
+    def __init__(self, failing_step: str) -> None:
+        self.failing_step = failing_step
+        self.calls: Counter[str] = Counter()
+
+    async def reclaim_expired(self) -> int:
+        self.calls["reclaim"] += 1
+        if self.failing_step == "reclaim" and self.calls["reclaim"] == 1:
+            raise RuntimeError("reclaim boom")
+        return 0
+
+    async def purge_old_commands(self, older_than_hours: int = 72) -> int:
+        del older_than_hours
+        self.calls["purge"] += 1
+        if self.failing_step == "purge" and self.calls["purge"] == 1:
+            raise RuntimeError("purge boom")
+        return 0
+
+    async def poll_commands(self, *, allowed_pairs: set[tuple[str, str]], limit: int = 20) -> list[ControlCommand]:
+        del allowed_pairs, limit
+        self.calls["poll"] += 1
+        if self.failing_step == "poll" and self.calls["poll"] == 1:
+            raise RuntimeError("poll boom")
+        return []
 
 
 def _command(
@@ -363,6 +390,39 @@ async def test_processor_runner_renews_leases_for_inflight_commands() -> None:
     assert bus.renewals[0] == ("cmd-lease", "claim-1", 30.0)
     assert bus.completed == [("cmd-lease", "claim-1")]
     assert bus.purge_calls >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_step", ["reclaim", "purge", "poll"])
+async def test_processor_runner_logs_and_survives_transient_loop_errors(
+    failing_step: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    bus = _FlakyLoopBus(failing_step)
+    runner = ProcessorRunner(
+        bus,
+        poll_interval_seconds=0.01,
+        reclaim_interval_seconds=0.01,
+    )
+    caplog.set_level(logging.ERROR, logger="app.control_plane.processor_runner")
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(runner.run(stop_event=stop_event))
+
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while True:
+        if failing_step == "poll":
+            if bus.calls["poll"] >= 2:
+                break
+        elif bus.calls[failing_step] >= 2 and bus.calls["poll"] >= 1:
+            break
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"processor loop did not recover after {failing_step} failure")
+        await asyncio.sleep(0.01)
+
+    stop_event.set()
+    await task
+
+    assert "Control-plane processor loop iteration failed" in caplog.text
 
 
 @pytest.mark.asyncio

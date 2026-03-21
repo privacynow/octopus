@@ -53,6 +53,21 @@ def ensure_json(value: Any) -> str:
     return json.dumps(value)
 
 
+def validated_bind_conversation_payload(payload: dict[str, Any]) -> dict[str, str]:
+    """Return the required conversation-bind fields or raise on invalid input."""
+    conversation_id = str(payload.get("conversation_id", "") or "")
+    origin_channel = str(payload.get("origin_channel", "") or "")
+    if not conversation_id.strip():
+        raise ValueError("bind_conversation requires non-empty conversation_id")
+    if not origin_channel.strip():
+        raise ValueError("bind_conversation requires non-empty origin_channel")
+    return {
+        "conversation_id": conversation_id,
+        "title": str(payload.get("title", "") or ""),
+        "origin_channel": origin_channel,
+    }
+
+
 def decode_json_field(value: Any, default: Any) -> Any:
     """Decode JSON text fields while tolerating already-decoded backend values."""
     if value in (None, ""):

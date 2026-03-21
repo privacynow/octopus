@@ -505,6 +505,22 @@ def test_bind_conversation_is_visible(store):
     assert [item["conversation_id"] for item in conversations] == ["c1"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"conversation_id": "c1", "title": "Conversation 1"},
+        {"conversation_id": "c1", "title": "Conversation 1", "origin_channel": ""},
+    ),
+)
+def test_bind_conversation_requires_non_empty_origin_channel(store, payload):
+    _, agent_token = _enroll(store, "alpha-bot")
+
+    with pytest.raises(ValueError, match="origin_channel"):
+        store.bind_conversation(agent_token, payload)
+
+    assert store.list_conversations() == []
+
+
 def test_create_conversation_delivers_channel_input(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
 

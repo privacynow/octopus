@@ -33,6 +33,7 @@ from app.registry_service.store_base import (
     runtime_health_generated_at,
     runtime_health_summary,
     utcnow_iso,
+    validated_bind_conversation_payload,
 )
 
 _SCHEMA = "agent_registry"
@@ -500,6 +501,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def bind_conversation(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        bind = validated_bind_conversation_payload(payload)
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -518,15 +520,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
-                        payload["conversation_id"],
+                        bind["conversation_id"],
                         row["agent_id"],
-                        payload.get("title", ""),
-                        payload.get("origin_channel", "telegram"),
+                        bind["title"],
+                        bind["origin_channel"],
                         now,
                         now,
                     ),
                 )
-        return self.get_conversation(payload["conversation_id"])
+        return self.get_conversation(bind["conversation_id"])
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         normalized = capability_name.strip().lower()

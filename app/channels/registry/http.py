@@ -230,6 +230,8 @@ def bind_conversation(
         return store.bind_conversation(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/discovery/search")

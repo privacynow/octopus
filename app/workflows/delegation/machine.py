@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 
 from app.session_state import DelegatedTask, PendingDelegation
@@ -111,6 +112,7 @@ class UpdateTaskStatusAction:
     full_text: str = ""
     follow_up_questions: tuple[str, ...] = ()
     completed_at: str = ""
+    submitted_at: float | str = 0.0
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,9 @@ def _task_with_status(task: DelegatedTask, action: UpdateTaskStatusAction) -> De
     allowed = _ALLOWED_CHILD_TRANSITIONS.get(current_status, frozenset())
     if next_status not in allowed:
         return task
+    submitted_at = task.submitted_at
+    if next_status == "submitted":
+        submitted_at = action.submitted_at or task.submitted_at or time.time()
     return replace(
         task,
         status=next_status,
@@ -141,6 +146,7 @@ def _task_with_status(task: DelegatedTask, action: UpdateTaskStatusAction) -> De
         full_text=action.full_text or task.full_text,
         follow_up_questions=list(action.follow_up_questions) if action.follow_up_questions else list(task.follow_up_questions),
         completed_at=action.completed_at or task.completed_at,
+        submitted_at=submitted_at,
     )
 
 

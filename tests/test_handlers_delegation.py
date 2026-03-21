@@ -1,3 +1,5 @@
+import time
+
 from app.identity import telegram_conversation_ref
 from app.identity import telegram_conversation_key
 from app.ports.agent_directory import AuthorityResolution
@@ -425,3 +427,70 @@ async def test_stale_submitted_delegation_expires_on_next_worker_message():
         assert pending["status"] == "partial_failed"
         assert pending["tasks"][0]["status"] == "failed"
         assert "delegation timed out" in pending["tasks"][0]["summary"]
+
+
+async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_age(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "delegation_timeout_seconds": 3600,
+        }
+    ) as (data_dir, cfg, prov):
+        import app.channels.telegram.ingress as th
+        from tests.support.handler_support import FakeChat, FakeUser
+
+        async def fake_submit_routed_task(*, request, authority_ref):
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+
+        async def fake_resolve_target_authority(*, target_agent_id):
+            return AuthorityResolution(status="resolved", authority_ref="registry:dev")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
+
+        chat = FakeChat()
+        user = FakeUser()
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_delegation"] = {
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
+            "title": "Feature delegation",
+            "created_at": time.time() - 3599,
+            "tasks": [
+                {
+                    "routed_task_id": "task-1",
+                    "title": "Implement feature",
+                    "target_agent_id": "developer-1",
+                    "instructions": "Build the feature end to end.",
+                    "status": "proposed",
+                }
+            ],
+        }
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        _, approve_msg = await send_callback(
+            th.handle_delegation_callback,
+            chat,
+            user,
+            f"delegation_approve:{chat.id}",
+        )
+
+        assert "approved" in last_reply(approve_msg).lower()
+
+        await send_text(chat, user, "continue please")
+        assert await drain_one_worker_item(data_dir) is True
+
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["status"] == "submitted"
+        assert pending["tasks"][0]["submitted_at"] > pending["created_at"]

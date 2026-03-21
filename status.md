@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20B2 landed green: delegation approval expiry still uses proposal age, but post-submission child-result expiry is now anchored to each task's own `submitted_at` timestamp instead of the original proposal timestamp.
 - Phase 20B1 landed green: the control-plane processor loop now logs and survives transient reclaim/purge/poll failures, and parent `delegated_result` timeline events are only published after a routed result is actually ready and matched to a pending delegation.
 - Phase 20A3 landed green: runtime-owned credential consumers now load only the requested active-skill subset, credential-validation host matching now accepts only exact hosts or intended `*.` suffixes, and preflight context no longer embeds raw runtime skill instruction bodies.
 - Phase 20A2 landed green: registry enroll/login now throttle repeated failed auth attempts per client host, UI session signing no longer regenerates per process when `REGISTRY_SESSION_SECRET` is unset, and `/healthz` now exposes only the minimal liveness contract.
@@ -102,7 +103,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2108 passed, 23 skipped`.
+- Latest verified full-suite run: `2112 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -158,6 +159,21 @@
   - `20C4` durable inbound transport provenance
 
 ## Phase 20 Slice Log
+
+- Complete: Phase 20B2 remediation — anchor delegated child-result expiry to actual submission time instead of the original proposal timestamp.
+  Scope:
+  - extended `DelegatedTask` session state with a durable `submitted_at` field that round-trips through the existing typed session serialization seam
+  - updated the delegation machine and `mark_task_submitted(...)` helper to stamp `submitted_at` exactly when a child task transitions to `submitted`
+  - changed `expire_stale_delegations(...)` so unapproved `proposed` tasks still expire from `PendingDelegation.created_at`, while submitted/running child tasks expire from their own `submitted_at` with a backward-compatible fallback for legacy stored plans
+  - added direct orchestration/session tests plus a handler-level regression proving that a near-deadline approval no longer causes immediate post-submission timeout on the next worker touch
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_orchestration.py tests/test_handlers_delegation.py tests/test_session_state.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - delegation approval expiry still rejects genuinely stale unsubmitted plans
+  - newly submitted child tasks no longer inherit near-expired proposal age for result timeout purposes
+  - `submitted_at` persists through session serialization and real approval/worker paths
+  - full suite status after Phase 20B2: `2112 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

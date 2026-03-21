@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -97,22 +98,26 @@ def expire_stale_delegations(
 ) -> DelegationExpirationOutcome:
     if pending is None:
         return DelegationExpirationOutcome(status="no_delegation", pending=None)
-    delegation_age = age_seconds(pending.created_at, now=utc_now())
-    if delegation_age is None or delegation_age <= timeout_seconds:
-        return DelegationExpirationOutcome(status="not_expired", pending=pending)
 
     updated_pending = pending
     expired_kind = ""
-    completed_at = utc_now().isoformat()
+    now = utc_now()
+    delegation_age = age_seconds(pending.created_at, now=now)
+    completed_at = now.isoformat()
     expired = False
     for task in list(updated_pending.tasks):
         current_status = normalize_child_status(task.status)
         if current_status in CHILD_TERMINAL_STATUSES:
             continue
         if current_status == "proposed":
+            if delegation_age is None or delegation_age <= timeout_seconds:
+                continue
             summary = _DELEGATION_APPROVAL_EXPIRED_SUMMARY
             expired_kind = expired_kind or "approval_expired"
         else:
+            task_age = age_seconds(task.submitted_at or pending.created_at, now=now)
+            if task_age is None or task_age <= timeout_seconds:
+                continue
             summary = _DELEGATION_TIMEOUT_SUMMARY
             expired_kind = "result_timeout"
         decision = decide_delegation_action(
@@ -165,6 +170,7 @@ def mark_task_submitted(
             routed_task_id=routed_task_id,
             authority_ref=authority_ref,
             status="submitted",
+            submitted_at=time.time(),
         ),
     )
     return DelegationUpdateOutcome(

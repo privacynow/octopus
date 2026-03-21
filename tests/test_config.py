@@ -306,23 +306,39 @@ def test_validate_config_poll_mode_no_webhook_errors():
     assert webhook_errors == []
 
 
-def test_validate_config_completion_webhook_url_is_non_fatal_when_malformed():
+def test_validate_config_rejects_malformed_completion_webhook_url():
     errors = validate_config(make_config(completion_webhook_url="http://"))
-    assert not any("COMPLETION_WEBHOOK" in e for e in errors)
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
 
 
-def test_validate_config_redacts_completion_webhook_query_params(tmp_path: Path, caplog):
-    with caplog.at_level("WARNING"):
-        errors = validate_config(
-            make_config(
-                completion_webhook_url="not-a-url?token=secret",
-                working_dir=tmp_path,
-            )
+def test_validate_config_rejects_remote_plain_http_completion_webhook():
+    errors = validate_config(make_config(completion_webhook_url="http://hooks.example.com/completed"))
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e and "plain HTTP over a non-local address" in e for e in errors)
+
+
+def test_validate_config_allows_local_plain_http_completion_webhook():
+    errors = validate_config(make_config(completion_webhook_url="http://127.0.0.1:9999/completed"))
+    assert not any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
+
+
+def test_validate_config_rejects_remote_plain_http_bot_webhook_url():
+    errors = validate_config(
+        make_config(
+            bot_mode="webhook",
+            webhook_url="http://bot.example.com/webhook",
         )
+    )
+    assert any("BOT_WEBHOOK_URL" in e and "plain HTTP over a non-local address" in e for e in errors)
 
-    assert errors == []
-    assert not any("token=secret" in record.message for record in caplog.records)
-    assert any("<redacted>" in record.message for record in caplog.records)
+
+def test_validate_config_allows_local_plain_http_bot_webhook_url():
+    errors = validate_config(
+        make_config(
+            bot_mode="webhook",
+            webhook_url="http://localhost:8080/webhook",
+        )
+    )
+    assert not any("BOT_WEBHOOK_URL" in e for e in errors)
 
 def test_config_defaults_to_poll():
     cfg = make_config()

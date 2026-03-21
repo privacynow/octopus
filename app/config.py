@@ -1,9 +1,11 @@
 """Configuration loading, validation, and fail-fast checks."""
 
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -19,6 +21,16 @@ from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
+_WEBHOOK_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_COMPLETION_WEBHOOK_METADATA_HOSTS = {
+    "metadata",
+    "metadata.aws.internal",
+    "metadata.google.internal",
+    "metadata.azure.internal",
+}
+_COMPLETION_WEBHOOK_METADATA_IPS = {
+    ipaddress.ip_address("169.254.169.254"),
+}
 
 
 def load_dotenv_file(path: Path) -> dict[str, str]:
@@ -106,6 +118,86 @@ def _is_local_http_url(raw: str) -> bool:
     parsed = urlparse(raw)
     host = (parsed.hostname or "").lower()
     return host in {"registry", "localhost", "127.0.0.1", "::1"}
+
+
+def _is_local_webhook_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    return host in _WEBHOOK_LOCAL_HTTP_HOSTS
+
+
+def _http_url_policy_error(raw: str, *, setting_name: str) -> str | None:
+    if not raw:
+        return None
+    if not _has_valid_http_url(raw):
+        return f"{setting_name} must be a valid http:// or https:// URL when set"
+    if raw.startswith("http://") and not _is_local_webhook_http_url(raw):
+        return (
+            f"{setting_name} uses plain HTTP over a non-local address. "
+            "Use https:// for remote webhook targets."
+        )
+    return None
+
+
+def completion_webhook_target_block_reason(raw: str) -> str | None:
+    """Return a security rejection reason for a completion webhook target."""
+
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host:
+        return "missing host"
+    if host in _COMPLETION_WEBHOOK_METADATA_HOSTS:
+        return "cloud metadata host is not allowed"
+
+    allow_loopback = _is_local_webhook_http_url(raw)
+
+    def _blocked_ip_reason(candidate: ipaddress._BaseAddress) -> str | None:
+        if candidate in _COMPLETION_WEBHOOK_METADATA_IPS:
+            return "cloud metadata address is not allowed"
+        if candidate.is_loopback:
+            return None if allow_loopback else "loopback addresses are not allowed"
+        if candidate.is_link_local:
+            return "link-local addresses are not allowed"
+        if candidate.is_private:
+            return "private addresses are not allowed"
+        if candidate.is_multicast:
+            return "multicast addresses are not allowed"
+        if candidate.is_unspecified:
+            return "unspecified addresses are not allowed"
+        if candidate.is_reserved:
+            return "reserved addresses are not allowed"
+        return None
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        return _blocked_ip_reason(ip)
+
+    try:
+        resolved = socket.getaddrinfo(
+            host,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return None
+
+    seen_addresses: set[ipaddress._BaseAddress] = set()
+    for family, _, _, _, sockaddr in resolved:
+        del family
+        address_text = sockaddr[0].split("%", 1)[0]
+        try:
+            candidate = ipaddress.ip_address(address_text)
+        except ValueError:
+            continue
+        if candidate in seen_addresses:
+            continue
+        seen_addresses.add(candidate)
+        if (reason := _blocked_ip_reason(candidate)) is not None:
+            return reason
+    return None
 
 
 def _has_valid_postgres_url(raw: str) -> bool:
@@ -717,6 +809,9 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+    if config.webhook_url:
+        if error := _http_url_policy_error(config.webhook_url, setting_name="BOT_WEBHOOK_URL"):
+            errors.append(error)
 
     if config.telegram_api_base_url and not _has_valid_http_url(config.telegram_api_base_url):
         errors.append(
@@ -728,11 +823,12 @@ def validate_config(config: BotConfig) -> list[str]:
             "BOT_TELEGRAM_FILE_API_BASE_URL must be a valid http:// or https:// URL when set"
         )
 
-    if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
-        log.warning(
-            "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
-            sanitize_url_for_logging(config.completion_webhook_url),
-        )
+    if config.completion_webhook_url:
+        if error := _http_url_policy_error(
+            config.completion_webhook_url,
+            setting_name="BOT_COMPLETION_WEBHOOK_URL",
+        ):
+            errors.append(error)
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(

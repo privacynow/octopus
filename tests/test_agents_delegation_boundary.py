@@ -3,9 +3,11 @@ from app.agents.delegation import (
     build_delegation_runtime,
     handle_delegation_approve,
     handle_delegation_cancel,
+    preview_delegation_targets,
 )
 from app.ports.agent_directory import AuthorityResolution
 from app.ports.task_routing import TaskSubmissionResult
+from app.session_state import DelegatedTask, PendingDelegation
 from app.storage import default_session, save_session
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env, load_session_disk
@@ -17,6 +19,14 @@ class _ChannelEgress:
 
     async def send_text(self, text: str, *, reply_markup=None) -> None:
         self.messages.append((text, reply_markup))
+
+
+class _PreviewDirectory:
+    def __init__(self, results):
+        self._results = results
+
+    async def resolve_target_authority(self, *, target_agent_id):
+        return self._results[target_agent_id]
 
 
 async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
@@ -137,3 +147,37 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
         session_after = load_session_disk(data_dir, f"tg:{chat_id}", prov)
         assert session_after.get("pending_delegation") is None
         assert channel_egress.messages == [("Delegation cancelled. No requests were sent.", None)]
+
+
+async def test_preview_delegation_targets_marks_resolved_and_unresolved_agents():
+    previews = await preview_delegation_targets(
+        PendingDelegation(
+            conversation_ref="telegram:bot:123",
+            tasks=[
+                DelegatedTask(
+                    routed_task_id="task-1",
+                    title="Implement",
+                    target_agent_id="developer-1",
+                ),
+                DelegatedTask(
+                    routed_task_id="task-2",
+                    title="Review",
+                    target_agent_id="reviewer-1",
+                ),
+            ],
+        ),
+        agent_directory=_PreviewDirectory(
+            {
+                "developer-1": AuthorityResolution(
+                    status="resolved",
+                    authority_ref="registry:default",
+                ),
+                "reviewer-1": AuthorityResolution(status="not_found"),
+            }
+        ),
+    )
+
+    assert previews[0].status == "resolved"
+    assert previews[0].authority_ref == "registry:default"
+    assert previews[1].status == "unresolved"
+    assert "reviewer-1" in previews[1].detail

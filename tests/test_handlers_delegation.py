@@ -17,7 +17,7 @@ from tests.support.handler_support import (
 )
 
 
-async def test_execute_request_proposes_delegation_and_persists_pending_delegation():
+async def test_execute_request_proposes_delegation_and_persists_pending_delegation(monkeypatch):
     with fresh_env(
         config_overrides={
             "approval_mode": "off",
@@ -27,6 +27,17 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
+
+        async def fake_resolve_target_authority(*, target_agent_id):
+            if target_agent_id == "developer-1":
+                return AuthorityResolution(status="resolved", authority_ref="registry:dev")
+            return AuthorityResolution(status="resolved", authority_ref="registry:review")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -65,6 +76,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         ]
         assert any(
             "<b>Delegation plan</b>" in message.get("text", "")
+            and "ready via" in message.get("text", "")
             and message.get("reply_markup") is not None
             for message in current_bot_instance().sent_messages
         )

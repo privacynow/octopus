@@ -17,6 +17,14 @@ class DelegationTaskDraft:
 
 
 @dataclass(frozen=True)
+class DelegationTargetPreview:
+    routed_task_id: str
+    status: str
+    authority_ref: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class DelegationApprovalPreparation:
     status: str
     pending: PendingDelegation | None = None

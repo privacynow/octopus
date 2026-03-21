@@ -20,6 +20,7 @@ from app.workflows.delegation.coordination import (
     mark_task_submitted,
     prepare_delegation_approval,
 )
+from app.workflows.delegation.contracts import DelegationTargetPreview
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,14 @@ def _coordination_unavailable_message(*, error: str = "") -> str:
         "Delegation is unavailable because registry connectivity is degraded."
         " The request was not sent." + detail
     )
+
+
+def _coordination_unavailable_detail(*, error: str = "") -> str:
+    if error == "no control plane":
+        return "No coordination-capable registry connections are configured."
+    if error:
+        return registry_error_summary(error)
+    return "Registry connectivity is degraded."
 
 
 def _expired_delegation_message(expired_kind: str) -> str:
@@ -184,6 +193,77 @@ async def handle_delegation_approve(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
         " I'll continue when results arrive."
     )
+
+
+async def preview_delegation_targets(
+    pending,
+    *,
+    agent_directory: AgentDirectoryPort,
+) -> tuple[DelegationTargetPreview, ...]:
+    if pending is None:
+        return ()
+    cached_resolutions: dict[str, Any] = {}
+    previews: list[DelegationTargetPreview] = []
+    for task in pending.tasks:
+        target_agent_id = (task.target_agent_id or "").strip()
+        if not target_agent_id:
+            previews.append(
+                DelegationTargetPreview(
+                    routed_task_id=task.routed_task_id,
+                    status="missing_target",
+                    detail="No target agent was specified for this task.",
+                )
+            )
+            continue
+        resolution = cached_resolutions.get(target_agent_id)
+        if resolution is None:
+            try:
+                resolution = await agent_directory.resolve_target_authority(
+                    target_agent_id=target_agent_id,
+                )
+            except Exception:
+                log.exception(
+                    "Delegation preview failed while resolving target agent %s",
+                    target_agent_id,
+                )
+                previews.append(
+                    DelegationTargetPreview(
+                        routed_task_id=task.routed_task_id,
+                        status="unavailable",
+                        detail=_coordination_unavailable_detail(error="registry_request_failed"),
+                    )
+                )
+                continue
+            cached_resolutions[target_agent_id] = resolution
+        if resolution.status == "resolved" and resolution.authority_ref:
+            previews.append(
+                DelegationTargetPreview(
+                    routed_task_id=task.routed_task_id,
+                    status="resolved",
+                    authority_ref=resolution.authority_ref,
+                )
+            )
+            continue
+        if resolution.status == "unavailable":
+            previews.append(
+                DelegationTargetPreview(
+                    routed_task_id=task.routed_task_id,
+                    status="unavailable",
+                    detail=_coordination_unavailable_detail(error=resolution.error),
+                )
+            )
+            continue
+        previews.append(
+            DelegationTargetPreview(
+                routed_task_id=task.routed_task_id,
+                status="unresolved",
+                detail=(
+                    "Could not resolve which authority owns "
+                    f"{target_agent_id}."
+                ),
+            )
+        )
+    return tuple(previews)
 
 
 async def handle_delegation_cancel(

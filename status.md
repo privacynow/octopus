@@ -10,6 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
+- Phase 19D2 landed green: delegation plans now pre-validate target ownership through the existing agent-directory seam before the user approves them.
 - Phase 19D1 landed green: stale delegations now expire through the existing delegation machine instead of lingering forever in submitted/proposed state.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
@@ -76,8 +77,12 @@
   - stale delegation plans fail remaining non-terminal child tasks through the existing `submitted/proposed -> failed` transitions
   - approval callbacks now reject expired plans instead of submitting stale work
   - the Telegram worker path expires stale parent delegations before processing the next message on that conversation
+- Delegation proposal-time UX now reuses the existing agent-directory seam before approval:
+  - proposed delegation plans pre-resolve target ownership without persisting a second discovery path
+  - proposal messages now mark ready, unavailable, unresolved, and missing-target tasks before the user approves anything
+  - approval-time resolution remains the safety net, so the actual submission path still owns the final authority check
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2074 passed, 23 skipped`.
+- Latest verified full-suite run: `2077 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -123,6 +128,21 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19D2 remediation — pre-validate delegation target ownership at proposal time through the existing agent-directory seam instead of waiting until approval to surface missing ownership.
+  Scope:
+  - added shared `preview_delegation_targets(...)` resolution previewing in `app/agents/delegation.py`, reusing the existing `AgentDirectoryPort` and caching repeated target lookups per proposal
+  - extended `app/channels/telegram/delegation_channel.py` to resolve target previews before rendering the plan, while keeping approval-time resolution as the final safety net
+  - updated `app/channels/telegram/presenters.py` to render ready/unavailable/unresolved/missing-target task states and a blocker note when some targets are not yet resolvable
+  - added workflow/presenter/live-path regression coverage in `tests/test_agents_delegation_boundary.py`, `tests/test_telegram_presenters.py`, `tests/test_telegram_delegation_channel.py`, and `tests/test_handlers_delegation.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents_delegation_boundary.py tests/test_telegram_presenters.py tests/test_telegram_delegation_channel.py tests/test_handlers_delegation.py -k 'delegation and (preview or propose or plan or approve or unavailable)'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - users now see which delegation targets are ready to route and which ones are blocked before they approve a plan
+  - proposal-time preview stays on the same authority-resolution seam as approval instead of inventing new persisted discovery state
+  - approval-time routing behavior remains unchanged and still re-checks authority ownership before submission
+  - full suite status after Phase 19D2: `2077 passed, 23 skipped`
 
 - Complete: Phase 19D1 remediation — expire stale delegations through the existing delegation machine instead of leaving them indefinitely proposed/submitted.
   Scope:

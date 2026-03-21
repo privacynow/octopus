@@ -13,6 +13,7 @@ from app.agents.delegation import (
     DelegationRuntime,
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
+    preview_delegation_targets,
 )
 from app.agents.types import TimelineEvent
 from app.session_state import PendingDelegation, SessionState
@@ -91,12 +92,19 @@ async def propose_delegation_plan(
         result.delegation_resume_instruction,
         list(result.delegation_tasks),
     )
+    previews = await preview_delegation_targets(
+        delegation,
+        agent_directory=runtime.services.control_plane.agent_directory,
+    )
     session.pending_delegation = delegation
     save_session(runtime, chat_id, session)
     await publish_delegation_proposed_event(runtime, message, delegation)
 
     send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
-    rendered = telegram_presenters.delegation_plan_message(delegation)
+    rendered = telegram_presenters.delegation_plan_message(
+        delegation,
+        previews=previews,
+    )
     await send_plan(
         rendered.text,
         parse_mode=rendered.parse_mode,

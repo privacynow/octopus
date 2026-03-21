@@ -23,6 +23,10 @@
   surface has been removed from finalization/worker code, and
   degraded routed-task state remains the only failure signal on that
   concern boundary.
+- Phase 13D landed green: the protected routed-task status contract is
+  now parameterized over the full shared status set across both store
+  backends, with the `completed` branch still proving
+  `result_json` preservation.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -95,8 +99,38 @@
   `1954 passed, 23 skipped`.
 - Full-suite status after Phase 13C:
   `1954 passed, 23 skipped`.
+- Full-suite status after Phase 13D:
+  `1960 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13D remediation — parametrize protected-status
+  contract coverage.
+  Scope:
+  - imported the shared
+    `PROTECTED_ROUTED_TASK_STATUSES` constant into
+    `tests/contracts/test_registry_store_contract.py`
+  - replaced the separate `completed` / `partialfailed` protection
+    tests with one parametrized contract that covers
+    `completed`, `failed`, `cancelled`, `timed_out`, and
+    `partialfailed` across SQLite and Postgres
+  - kept the `partialfailed` overwrite-by-result test separate so
+    final result ownership remains explicitly proven
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_registry_store_contract.py -k 'routed_task_status_updates_do_not_overwrite_protected_status or routed_task_result_can_overwrite_partialfailed or create_routed_task_and_lookup'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the parametrized `completed` branch still establishes the
+    state via `update_routed_task_result()` and asserts
+    `result_json` preservation after a late `running` update
+  Review:
+  - this slice closed the invariant-test gap without changing store
+    behavior; it made the contract match the shared production
+    vocabulary instead of the narrower historical bug cases
+  Verified:
+  - all protected routed-task statuses now resist late in-flight
+    updates across both backends
+  - full suite status after Phase 13D: `1960 passed, 23 skipped`
 
 - Complete: Phase 13C remediation — delete the dead routed-result
   warning surface.

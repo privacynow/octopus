@@ -6,9 +6,10 @@ import re
 import pytest
 
 from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import hash_agent_token
 from app.registry_service.store_base import CapabilityDisabledError
+from app.registry_service.store_base import PROTECTED_ROUTED_TASK_STATUSES
 from app.registry_service.store_base import RegistryScopeError
+from app.registry_service.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -296,24 +297,38 @@ def test_create_routed_task_and_lookup(store):
     assert deliveries[0]["kind"] == "routed_task"
 
 
-def test_routed_task_status_updates_do_not_overwrite_completed_result(store):
+@pytest.mark.parametrize("protected_status", PROTECTED_ROUTED_TASK_STATUSES)
+def test_routed_task_status_updates_do_not_overwrite_protected_status(store, protected_status):
+    routed_task_id = f"task-status-{protected_status}"
+    protected_summary = f"{protected_status} summary"
     _routed, _origin_id, _target_id, target_token = _create_routed_task(
-        store, routed_task_id="task-status-completed"
+        store, routed_task_id=routed_task_id
     )
 
-    store.update_routed_task_result(
-        target_token,
-        "task-status-completed",
-        {
-            "status": "completed",
-            "summary": "done",
-            "full_text": "Full result",
-        },
-    )
+    if protected_status == "completed":
+        store.update_routed_task_result(
+            target_token,
+            routed_task_id,
+            {
+                "status": "completed",
+                "summary": protected_summary,
+                "full_text": "Full result",
+            },
+        )
+    else:
+        store.update_routed_task_status(
+            target_token,
+            routed_task_id,
+            {
+                "status": protected_status,
+                "summary": protected_summary,
+                "timeline_events": [],
+            },
+        )
 
     store.update_routed_task_status(
         target_token,
-        "task-status-completed",
+        routed_task_id,
         {
             "status": "running",
             "summary": "late progress",
@@ -321,42 +336,12 @@ def test_routed_task_status_updates_do_not_overwrite_completed_result(store):
         },
     )
 
-    task = _routed_task_row(store, "task-status-completed")
+    task = _routed_task_row(store, routed_task_id)
 
-    assert task["status"] == "completed"
-    assert task["summary"] == "done"
-    assert "Full result" in str(task["result_json"])
-
-
-def test_routed_task_status_updates_do_not_overwrite_partialfailed(store):
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
-        store, routed_task_id="task-status-partialfailed"
-    )
-
-    store.update_routed_task_status(
-        target_token,
-        "task-status-partialfailed",
-        {
-            "status": "partialfailed",
-            "summary": "delivery failed",
-            "timeline_events": [],
-        },
-    )
-
-    store.update_routed_task_status(
-        target_token,
-        "task-status-partialfailed",
-        {
-            "status": "running",
-            "summary": "late progress",
-            "timeline_events": [],
-        },
-    )
-
-    task = _routed_task_row(store, "task-status-partialfailed")
-
-    assert task["status"] == "partialfailed"
-    assert task["summary"] == "delivery failed"
+    assert task["status"] == protected_status
+    assert task["summary"] == protected_summary
+    if protected_status == "completed":
+        assert "Full result" in str(task["result_json"])
 
 
 def test_routed_task_result_can_overwrite_partialfailed(store):

@@ -230,7 +230,7 @@ async def test_simulator_recovery_notice_no_provider_call():
 
         wq.record_update(
             data_dir, _event(9001), _conv(12345), _actor(42), "message",
-            payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered"}',
+            payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered", "source": "telegram"}',
         )
         conn = work_queue.debug_transport_connection(data_dir)
         now = datetime.now(timezone.utc).isoformat()

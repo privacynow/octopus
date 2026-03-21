@@ -82,3 +82,23 @@ def test_deserialize_inbound_rejects_registry_payload_without_authority_ref() ->
 
     with pytest.raises(ValueError, match="canonical authority_ref"):
         deserialize_inbound("message", payload)
+
+
+def test_deserialize_inbound_rejects_payload_without_canonical_source() -> None:
+    payload = (
+        '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
+        '"text":"hello","attachments":[]}'
+    )
+
+    with pytest.raises(ValueError, match="canonical source"):
+        deserialize_inbound("message", payload)
+
+
+def test_deserialize_inbound_rejects_payload_with_blank_source() -> None:
+    payload = (
+        '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
+        '"text":"hello","source":"   ","attachments":[]}'
+    )
+
+    with pytest.raises(ValueError, match="canonical source"):
+        deserialize_inbound("message", payload)

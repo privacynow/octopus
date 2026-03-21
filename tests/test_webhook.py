@@ -45,6 +45,15 @@ def _install_async_client(monkeypatch, results, calls):
     monkeypatch.setattr("app.webhook.httpx.AsyncClient", FakeAsyncClient)
 
 
+def _install_dns_success(monkeypatch, address: str = "93.184.216.34") -> None:
+    monkeypatch.setattr(
+        "app.config.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (0, 0, 0, "", (address, 443)),
+        ],
+    )
+
+
 @pytest.mark.asyncio
 async def test_fire_skips_when_url_empty(monkeypatch):
     import app.webhook as wh
@@ -107,6 +116,33 @@ async def test_fire_blocks_metadata_targets(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
+async def test_fire_blocks_when_target_host_resolution_fails(monkeypatch, caplog):
+    import socket
+    import app.webhook as wh
+
+    calls: list[dict] = []
+    _install_async_client(monkeypatch, [_response(200)], calls)
+
+    def _boom(*args, **kwargs):
+        raise socket.gaierror("dns failed")
+
+    monkeypatch.setattr("app.config.socket.getaddrinfo", _boom)
+
+    with caplog.at_level("WARNING"):
+        await wh.fire_completion_webhook(
+            "https://hooks.example.com/completed",
+            chat_id=123,
+            conversation_ref="conv-1",
+            status="completed",
+            summary="done",
+            completed_at="2026-03-16T00:00:00Z",
+        )
+
+    assert calls == []
+    assert any("host resolution failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_fire_allows_loopback_dev_target(monkeypatch):
     import app.webhook as wh
 
@@ -131,6 +167,7 @@ async def test_fire_delivers_on_success(monkeypatch):
 
     calls: list[dict] = []
     _install_async_client(monkeypatch, [_response(200)], calls)
+    _install_dns_success(monkeypatch)
 
     await wh.fire_completion_webhook(
         "https://hooks.example.com/completed",
@@ -159,6 +196,7 @@ async def test_fire_retries_on_5xx(monkeypatch):
 
     calls: list[dict] = []
     _install_async_client(monkeypatch, [_response(503), _response(503), _response(200)], calls)
+    _install_dns_success(monkeypatch)
 
     await wh.fire_completion_webhook(
         "https://hooks.example.com/completed",
@@ -178,6 +216,7 @@ async def test_fire_no_retry_on_4xx(monkeypatch):
 
     calls: list[dict] = []
     _install_async_client(monkeypatch, [_response(400)], calls)
+    _install_dns_success(monkeypatch)
 
     await wh.fire_completion_webhook(
         "https://hooks.example.com/completed",
@@ -198,6 +237,7 @@ async def test_circuit_opens_after_threshold(monkeypatch):
     calls: list[dict] = []
     now = [100.0]
     monkeypatch.setattr(wh.time, "monotonic", lambda: now[0])
+    _install_dns_success(monkeypatch)
     _install_async_client(
         monkeypatch,
         [_response(500)] * (wh._FAILURE_THRESHOLD * wh._MAX_ATTEMPTS),
@@ -235,6 +275,7 @@ async def test_circuit_recovers_after_timeout(monkeypatch):
     calls: list[dict] = []
     now = [100.0]
     monkeypatch.setattr(wh.time, "monotonic", lambda: now[0])
+    _install_dns_success(monkeypatch)
     _install_async_client(
         monkeypatch,
         [_response(500)] * (wh._FAILURE_THRESHOLD * wh._MAX_ATTEMPTS) + [_response(200)],
@@ -271,6 +312,7 @@ async def test_webhook_logging_redacts_query_tokens(caplog, monkeypatch):
 
     calls: list[dict] = []
     request = httpx.Request("POST", "https://hooks.example.com/completed?token=secret")
+    _install_dns_success(monkeypatch)
     _install_async_client(
         monkeypatch,
         [httpx.HTTPStatusError("boom", request=request, response=httpx.Response(500, request=request))],

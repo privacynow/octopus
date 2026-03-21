@@ -10,6 +10,8 @@
 ## Current State
 
 - Phases 1-19 are implemented and closed.
+- Phase 21 is in progress: the final owner-seam closure pass is executing sequentially with focused regression coverage plus a green full-suite rerun after each slice.
+- Phase 21A landed green: artifact extraction now uses real path containment instead of a vulnerable string-prefix check, and completion-webhook validation/runtime both fail closed when target host resolution fails.
 - Phase 20 is closed: all remaining security/runtime boundary findings from the repo-wide audit landed sequentially with focused regression coverage plus a green full-suite rerun after each slice.
 - Phase 20Z landed green: the final closeout audit found no remaining open items from the Phase 20 findings list, and `retry_allow_pending()` now returns explicitly on its approved continuation branch instead of relying on fallthrough.
 - Phase 20C4 landed green: durable inbound payloads now preserve transport provenance through the runtime admission seam, including legacy replay fallback for older rows that only carried canonical `source`.
@@ -163,6 +165,25 @@
   - `20C3` shared runtime Telegram-assumption removal
   - `20C4` durable inbound transport provenance
   - `20Z` closeout audit and final pending-branch consistency cleanup
+
+## Phase 21 Slice Log
+
+- Complete: Phase 21A remediation — close the remaining artifact/webhook owner-boundary gaps.
+  Scope:
+  - replaced the archive containment guard in `app/registry.py` with a real path-containment check based on `Path.relative_to(...)` instead of a vulnerable string-prefix comparison
+  - added a traversal regression in `tests/test_registry.py` proving a crafted tar member like `../extracted-evil/skill.md` is rejected and not written outside the destination directory
+  - changed `app/config.py` so completion-webhook target validation fails closed on DNS resolution failure and now surfaces that owner-seam check through config validation as well as runtime delivery
+  - hardened `tests/test_config.py` and `tests/test_webhook.py` with explicit positive/negative DNS-path coverage, including deterministic public-DNS stubs for success-path webhook tests
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry.py -k 'path_traversal_member or valid_and_digest_stable'`
+  - `./.venv/bin/python -m pytest -q tests/test_config.py -k 'completion_webhook'`
+  - `./.venv/bin/python -m pytest -q tests/test_webhook.py -k 'logging_redacts_query_tokens or host_resolution_fails or blocks_private_ip_targets or delivers_on_success or retries_on_5xx or no_retry_on_4xx'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - traversal artifacts can no longer escape the extraction root via sibling-prefix path tricks
+  - completion-webhook config/runtime now agree on fail-closed target resolution behavior instead of silently skipping SSRF validation on DNS failure
+  - existing webhook success/failure logging and retry behavior remain intact under deterministic DNS stubs
+  - full suite status after Phase 21A: `2126 passed, 23 skipped`
 
 ## Phase 20 Slice Log
 

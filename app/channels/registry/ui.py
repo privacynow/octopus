@@ -699,8 +699,33 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           completed: "badge-completed",
           healthy: "badge-connected",
           unhealthy: "badge-failed",
+          started: "badge-running",
+          progress: "badge-running",
+          channelinput: "badge-open",
+          channelaction: "badge-pending",
+          control: "badge-cancelling",
+          usage: "badge-standalone",
+          delegationproposed: "badge-pending",
+          delegationready: "badge-pending",
+          delegatedresult: "badge-completed",
+          botmessage: "badge-open",
+          recoverynotice: "badge-pending",
+          routedtask: "badge-pending",
+          routedresult: "badge-completed",
+          result: "badge-completed",
+          approval: "badge-pending",
         }};
         return map[s] || "";
+      }}
+
+      function diagnosticClass(level) {{
+        const normalized = String(level || "info").toLowerCase();
+        const map = {{
+          info: "diag-info",
+          warning: "diag-warning",
+          error: "diag-error",
+        }};
+        return map[normalized] || map.info;
       }}
 
       function statusLabel(status) {{
@@ -711,6 +736,13 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           timed_out: "Timed out",
         }};
         return labels[value] || value.replace(/_/g, " ").replace(/\\b\\w/g, c => c.toUpperCase());
+      }}
+
+      function renderSearchSnippet(snippet) {{
+        const escaped = escapeHtml(snippet || "");
+        return escaped
+          .replace(/&lt;b&gt;/g, "<b>")
+          .replace(/&lt;\\/b&gt;/g, "</b>");
       }}
 
       function ensureEditorHost(textarea) {{
@@ -885,7 +917,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           return '<div class="meta">No mirrored diagnostics.</div>';
         }}
         return diagnostics.map(item => `
-          <div class="meta diag-${{escapeHtml(item.level || "info")}}">
+          <div class="meta ${{diagnosticClass(item.level)}}">
             <strong>${{escapeHtml((item.level || "info").toUpperCase())}}:</strong>
             ${{escapeHtml(item.message || "")}}
           </div>
@@ -977,7 +1009,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
             </div>
             ${{
               item.search_snippet
-                ? `<div class="meta">${{escapeHtml(item.search_snippet).replace(/&lt;b&gt;/g, "<b>").replace(/&lt;\\/b&gt;/g, "</b>")}}</div>`
+                ? `<div class="meta">${{renderSearchSnippet(item.search_snippet)}}</div>`
                 : ""
             }}
           </button>

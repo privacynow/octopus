@@ -252,6 +252,12 @@ def _services_for_config(config: BotConfig) -> BotServices:
 
 @asynccontextmanager
 async def _running_registry_processor(config: BotConfig):
+    """Run the registry processor harness for bus/processor integration coverage.
+
+    This helper intentionally exercises the processor path regardless of which
+    process role would own it in production; the tests using it are asserting
+    control-plane delivery semantics, not shared-worker startup shape.
+    """
     runner = ProcessorRunner(
         ControlPlaneBus(config.data_dir),
         poll_interval_seconds=0.01,

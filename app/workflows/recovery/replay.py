@@ -130,8 +130,22 @@ class RecoveryUseCases(RecoveryPort):
                 status="not_message",
                 edit_message=_msg.recovery_replay_failed_edit(),
             )
+        try:
+            conversation_ref = self._event_conversation_ref(event, config=config)
+        except Exception:
+            work_queue.fail_work_item(data_dir, item["id"], error="conversation_ref_invalid")
+            return RecoveryActionOutcome(
+                status="conversation_ref_invalid",
+                edit_message=_msg.recovery_replay_failed_edit(),
+            )
+        if not conversation_ref:
+            work_queue.fail_work_item(data_dir, item["id"], error="conversation_ref_missing")
+            return RecoveryActionOutcome(
+                status="conversation_ref_missing",
+                edit_message=_msg.recovery_replay_failed_edit(),
+            )
         trust_tier = trust_tier_for_ref(
-            self._event_conversation_ref(event, config=config),
+            conversation_ref,
             event.user,
             config=config,
             dispatcher=dispatcher,

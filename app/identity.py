@@ -107,16 +107,23 @@ def resolve_event_conversation_ref(*, config: Any, event: Any) -> str:
     conversation_ref = str(getattr(event, "conversation_ref", "") or "")
     if conversation_ref:
         return conversation_ref
+    conversation_key = str(getattr(event, "conversation_key", "") or "")
     try:
         chat_id = getattr(event, "chat_id")
-    except Exception:
+    except AttributeError:
         chat_id = None
+    except ValueError:
+        if conversation_key:
+            chat_id = None
+        else:
+            raise
     if isinstance(chat_id, int):
         return telegram_conversation_ref(config, chat_id)
-    conversation_key = str(getattr(event, "conversation_key", "") or "")
     numeric_chat_id = telegram_numeric_id(conversation_key)
     if numeric_chat_id is not None:
         return telegram_conversation_ref(config, numeric_chat_id)
+    if not conversation_key:
+        raise ValueError("event missing conversation_ref/conversation_key")
     return conversation_key
 
 

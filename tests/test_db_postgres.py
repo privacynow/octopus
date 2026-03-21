@@ -111,6 +111,126 @@ def test_run_bootstrap_is_idempotent_on_bootstrapped_db(postgres_truncated):
     assert errors == []
 
 
+def test_registry_bootstrap_schema_matches_current_store_contract(postgres_truncated):
+    """Fresh Postgres bootstrap exposes the current registry tables/columns/defaults."""
+    from app.db.postgres import get_connection
+
+    expected_columns = {
+        "agents": {
+            "agent_id",
+            "agent_token",
+            "display_name",
+            "slug",
+            "role",
+            "registry_scope",
+            "skills_json",
+            "tags_json",
+            "description",
+            "provider",
+            "mode",
+            "connectivity_state",
+            "current_capacity",
+            "max_capacity",
+            "channel_capabilities_json",
+            "version",
+            "runtime_health_json",
+            "created_at",
+            "updated_at",
+            "last_heartbeat_at",
+        },
+        "agent_runtime_workers": {
+            "agent_id",
+            "worker_id",
+            "process_role",
+            "started_at",
+            "last_seen_at",
+            "current_item_id",
+            "current_conversation_key",
+            "current_kind",
+            "items_processed",
+            "stale_recoveries_seen",
+            "last_error",
+            "mirrored_at",
+        },
+        "deliveries": {
+            "seq",
+            "delivery_id",
+            "target_agent_id",
+            "kind",
+            "payload_json",
+            "state",
+            "created_at",
+            "updated_at",
+            "leased_at",
+            "acked_at",
+        },
+        "conversations": {
+            "conversation_id",
+            "target_agent_id",
+            "title",
+            "origin_channel",
+            "status",
+            "created_at",
+            "updated_at",
+        },
+        "routed_tasks": {
+            "routed_task_id",
+            "parent_conversation_id",
+            "origin_agent_id",
+            "target_agent_id",
+            "title",
+            "request_json",
+            "status",
+            "summary",
+            "result_json",
+            "created_at",
+            "updated_at",
+        },
+        "timeline_events": {
+            "seq",
+            "event_id",
+            "conversation_id",
+            "routed_task_id",
+            "agent_id",
+            "kind",
+            "title",
+            "body",
+            "status",
+            "progress",
+            "metadata_json",
+            "created_at",
+            "body_tsv",
+        },
+        "skills_override": {"skill_name", "enabled", "set_by", "set_at"},
+        "meta": {"key", "value"},
+    }
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name, column_name, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'agent_registry'
+                ORDER BY table_name, ordinal_position
+                """
+            )
+            rows = cur.fetchall()
+
+    by_table: dict[str, set[str]] = {}
+    defaults: dict[tuple[str, str], str] = {}
+    for table_name, column_name, column_default in rows:
+        by_table.setdefault(table_name, set()).add(column_name)
+        defaults[(table_name, column_name)] = column_default or ""
+
+    assert by_table == expected_columns
+    assert defaults[("agents", "registry_scope")].startswith("'full'")
+    assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
+    assert "jsonb" in defaults[("agents", "runtime_health_json")]
+    assert defaults[("conversations", "origin_channel")].startswith("'registry'")
+    assert "jsonb" in defaults[("timeline_events", "metadata_json")]
+
+
 def test_cli_doctor_exits_when_no_database_url(monkeypatch):
     """db doctor must exit with error when BOT_DATABASE_URL is not set."""
     monkeypatch.delenv("BOT_DATABASE_URL", raising=False)

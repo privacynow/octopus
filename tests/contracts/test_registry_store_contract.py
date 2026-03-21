@@ -9,6 +9,7 @@ from app.registry_service.store import RegistrySQLiteStore
 from app.registry_service.store_base import CapabilityDisabledError
 from app.registry_service.store_base import PROTECTED_ROUTED_TASK_STATUSES
 from app.registry_service.store_base import RegistryScopeError
+from app.registry_service.store_base import conversation_status_for_event
 from app.registry_service.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
@@ -226,6 +227,24 @@ def test_enroll_persists_registry_scope(store):
     assert agents[0]["registry_scope"] == "channel"
 
 
+def test_enroll_requires_explicit_registry_scope(store):
+    with pytest.raises(ValueError, match="registry_scope"):
+        store.enroll(
+            {
+                "display_name": "Missing Scope Bot",
+                "slug": "missing-scope-bot",
+                "role": "developer",
+                "capabilities": ["python"],
+                "tags": ["backend"],
+                "description": "Missing scope",
+                "provider": "codex",
+                "mode": "registry",
+                "channel_capabilities": ["registry"],
+                "version": "test",
+            }
+        )
+
+
 def test_enroll_hashes_agent_token_at_rest(store):
     agent_id, agent_token = _enroll(store, "hashed-bot")
 
@@ -267,6 +286,30 @@ def test_ack_marks_delivery_done(store):
     assert store.poll(agent_token, cursor=0, limit=20)["deliveries"] == []
 
 
+def test_conversation_status_transitions_cover_running_terminal_and_cancelling_states():
+    assert conversation_status_for_event("started", "open") == "running"
+    assert conversation_status_for_event("progress", "running") == "running"
+    assert conversation_status_for_event("progress", "cancelling") == "cancelling"
+    assert conversation_status_for_event("control", "running") == "cancelling"
+    assert conversation_status_for_event("completed", "running") == "completed"
+    assert conversation_status_for_event("failed", "running") == "failed"
+    assert conversation_status_for_event("channel_input", "open") == "open"
+
+
+def test_ack_rejects_invalid_classification(store):
+    agent_id, agent_token = _enroll(store, "alpha-bot")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    polled = store.poll(agent_token, cursor=0, limit=20)
+    delivery_id = polled["deliveries"][0]["delivery_id"]
+
+    with pytest.raises(ValueError, match="classification"):
+        store.ack(agent_token, delivery_ids=[delivery_id], classification="later")
+
+
 def test_search_agents_by_capability(store):
     _enroll(store, "rust-bot", ["rust"])
 
@@ -295,6 +338,23 @@ def test_create_routed_task_and_lookup(store):
     assert routed["delivery_id"]
     assert len(deliveries) == 1
     assert deliveries[0]["kind"] == "routed_task"
+
+
+def test_create_routed_task_requires_required_fields(store):
+    origin_id, _origin_token = _enroll(store, "origin-create")
+    target_id, _target_token = _enroll(store, "target-create", ["reviewer"])
+
+    with pytest.raises(ValueError, match="title"):
+        store.create_routed_task(
+            {
+                "routed_task_id": "task-missing-title",
+                "parent_conversation_id": "conv-create",
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "instructions": "Review the spec.",
+                "requested_capabilities": ["reviewer"],
+            }
+        )
 
 
 @pytest.mark.parametrize("protected_status", PROTECTED_ROUTED_TASK_STATUSES)
@@ -374,6 +434,38 @@ def test_routed_task_result_can_overwrite_partialfailed(store):
     assert task["status"] == "completed"
     assert task["summary"] == "done"
     assert "Recovered result" in str(task["result_json"])
+
+
+def test_routed_task_status_requires_explicit_non_empty_status(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-required"
+    )
+
+    with pytest.raises(ValueError, match="status"):
+        store.update_routed_task_status(
+            target_token,
+            "task-status-required",
+            {
+                "summary": "missing status",
+                "timeline_events": [],
+            },
+        )
+
+
+def test_routed_task_result_requires_explicit_non_empty_status(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-result-required"
+    )
+
+    with pytest.raises(ValueError, match="status"):
+        store.update_routed_task_result(
+            target_token,
+            "task-result-required",
+            {
+                "summary": "missing status",
+                "full_text": "No explicit status",
+            },
+        )
 
 
 def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
@@ -537,6 +629,30 @@ def test_create_conversation_delivers_channel_input(store):
     assert deliveries[0]["payload"]["text"] == "hello from registry"
 
 
+def test_add_conversation_message_requires_non_empty_text(store):
+    agent_id, _agent_token = _enroll(store, "message-bot")
+    conversation = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Registry conversation",
+        message_text="hello from registry",
+    )
+
+    with pytest.raises(ValueError, match="message text"):
+        store.add_conversation_message(conversation["conversation_id"], "   ")
+
+
+def test_add_conversation_action_requires_non_empty_action(store):
+    agent_id, _agent_token = _enroll(store, "action-bot")
+    conversation = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Registry conversation",
+        message_text="hello from registry",
+    )
+
+    with pytest.raises(ValueError, match="action"):
+        store.add_conversation_action(conversation["conversation_id"], "   ")
+
+
 def test_timeline_publish_and_retrieve(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.bind_conversation(
@@ -566,6 +682,31 @@ def test_timeline_publish_and_retrieve(store):
     assert len(events) == 1
     assert events[0]["kind"] == "progress"
     assert events[0]["body"] == "Doing the work"
+
+
+def test_publish_timeline_requires_required_event_fields(store):
+    _, agent_token = _enroll(store, "timeline-bot")
+    store.bind_conversation(
+        agent_token,
+        {
+            "conversation_id": "conv-missing-event-fields",
+            "title": "Bound conversation",
+            "origin_channel": "registry",
+        },
+    )
+
+    with pytest.raises(ValueError, match="title"):
+        store.publish_timeline(
+            agent_token,
+            [
+                {
+                    "event_id": "evt-missing-title",
+                    "conversation_id": "conv-missing-event-fields",
+                    "kind": "progress",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                }
+            ],
+        )
 
 
 def test_usage_summary_from_timeline(store):
@@ -660,6 +801,38 @@ def test_heartbeat_replaces_missing_worker_rows(store):
     assert [row["worker_id"] for row in detail["workers"]] == ["worker-1"]
 
 
+def test_register_preserves_omitted_capacity_and_card_lists(store):
+    agent_id, agent_token = _enroll(store, "partial-register-bot", ["python", "tests"])
+
+    store.heartbeat(
+        agent_token,
+        {
+            "connectivity_state": "connected",
+            "current_capacity": 2,
+            "max_capacity": 5,
+        },
+    )
+
+    updated = store.register(
+        agent_token,
+        {
+            "agent_card": {
+                "display_name": "Partial Register Bot",
+                "registry_scope": "coordination",
+            },
+            "connectivity_state": "connected",
+        },
+    )
+
+    assert updated["agent_id"] == agent_id
+    assert updated["current_capacity"] == 2
+    assert updated["max_capacity"] == 5
+    assert updated["capabilities"] == ["python", "tests"]
+    assert updated["tags"] == ["backend"]
+    assert updated["channel_capabilities"] == ["registry"]
+    assert updated["registry_scope"] == "coordination"
+
+
 def test_search_conversations_fts(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.bind_conversation(
@@ -696,6 +869,13 @@ def test_capability_override_disabled_excludes_from_search(store):
     store.set_capability_override("rust", enabled=False)
 
     assert store.search_agents({"capabilities": ["rust"], "required_state": "connected"}) == []
+
+
+def test_search_agents_rejects_string_filters(store):
+    _enroll(store, "alpha-bot", ["python"])
+
+    with pytest.raises(ValueError, match="capabilities"):
+        store.search_agents({"capabilities": "python", "required_state": "connected"})
 
 
 def test_list_capabilities_aggregates_declared(store):

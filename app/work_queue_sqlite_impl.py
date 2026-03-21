@@ -141,6 +141,35 @@ _REQUIRED_INDEX = "idx_one_claimed_per_conv"
 _MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = ()
 
 
+def _execute_sql_script(conn: sqlite3.Connection, script: str) -> None:
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                conn.execute(statement)
+            buffer = ""
+    statement = buffer.strip()
+    if statement:
+        conn.execute(statement)
+
+
+def _run_migration_step(
+    conn: sqlite3.Connection,
+    version: int,
+    migration: Callable[[sqlite3.Connection], None],
+) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        migration(conn)
+        _set_schema_version(conn, version)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def _create_new_transport_db(conn: sqlite3.Connection) -> None:
     """Initialize a brand-new transport DB. Call only when the file has no tables."""
     conn.executescript(_CREATE_SQL)
@@ -164,7 +193,8 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 
 def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 3 to 4: add usage_log table."""
-    conn.executescript(
+    _execute_sql_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS usage_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,13 +208,14 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON usage_log(chat_id);
         CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON usage_log(recorded_at);
-        """
+        """,
     )
 
 
 def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 4 to 5: add user_access table."""
-    conn.executescript(
+    _execute_sql_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS user_access (
             user_id INTEGER PRIMARY KEY,
@@ -193,13 +224,14 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
             granted_by INTEGER NOT NULL DEFAULT 0,
             granted_at REAL NOT NULL
         );
-        """
+        """,
     )
 
 
 def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 5 to 6: channel-neutral text identities."""
-    conn.executescript(
+    _execute_sql_script(
+        conn,
         """
         CREATE TABLE updates_v2 (
             event_id          TEXT PRIMARY KEY,
@@ -297,24 +329,26 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
             FROM user_access;
         DROP TABLE user_access;
         ALTER TABLE user_access_v2 RENAME TO user_access;
-        """
+        """,
     )
 
 
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 6 to 7: durable cancel metadata."""
-    conn.executescript(
+    _execute_sql_script(
+        conn,
         """
         ALTER TABLE work_items ADD COLUMN cancel_requested_at TEXT;
         ALTER TABLE work_items ADD COLUMN cancel_requested_by TEXT NOT NULL DEFAULT '';
         ALTER TABLE work_items ADD COLUMN cancel_request_event_id TEXT NOT NULL DEFAULT '';
-        """
+        """,
     )
 
 
 def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 7 to 8: durable worker heartbeats."""
-    conn.executescript(
+    _execute_sql_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS worker_heartbeats (
             worker_id                TEXT PRIMARY KEY,
@@ -329,7 +363,7 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
             last_error               TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at);
-        """
+        """,
     )
 
 
@@ -430,9 +464,7 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
     for version, fn in _MIGRATIONS:
         if stored < version:
-            fn(conn)
-            _set_schema_version(conn, version)
-            conn.commit()
+            _run_migration_step(conn, version, fn)
             stored = version
     _validate_existing_transport_db(conn)
 

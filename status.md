@@ -11,6 +11,7 @@
 
 - Phases 1-13 are implemented and closed.
 - Phase 14 is active.
+- Phase 14C landed green: the agent card no longer leaks the internal `phase-19-foundation` rollout marker, and the registry UI continues to fall back to `unknown` for blank bot versions.
 - Phase 14B landed green: generic ref/text helpers now live on the existing identity/formatting seams, and recovery/inbound ref resolution share one data-driven helper instead of carrying Telegram-specific fallback logic in multiple places.
 - Phase 14A landed green: bridge admission no longer fabricates bot presence for registry `channel_input` refs, while the legitimate registry conversation bind/timeline path remains intact.
 - Phase 13G landed green: the status document now matches the real control-plane/remediation track, uses a present-tense current-state summary, and was verified against a final full-suite rerun.
@@ -24,7 +25,7 @@
 - Registry UI shell routes visible degraded/timed-out status text through human-readable labels instead of exposing raw internal codes.
 - Dead routed-result warning surface has been removed from worker/finalization code.
 - Protected routed-task status coverage now spans the full shared status set across SQLite and Postgres, and rejected protected-state updates cannot append timeline rows.
-- Latest verified full-suite run: `1967 passed, 23 skipped`.
+- Latest verified full-suite run: `1970 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -49,6 +50,19 @@
   - `14E` status/doc closeout
 
 ## Phase 14 Slice Log
+
+- Complete: Phase 14C remediation — remove the internal rollout label from the product surface.
+  Scope:
+  - changed `AgentRuntime.requested_card()` in `app/agents/runtime.py` to emit a neutral blank version instead of `phase-19-foundation`
+  - added focused agent-runtime tests proving the requested card stays neutral and the old internal rollout marker is absent from production runtime code
+  - added a registry UI shell regression proving the bot-detail render path still falls back to `unknown` when `bot.version` is blank
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_registry_service.py -k 'requested_card_uses_neutral_version_when_no_product_version_is_defined or agent_runtime_source_has_no_internal_rollout_version_marker or requested_card_uses_agent_capabilities_without_default_skill_fallback or registry_ui_shell_bot_detail_version_falls_back_to_unknown'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - operator-facing bot detail no longer depends on an internal rollout label to populate the version field
+  - blank requested-card versions render through the existing registry UI fallback as `unknown`
+  - full suite status after Phase 14C: `1970 passed, 23 skipped`
 
 - Complete: Phase 14B remediation — extract generic helpers from bridge and make recovery ref resolution data-driven.
   Scope:

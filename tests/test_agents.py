@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app import work_queue
+import app.agents.runtime as agent_runtime_module
 from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
@@ -50,6 +51,19 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
     card = AgentRuntime(config).requested_card()
 
     assert card.capabilities == ()
+
+
+def test_requested_card_uses_neutral_version_when_no_product_version_is_defined(tmp_path: Path):
+    config = make_config(data_dir=tmp_path, agent_display_name="Product Bot")
+
+    card = AgentRuntime(config).requested_card()
+
+    assert card.version == ""
+    assert card.version != "phase-19-foundation"
+
+
+def test_agent_runtime_source_has_no_internal_rollout_version_marker() -> None:
+    assert "phase-19-foundation" not in Path(agent_runtime_module.__file__).read_text()
 
 
 def test_telegram_conversation_ref_uses_stable_bot_identity(tmp_path: Path):

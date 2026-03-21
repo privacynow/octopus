@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20C1 landed green: Telegram approval/retry buttons now carry a durable per-request callback token, and stale callback presses no longer approve or retry whatever request happens to be pending now.
 - Phase 20B2 landed green: delegation approval expiry still uses proposal age, but post-submission child-result expiry is now anchored to each task's own `submitted_at` timestamp instead of the original proposal timestamp.
 - Phase 20B1 landed green: the control-plane processor loop now logs and survives transient reclaim/purge/poll failures, and parent `delegated_result` timeline events are only published after a routed result is actually ready and matched to a pending delegation.
 - Phase 20A3 landed green: runtime-owned credential consumers now load only the requested active-skill subset, credential-validation host matching now accepts only exact hosts or intended `*.` suffixes, and preflight context no longer embeds raw runtime skill instruction bodies.
@@ -103,7 +104,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2112 passed, 23 skipped`.
+- Latest verified full-suite run: `2114 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -174,6 +175,22 @@
   - newly submitted child tasks no longer inherit near-expired proposal age for result timeout purposes
   - `submitted_at` persists through session serialization and real approval/worker paths
   - full suite status after Phase 20B2: `2112 passed, 23 skipped`
+
+- Complete: Phase 20C1 remediation — bind Telegram approval/retry callbacks to the specific pending request instead of trusting bare callback names.
+  Scope:
+  - extended `PendingApproval` and `PendingRetry` with a durable short `callback_token` stored on the pending-request seam alongside the existing context hash
+  - updated pending prompt presenters and Telegram execution senders so approval/retry buttons now carry request-bound callback data while still tolerating legacy tokenless pending state in tests and older stored sessions
+  - validated callback tokens at both direct pending callback handling and shared worker-owned callback dispatch, so stale bare buttons no longer approve or retry the current pending request
+  - kept `/approve` and `/reject` command flows unchanged and added regression coverage for stale-button rejection plus the full approval/retry hash-consistency suites
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_presenters.py tests/test_handlers_approval.py tests/test_runtime_dispatch_boundary.py`
+  - `./.venv/bin/python -m pytest -q tests/test_execution_context.py tests/test_workitem_integration.py tests/test_handlers_credentials.py tests/test_handlers_approval.py tests/test_telegram_presenters.py tests/test_runtime_dispatch_boundary.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - real approval/retry buttons now carry request-bound callback data instead of bare static action names
+  - stale or replayed bare callback presses no longer approve the current pending request
+  - command-driven `/approve` and `/reject` behavior remains unchanged
+  - full suite status after Phase 20C1: `2114 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

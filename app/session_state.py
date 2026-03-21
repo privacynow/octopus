@@ -45,6 +45,7 @@ class PendingApproval:
     image_paths: list[str]
     attachment_dicts: list[dict[str, Any]]
     context_hash: str
+    callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
 
@@ -57,6 +58,7 @@ class PendingRetry:
     image_paths: list[str]
     context_hash: str
     denials: list[dict[str, Any]]
+    callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
 

@@ -178,14 +178,19 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
         params["message_id"] = message_id
 
     data = event.data or ""
-    if data == "approval_approve":
-        return _telegram_action(event, "approve_pending", params=params)
-    if data == "approval_reject":
-        return _telegram_action(event, "reject_pending", params=params)
-    if data == "retry_allow":
-        return _telegram_action(event, "retry_allow", params=params)
-    if data == "retry_skip":
-        return _telegram_action(event, "retry_skip", params=params)
+    pending_action = telegram_presenters.parse_pending_callback_data(data)
+    if pending_action is not None:
+        action, callback_token = pending_action
+        if callback_token:
+            params["callback_token"] = callback_token
+        if action == "approval_approve":
+            return _telegram_action(event, "approve_pending", params=params)
+        if action == "approval_reject":
+            return _telegram_action(event, "reject_pending", params=params)
+        if action == "retry_allow":
+            return _telegram_action(event, "retry_allow", params=params)
+        if action == "retry_skip":
+            return _telegram_action(event, "retry_skip", params=params)
     if data.startswith("recovery_"):
         parts = data.split(":", 1)
         if len(parts) != 2:

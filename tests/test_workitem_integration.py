@@ -341,10 +341,13 @@ async def test_preflight_and_execution_use_same_model():
         assert preflight_ctx.effective_model == "claude-fast-model", (
             f"Preflight model: {preflight_ctx.effective_model!r}"
         )
+        session = telegram_load_session(current_runtime(), chat_id)
+        callback_token = session.pending_approval.callback_token
+        assert callback_token
 
         # Approve it
         query = FakeCallbackQuery(
-            "approval_approve",
+            f"approval_approve:{callback_token}",
             message=FakeMessage(chat=chat),
             user=user,
         )

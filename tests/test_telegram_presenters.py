@@ -4,6 +4,7 @@ from app.channels.telegram.presenters import (
     access_overrides_message,
     admin_sessions_summary_message,
     approval_prompt,
+    retry_prompt,
     compact_mode_status,
     compact_reply_blockquote_message,
     compact_reply_button_message,
@@ -55,6 +56,16 @@ def test_approval_prompt_renders_expected_buttons():
     assert rendered.text
     assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "approval_approve"
     assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "approval_reject"
+
+
+def test_pending_prompts_render_request_bound_callback_tokens():
+    approval = approval_prompt("abc123")
+    retry = retry_prompt((), "def456")
+
+    assert approval.reply_markup.inline_keyboard[0][0].callback_data == "approval_approve:abc123"
+    assert approval.reply_markup.inline_keyboard[0][1].callback_data == "approval_reject:abc123"
+    assert retry.reply_markup.inline_keyboard[0][0].callback_data == "retry_allow:def456"
+    assert retry.reply_markup.inline_keyboard[0][1].callback_data == "retry_skip:def456"
 
 
 def test_collapsed_response_message_renders_expand_button():

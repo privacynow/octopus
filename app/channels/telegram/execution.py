@@ -234,13 +234,13 @@ async def show_setup_prompt(message, missing_skill: str, first_requirement: dict
     await message.reply_text(rendered.text, **rendered.kwargs())
 
 
-async def send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
-    rendered = telegram_presenters.retry_prompt(denials)
+async def send_retry_prompt(message, denials: tuple[dict[str, Any], ...], callback_token: str) -> None:
+    rendered = telegram_presenters.retry_prompt(denials, callback_token)
     await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 
-async def send_approval_prompt(message) -> None:
-    rendered = telegram_presenters.approval_prompt()
+async def send_approval_prompt(message, callback_token: str) -> None:
+    rendered = telegram_presenters.approval_prompt(callback_token)
     await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 

@@ -324,6 +324,7 @@ def main() -> None:
         delivery_runtime = build_registry_delivery_runtime(
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
+            services=services,
             bot=app.bot if app is not None else None,
             dispatcher=dispatcher,
         )

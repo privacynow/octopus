@@ -397,6 +397,7 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
     return build_registry_delivery_runtime(
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
+        services=current_runtime().services,
         bot=bot,
         dispatcher=current_runtime().channel_dispatcher,
     )

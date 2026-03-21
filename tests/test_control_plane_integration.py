@@ -450,6 +450,7 @@ async def test_shared_worker_registry_delivery_projects_parent_timeline_to_multi
     delivery_runtime = build_registry_delivery_runtime(
         provider_name="claude",
         provider_state_factory=dict,
+        services=services,
         bot=None,
         dispatcher=dispatcher,
     )

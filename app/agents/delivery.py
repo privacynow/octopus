@@ -16,10 +16,11 @@ from app.agents.bridge import (
     conversation_key_for_ref,
     qualify_registry_parent_ref,
 )
-from app.agents.types import RoutedTaskResult, TimelineEvent
+from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import BotServices
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.skill_activation_service import get_skill_activation_service
 from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 class RegistryDeliveryRuntime:
     provider_name: str
     provider_state_factory: Callable[[], dict[str, Any]]
+    services: BotServices
     bot: Any | None = None
     dispatcher: ChannelDispatcher | None = None
 
@@ -39,12 +41,14 @@ def build_registry_delivery_runtime(
     *,
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
+    services: BotServices,
     bot: Any | None = None,
     dispatcher: ChannelDispatcher | None = None,
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
+        services=services,
         bot=bot,
         dispatcher=dispatcher,
     )
@@ -116,14 +120,9 @@ def _registry_semantic_action(
     )
 
 
-def _egress_bot(bot: Any | None) -> Any:
-    return bot if bot is not None else object()
-
-
-async def _publish_timeline_via_dispatcher(
-    config: BotConfig,
+async def _publish_timeline(
     *,
-    runtime: RegistryDeliveryRuntime,
+    services: BotServices,
     conversation_ref: str,
     kind: str,
     title: str,
@@ -133,26 +132,15 @@ async def _publish_timeline_via_dispatcher(
     metadata: dict[str, object] | None = None,
     event_id: str | None = None,
 ) -> None:
-    if runtime.dispatcher is None:
-        raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
-    channel_egress = runtime.dispatcher.create_egress(
-        conversation_ref,
-        config=config,
-        bot=_egress_bot(runtime.bot),
-        conversation_key=conversation_key_for_ref(conversation_ref),
-        source="registry",
-    )
-    await channel_egress.publish_timeline(
-        TimelineEvent(
-            event_id=event_id or "",
-            conversation_id=conversation_ref,
-            kind=kind,
-            title=title,
-            body=body,
-            status=status,
-            progress=progress,
-            metadata=metadata or {},
-        )
+    await services.control_plane.conversation_projection.publish_external_timeline(
+        conversation_ref=conversation_ref,
+        kind=kind,
+        title=title,
+        body=body,
+        status=status,
+        progress=progress,
+        metadata=metadata,
+        event_id=event_id,
     )
 
 
@@ -239,9 +227,8 @@ async def handle_registry_delivery(
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        await _publish_timeline_via_dispatcher(
-            config,
-            runtime=runtime,
+        await _publish_timeline(
+            services=runtime.services,
             conversation_ref=parent_conversation_id,
             kind="delegated_result",
             title="Delegated result received",
@@ -312,9 +299,8 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
-            await _publish_timeline_via_dispatcher(
-                config,
-                runtime=runtime,
+            await _publish_timeline(
+                services=runtime.services,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",
                 title="All delegated results received",
@@ -323,9 +309,8 @@ async def handle_registry_delivery(
                 event_id=f"delegation-ready:{parent_conversation_id}",
             )
         elif admit_status == "duplicate":
-            await _publish_timeline_via_dispatcher(
-                config,
-                runtime=runtime,
+            await _publish_timeline(
+                services=runtime.services,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",
                 title="All delegated results received",

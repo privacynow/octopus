@@ -3979,3 +3979,90 @@ Strictly sequential: 16A → 16B → 16C.
 - the external-id helper name matches its actual behavior
 - no stale references to the old helper name remain
 - full suite passes after every slice and at final closeout
+
+## Phase 17: Shared Inbound Provenance Closure
+
+Why this phase exists: the post-Phase 16 invariant sweep found one more
+owner-level hidden Telegram default at the shared runtime boundary.
+`serialize_inbound(...)` already writes explicit provenance, but
+`deserialize_inbound(...)` was still inventing `"telegram"` when
+payloads omitted `source`. This phase closes that seam directly instead
+of patching individual callers.
+
+### Phase 17 Architecture Decisions
+
+- No new infrastructure, modules, or abstractions
+- Extend only the existing shared inbound seam in
+  `app/runtime/inbound_types.py`
+- Behavior and contract tests are primary proof; any source-shape checks
+  remain secondary only
+- Update the small number of manual canonical payload fixtures so they
+  carry explicit `source` instead of depending on malformed legacy test
+  data
+- Re-audit the remaining shared `source="telegram"` dataclass defaults
+  before closeout; do not remove them unless they are proven to be
+  owner-boundary defaults rather than constructor conveniences
+
+### Slice 17A: Close the shared inbound provenance invariant
+
+**Statement**: durable inbound payloads must carry explicit canonical
+`source`. Shared deserialization must not invent Telegram provenance for
+malformed or incomplete payloads.
+
+**Owning seam**:
+- `deserialize_inbound()` in `app/runtime/inbound_types.py`
+
+**Fix**:
+- replace the `data.get("source", "telegram")` fallback with explicit
+  source validation
+- reject missing or blank `source` with a canonical validation error
+- keep the existing registry `authority_ref` validation after source has
+  been validated
+- update manual test fixtures that were pretending malformed payloads
+  were canonical
+
+**Contract tests**:
+- direct rejection of missing `source`
+- direct rejection of blank `source`
+- keep the explicit `source="registry"` authority-ref tests green
+
+**Live-path regression tests**:
+- worker loop marks a queued payload missing canonical `source` as
+  `deserialize_error` instead of dispatching it
+- recovery/shared-runtime tests using manual canonical payload strings
+  stay green after adding explicit `source`
+
+**Commit**:
+- `phase-17 / 17a: close inbound provenance invariant`
+
+### Slice 17B: Closeout
+
+- re-audit remaining shared `source="telegram"` defaults after 17A:
+  if they are only constructor conveniences on Telegram-owned ingress
+  builders, record that explicitly; if they are owner-boundary fallbacks,
+  fix them before closeout
+- update `status.md` only after focused tests and the full suite are
+  green
+- keep the accepted static-shell UI limitation honest; do not overclaim
+  it as browser-rendered proof
+
+**Commit**:
+- `phase-17 / 17b: close inbound provenance cleanup`
+
+### Phase 17 Sequencing
+
+Strictly sequential: 17A → 17B.
+
+### Phase 17 Exit Gates
+
+- `deserialize_inbound()` no longer defaults missing provenance to
+  `"telegram"`
+- direct contract tests reject missing and blank `source`
+- malformed queued items missing `source` fail as `deserialize_error`
+  instead of dispatching
+- manual canonical payload fixtures that are supposed to represent
+  runtime-owned payloads now carry explicit `source`
+- the remaining shared `source="telegram"` dataclass defaults are either
+  explicitly audited as constructor conveniences or removed in this
+  phase
+- full suite passes after every slice and at final closeout

@@ -9,8 +9,8 @@
 
 ## Current State
 
-- Phases 1-16 are implemented and closed.
-- Phase 16C landed green: the boundary validation and helper-contract cleanup pass is complete after the final fallback/helper-name sweep and full-suite rerun.
+- Phases 1-17 are implemented and closed.
+- Phase 17B landed green: the shared inbound provenance cleanup pass is complete after the deserializer contract fix, live-path regression coverage, constructor-default audit, and final full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -30,8 +30,10 @@
 - Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
 - Registry bind persistence no longer invents `origin_channel="telegram"` when callers omit the field; invalid bind payloads now fail at the owning store seam and are surfaced as `422` at the raw registry HTTP edge.
 - Registry binding now uses `binding_external_id_for_ref(...)`, making the helper contract explicit: registry refs yield parsed external ids and non-registry refs preserve their original qualified ref for binding.
+- Shared inbound deserialization no longer invents Telegram provenance for malformed payloads: durable inbound payloads must now carry explicit canonical `source`, and malformed queued items missing it fail as `deserialize_error` instead of dispatching.
+- The remaining `source="telegram"` defaults on runtime inbound dataclasses were re-audited after Phase 17A and left in place only as constructor conveniences used by Telegram-owned event builders; no remaining owner-boundary provenance fallback was found after the deserializer fix.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `1998 passed, 23 skipped`.
+- Latest verified full-suite run: `2001 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -62,6 +64,40 @@
   - `16A` bind/origin-channel invariant closure
   - `16B` external-id helper contract clarification
   - `16C` closeout
+- Phase 17 is the shared inbound provenance closure track:
+  - `17A` shared inbound provenance invariant closure
+  - `17B` closeout and constructor-default audit
+
+## Phase 17 Slice Log
+
+- Complete: Phase 17B closeout — rerun the provenance/default audit, keep the accepted limitations honest, and only then close the phase.
+  Scope:
+  - reran the shared-default audit after removing the deserializer fallback and confirmed the remaining `source="telegram"` defaults in `app/runtime/inbound_types.py` are constructor conveniences used by Telegram-owned builders, not owner-boundary persistence/deserialization fallbacks
+  - updated the plan/status documents only after the focused tests and final full-suite rerun were green
+  - kept the accepted static-shell UI-test limitation explicit instead of overstating it as browser-rendered proof
+  Tests:
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - no owner-boundary inbound provenance fallback remains after the deserializer fix
+  - the constructor-default audit did not uncover another shared persistence/runtime seam bug in this area
+  - final full suite status after Phase 17B: `2001 passed, 23 skipped`
+
+- Complete: Phase 17A remediation — close the shared inbound provenance invariant at the deserializer seam instead of relying on caller discipline.
+  Scope:
+  - updated `app/runtime/inbound_types.py` so `deserialize_inbound(...)` requires explicit canonical `source` instead of defaulting missing provenance to `"telegram"`
+  - kept the existing registry `authority_ref` validation on the explicit-provenance path and added a code comment documenting why the Telegram fallback was structurally wrong
+  - added direct contract tests in `tests/test_runtime_inbound_types.py` for missing and blank `source`
+  - added a live worker regression in `tests/test_work_queue.py` proving malformed queued payloads missing `source` fail as `deserialize_error` instead of dispatching
+  - updated the small set of manual canonical payload fixtures in `tests/test_shared_runtime.py`, `tests/test_handlers.py`, and `tests/test_simulator_e2e.py` so they now carry explicit `source="telegram"`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_inbound_types.py tests/test_work_queue.py -k 'deserialize_inbound or worker_loop_handles_bad_payload or worker_loop_rejects_payload_missing_canonical_source or worker_loop_notifies_on_deserialize_failure'`
+  - `./.venv/bin/python -m pytest -q tests/test_shared_runtime.py -k 'shared_cancel_records_action_and_sets_durable_flag or worker_loop_heartbeat_tracks_current_item'`
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py -k 'registry_channel_action_recovery_replay_executes_request'`
+  - `./.venv/bin/python -m pytest -q tests/test_simulator_e2e.py -k 'recover'`
+  Verified:
+  - shared inbound deserialization now rejects missing or blank canonical provenance instead of silently classifying malformed payloads as Telegram
+  - worker-loop and recovery/shared-runtime paths stay green once canonical payload fixtures carry explicit `source`
+  - focused seam and live-path coverage passed before the final closeout rerun
 
 ## Phase 16 Slice Log
 

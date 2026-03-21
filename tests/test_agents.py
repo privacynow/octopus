@@ -262,6 +262,61 @@ def test_runtime_registry_connection_state_applies_requested_scope_when_file_is_
     )
 
 
+def test_runtime_registry_connection_state_uses_requested_scope_when_file_omits_scope(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "registry_id": "default",
+                "agent_id": "agent-1",
+                "agent_token": "secret-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="coordination",
+        agent_id="agent-1",
+        agent_token="secret-token",
+    )
+
+
+def test_runtime_registry_connection_state_keeps_explicit_persisted_scope(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "registry_id": "default",
+                "registry_scope": "full",
+                "agent_id": "agent-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="full",
+        agent_id="agent-1",
+    )
+
+
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,

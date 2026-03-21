@@ -404,9 +404,12 @@ def registry_scope_for_agent_row(agent_row: Any) -> str:
     """Return the stored registry scope for an authenticated agent row."""
     try:
         scope = agent_row["registry_scope"]
-    except Exception:
-        scope = "full"
-    return str(scope or "full")
+    except Exception as exc:
+        raise PermissionError("Authenticated agent row missing registry_scope") from exc
+    try:
+        return validated_registry_scope(scope)
+    except ValueError as exc:
+        raise PermissionError("Authenticated agent row has invalid registry_scope") from exc
 
 
 def require_registry_scope(agent_row: Any, required_scopes: set[str]) -> str:
@@ -419,7 +422,7 @@ def require_registry_scope(agent_row: Any, required_scopes: set[str]) -> str:
 
 def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | None:
     """Return the delivery kinds visible to the provided registry scope."""
-    scope = (registry_scope or "full").strip().lower() or "full"
+    scope = validated_registry_scope(registry_scope)
     if scope == "channel":
         return ("channel_input", "channel_action")
     if scope == "coordination":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 from pathlib import Path
 
@@ -365,9 +366,10 @@ async def test_processor_runner_renews_leases_for_inflight_commands() -> None:
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_forwards_claim_token_on_processor_failure() -> None:
+async def test_processor_runner_forwards_claim_token_on_processor_failure(caplog) -> None:
     command = _command("cmd-fail")
     bus = _FakeLeaseBus(command)
+    caplog.set_level(logging.ERROR, logger="app.control_plane.processor_runner")
 
     async def boom(_command: ControlCommand) -> ControlReply:
         raise RuntimeError("boom")
@@ -393,12 +395,14 @@ async def test_processor_runner_forwards_claim_token_on_processor_failure() -> N
     await task
 
     assert bus.failed == [("cmd-fail", "claim-1", "boom")]
+    assert "Control-plane processor crashed for command cmd-fail" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owner() -> None:
+async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owner(caplog) -> None:
     command = _command("cmd-dead-letter", authority_ref="registry:beta")
     bus = _FakeLeaseBus(command)
+    caplog.set_level(logging.WARNING, logger="app.control_plane.processor_runner")
     runner = ProcessorRunner(
         bus,
         poll_interval_seconds=0.01,
@@ -423,6 +427,7 @@ async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owne
     assert command_id == "cmd-dead-letter"
     assert claimed_at == "claim-1"
     assert "no control-plane processor registered" in reason
+    assert "Dead-lettering control-plane command cmd-dead-letter" in caplog.text
 
 
 def test_processor_runner_rejects_duplicate_pair_ownership(sqlite_bus_and_data_dir) -> None:

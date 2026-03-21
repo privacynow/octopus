@@ -153,11 +153,14 @@ def download_artifact(artifact_url: str, dest_dir: Path) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(tmp_path, "r:gz") as tf:
             # Security: reject traversal and resource-exhaustion artifacts before extraction.
+            resolved_dest_dir = dest_dir.resolve()
             total_expanded = 0
             file_count = 0
             for member in tf.getmembers():
                 resolved = (dest_dir / member.name).resolve()
-                if not str(resolved).startswith(str(dest_dir.resolve())):
+                try:
+                    resolved.relative_to(resolved_dest_dir)
+                except ValueError:
                     raise ValueError(f"Artifact contains path traversal: {member.name}")
                 if not member.isfile():
                     continue

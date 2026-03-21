@@ -321,6 +321,32 @@ def test_validate_config_allows_local_plain_http_completion_webhook():
     assert not any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
 
 
+def test_validate_config_rejects_completion_webhook_when_host_resolution_fails(monkeypatch):
+    import socket
+
+    def _boom(*args, **kwargs):
+        raise socket.gaierror("dns failed")
+
+    monkeypatch.setattr("app.config.socket.getaddrinfo", _boom)
+
+    errors = validate_config(make_config(completion_webhook_url="https://hooks.example.com/completed"))
+
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e and "host resolution failed" in e for e in errors)
+
+
+def test_validate_config_allows_completion_webhook_with_public_dns_target(monkeypatch):
+    monkeypatch.setattr(
+        "app.config.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (0, 0, 0, "", ("93.184.216.34", 443)),
+        ],
+    )
+
+    errors = validate_config(make_config(completion_webhook_url="https://hooks.example.com/completed"))
+
+    assert not any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
+
+
 def test_validate_config_rejects_remote_plain_http_bot_webhook_url():
     errors = validate_config(
         make_config(

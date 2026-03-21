@@ -182,7 +182,7 @@ def completion_webhook_target_block_reason(raw: str) -> str | None:
             type=socket.SOCK_STREAM,
         )
     except socket.gaierror:
-        return None
+        return "host resolution failed"
 
     seen_addresses: set[ipaddress._BaseAddress] = set()
     for family, _, _, _, sockaddr in resolved:
@@ -829,6 +829,10 @@ def validate_config(config: BotConfig) -> list[str]:
             setting_name="BOT_COMPLETION_WEBHOOK_URL",
         ):
             errors.append(error)
+        elif reason := completion_webhook_target_block_reason(config.completion_webhook_url):
+            errors.append(
+                f"BOT_COMPLETION_WEBHOOK_URL target is not allowed: {reason}"
+            )
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(

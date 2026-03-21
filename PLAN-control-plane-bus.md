@@ -4635,3 +4635,644 @@ Hard rules:
    that seam and with contract/behavior tests
 4. Behavior tests are primary proof
 5. Each slice is one commit and leaves the repo green
+
+## Phase 20: Security and Boundary Closure
+
+Why this phase exists:
+
+Phase 19 closed the large remediation tracks, but the post-close review
+still found three classes of remaining debt:
+
+- security-sensitive outbound and auth seams that still trusted too
+  much input
+- runtime ownership seams that can still report false state or die on
+  transient infra errors
+- Telegram-first assumptions still embedded in shared runtime helpers
+  and callback flows
+
+This phase is not another broad rewrite. It closes the remaining owner
+seams directly and adds behavior tests at those seams.
+
+### Phase 20 Process Rules
+
+- Track A is blocking. No other track starts until `20A1` lands green.
+- Fix the owner seam, not a caller-local symptom.
+- Shared runtime code must not gain new Telegram-only branches.
+- Where a finding is really a security boundary, validate at config,
+  auth, or provider boundary first; do not rely on downstream callers.
+- Each slice updates `status.md` only after focused tests and a full
+  suite rerun are green.
+
+### Phase 20 Architecture Decisions
+
+- No new frameworks, daemons, or external dependencies.
+- Reuse existing owner seams:
+  - config validation in `app/config.py`
+  - completion-webhook delivery in `app/webhook.py`
+  - registry auth/session helpers in `app/channels/registry/auth.py`
+  - credential service/store contracts in
+    `app/credential_service.py` and `app/credential_store_base.py`
+  - delegation progression in
+    `app/workflows/delegation/coordination.py` and
+    `app/workflows/delegation/machine.py`
+  - shared provider dispatch plumbing in `app/runtime/dispatch.py`
+- Behavior tests are primary proof. Source-shape checks are secondary
+  only.
+- Do not invent a new callback-token subsystem or new transport-store
+  table. Extend the existing pending-state and inbound-payload seams.
+- Do not change SQLite/Postgres JSON/TIMESTAMPTZ type differences; only
+  change behavior where the contract is wrong.
+
+### Track A: Security and Auth Boundaries
+
+#### 20A1: Harden completion-webhook targets and webhook URL policy
+
+Close these findings:
+
+- `SEC-1` no SSRF protection on completion webhook URL
+- `SEC-3` completion webhook URL allows insecure remote HTTP
+- `OPS-2` incoming bot webhook URL does not enforce HTTPS for remote targets
+
+Fix:
+
+- Add one shared completion-webhook target validator across
+  `app/config.py` and `app/webhook.py`.
+- Config validation must reject:
+  - malformed `BOT_COMPLETION_WEBHOOK_URL`
+  - remote plain-HTTP completion webhook URLs
+  - remote plain-HTTP `BOT_WEBHOOK_URL`
+- Runtime webhook delivery must reject disallowed/private targets
+  before sending. The validator must:
+  - block private, link-local, loopback, multicast, unspecified, and
+    reserved IP literals except explicitly allowed local development
+    loopback targets
+  - resolve hostnames and reject them when they resolve only to blocked
+    addresses
+  - explicitly block cloud metadata endpoints
+- Keep logging sanitized through `sanitize_url_for_logging`.
+
+Tests:
+
+- config tests for malformed completion-webhook URL
+- config tests for remote `http://` completion-webhook and bot-webhook
+  URLs
+- webhook tests for allowed public HTTPS target
+- webhook tests for rejected private/metadata targets
+- webhook tests for preserved redaction in warning logs
+
+Commit:
+
+- `phase-20 / 20a1: harden webhook target validation`
+
+#### 20A2: Harden registry auth surfaces
+
+Close these findings:
+
+- `SEC-2` no brute-force protection on enrollment and UI login
+- `DATA-1` registry session secret regenerates on restart
+- `OPS-1` `/healthz` leaks agent count
+
+Fix:
+
+- Add small in-process auth-attempt throttling in the registry auth/http
+  seam for:
+  - `/v1/agents/enroll`
+  - `/ui/login`
+- Rate limiting is keyed by client host and endpoint and returns `429`
+  on saturation.
+- Replace the random per-process `REGISTRY_SESSION_SECRET` fallback with
+  a stable fallback derived from existing registry auth config so UI
+  sessions survive restart and multi-instance deployments share the same
+  signing key when the operator has not set an explicit secret.
+- Keep `REGISTRY_SESSION_SECRET` as the preferred explicit secret.
+- Reduce `/healthz` to a minimal unauthenticated liveness contract:
+  `{"ok": true}` only.
+
+Tests:
+
+- repeated failed enroll/login attempts rate-limit with `429`
+- successful flows still work below the limit
+- session middleware fallback secret is stable when
+  `REGISTRY_SESSION_SECRET` is unset
+- `/healthz` no longer exposes bot count
+
+Commit:
+
+- `phase-20 / 20a2: harden registry auth boundaries`
+
+#### 20A3: Minimize credential and preflight exposure
+
+Close these findings:
+
+- `SEC-4` credential-validation host allowlist is too permissive
+- `SEC-5` runtime credential loads are broader than the active skill set
+- `DATA-2` preflight context includes full runtime skill instruction
+  bodies
+
+Fix:
+
+- Replace `fnmatch`-style host matching in
+  `app/credential_validation.py` with exact-host and strict `*.` suffix
+  matching only.
+- Reject overly broad wildcard patterns such as bare shell globs.
+- Extend the credential-store/service contract with a filtered
+  load-for-skills path and use it in runtime-owned code paths
+  (`runtime_skills`, runtime health, execution env assembly).
+- Keep full credential loads only for explicit credential-management
+  surfaces that actually need the full actor view.
+- Build a sanitized preflight context that does not embed full runtime
+  skill instruction bodies. Preflight may still include:
+  - role/persona
+  - capability summary
+  - active skill names / labels
+  but not raw instruction text intended only for execution-time system
+  prompts.
+
+Tests:
+
+- credential-validation host matching allows exact hosts and intended
+  `*.` subdomains only
+- overly broad wildcard patterns do not match arbitrary domains
+- runtime-skill and runtime-health paths only receive credentials for
+  the requested active skills
+- preflight context excludes raw instruction bodies while run context
+  still includes execution-time system prompt content
+
+Commit:
+
+- `phase-20 / 20a3: minimize credential and preflight exposure`
+
+### Track B: Runtime Correctness
+
+#### 20B1: Make routed-result and processor reporting truthful
+
+Close these findings:
+
+- review finding: control-plane runner loop dies on transient bus errors
+- review finding: routed-result timeline is published before
+  applicability is known
+
+Fix:
+
+- Add loop-level error handling in
+  `app/control_plane/processor_runner.py` around reclaim/purge/poll so
+  transient store failures are logged and the runner continues instead
+  of silently dying.
+- Move routed-result parent timeline publication in
+  `app/agents/delivery.py` to after:
+  - readiness check
+  - delegation-result application
+  - matched-result confirmation
+- Keep the existing stable event id and operator warning for unmatched
+  results.
+
+Tests:
+
+- processor runner logs and survives transient reclaim/purge/poll errors
+- routed-result retry-later path does not publish delegated-result
+  timeline state early
+- unmatched routed results do not publish delegated-result timeline
+  state
+- matched routed results still publish parent timeline state exactly
+  once
+
+Commit:
+
+- `phase-20 / 20b1: harden processor loop and routed-result truthfulness`
+
+#### 20B2: Anchor delegation timeout to submission time
+
+Close this finding:
+
+- review finding: delegation timeout is measured from proposal creation
+  instead of task submission
+
+Fix:
+
+- Extend the existing delegation state model with explicit submission
+  timing for child tasks.
+- `mark_task_submitted()` must stamp submission time through the
+  machine-owned update path.
+- `expire_stale_delegations()` must:
+  - continue treating unsent proposed tasks as approval expiry from
+    delegation creation time
+  - treat submitted tasks as result-timeout from their submission time
+    instead of proposal creation time
+- Do not invent new status vocabulary. Expiration still resolves
+  through existing `failed` child transitions and parent-state
+  derivation.
+
+Tests:
+
+- stale proposed tasks expire as approval-expired
+- newly submitted tasks do not time out just because approval was late
+- submitted tasks time out correctly once their own submission age
+  crosses the threshold
+- machine/serialization round trips preserve the new timestamp field
+
+Commit:
+
+- `phase-20 / 20b2: anchor delegation timeout to submission time`
+
+### Track C: Telegram and Shared Runtime Boundaries
+
+#### 20C1: Bind approval and retry callbacks to the current pending request
+
+Close these findings:
+
+- `BUG-1` approval/retry buttons are not request-bound
+- `BUG-3` retry-allow branch is inconsistent and lacks the explicit
+  return used by the sibling branches
+
+Fix:
+
+- Add a request-specific callback token derived from the current pending
+  request/retry state.
+- Render approval/retry callback data with that token.
+- Verify the token before executing approval or retry actions in both:
+  - local Telegram callback handling
+  - shared-mode callback dispatch
+- Stale or mismatched buttons must fail safely with a user-visible
+  “no longer valid/current” message instead of approving the current
+  unrelated request.
+- Add the missing explicit return in the final `retry_allow` branch for
+  parity with the sibling branches.
+
+Tests:
+
+- current approval/retry buttons still execute normally
+- stale approval button does not approve a newer pending request
+- stale retry button does not replay a newer pending retry
+- shared-mode callback path enforces the same binding
+
+Commit:
+
+- `phase-20 / 20c1: bind approval and retry callbacks`
+
+#### 20C2: Harden Telegram ingress UX and attachment bounds
+
+Close these findings:
+
+- `BUG-2` Telegram attachment downloads have no size guard
+- `BUG-4` unknown slash commands are silently ignored
+
+Fix:
+
+- Validate Telegram attachment size before download and reject files
+  above the supported limit with a user-visible message.
+- Apply the same rule to both photos and documents when the size is
+  known.
+- Add an explicit unknown-command handler in Telegram bootstrap for both
+  local and shared runtime modes.
+- Keep the feedback provider-neutral and consistent with existing help
+  UX.
+
+Tests:
+
+- oversize document/photo is rejected before download and surfaces a
+  clear message
+- normal attachments still normalize and download
+- unknown slash commands return a help-oriented message instead of being
+  ignored
+
+Commit:
+
+- `phase-20 / 20c2: harden telegram ingress bounds and unknown commands`
+
+#### 20C3: Remove Telegram assumptions from shared runtime dispatch state
+
+Close these findings:
+
+- `ARCH-1` shared dispatch layer still assumes Telegram message APIs
+- `ARCH-2` shared inbound event types expose Telegram-only `.chat_id`
+  convenience
+- `ARCH-4` live cancellation registry keys are not canonically qualified
+
+Fix:
+
+- Move message-reply/typing target ownership out of
+  `app/runtime/dispatch.py` and into runtime collaborators so the shared
+  dispatch layer no longer directly assumes Telegram message objects.
+- Replace shared-event `.chat_id` dependence with Telegram-owned helper
+  resolution at Telegram channel boundaries.
+- Normalize cancellation-registry keys to canonical conversation keys so
+  equal numeric ids across surfaces cannot collide.
+- Keep Telegram behavior unchanged at the product surface.
+
+Tests:
+
+- runtime dispatch uses injected status-message / typing-target
+  collaborators instead of raw Telegram methods
+- Telegram handlers still work through the updated boundary
+- cancellation registry treats bare numeric ids and canonical Telegram
+  keys as the same conversation while preserving separation from
+  non-Telegram keys
+
+Commit:
+
+- `phase-20 / 20c3: remove telegram assumptions from shared runtime`
+
+#### 20C4: Persist inbound transport provenance in durable payloads
+
+Close this finding:
+
+- `ARCH-3` `InboundEnvelope.transport` is not preserved through durable
+  payload serialization
+
+Fix:
+
+- Persist transport provenance alongside serialized inbound payloads in
+  a backwards-compatible way.
+- Add a runtime helper to recover transport from stored payloads
+  without breaking the existing `deserialize_inbound(...)` contract.
+- Use that helper in recovery/replay paths that need to understand the
+  original delivery transport.
+
+Tests:
+
+- serialized inbound payloads preserve transport metadata
+- older payloads without transport still deserialize cleanly
+- recovery helpers can recover the original transport when present
+
+Commit:
+
+- `phase-20 / 20c4: persist inbound transport provenance`
+
+### Phase 20 Sequencing
+
+Strictly sequential:
+
+- Track A: `20A1 → 20A2 → 20A3`
+- Track B: `20B1 → 20B2` (after `20A1`)
+- Track C: `20C1 → 20C2 → 20C3 → 20C4` (after `20B1`)
+
+### Phase 20 Exit Gates
+
+- completion-webhook targets reject private/metadata destinations and
+  config rejects insecure remote webhook URLs
+- registry enroll/login surfaces are throttled and registry UI sessions
+  no longer churn on restart due to random secret fallback
+- `/healthz` exposes only liveness
+- credential validation uses strict host matching and runtime credential
+  access is scoped to active skills
+- preflight context no longer includes raw runtime skill instruction
+  bodies
+- processor runner survives transient reclaim/purge/poll errors
+- routed-result timeline publication only happens for matched,
+  actionable results
+- submitted-task timeout is measured from submission time
+- approval/retry callbacks are request-bound and stale buttons fail
+  safely
+- Telegram attachment download size is bounded and unknown commands get
+  explicit feedback
+- shared dispatch and cancellation seams no longer depend on raw
+  Telegram assumptions
+- durable inbound payloads preserve transport provenance
+- full suite passes after every slice and at final closeout
+
+### What Not To Do (Phase 20)
+
+- Do not add a new rate-limiting service or external cache.
+- Do not add a new transport-store table for inbound transport
+  provenance.
+- Do not reintroduce Telegram branches into shared orchestration code.
+- Do not weaken runtime credential isolation by passing full actor
+  credential maps into execution/preflight paths.
+- Do not treat static UI shell tests as proof of browser-rendered DOM
+  behavior.
+
+### Phase 20 Execution Prompt
+
+Implement Phase 20: security and boundary closure for
+`telegram-agent-bot`.
+
+Read first:
+- `PLAN-control-plane-bus.md`
+- `status.md`
+- backup guidance in
+  `backups/telegram-agent-bot-internal-cleanup-20260316-221803/`
+
+Key constraints:
+- `20A1` must close both insecure remote-URL config policy and runtime
+  SSRF checks at the webhook owner seam
+- `20A2` rate limiting is small in-process protection, not a new
+  distributed auth system
+- `20A3` must minimize credential/preflight exposure without breaking
+  execution-time skill behavior
+- `20B2` must distinguish approval expiry from submitted-task result
+  timeout
+- `20C1` callback binding must work in both local and shared runtime
+  Telegram paths
+- `20C3` must remove Telegram assumptions from shared runtime code
+  without regressing the Telegram surface
+- `20C4` must be backward compatible with older stored inbound payloads
+
+Hard rules:
+1. No new frameworks or dependencies
+2. Security fixes are blocking — Track A first
+3. Any contract change to a shared/store seam lands with both backend
+   implementations and the appropriate contract/behavior tests
+4. Behavior tests are primary proof
+5. Each slice is one commit and leaves the repo green
+
+## Phase 21: Final Owner-Seam Closure
+
+### Why This Phase Exists
+
+The latest full-code review did not surface another broad architecture
+collapse. It found a small set of live owner-seam issues that still
+need closure:
+
+- artifact extraction containment uses an unsafe path-prefix check
+- completion-webhook SSRF validation fails open on DNS resolution
+  failure
+- registry scope helpers still fail open to `full`
+- runtime registry connection state can widen a missing persisted scope
+  to `full` on restart
+- standalone Telegram mode still drops unknown slash commands silently
+
+This phase does not reopen already-correct compatibility behavior:
+
+- tokenless legacy pending callbacks currently parse as an empty token,
+  not `None`, and already fail safely against tokenized pending
+  requests
+- Telegram cancellation-key normalization is already enforced by the
+  cancellation-registry mapping itself
+- legacy inbound transport fallback to canonical `source` is an
+  intentional replay-compatibility contract and is directly tested
+
+### Track A: Security and Containment
+
+#### 21A1: Fix artifact extraction containment and fail closed on DNS resolution failure
+
+Close these findings:
+
+- artifact extraction traversal check is bypassable by sibling-prefix
+  paths
+- completion webhook target validation skips SSRF blocking when DNS
+  resolution fails
+
+Fix:
+
+- Replace the `startswith(...)` containment check in
+  `app/registry.py:download_artifact()` with a real path-containment
+  check (`Path.is_relative_to()` or `os.path.commonpath()`).
+- Add a traversal regression test with a tar member like
+  `../skill-evil/skill.md` proving extraction is rejected.
+- Change `completion_webhook_target_block_reason(...)` in
+  `app/config.py` to fail closed on `socket.gaierror` with an explicit
+  reason such as host resolution failure.
+- Add config/webhook regression tests proving DNS failure blocks both
+  validation and runtime delivery before any POST is attempted.
+
+Tests:
+
+- artifact extraction accepts valid archives and rejects traversal
+  entries
+- completion-webhook config rejects DNS-resolution failure
+- runtime webhook delivery does not attempt POST when target resolution
+  fails
+
+Commit:
+
+- `phase-21 / 21a: close artifact and webhook boundary gaps`
+
+#### 21A2: Update status after Track A
+
+Update `status.md` with the completed Track A work and actual test
+results only after focused and full-suite reruns pass.
+
+Commit:
+
+- included in `21a`
+
+### Track B: Registry Scope Fail-Closed Behavior
+
+#### 21B1: Make registry scope helpers and runtime state fallback fail closed
+
+Close these findings:
+
+- registry scope helpers default missing/blank scope to `full`
+- runtime registry state widens missing persisted scope to `full`
+
+Fix:
+
+- In `app/registry_service/store_base.py`, make
+  `registry_scope_for_agent_row(...)` validate the stored scope instead
+  of defaulting to `full`.
+- Make `delivery_kinds_for_registry_scope(...)` require a validated
+  scope instead of treating blank as `full`.
+- Update the SQLite and Postgres registry stores to validate the token
+  row scope before deriving visible delivery kinds in `poll(...)`.
+- In `app/agents/state.py`, make
+  `load_runtime_registry_connection_state(...)` fall back to the
+  configured runtime scope when an existing state file is missing or
+  blank for `registry_scope`, without widening to `full`.
+- Keep direct persisted-state round-trip behavior intact for valid saved
+  scopes.
+
+Tests:
+
+- helper-owner tests prove missing/blank scope fails closed
+- SQLite/Postgres poll behavior still filters correctly for valid
+  `channel` and `coordination` scopes
+- runtime registry state uses the configured scope when an existing
+  state file omits `registry_scope`
+- valid persisted scope still wins when explicitly present
+
+Commit:
+
+- `phase-21 / 21b: fail closed on registry scope seams`
+
+### Track C: Telegram Surface Parity
+
+#### 21C1: Close the remaining standalone unknown-command gap
+
+Close this finding:
+
+- standalone Telegram mode still silently drops unknown slash commands
+
+Fix:
+
+- Add a standalone Telegram catch-all command handler in
+  `app/channels/telegram/bootstrap.py` that replies with the existing
+  canonical unknown-command wording from `app/user_messages.py`.
+- Reuse the existing user-visible copy and keep shared-mode behavior
+  unchanged.
+- Do not widen this slice into another callback-token rewrite unless a
+  new failing regression test proves a live mismatch.
+
+Tests:
+
+- standalone mode replies to an unrecognized slash command with the
+  canonical unknown-command message
+- shared mode still replies with the same canonical message
+- known commands still route to their existing handlers
+
+Commit:
+
+- `phase-21 / 21c: close standalone unknown-command parity`
+
+### Phase 21 Sequencing
+
+Strictly sequential:
+
+- Track A: `21A1`
+- Track B: `21B1`
+- Track C: `21C1`
+- Closeout: `21Z`
+
+### Phase 21 Exit Gates
+
+- artifact extraction uses real path containment, not string prefix
+  matching
+- traversal archives are rejected by a direct regression test
+- completion-webhook validation blocks DNS-resolution failure and
+  runtime delivery does not POST when resolution fails
+- registry scope helpers no longer widen missing/blank scope to `full`
+- poll scope filtering still works for valid `channel` and
+  `coordination` agents in both backends
+- runtime registry state falls back to configured scope when persisted
+  scope is missing
+- standalone Telegram mode replies to mistyped slash commands with the
+  canonical unknown-command message
+- full suite passes after every slice and at final closeout
+
+### What Not To Do (Phase 21)
+
+- Do not reopen tokenless pending-callback compatibility unless a new
+  failing regression proves a live issue.
+- Do not weaken the legacy inbound transport fallback contract; it is a
+  deliberate replay-compatibility behavior.
+- Do not add a new validation framework or new transport abstraction.
+- Do not convert the cancellation registry again; its normalization seam
+  already owns the cross-channel key behavior.
+
+### Phase 21 Execution Prompt
+
+Implement Phase 21: final owner-seam closure for `telegram-agent-bot`.
+
+Read first:
+- `PLAN-control-plane-bus.md`
+- `status.md`
+- backup guidance in
+  `backups/telegram-agent-bot-internal-cleanup-20260316-221803/`
+
+Key constraints:
+- `21A1` must fix both the artifact containment check and the
+  completion-webhook DNS-resolution fail-open gap at the owner seam
+- `21B1` must fail closed on malformed registry scope without widening
+  permissions, and must preserve valid saved-scope behavior
+- `21C1` must close the standalone unknown-command gap without
+  regressing the shared-mode command path
+- compatibility behaviors explicitly listed as already correct should be
+  verified, not rewritten
+
+Hard rules:
+1. No new frameworks or dependencies
+2. Behavior tests are primary proof
+3. Each slice is one commit and leaves the repo green
+4. Store-scope changes must preserve SQLite/Postgres behavior for valid
+   rows
+5. Do not reopen already-correct compatibility seams without a failing
+   regression proving a live bug

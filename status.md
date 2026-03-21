@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19A3 landed green: Claude MCP temp files now get restrictive permissions at creation time and are cleaned up in a `finally` on success, timeout, and exception paths, without overclaiming crash/SIGKILL safety.
+- Phase 19A4 landed green: new guided installs now receive an active independent `BOT_CREDENTIAL_KEY`, while the legacy Telegram-token fallback now emits one stronger owner-seam error with rotation guidance.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -59,8 +59,9 @@
   - invalid override entries are rejected with warnings instead of silently weakening execution
   - `skip_permissions=True` is now explicitly documented and regression-guarded as an approval/retry-only grant, not a provider-layer policy
 - Claude provider MCP setup now cleans up temporary config files on all normal return/exception/timeout paths and no longer leaves those files world-readable by default.
+- New guided bot env files now include an active `BOT_CREDENTIAL_KEY`; legacy configs without one still function through the fallback path, but the credential-store seam now logs an explicit `ERROR` telling operators to set the key before rotating the Telegram bot token.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2051 passed, 23 skipped`.
+- Latest verified full-suite run: `2052 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -106,6 +107,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19A4 remediation — make the credential-key fallback guidance real for new installs instead of only warning after the fact.
+  Scope:
+  - updated `octopus` so first-write bot env generation now creates and writes an active random `BOT_CREDENTIAL_KEY` by default
+  - strengthened the existing fallback diagnostic in `app/credential_store.py` by upgrading it to an explicit error with rotation guidance, without adding a duplicate startup warning path elsewhere
+  - added direct tests proving new env files get a real independent credential key and that explicit-key setups stay quiet while legacy fallback setups emit the stronger diagnostic
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_credential_store_factory.py tests/test_octopus_first_bot_flow.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - fresh guided installs no longer depend on the Telegram bot token as the default credential-encryption key
+  - legacy/manual configs without `BOT_CREDENTIAL_KEY` still function, but now emit one explicit owner-seam error telling operators how to avoid rotation breakage
+  - full suite status after Phase 19A4: `2052 passed, 23 skipped`
 
 - Complete: Phase 19A3 remediation — harden the Claude MCP temp-file lifecycle at the provider seam.
   Scope:

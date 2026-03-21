@@ -37,7 +37,27 @@ def test_init_credential_store_for_config_prefers_bot_credential_key(tmp_path: P
     assert rotated_store.load("tg:42") == {"alpha": {"API_TOKEN": "secret-value"}}
 
 
-def test_init_credential_store_for_config_falls_back_to_telegram_token_and_warns_once(
+def test_init_credential_store_for_config_with_explicit_key_emits_no_fallback_error(
+    tmp_path: Path,
+    caplog,
+):
+    cfg = make_config(
+        data_dir=tmp_path,
+        telegram_token="telegram-token-a",
+        credential_key="credential-key-a",
+        database_url="",
+    )
+
+    with caplog.at_level("ERROR"):
+        credential_store.init_credential_store_for_config(cfg)
+
+    assert not any(
+        "Credential encryption is using TELEGRAM_BOT_TOKEN" in record.message
+        for record in caplog.records
+    )
+
+
+def test_init_credential_store_for_config_falls_back_to_telegram_token_and_logs_error_guidance(
     tmp_path: Path,
     caplog,
 ):
@@ -48,7 +68,7 @@ def test_init_credential_store_for_config_falls_back_to_telegram_token_and_warns
         database_url="",
     )
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("ERROR"):
         store = credential_store.init_credential_store_for_config(cfg)
         store.save("tg:42", "alpha", "API_TOKEN", "secret-value")
         credential_store.reset_for_test()
@@ -60,6 +80,11 @@ def test_init_credential_store_for_config_falls_back_to_telegram_token_and_warns
         if "Credential encryption is using TELEGRAM_BOT_TOKEN" in record.message
     ]
     assert len(warnings) == 2
+    assert all(
+        "Set BOT_CREDENTIAL_KEY in the bot env file before rotating the Telegram bot token."
+        in message
+        for message in warnings
+    )
     assert reloaded.load("tg:42") == {"alpha": {"API_TOKEN": "secret-value"}}
 
 

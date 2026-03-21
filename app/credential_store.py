@@ -102,9 +102,9 @@ def resolve_credential_secret_material(
         )
 
     if not _fallback_warning_emitted:
-        log.warning(
+        log.error(
             "Credential encryption is using TELEGRAM_BOT_TOKEN as the key material. "
-            "Set BOT_CREDENTIAL_KEY for independent key management before rotating the bot token."
+            "Set BOT_CREDENTIAL_KEY in the bot env file before rotating the Telegram bot token."
         )
         _fallback_warning_emitted = True
     return fallback

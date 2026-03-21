@@ -1168,9 +1168,13 @@ write_first_bot_env() {
   local skills="${BOT_SETUP_SKILLS:-}" allowed_users="${BOT_SETUP_ALLOWED_USERS:-}"
   local timeout_seconds="${BOT_SETUP_TIMEOUT_SECONDS:-3600}" working_dir="${BOT_SETUP_WORKING_DIR:-/home/bot}"
   local completion_webhook_url="${BOT_SETUP_COMPLETION_WEBHOOK_URL:-}"
+  local credential_key="${BOT_SETUP_CREDENTIAL_KEY:-}"
   bot_dir=".deploy/bots/$slug"
   env_file="$bot_dir/.env"
   mkdir -p "$bot_dir"
+  if [ -z "$credential_key" ]; then
+    credential_key="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  fi
   {
     write_env_assignment_line BOT_INSTANCE "$slug"
     write_env_assignment_line BOT_SLUG "$slug"
@@ -1206,6 +1210,7 @@ write_first_bot_env() {
     write_env_assignment_line BOT_TIMEOUT_SECONDS "$timeout_seconds"
     write_env_assignment_line BOT_WORKING_DIR "$working_dir"
     write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
+    write_env_assignment_line BOT_CREDENTIAL_KEY "$credential_key"
     if [ -n "$completion_webhook_url" ]; then
       write_env_assignment_line BOT_COMPLETION_WEBHOOK_URL "$completion_webhook_url"
     fi

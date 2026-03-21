@@ -10,8 +10,10 @@ import sqlite3
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 import app.content_store as content_store_mod
+import app.registry_service.store as registry_store_module
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
@@ -2142,3 +2144,43 @@ def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_col
     ).fetchone()
     assert fts_row is not None
     conn.close()
+
+
+def test_registry_store_migration_rolls_back_schema_version_when_step_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    db_path = tmp_path / "registry.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(registry_store_module._BASE_SCHEMA_SQL)
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+    conn.commit()
+    conn.close()
+
+    store = registry_store_module.RegistrySQLiteStore.__new__(
+        registry_store_module.RegistrySQLiteStore
+    )
+    store.db_path = db_path
+
+    def fail_migration(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store, "_migrate_v2_timeline_fts", fail_migration)
+
+    verify = sqlite3.connect(db_path)
+    verify.row_factory = sqlite3.Row
+    with pytest.raises(RuntimeError, match="boom"):
+        store._run_migrations(verify)
+
+    version = verify.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    tables = {
+        row[0]
+        for row in verify.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    verify.close()
+
+    assert version == "1"
+    assert "migration_probe" not in tables

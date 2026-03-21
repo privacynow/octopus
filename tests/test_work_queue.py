@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import app.work_queue_sqlite_impl as work_queue_sqlite_impl
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.workflows.recovery.results import TransportStateCorruption
 from app.work_queue import (
@@ -1694,6 +1695,38 @@ def test_run_migrations_adds_dispatch_mode_for_v2_db(data_dir):
     assert "dispatch_mode" in work_item_columns
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
     assert version == str(_SCHEMA_VERSION)
+    conn.close()
+
+
+def test_run_migrations_rolls_back_schema_version_when_step_fails(
+    data_dir,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '3')")
+    conn.commit()
+
+    def fail_migration(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(work_queue_sqlite_impl, "_MIGRATIONS", ((4, fail_migration),))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_migrations(conn)
+
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    assert version == "3"
+    assert "migration_probe" not in tables
     conn.close()
 
 

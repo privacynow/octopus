@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19B2 landed green: registry-delivered routed results now apply to parent delegation session state inside one short storage transaction, closing the only proven cross-boundary session race left outside the Telegram chat lock.
+- Phase 19B3 landed green: the SQLite session, transport, and registry migration ladders now advance schema version inside the same transaction as each migration step, so failed upgrades roll back cleanly instead of leaving replayable half-state behind.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -62,8 +62,9 @@
 - New guided bot env files now include an active `BOT_CREDENTIAL_KEY`; legacy configs without one still function through the fallback path, but the credential-store seam now logs an explicit `ERROR` telling operators to set the key before rotating the Telegram bot token.
 - Local agent state persistence now uses atomic same-directory replace writes for both stable bot identity and registry connection state, preserving the last good file if a rename fails mid-save.
 - Parent-session delegation result application is now storage-owned and atomic on both backends, so concurrent routed results for the same conversation no longer race through a load-modify-save gap in delivery handling.
+- SQLite migration owners now execute migration scripts statement-by-statement inside explicit transactions, so failed session/transport/registry upgrades preserve the previous `schema_version` and leave no partial DDL behind.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2058 passed, 23 skipped`.
+- Latest verified full-suite run: `2061 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -109,6 +110,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19B3 remediation — make the SQLite migration ladders atomic with their schema-version updates instead of committing steps separately.
+  Scope:
+  - replaced `executescript(...)`-driven migration steps in the session, transport, and registry SQLite owners with statement-by-statement execution inside explicit migration transactions
+  - added one rollback regression test per owner proving a failing migration step leaves `schema_version` unchanged and does not persist partial DDL
+  - kept the slice scoped to the actual in-process SQLite migration ladders; fresh-create bootstrap and Postgres SQL-file migrations were left on their existing seams
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_storage.py tests/test_work_queue.py tests/test_registry_service.py -k 'migration or run_migrations or schema_version or registry_store_migrations'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - failed session/transport/registry SQLite migrations now roll back both schema changes and version bumps together
+  - existing upgrade/idempotence coverage remains green after the transactional migration changes
+  - full suite status after Phase 19B3: `2061 passed, 23 skipped`
 
 - Complete: Phase 19B2 remediation — close the delivery-side delegation session race with one storage-owned atomic helper instead of broad transactional wrappers.
   Scope:

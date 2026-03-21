@@ -149,6 +149,37 @@ CREATE TABLE IF NOT EXISTS timeline_events (
     created_at TEXT NOT NULL
 );
 """
+def _execute_sql_script(conn: sqlite3.Connection, script: str) -> None:
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                conn.execute(statement)
+            buffer = ""
+    statement = buffer.strip()
+    if statement:
+        conn.execute(statement)
+
+
+def _run_migration_step(conn: sqlite3.Connection, version: int, migration) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        migration(conn)
+        conn.execute(
+            """
+            INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(version),),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 class RegistrySQLiteStore(AbstractRegistryStore):
     """SQLite-backed registry store used by the FastAPI registry service."""
 
@@ -186,7 +217,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         )
 
     def _migrate_v1(self, conn: sqlite3.Connection) -> None:
-        conn.executescript(
+        _execute_sql_script(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS skills_override (
                 skill_name TEXT PRIMARY KEY,
@@ -194,11 +226,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 set_by TEXT NOT NULL DEFAULT 'ui',
                 set_at REAL NOT NULL
             );
-            """
+            """,
         )
 
     def _migrate_v2_timeline_fts(self, conn: sqlite3.Connection) -> None:
-        conn.executescript(
+        _execute_sql_script(
+            conn,
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
             USING fts5(body, content=timeline_events, content_rowid=seq);
@@ -213,7 +246,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
               INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
               INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
             END;
-            """
+            """,
         )
         conn.execute(
             """
@@ -229,7 +262,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 "ALTER TABLE agents ADD COLUMN runtime_health_json TEXT NOT NULL DEFAULT '{}'"
             )
-        conn.executescript(
+        _execute_sql_script(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS agent_runtime_workers (
                 agent_id TEXT NOT NULL,
@@ -248,7 +282,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             );
             CREATE INDEX IF NOT EXISTS idx_agent_runtime_workers_seen
                 ON agent_runtime_workers (agent_id, last_seen_at DESC);
-            """
+            """,
         )
 
     def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
@@ -311,34 +345,22 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 f"Registry DB schema version {current} is newer than supported version {_SCHEMA_VERSION}. Upgrade the registry."
             )
         if current < 1:
-            self._migrate_v1(conn)
-            self._set_schema_version(conn, 1)
-            conn.commit()
+            _run_migration_step(conn, 1, self._migrate_v1)
             current = 1
         if current < 2:
-            self._migrate_v2_timeline_fts(conn)
-            self._set_schema_version(conn, 2)
-            conn.commit()
+            _run_migration_step(conn, 2, self._migrate_v2_timeline_fts)
             current = 2
         if current < 3:
-            self._migrate_v3_runtime_health(conn)
-            self._set_schema_version(conn, 3)
-            conn.commit()
+            _run_migration_step(conn, 3, self._migrate_v3_runtime_health)
             current = 3
         if current < 4:
-            self._migrate_v4_channel_vocabulary(conn)
-            self._set_schema_version(conn, 4)
-            conn.commit()
+            _run_migration_step(conn, 4, self._migrate_v4_channel_vocabulary)
             current = 4
         if current < 5:
-            self._migrate_v5_agent_token_hashing(conn)
-            self._set_schema_version(conn, 5)
-            conn.commit()
+            _run_migration_step(conn, 5, self._migrate_v5_agent_token_hashing)
             current = 5
         if current < 6:
-            self._migrate_v6_registry_scope(conn)
-            self._set_schema_version(conn, 6)
-            conn.commit()
+            _run_migration_step(conn, 6, self._migrate_v6_registry_scope)
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
         slug = requested

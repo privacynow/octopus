@@ -1,9 +1,12 @@
 """Tests for storage.py — session CRUD (SQLite-backed), path resolution, uploads."""
 
 import json
+import sqlite3
 import tempfile
 import threading
 from pathlib import Path
+
+import pytest
 
 from app.agents.types import RoutedTaskResult
 from app.identity import telegram_conversation_key
@@ -420,6 +423,58 @@ def test_json_file_migration():
         assert len(result) == 2
 
         reset_db_for_test(data_dir)
+
+
+def test_session_migration_rolls_back_when_step_fails(monkeypatch: pytest.MonkeyPatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        db_path = data_dir / "sessions.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            """
+            CREATE TABLE sessions (
+                chat_id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT '',
+                data TEXT NOT NULL DEFAULT '{}',
+                has_pending INTEGER NOT NULL DEFAULT 0,
+                has_setup INTEGER NOT NULL DEFAULT 0,
+                project_id TEXT,
+                file_policy TEXT,
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+        conn.commit()
+        conn.close()
+
+        store = SQLiteSessionStore()
+
+        def fail_migration(conn: sqlite3.Connection) -> None:
+            conn.execute("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(store, "_migrate_v1_to_v2", fail_migration)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            store._db(data_dir)
+
+        verify = sqlite3.connect(str(db_path))
+        version = verify.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        tables = {
+            row[0]
+            for row in verify.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        verify.close()
+
+        assert version == "1"
+        assert "migration_probe" not in tables
 
 
 # -- Session/upload isolation (from test_high_risk.py) --

@@ -37,6 +37,38 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _execute_sql_script(conn: sqlite3.Connection, script: str) -> None:
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                conn.execute(statement)
+            buffer = ""
+    statement = buffer.strip()
+    if statement:
+        conn.execute(statement)
+
+
+def _run_migration_step(
+    conn: sqlite3.Connection,
+    version: int,
+    migration: Callable[[sqlite3.Connection], None],
+) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        migration(conn)
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+            (str(version),),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 class SQLiteSessionStore:
     """Session store backed by SQLite. One instance per backend; owns its connection cache."""
 
@@ -84,16 +116,13 @@ class SQLiteSessionStore:
     def _run_migrations(self, conn: sqlite3.Connection, stored_version: int) -> None:
         version = stored_version
         if version < 2:
-            self._migrate_v1_to_v2(conn)
+            _run_migration_step(conn, 2, self._migrate_v1_to_v2)
             version = 2
-        conn.execute(
-            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
-            (str(version),),
-        )
-        conn.commit()
+        return None
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
-        conn.executescript(
+        _execute_sql_script(
+            conn,
             """
             CREATE TABLE sessions_v2 (
                 conversation_key TEXT PRIMARY KEY,
@@ -118,7 +147,7 @@ class SQLiteSessionStore:
             DROP TABLE sessions;
             ALTER TABLE sessions_v2 RENAME TO sessions;
             CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions (updated_at);
-            """
+            """,
         )
 
     def _migrate_json_files(self, data_dir: Path, conn: sqlite3.Connection) -> None:

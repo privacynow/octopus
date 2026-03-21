@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20B1 landed green: the control-plane processor loop now logs and survives transient reclaim/purge/poll failures, and parent `delegated_result` timeline events are only published after a routed result is actually ready and matched to a pending delegation.
 - Phase 20A3 landed green: runtime-owned credential consumers now load only the requested active-skill subset, credential-validation host matching now accepts only exact hosts or intended `*.` suffixes, and preflight context no longer embeds raw runtime skill instruction bodies.
 - Phase 20A2 landed green: registry enroll/login now throttle repeated failed auth attempts per client host, UI session signing no longer regenerates per process when `REGISTRY_SESSION_SECRET` is unset, and `/healthz` now exposes only the minimal liveness contract.
 - Phase 20A1 landed green: webhook config/runtime now reject insecure remote webhook targets, and completion-webhook delivery refuses private/metadata destinations before posting any payload.
@@ -101,7 +102,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2105 passed, 23 skipped`.
+- Latest verified full-suite run: `2108 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -157,6 +158,20 @@
   - `20C4` durable inbound transport provenance
 
 ## Phase 20 Slice Log
+
+- Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
+  Scope:
+  - wrapped the main `ProcessorRunner.run(...)` loop body in loop-level error handling so transient reclaim/purge/poll failures are logged and the runner continues instead of silently dying
+  - moved routed-result `delegated_result` parent timeline publication in `app/agents/delivery.py` to after readiness and matched-result confirmation, preserving the stable event id while avoiding misleading early success-looking events
+  - updated runner tests with transient reclaim/purge/poll failure coverage and updated routed-result tests/integration coverage so retry-later and unmatched result paths no longer expect parent timeline publication
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_processor_runner.py tests/test_agents.py -k 'routed_result' tests/test_control_plane_integration.py -k 'routed_result or registry_delivery_timeline'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - transient bus/store exceptions in reclaim/purge/poll no longer terminate the background processor loop
+  - retry-later and unmatched routed results do not publish misleading `delegated_result` parent timeline state
+  - matched routed results still publish the parent timeline event once when the result is actually applicable
+  - full suite status after Phase 20B1: `2108 passed, 23 skipped`
 
 - Complete: Phase 20A3 remediation — minimize credential and preflight exposure at the owner seams instead of trusting every runtime caller to filter correctly.
   Scope:

@@ -230,16 +230,6 @@ async def handle_registry_delivery(
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        await _publish_timeline(
-            services=runtime.services,
-            conversation_ref=parent_conversation_id,
-            kind="delegated_result",
-            title="Delegated result received",
-            body=routed_result.full_text or routed_result.summary,
-            status=routed_result.status,
-            metadata={"routed_task_id": routed_task_id},
-            event_id=f"delegated-result:{routed_task_id}",
-        )
         if runtime.dispatcher is None:
             raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
         if not runtime.dispatcher.egress_ready_for_ref(
@@ -265,6 +255,16 @@ async def handle_registry_delivery(
                 registry_authority_ref(registry_id),
             )
             return "accepted"
+        await _publish_timeline(
+            services=runtime.services,
+            conversation_ref=parent_conversation_id,
+            kind="delegated_result",
+            title="Delegated result received",
+            body=routed_result.full_text or routed_result.summary,
+            status=routed_result.status,
+            metadata={"routed_task_id": routed_task_id},
+            event_id=f"delegated-result:{routed_task_id}",
+        )
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
         continuation_text = applied.resume_prompt

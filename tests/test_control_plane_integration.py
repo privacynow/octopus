@@ -495,17 +495,9 @@ async def test_shared_worker_registry_delivery_projects_parent_timeline_to_multi
             runtime=delivery_runtime,
         )
 
-        await _wait_for(
-            lambda: all(
-                "delegated_result" in _timeline_kinds(seeded_registry.store, parent_conversation_ref)
-                for seeded_registry in seeded
-            ),
-            message="registry delivery timeline did not reach both registries",
-        )
-
     assert outcome == "retry_later"
     for seeded_registry in seeded:
-        assert "delegated_result" in _timeline_kinds(
+        assert "delegated_result" not in _timeline_kinds(
             seeded_registry.store,
             parent_conversation_ref,
         )

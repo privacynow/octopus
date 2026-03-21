@@ -1120,6 +1120,32 @@ def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
             assert token not in text, f"{token} still referenced in {path}"
 
 
+def test_bridge_module_has_no_fake_bot_helper() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bridge_path = repo_root / "app" / "agents" / "bridge.py"
+    text = bridge_path.read_text()
+
+    assert "_egress_bot(" not in text, f"_egress_bot helper still referenced in {bridge_path}"
+
+
+def test_selected_telegram_and_workflow_modules_no_longer_import_bridge_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    guarded_paths = (
+        repo_root / "app" / "channels" / "telegram" / "execution.py",
+        repo_root / "app" / "channels" / "telegram" / "inbound_context.py",
+        repo_root / "app" / "channels" / "telegram" / "normalization.py",
+        repo_root / "app" / "channels" / "telegram" / "worker.py",
+        repo_root / "app" / "channels" / "telegram" / "delegation_channel.py",
+        repo_root / "app" / "workflows" / "execution" / "finalization.py",
+        repo_root / "app" / "workflows" / "recovery" / "replay.py",
+    )
+    for path in guarded_paths:
+        text = path.read_text()
+        assert "app.agents.bridge" not in text, (
+            f"bridge helper import still referenced in {path}"
+        )
+
+
 def _non_registry_orchestration_paths() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"

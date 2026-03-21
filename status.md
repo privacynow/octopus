@@ -11,6 +11,7 @@
 
 - Phases 1-13 are implemented and closed.
 - Phase 14 is active.
+- Phase 14D landed green: behavior tests remain the primary ownership oracle, and the repo now has narrow secondary checks that specifically guard the removed bridge shim and the removed Telegram/workflow bridge-helper imports.
 - Phase 14C landed green: the agent card no longer leaks the internal `phase-19-foundation` rollout marker, and the registry UI continues to fall back to `unknown` for blank bot versions.
 - Phase 14B landed green: generic ref/text helpers now live on the existing identity/formatting seams, and recovery/inbound ref resolution share one data-driven helper instead of carrying Telegram-specific fallback logic in multiple places.
 - Phase 14A landed green: bridge admission no longer fabricates bot presence for registry `channel_input` refs, while the legitimate registry conversation bind/timeline path remains intact.
@@ -25,7 +26,7 @@
 - Registry UI shell routes visible degraded/timed-out status text through human-readable labels instead of exposing raw internal codes.
 - Dead routed-result warning surface has been removed from worker/finalization code.
 - Protected routed-task status coverage now spans the full shared status set across SQLite and Postgres, and rejected protected-state updates cannot append timeline rows.
-- Latest verified full-suite run: `1970 passed, 23 skipped`.
+- Latest verified full-suite run: `1972 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -50,6 +51,19 @@
   - `14E` status/doc closeout
 
 ## Phase 14 Slice Log
+
+- Complete: Phase 14D remediation — rebalance guardrails toward behavior-level proof.
+  Scope:
+  - added a narrow zero-import/source-shape check in `tests/test_zero_import_gates.py` proving `app/agents/bridge.py` no longer contains the `_egress_bot(...)` shim
+  - added an explicit targeted guard proving the cleaned Telegram/workflow modules no longer import `app.agents.bridge`
+  - kept the existing 14A-14C behavior tests as the primary oracles and used the new source-shape checks only as focused backstops
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py tests/test_agents.py tests/test_worker_workflows.py tests/test_registry_service.py -k 'bridge_module_has_no_fake_bot_helper or selected_telegram_and_workflow_modules_no_longer_import_bridge_helpers or admit_registry_delivery_queued_is_accepted or recovery_prepare_action or event_conversation_ref_uses_chat_id_when_no_ref_or_key_is_present or requested_card_uses_neutral_version_when_no_product_version_is_defined or registry_ui_shell_bot_detail_version_falls_back_to_unknown'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the removed bridge shim and removed Telegram/workflow bridge-helper imports now have narrow direct regression checks
+  - behavior-level tests from 14A-14C remain the primary proof of the bridge, recovery, and version contracts
+  - full suite status after Phase 14D: `1972 passed, 23 skipped`
 
 - Complete: Phase 14C remediation — remove the internal rollout label from the product surface.
   Scope:

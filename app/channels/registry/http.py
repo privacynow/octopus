@@ -150,7 +150,7 @@ async def _registry_lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Telegram Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
+app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
 
 

@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-14 are implemented and closed.
-- Phase 15 is active. Slice 15A landed green and reopened the rollout under an invariant-first closeout standard rather than another path-local cleanup.
+- Phase 15 is active. Slices 15A-15B landed green and reopened the rollout under an invariant-first closeout standard rather than another path-local cleanup.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -27,7 +27,8 @@
 - Dead routed-result warning surface has been removed from worker/finalization code.
 - Protected routed-task status coverage spans the full shared status set across SQLite and Postgres, rejected protected-state updates cannot append timeline rows, and the remaining bridge-cleanup seams now have narrow secondary regression checks.
 - Registry ref qualification now treats already-qualified refs generically instead of hardcoding Telegram/registry prefixes, and the helper seam has direct contract coverage plus live caller regressions for registry `channel_action` and `routed_result`.
-- Latest verified full-suite run: `1988 passed, 23 skipped`.
+- Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
+- Latest verified full-suite run: `1991 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -56,6 +57,21 @@
   - `15C` invariant closeout sweep and status/doc update
 
 ## Phase 15 Slice Log
+
+- Complete: Phase 15B remediation — remove stale channel-specific wording from shared prompts and remaining generic registry surfaces.
+  Scope:
+  - changed `app/approvals.py:build_preflight_prompt()` from `Telegram bridge` wording to neutral bot/provider wording
+  - changed the FastAPI registry app title in `app/channels/registry/http.py` from `Telegram Agent Registry` to `Agent Registry`
+  - removed the stale Telegram-specific conversation empty-state copy from `app/channels/registry/ui.py`
+  - added a direct approval-prompt regression in `tests/test_approvals.py`, an `/openapi.json` title check in `tests/test_registry_service.py`, and a registry UI shell regression proving the empty-state copy is now channel-neutral
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_approvals.py tests/test_registry_service.py -k 'preflight_prompt or openapi_title_is_channel_neutral or conversation_empty_state_is_channel_neutral or bot_detail_version_falls_back_to_unknown or humanizes_visible_status_labels'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - shared preflight text no longer describes the system as a Telegram bridge
+  - registry API metadata now matches the generic `Agent Registry` product naming already used on the UI shell/login surfaces
+  - the remaining stale Telegram-specific copy found during the shared/product sweep was fixed in the same slice rather than deferred
+  - full suite status after Phase 15B: `1991 passed, 23 skipped`
 
 - Complete: Phase 15A remediation — close the ref-qualification invariant at the owning seam instead of only at caller paths.
   Scope:

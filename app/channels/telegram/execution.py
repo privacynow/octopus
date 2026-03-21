@@ -286,6 +286,8 @@ def build_dispatch_runtime(
         boot_id=runtime.boot_id,
         cancellations=runtime.cancellation_registry,
         progress_factory=collaborators.progress_factory,
+        send_status=lambda message, label: message.reply_text(label),
+        typing_target=lambda message: getattr(message, "chat", message),
         keep_typing=collaborators.keep_typing,
         heartbeat=collaborators.heartbeat,
         format_provider_error=lambda raw_text, returncode: format_provider_error(

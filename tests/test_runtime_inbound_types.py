@@ -68,6 +68,18 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert action.authority_ref == "registry:prod"
 
 
+def test_non_telegram_inbound_chat_id_falls_back_to_conversation_key() -> None:
+    event = InboundAction(
+        user=InboundUser(id="reg:actor", username="registry"),
+        conversation_key="registry:prod:conversation:conv-1",
+        action="approve_pending",
+        params={},
+        source="registry",
+    )
+
+    assert event.chat_id == "registry:prod:conversation:conv-1"
+
+
 def test_deserialize_inbound_rejects_non_canonical_identity_payloads() -> None:
     payload = '{"user_id":42,"chat_id":99,"text":"hello","source":"telegram"}'
 

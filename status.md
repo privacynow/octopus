@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20C3 landed green: the shared provider-dispatch seam now uses injected status/typing collaborators instead of assuming Telegram `reply_text`/`.chat`, and live cancellation keys normalize Telegram numeric ids without colliding with qualified non-Telegram conversation keys.
 - Phase 20C2 landed green: Telegram ingress now rejects oversized attachments before downloading them, and shared-mode unknown slash commands now produce explicit user feedback instead of being silently ignored.
 - Phase 20C1 landed green: Telegram approval/retry buttons now carry a durable per-request callback token, and stale callback presses no longer approve or retry whatever request happens to be pending now.
 - Phase 20B2 landed green: delegation approval expiry still uses proposal age, but post-submission child-result expiry is now anchored to each task's own `submitted_at` timestamp instead of the original proposal timestamp.
@@ -105,7 +106,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2117 passed, 23 skipped`.
+- Latest verified full-suite run: `2120 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -208,6 +209,22 @@
   - unknown shared-mode slash commands no longer disappear silently
   - the ingress structural guard stays green after the new normalization/error path
   - full suite status after Phase 20C2: `2117 passed, 23 skipped`
+
+- Complete: Phase 20C3 remediation — remove the remaining Telegram-shaped assumptions from the shared runtime dispatch/cancellation seams.
+  Scope:
+  - normalized `TelegramCancellationRegistry` keys through canonical Telegram conversation keys so bare numeric chat ids and qualified Telegram refs address the same live cancel event without colliding with other channel ids
+  - extended `RuntimeDispatchRuntime` with injected `send_status(...)` and `typing_target(...)` collaborators so shared provider dispatch no longer reaches directly into Telegram `reply_text` or `.chat`
+  - updated the Telegram execution runtime to supply those collaborators explicitly at the Telegram-owned boundary instead of leaving the shared dispatch layer coupled to Telegram message objects
+  - relaxed non-Telegram inbound `chat_id` access so shared runtime event objects return their canonical conversation key instead of raising on non-Telegram refs
+  - added direct regression coverage for cancellation-key normalization, non-Telegram inbound `chat_id` access, and running provider dispatch with a message object that has no Telegram reply/chat API at all
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_dispatch_boundary.py tests/test_runtime_inbound_types.py tests/test_telegram_channel_state.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - shared provider dispatch now depends only on injected runtime collaborators, not Telegram message internals
+  - Telegram numeric cancel keys and qualified Telegram refs resolve to the same live cancel event while qualified non-Telegram keys stay disjoint
+  - non-Telegram inbound events no longer crash when shared code asks for `chat_id`
+  - full suite status after Phase 20C3: `2120 passed, 23 skipped`
 
 - Complete: Phase 20B1 remediation — make processor and routed-result reporting truthful at the seams that actually own those outcomes.
   Scope:

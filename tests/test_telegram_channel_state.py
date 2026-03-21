@@ -272,6 +272,18 @@ def test_runtime_owns_explicit_cancellation_registry():
     assert runtime.cancellation_registry.get(12345) is None
 
 
+def test_cancellation_registry_normalizes_numeric_chat_ids_to_qualified_keys():
+    runtime = build_telegram_runtime(make_config(data_dir=Path("/tmp/channel-cancel")), FakeProvider("claude"))
+
+    event = asyncio.Event()
+    runtime.cancellation_registry.set(12345, event)
+
+    assert runtime.cancellation_registry.get("tg:12345") is event
+    assert "tg:12345" in runtime.cancellation_registry
+    assert 12345 in runtime.cancellation_registry
+    assert runtime.cancellation_registry.get("slack:12345") is None
+
+
 def test_singleton_accessors_are_deleted():
     for name in (
         "install_channel_state",

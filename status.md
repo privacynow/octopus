@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19B1 landed green: bot identity and registry connection state now persist through atomic replace writes, so a failed rename can no longer truncate or partially overwrite the last good state file.
+- Phase 19B2 landed green: registry-delivered routed results now apply to parent delegation session state inside one short storage transaction, closing the only proven cross-boundary session race left outside the Telegram chat lock.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -61,8 +61,9 @@
 - Claude provider MCP setup now cleans up temporary config files on all normal return/exception/timeout paths and no longer leaves those files world-readable by default.
 - New guided bot env files now include an active `BOT_CREDENTIAL_KEY`; legacy configs without one still function through the fallback path, but the credential-store seam now logs an explicit `ERROR` telling operators to set the key before rotating the Telegram bot token.
 - Local agent state persistence now uses atomic same-directory replace writes for both stable bot identity and registry connection state, preserving the last good file if a rename fails mid-save.
+- Parent-session delegation result application is now storage-owned and atomic on both backends, so concurrent routed results for the same conversation no longer race through a load-modify-save gap in delivery handling.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2054 passed, 23 skipped`.
+- Latest verified full-suite run: `2058 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -108,6 +109,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19B2 remediation — close the delivery-side delegation session race with one storage-owned atomic helper instead of broad transactional wrappers.
+  Scope:
+  - added `apply_delegation_result_atomically(...)` to both session backends and exposed it through the neutral storage/session-runtime seams
+  - updated `app/agents/delivery.py` so routed-result handling now uses that helper instead of a manual load-apply-save sequence outside the store
+  - added concurrent same-conversation regression tests in `tests/test_storage.py` and `tests/test_storage_pg.py`, plus sibling checks proving other conversations remain untouched
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_storage.py tests/test_storage_pg.py tests/test_agents.py -k 'apply_delegation_result_atomically or routed_result or registry_connection_state or bot_identity'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - concurrent routed-result applications for the same parent conversation now merge instead of racing through last-writer-wins session saves
+  - the fix stays narrow to the proven delivery-side race and does not widen session transactions across unrelated handler flows or awaits
+  - full suite status after Phase 19B2: `2058 passed, 23 skipped`
 
 - Complete: Phase 19B1 remediation — make local agent state-file writes atomic at the persistence seam instead of relying on direct overwrite writes.
   Scope:

@@ -5,10 +5,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.session_state import SessionState, session_from_dict, session_to_dict
-from app.storage import default_session, load_session, save_session
+from app.storage import (
+    apply_delegation_result_atomically,
+    default_session,
+    load_session,
+    save_session,
+)
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
 
 
 def resolve_session_context(
@@ -49,6 +56,23 @@ def save_runtime_session(
     session: SessionState,
 ) -> None:
     save_session(data_dir, conversation_key, session_to_dict(session))
+
+
+def apply_runtime_delegation_result(
+    data_dir: Path,
+    conversation_key: str,
+    *,
+    routed_task_id: str,
+    authority_ref: str,
+    result: RoutedTaskResult,
+) -> DelegationUpdateOutcome:
+    return apply_delegation_result_atomically(
+        data_dir,
+        conversation_key,
+        routed_task_id=routed_task_id,
+        authority_ref=authority_ref,
+        result=result,
+    )
 
 
 def default_runtime_session(

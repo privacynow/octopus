@@ -41,11 +41,6 @@ def qualify_registry_parent_ref(registry_id: str, conversation_ref: str) -> str:
 def telegram_conversation_ref(config: BotConfig, chat_id: int) -> str:
     return f"telegram:{bot_identity(config.data_dir)}:{chat_id}"
 
-
-def _egress_bot(bot: Any | None) -> Any:
-    return bot if bot is not None else object()
-
-
 def build_registry_message_delivery(
     *,
     conversation_ref: str,
@@ -150,7 +145,6 @@ async def admit_registry_delivery(
             channel_egress = dispatcher.create_egress(
                 conversation_ref,
                 config=config,
-                bot=_egress_bot(bot),
                 conversation_key=conversation_key,
                 source="registry",
             )

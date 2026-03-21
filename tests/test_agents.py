@@ -608,6 +608,7 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
 
 async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str]] = []
+    egress_kwargs: list[dict[str, object]] = []
 
     class _FakeEgress:
         async def sync_binding(self, binding):
@@ -618,7 +619,8 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
 
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
-            del conversation_ref, config, kwargs
+            del conversation_ref, config
+            egress_kwargs.append(dict(kwargs))
             return _FakeEgress()
 
     monkeypatch.setattr(
@@ -664,6 +666,13 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert ("timeline", registry_conversation_ref("prod", "conv-1")) in seen
     assert ("bind", registry_task_ref("prod", "task-1")) not in seen
     assert ("timeline", registry_task_ref("prod", "task-1")) not in seen
+    assert egress_kwargs == [
+        {
+            "conversation_key": _reg_conv(registry_conversation_ref("prod", "conv-1")),
+            "source": "registry",
+        }
+    ]
+    assert "bot" not in egress_kwargs[0]
 
 
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):

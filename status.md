@@ -10,7 +10,8 @@
 ## Current State
 
 - Phases 1-14 are implemented and closed.
-- Phase 15 is active. Slices 15A-15B landed green and reopened the rollout under an invariant-first closeout standard rather than another path-local cleanup.
+- Phases 1-15 are implemented and closed.
+- Phase 15C landed green: the invariant-first seam-closure pass is complete, and the final closeout reran the full suite after the final shared-string / rollout-marker sweep.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -28,6 +29,7 @@
 - Protected routed-task status coverage spans the full shared status set across SQLite and Postgres, rejected protected-state updates cannot append timeline rows, and the remaining bridge-cleanup seams now have narrow secondary regression checks.
 - Registry ref qualification now treats already-qualified refs generically instead of hardcoding Telegram/registry prefixes, and the helper seam has direct contract coverage plus live caller regressions for registry `channel_action` and `routed_result`.
 - Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
+- Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
 - Latest verified full-suite run: `1991 passed, 23 skipped`.
 
 ## Phase Summary
@@ -57,6 +59,20 @@
   - `15C` invariant closeout sweep and status/doc update
 
 ## Phase 15 Slice Log
+
+- Complete: Phase 15C closeout — rerun the invariant sweep, record the accepted limitations honestly, and only then close the phase.
+  Scope:
+  - reran the targeted grep sweep for stale `Telegram bridge` / `Telegram Agent Registry` strings, hardcoded ref-qualification prefix lists, and rollout-marker hits after 15A-15B
+  - verified the only remaining hardcoded prefix check is the intentional `parse_registry_ref()` parser guard and the only remaining `phase-19-foundation` hits are negative assertions in tests
+  - rewrote the status document current state so Phase 15 is presented as closed invariant-first seam closure instead of an active cleanup track
+  - recorded the accepted limitation on registry UI shell tests explicitly: they prove static HTML/JS shell wiring, not browser-rendered DOM behavior
+  Tests:
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - no stale `Telegram bridge` or `Telegram Agent Registry` strings remain in production code
+  - no rollout-marker hits remain in production code
+  - the accepted static-shell UI-test limitation is now documented instead of being overclaimed
+  - final full suite status after Phase 15C: `1991 passed, 23 skipped`
 
 - Complete: Phase 15B remediation — remove stale channel-specific wording from shared prompts and remaining generic registry surfaces.
   Scope:

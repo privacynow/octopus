@@ -102,6 +102,7 @@ async def normalize_message(
         conversation_key=conversation_key,
         text=text,
         attachments=tuple(attachments),
+        source="telegram",
     )
 
 
@@ -132,6 +133,7 @@ def normalize_command(update, context) -> InboundCommand | None:
         conversation_key=telegram_conversation_key(chat_id),
         command=command,
         args=args,
+        source="telegram",
     )
 
 
@@ -149,4 +151,5 @@ def normalize_callback(update) -> InboundCallback | None:
         user=user,
         conversation_key=telegram_conversation_key(chat_id),
         data=data,
+        source="telegram",
     )

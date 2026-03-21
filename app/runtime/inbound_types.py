@@ -11,6 +11,18 @@ from typing import Any
 from app.identity import telegram_numeric_id
 
 
+_SOURCE_MISSING = object()
+
+
+def _validated_source(source: object) -> str:
+    if source is _SOURCE_MISSING:
+        raise ValueError("Inbound event source must be explicit")
+    value = str(source or "").strip()
+    if not value:
+        raise ValueError("Inbound event source must be non-empty")
+    return value
+
+
 @dataclass(frozen=True)
 class InboundUser:
     """Identity of the user who sent an inbound event."""
@@ -37,11 +49,14 @@ class InboundMessage:
     conversation_key: str
     text: str
     attachments: tuple[InboundAttachment, ...] = ()
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
     skip_approval: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
     def chat_id(self) -> int:
@@ -59,8 +74,11 @@ class InboundCommand:
     conversation_key: str
     command: str
     args: tuple[str, ...] = ()
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
     def chat_id(self) -> int:
@@ -77,8 +95,11 @@ class InboundCallback:
     user: InboundUser
     conversation_key: str
     data: str
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
     def chat_id(self) -> int:
@@ -96,9 +117,12 @@ class InboundAction:
     conversation_key: str
     action: str
     params: dict[str, Any] = field(default_factory=dict)
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     authority_ref: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
     def chat_id(self) -> int:

@@ -18,6 +18,7 @@ def test_inbound_envelope_constructs_without_surface_binding_id() -> None:
         conversation_key="tg:123",
         action="approve",
         params={"item_id": "abc"},
+        source="telegram",
     )
 
     envelope = InboundEnvelope(
@@ -102,3 +103,30 @@ def test_deserialize_inbound_rejects_payload_with_blank_source() -> None:
 
     with pytest.raises(ValueError, match="canonical source"):
         deserialize_inbound("message", payload)
+
+
+@pytest.mark.parametrize(
+    ("factory", "kwargs"),
+    [
+        (
+            InboundMessage,
+            {
+                "user": InboundUser(id="tg:42", username="alice"),
+                "conversation_key": "tg:123",
+                "text": "hello",
+            },
+        ),
+        (
+            InboundAction,
+            {
+                "user": InboundUser(id="tg:42", username="alice"),
+                "conversation_key": "tg:123",
+                "action": "approve",
+                "params": {},
+            },
+        ),
+    ],
+)
+def test_inbound_event_constructors_require_explicit_source(factory, kwargs) -> None:
+    with pytest.raises(ValueError, match="source must be explicit"):
+        factory(**kwargs)

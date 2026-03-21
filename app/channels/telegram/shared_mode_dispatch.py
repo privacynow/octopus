@@ -91,50 +91,45 @@ def _build_action_envelope(
     )
 
 
+def _telegram_action(event, action: str, *, params: dict[str, Any] | None = None) -> InboundAction:
+    return InboundAction(
+        event.user,
+        event.conversation_key,
+        action,
+        params={} if params is None else params,
+        source="telegram",
+    )
+
+
 def _worker_owned_command_action(event) -> InboundAction | None:
     args = tuple(event.args or ())
     command = (event.command or "").lower()
 
     if command == "new":
-        return InboundAction(event.user, event.conversation_key, "session_new")
+        return _telegram_action(event, "session_new")
     if command == "approval":
         mode = args[0].lower() if args else "status"
         if mode in {"on", "off"}:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_approval_mode",
-                params={"value": mode},
-            )
+            return _telegram_action(event, "set_approval_mode", params={"value": mode})
         return None
     if command == "approve":
-        return InboundAction(event.user, event.conversation_key, "approve_pending")
+        return _telegram_action(event, "approve_pending")
     if command == "reject":
-        return InboundAction(event.user, event.conversation_key, "reject_pending")
+        return _telegram_action(event, "reject_pending")
     if command == "cancel":
-        return InboundAction(event.user, event.conversation_key, "cancel_conversation")
+        return _telegram_action(event, "cancel_conversation")
     if command == "role":
         if not args:
             return None
         value = "" if args[0].lower() == "clear" else " ".join(args)
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_role",
-            params={"value": value},
-        )
+        return _telegram_action(event, "set_role", params={"value": value})
     if command == "compact":
         if not args:
             return None
         mode = args[0].lower()
         if mode not in {"on", "off"}:
             return None
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_compact_mode",
-            params={"value": mode == "on"},
-        )
+        return _telegram_action(event, "set_compact_mode", params={"value": mode == "on"})
     if command == "model":
         if not args:
             return None
@@ -143,30 +138,15 @@ def _worker_owned_command_action(event) -> InboundAction | None:
             return None
         if profile == "inherit":
             profile = ""
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_model_profile",
-            params={"profile": profile},
-        )
+        return _telegram_action(event, "set_model_profile", params={"profile": profile})
     if command == "project":
         if not args:
             return None
         sub = args[0].lower()
         if sub == "use" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_project",
-                params={"value": args[1]},
-            )
+            return _telegram_action(event, "set_project", params={"value": args[1]})
         if sub == "clear":
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_project",
-                params={"value": "clear"},
-            )
+            return _telegram_action(event, "set_project", params={"value": "clear"})
         return None
     if command == "policy":
         mode = args[0].lower() if args else ""
@@ -176,37 +156,17 @@ def _worker_owned_command_action(event) -> InboundAction | None:
             value = ""
         else:
             return None
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_file_policy",
-            params={"value": value},
-        )
+        return _telegram_action(event, "set_file_policy", params={"value": value})
     if command == "skills":
         sub = args[0].lower() if args else ""
         if sub == "add" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_add",
-                params={"name": args[1]},
-            )
+            return _telegram_action(event, "skills_add", params={"name": args[1]})
         if sub == "remove" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_remove",
-                params={"name": args[1]},
-            )
+            return _telegram_action(event, "skills_remove", params={"name": args[1]})
         if sub == "setup" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_setup",
-                params={"name": args[1]},
-            )
+            return _telegram_action(event, "skills_setup", params={"name": args[1]})
         if sub == "clear":
-            return InboundAction(event.user, event.conversation_key, "skills_clear")
+            return _telegram_action(event, "skills_clear")
         return None
     return None
 
@@ -219,13 +179,13 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
 
     data = event.data or ""
     if data == "approval_approve":
-        return InboundAction(event.user, event.conversation_key, "approve_pending", params=params)
+        return _telegram_action(event, "approve_pending", params=params)
     if data == "approval_reject":
-        return InboundAction(event.user, event.conversation_key, "reject_pending", params=params)
+        return _telegram_action(event, "reject_pending", params=params)
     if data == "retry_allow":
-        return InboundAction(event.user, event.conversation_key, "retry_allow", params=params)
+        return _telegram_action(event, "retry_allow", params=params)
     if data == "retry_skip":
-        return InboundAction(event.user, event.conversation_key, "retry_skip", params=params)
+        return _telegram_action(event, "retry_skip", params=params)
     if data.startswith("recovery_"):
         parts = data.split(":", 1)
         if len(parts) != 2:
@@ -234,14 +194,14 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
             params["update_id"] = int(parts[1])
         except (TypeError, ValueError):
             return None
-        return InboundAction(event.user, event.conversation_key, parts[0], params=params)
+        return _telegram_action(event, parts[0], params=params)
     if data.startswith("delegation_"):
         parsed = parse_delegation_callback(data)
         if parsed is None:
             return None
         action, chat_id = parsed
         params["target_conversation_key"] = conversation_key(chat_id)
-        return InboundAction(event.user, event.conversation_key, action, params=params)
+        return _telegram_action(event, action, params=params)
     if data.startswith("setting_"):
         _, rest = data.split("_", 1)
         if ":" not in rest:
@@ -249,23 +209,23 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
         setting, value = rest.split(":", 1)
         if setting == "model":
             params["profile"] = "" if value == "inherit" else value
-            return InboundAction(event.user, event.conversation_key, "set_model_profile", params=params)
+            return _telegram_action(event, "set_model_profile", params=params)
         if setting == "approval":
             params["value"] = value
-            return InboundAction(event.user, event.conversation_key, "set_approval_mode", params=params)
+            return _telegram_action(event, "set_approval_mode", params=params)
         if setting == "compact":
             params["value"] = value == "on"
-            return InboundAction(event.user, event.conversation_key, "set_compact_mode", params=params)
+            return _telegram_action(event, "set_compact_mode", params=params)
         if setting == "policy":
             params["value"] = "" if value == "inherit" else value
-            return InboundAction(event.user, event.conversation_key, "set_file_policy", params=params)
+            return _telegram_action(event, "set_file_policy", params=params)
         if setting == "project":
             params["value"] = value
-            return InboundAction(event.user, event.conversation_key, "set_project", params=params)
+            return _telegram_action(event, "set_project", params=params)
         return None
     if data.startswith("skill_add_confirm:"):
         params["name"] = data.split(":", 1)[1]
-        return InboundAction(event.user, event.conversation_key, "skills_add", params=params)
+        return _telegram_action(event, "skills_add", params=params)
     return None
 
 

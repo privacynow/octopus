@@ -1,4 +1,4 @@
-"""Approval flow data shaping. No Telegram I/O — pure functions only."""
+"""Approval flow data shaping. No channel I/O — pure functions only."""
 
 import html
 import json

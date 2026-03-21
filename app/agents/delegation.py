@@ -1,4 +1,4 @@
-"""Shared delegation action handlers usable from Telegram and registry channels."""
+"""Shared delegation action handlers usable across channel entrypoints."""
 
 from __future__ import annotations
 

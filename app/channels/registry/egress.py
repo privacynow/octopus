@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.channels.registry.refs import parse_registry_ref, registry_ref_external_id
+from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
 from app.ports.egress import (
@@ -80,7 +80,7 @@ class RegistryChannelEgress(ChannelEgress):
         self.routed_task_id = routed_task_id or (parsed_ref[2] if parsed_ref[1] == "task" else "")
         self.authority_ref = authority_ref
         self.title = title or "Registry conversation"
-        self.external_id = external_id or registry_ref_external_id(conversation_ref)
+        self.external_id = external_id or binding_external_id_for_ref(conversation_ref)
         self.sent_messages: list[str] = []
         self.last_status_text = ""
         self._output_log = output_log

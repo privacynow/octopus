@@ -25,7 +25,7 @@ def parse_registry_ref(conversation_ref: str) -> tuple[str, str, str] | None:
     return registry_id, ref_kind, external_id
 
 
-def registry_ref_external_id(conversation_ref: str) -> str:
+def binding_external_id_for_ref(conversation_ref: str) -> str:
     parsed = parse_registry_ref(conversation_ref)
     if parsed is None:
         return conversation_ref

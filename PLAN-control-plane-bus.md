@@ -3595,7 +3595,7 @@ def qualify_registry_conversation_ref(registry_id: str, conversation_ref: str) -
   - `parse_registry_ref()` handles task refs correctly
   - `parse_registry_ref()` returns `None` for non-registry refs and
     bare ids
-  - `registry_ref_external_id()` returns parsed external ids and
+  - `binding_external_id_for_ref()` returns parsed external ids and
     passes through unknown refs unchanged
 
 **Caller regression tests**:
@@ -3845,7 +3845,7 @@ default and one misleading helper contract survived review:
 1. the registry bind persistence seam still defaulted missing
    `origin_channel` to `"telegram"` even though the owning
    control-plane contract requires it explicitly
-2. `registry_ref_external_id()` has behavior that is correct for
+2. `binding_external_id_for_ref()` has behavior that is correct for
    current registry binding flows but its name overpromises what it
    extracts for non-registry refs
 
@@ -3915,7 +3915,7 @@ must not persist as `"telegram"` or any other implicit surface.
 ### Slice 16B: Make the external-id helper contract honest
 
 **Statement**: The helper currently named
-`registry_ref_external_id()` does not extract only "registry external
+`binding_external_id_for_ref()` does not extract only "registry external
 ids"; for non-registry refs it returns the original ref unchanged. That
 behavior is correct for current registry binding flows, but the name is
 misleading.

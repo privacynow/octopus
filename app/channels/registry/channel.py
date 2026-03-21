@@ -10,7 +10,7 @@ from app.agents.registry_capabilities import (
 )
 from app.agents.types import RegistryConnectionConfig
 from app.channels.registry.egress import RegistryChannelEgress
-from app.channels.registry.refs import parse_registry_ref, registry_ref_external_id
+from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
@@ -64,7 +64,7 @@ class _RegistryChannel(Channel):
     def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
         del config
         parsed = parse_registry_ref(conversation_ref)
-        external_id = registry_ref_external_id(conversation_ref)
+        external_id = binding_external_id_for_ref(conversation_ref)
         routed_task_id = str(kw.get("routed_task_id", ""))
         if self._ref_kind == "task" and not routed_task_id:
             routed_task_id = external_id

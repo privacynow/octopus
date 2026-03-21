@@ -686,6 +686,65 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert "bot" not in egress_kwargs[0]
 
 
+async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_registry_ref(
+    monkeypatch,
+    tmp_path: Path,
+):
+    seen_bindings: list[dict[str, str]] = []
+
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            seen_bindings.append(
+                {
+                    "conversation_ref": str(binding.get("conversation_ref", "")),
+                    "external_id": str(binding.get("external_id", "")),
+                    "origin_channel": str(binding.get("origin_channel", "")),
+                }
+            )
+
+        async def publish_timeline(self, event):
+            del event
+            return None
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            return _FakeEgress()
+
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "channel_input",
+            "delivery_id": "delivery-slack-1",
+            "registry_id": "prod",
+            "payload": {
+                "conversation_id": "slack:eng:C0123ABC",
+                "text": "hello from slack",
+            },
+        },
+        dispatcher=_FakeDispatcher(),
+    )
+
+    assert outcome == "accepted"
+    assert seen_bindings == [
+        {
+            "conversation_ref": "slack:eng:C0123ABC",
+            "external_id": "slack:eng:C0123ABC",
+            "origin_channel": "registry",
+        }
+    ]
+
+
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 

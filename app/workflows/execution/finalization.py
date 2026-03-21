@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from app.agents.bridge import summarize_text
 from app.agents.types import RoutedTaskResult, RoutedTaskUpdate
+from app.formatting import summarize_text
 from app.ports.task_routing import TaskRoutingPort
 from app.session_state import SessionState
 from app.workflows.delegation.coordination import finalize_resumed_delegation

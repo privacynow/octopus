@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.formatting import summarize_text
+from app.identity import telegram_conversation_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
-from app.agents.bridge import (
-    summarize_text,
-    telegram_conversation_ref,
-)
 from app.agents.delegation import (
     DelegationRuntime,
     handle_delegation_approve as handle_channel_delegation_approve,

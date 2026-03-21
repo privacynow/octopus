@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app import work_queue
-from app.agents.bridge import conversation_key_for_ref
+from app.identity import conversation_key_for_ref
 from app.channels.registry.refs import registry_conversation_ref
 from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
 from app.providers.base import RunResult

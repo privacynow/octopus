@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from pathlib import Path
+from typing import Any
+
+from app.agents.state import bot_identity
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -86,6 +90,34 @@ def telegram_chat_id_from_ref(conversation_ref: str) -> int | None:
     if not chat_id.isdigit():
         return None
     return int(chat_id)
+
+
+def telegram_conversation_ref(config: Any, chat_id: int | str) -> str:
+    return f"telegram:{bot_identity(Path(config.data_dir))}:{chat_id}"
+
+
+def conversation_key_for_ref(conversation_ref: str) -> str:
+    chat_id = telegram_chat_id_from_ref(conversation_ref)
+    if chat_id is not None:
+        return telegram_conversation_key(chat_id)
+    return conversation_ref
+
+
+def resolve_event_conversation_ref(*, config: Any, event: Any) -> str:
+    conversation_ref = str(getattr(event, "conversation_ref", "") or "")
+    if conversation_ref:
+        return conversation_ref
+    try:
+        chat_id = getattr(event, "chat_id")
+    except Exception:
+        chat_id = None
+    if isinstance(chat_id, int):
+        return telegram_conversation_ref(config, chat_id)
+    conversation_key = str(getattr(event, "conversation_key", "") or "")
+    numeric_chat_id = telegram_numeric_id(conversation_key)
+    if numeric_chat_id is not None:
+        return telegram_conversation_ref(config, numeric_chat_id)
+    return conversation_key
 
 
 def filesystem_component_for_key(key: str | int) -> str:

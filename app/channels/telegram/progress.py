@@ -58,7 +58,7 @@ class TelegramProgress:
             try:
                 await self._timeline_callback(html_text, force=force)
             except Exception:
-                log.warning("Control-plane timeline callback failed", exc_info=True)
+                log.warning("Control-plane progress callback failed", exc_info=True)
 
 
 async def progress_timeline_callback(

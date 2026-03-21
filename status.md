@@ -27,6 +27,9 @@
   now parameterized over the full shared status set across both store
   backends, with the `completed` branch still proving
   `result_json` preservation.
+- Phase 13E landed green: Telegram progress callback failures now log
+  against the concern-neutral “progress callback” seam instead of the
+  old timeline-only wording.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -101,8 +104,34 @@
   `1954 passed, 23 skipped`.
 - Full-suite status after Phase 13D:
   `1960 passed, 23 skipped`.
+- Full-suite status after Phase 13E:
+  `1961 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13E remediation — make progress callback logging
+  concern-neutral.
+  Scope:
+  - changed the Telegram progress warning text from
+    `"Control-plane timeline callback failed"` to
+    `"Control-plane progress callback failed"` in
+    `app/channels/telegram/progress.py`
+  - added a focused regression test proving the new wording is logged
+    and the old wording is absent when the callback raises
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_progress_module.py -k 'logs_concern_neutral_callback_failure or throttles_routed_task_callback_and_force_bypasses or routed_task_progress_callback_updates_task_status_via_port'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified there were no existing tests asserting the old wording,
+    so this slice added the contract instead of relying on silent
+    string replacement
+  Review:
+  - this slice stayed intentionally small and concern-specific: no
+    callback behavior changed, only the operator-facing failure signal
+    became accurate for both projection and task-routing callback use
+  Verified:
+  - callback-failure logs now describe the progress concern accurately
+  - full suite status after Phase 13E: `1961 passed, 23 skipped`
 
 - Complete: Phase 13D remediation — parametrize protected-status
   contract coverage.

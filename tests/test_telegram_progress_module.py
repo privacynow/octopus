@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -194,6 +195,25 @@ async def test_telegram_progress_throttles_routed_task_callback_and_force_bypass
     assert second_update.status == "running"
     assert second_update.summary == _msg.progress_completed()
     assert second_kwargs["authority_ref"] == "registry:ops"
+
+
+@pytest.mark.asyncio
+async def test_telegram_progress_logs_concern_neutral_callback_failure(caplog) -> None:
+    async def failing_callback(html_text: str, *, force: bool = False) -> None:
+        del html_text, force
+        raise RuntimeError("boom")
+
+    progress = telegram_progress.TelegramProgress(
+        FakeMessage(text="status"),
+        make_config(data_dir=Path("/tmp/telegram-progress-log")),
+        timeline_callback=failing_callback,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await progress.update("<i>Working</i>", force=True)
+
+    assert any("Control-plane progress callback failed" in record.message for record in caplog.records)
+    assert not any("Control-plane timeline callback failed" in record.message for record in caplog.records)
 
 
 @pytest.mark.parametrize(

@@ -91,6 +91,42 @@ def _expired_delegation_message(expired_kind: str) -> str:
     return "Delegation timed out while waiting for delegated results. Please ask me to delegate again if you still need that work."
 
 
+def _delegation_task_label(task) -> str:
+    return task.target_agent_id or task.title or task.routed_task_id
+
+
+def _task_labels_with_status(pending, expected_status: str) -> list[str]:
+    labels: list[str] = []
+    for task in pending.tasks if pending is not None else ():
+        current_status = getattr(task, "status", "")
+        if current_status == expected_status:
+            labels.append(_delegation_task_label(task))
+    return labels
+
+
+def _partial_submission_message(
+    pending,
+    *,
+    reason: str,
+) -> str:
+    submitted = _task_labels_with_status(pending, "submitted")
+    remaining = _task_labels_with_status(pending, "proposed")
+    lines = [
+        (
+            "Delegation partially submitted."
+            f" Sent {len(submitted)} request(s), but {len(remaining)} could not be sent."
+        )
+    ]
+    if reason:
+        lines.append(reason)
+    if submitted:
+        lines.append(f"Already sent to: {', '.join(submitted)}.")
+    if remaining:
+        lines.append(f"Still pending: {', '.join(remaining)}.")
+    lines.append("Approving again will only send the remaining requests.")
+    return " ".join(lines)
+
+
 async def handle_delegation_approve(
     chat_id: int | str,
     conversation_ref: str,
@@ -129,8 +165,29 @@ async def handle_delegation_approve(
             if resolution.status != "resolved" or not resolution.authority_ref:
                 _save_session(runtime, chat_id, session)
                 if resolution.status == "unavailable":
+                    if submitted_ids:
+                        await channel_egress.send_text(
+                            _partial_submission_message(
+                                session.pending_delegation,
+                                reason=_coordination_unavailable_detail(error=resolution.error),
+                            ),
+                            reply_markup=retry_markup,
+                        )
+                        return
                     await channel_egress.send_text(
                         _coordination_unavailable_message(error=resolution.error),
+                        reply_markup=retry_markup,
+                    )
+                    return
+                if submitted_ids:
+                    await channel_egress.send_text(
+                        _partial_submission_message(
+                            session.pending_delegation,
+                            reason=(
+                                "Could not resolve which authority owns "
+                                f"{task.target_agent_id or task.routed_task_id}."
+                            ),
+                        ),
                         reply_markup=retry_markup,
                     )
                     return
@@ -154,6 +211,15 @@ async def handle_delegation_approve(
             )
             if submission.status != "accepted":
                 _save_session(runtime, chat_id, session)
+                if submitted_ids:
+                    await channel_egress.send_text(
+                        _partial_submission_message(
+                            session.pending_delegation,
+                            reason=registry_error_summary(submission.error),
+                        ),
+                        reply_markup=retry_markup,
+                    )
+                    return
                 if submission.status == "unavailable":
                     await channel_egress.send_text(
                         _coordination_unavailable_message(error=submission.error),
@@ -180,6 +246,15 @@ async def handle_delegation_approve(
             "Delegation submission failed after %s request(s) due to an unexpected error",
             len(submitted_ids),
         )
+        if submitted_ids:
+            await channel_egress.send_text(
+                _partial_submission_message(
+                    session.pending_delegation,
+                    reason="An unexpected error interrupted the remaining submissions.",
+                ),
+                reply_markup=retry_markup,
+            )
+            return
         await channel_egress.send_text(
             f"Delegation submission failed after {len(submitted_ids)} request(s)."
             " An unexpected error interrupted the remaining submissions."

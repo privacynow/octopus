@@ -10,6 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
+- Phase 19D3 landed green: partial delegation submission now tells the user exactly what was already sent and what a retry will resend.
 - Phase 19D2 landed green: delegation plans now pre-validate target ownership through the existing agent-directory seam before the user approves them.
 - Phase 19D1 landed green: stale delegations now expire through the existing delegation machine instead of lingering forever in submitted/proposed state.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
@@ -81,8 +82,12 @@
   - proposed delegation plans pre-resolve target ownership without persisting a second discovery path
   - proposal messages now mark ready, unavailable, unresolved, and missing-target tasks before the user approves anything
   - approval-time resolution remains the safety net, so the actual submission path still owns the final authority check
+- Partial delegation submission now reports the real in-flight state instead of collapsing back to one generic failure:
+  - partial approval failures name which targets were already sent
+  - the remaining proposed targets are called out explicitly
+  - retry messaging now matches the actual state machine: only unsent tasks are retried
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2077 passed, 23 skipped`.
+- Latest verified full-suite run: `2078 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -128,6 +133,20 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19D3 remediation — make partial delegation submission failures describe the real submitted-vs-unsent task state instead of collapsing to one generic retry error.
+  Scope:
+  - added shared partial-submission formatting in `app/agents/delegation.py`, using the existing pending-delegation state to name already-submitted and still-proposed tasks
+  - updated approval failure handling so authority-resolution failures, routing failures, and unexpected exceptions all produce the clearer partial-submission message once some tasks have already been sent
+  - added shared-boundary regression coverage in `tests/test_agents_delegation_boundary.py` to prove the retry path only re-submits the remaining proposed tasks
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py -k 'delegation_status_strings_directly' tests/test_agents_delegation_boundary.py tests/test_handlers_delegation.py -k 'partial or delegation_approve or preview'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - users now see which delegation targets were already sent and which ones are still pending when a partial approval failure happens
+  - retry semantics stay unchanged and explicit: only the remaining proposed tasks are re-submitted
+  - the shared delegation handler still respects the existing zero-import guardrails instead of editing task status strings directly
+  - full suite status after Phase 19D3: `2078 passed, 23 skipped`
 
 - Complete: Phase 19D2 remediation — pre-validate delegation target ownership at proposal time through the existing agent-directory seam instead of waiting until approval to surface missing ownership.
   Scope:

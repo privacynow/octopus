@@ -511,6 +511,21 @@ def reclaim_expired(conn: sqlite3.Connection) -> int:
     return reclaimed
 
 
+def purge_old_commands(conn: sqlite3.Connection, older_than_hours: int = 72) -> int:
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    with _write_tx(conn):
+        cursor = conn.execute(
+            """
+            DELETE FROM control_plane_commands
+            WHERE state IN ('completed', 'dead_letter')
+              AND completed_at IS NOT NULL
+              AND completed_at < ?
+            """,
+            (cutoff_iso,),
+        )
+        return cursor.rowcount
+
+
 def reconcile_orphans(conn: sqlite3.Connection, *, allowed_pairs: set[tuple[str, str]]) -> int:
     now_iso = _utcnow_iso()
     dead_lettered = 0
@@ -659,6 +674,12 @@ class SQLiteControlPlaneStore:
 
     def reclaim_expired(self, data_dir: Path) -> int:
         return reclaim_expired(self._control_plane_db(data_dir))
+
+    def purge_old_commands(self, data_dir: Path, older_than_hours: int = 72) -> int:
+        return purge_old_commands(
+            self._control_plane_db(data_dir),
+            older_than_hours=older_than_hours,
+        )
 
     def reconcile_orphans(
         self,

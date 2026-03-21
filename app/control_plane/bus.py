@@ -101,6 +101,12 @@ class ControlPlaneBus:
     async def reclaim_expired(self) -> int:
         return self._store().reclaim_expired(self._data_dir)
 
+    async def purge_old_commands(self, older_than_hours: int = 72) -> int:
+        return self._store().purge_old_commands(
+            self._data_dir,
+            older_than_hours=older_than_hours,
+        )
+
     async def reconcile_orphans(
         self,
         *,

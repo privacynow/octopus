@@ -65,6 +65,7 @@ class ProcessorRunner:
                 now = monotonic()
                 if now - last_reclaim >= self._reclaim_interval_seconds:
                     await self._bus.reclaim_expired()
+                    await self._bus.purge_old_commands()
                     last_reclaim = now
 
                 available_slots = self._claim_limit - len(self._inflight)

@@ -416,3 +416,50 @@ async def test_reconcile_orphans_dead_letters_removed_and_revoked_pairs(backend_
     assert [item.command_id for item in claimed] == ["cmd-valid"]
     assert store.get_reply(data_dir, "cmd-removed") is not None
     assert store.get_reply(data_dir, "cmd-revoked") is not None
+
+
+@pytest.mark.asyncio
+async def test_purge_old_commands_keeps_pending_and_claimed_rows(backend_bus_and_data_dir):
+    _backend, bus, data_dir = backend_bus_and_data_dir
+    from app import runtime_backend
+
+    store = runtime_backend.control_plane_store()
+    await bus.submit(_command("cmd-pending", authority_ref="registry:beta"))
+    await bus.submit(_command("cmd-claimed"))
+    await bus.submit(_command("cmd-completed"))
+    await bus.submit(_command("cmd-dead"))
+
+    claimed = store.poll_commands(
+        data_dir,
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+        limit=3,
+    )
+    claimed_by_id = {item.command_id: item for item in claimed}
+    assert set(claimed_by_id) == {"cmd-claimed", "cmd-completed", "cmd-dead"}
+
+    await bus.complete(
+        "cmd-completed",
+        claimed_at=claimed_by_id["cmd-completed"].claimed_at,
+        result_json='{"accepted": true}',
+    )
+    await bus.dead_letter(
+        "cmd-dead",
+        claimed_at=claimed_by_id["cmd-dead"].claimed_at,
+        reason="cleanup test",
+    )
+
+    purged = await bus.purge_old_commands(older_than_hours=0)
+
+    assert purged == 2
+    assert store.get_reply(data_dir, "cmd-completed") is None
+    assert store.get_reply(data_dir, "cmd-dead") is None
+    assert await bus.renew_lease(
+        "cmd-claimed",
+        claimed_at=claimed_by_id["cmd-claimed"].claimed_at,
+        extension_seconds=30.0,
+    )
+
+    pending = await bus.poll_commands(
+        allowed_pairs={("registry:beta", "conversation_projection")},
+    )
+    assert [item.command_id for item in pending] == ["cmd-pending"]

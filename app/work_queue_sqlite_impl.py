@@ -1507,6 +1507,16 @@ def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
         return deleted_items
 
 
+def purge_old_usage(conn: sqlite3.Connection, older_than_hours: int = 168) -> int:
+    cutoff_epoch = time.time() - (older_than_hours * 3600)
+    with _write_tx(conn):
+        cursor = conn.execute(
+            "DELETE FROM usage_log WHERE recorded_at < ?",
+            (cutoff_epoch,),
+        )
+        return cursor.rowcount
+
+
 def get_user_access_override(conn: sqlite3.Connection, actor_key: str) -> str | None:
     """Return 'allowed', 'blocked', or None when no override exists for actor_key."""
     row = conn.execute(

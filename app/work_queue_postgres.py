@@ -229,6 +229,10 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return work_queue_postgres_impl.purge_old(conn, older_than_hours)
 
+    def purge_old_usage(self, data_dir: Path, older_than_hours: int = 168) -> int:
+        with self._conn() as conn:
+            return work_queue_postgres_impl.purge_old_usage(conn, older_than_hours)
+
     def get_user_access(self, data_dir: Path, actor_key: str) -> str | None:
         with self._conn() as conn:
             return work_queue_postgres_impl.get_user_access_override(conn, actor_key)

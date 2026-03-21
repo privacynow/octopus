@@ -56,6 +56,8 @@ class AbstractControlPlaneStore(Protocol):
 
     def reclaim_expired(self, data_dir: Path) -> int: ...
 
+    def purge_old_commands(self, data_dir: Path, older_than_hours: int = 72) -> int: ...
+
     def reconcile_orphans(
         self,
         data_dir: Path,

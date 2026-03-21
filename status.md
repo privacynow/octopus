@@ -9,6 +9,12 @@
 
 ## Current State
 
+- Phase 13 is now the active final cleanup track.
+- Phase 13A landed green: registry delivery parent-conversation
+  timeline publication now uses the existing control-plane
+  `ConversationProjectionPort` directly, the dummy-bot egress-proxy
+  helper path is gone from `app/agents/delivery.py`, and the live
+  egress readiness/resume paths remain unchanged.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -75,8 +81,47 @@
   seams.
 - Full-suite status after Phase 12 closeout:
   `1953 passed, 23 skipped`.
+- Full-suite status after Phase 13A:
+  `1953 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13A remediation — remove delivery-side egress proxy
+  for projection.
+  Scope:
+  - added `services: BotServices` to
+    `app/agents/delivery.py:RegistryDeliveryRuntime` and threaded the
+    existing runtime services container through the delivery-runtime
+    builder in production and test call sites
+  - removed the `_egress_bot() -> object()` hack and deleted
+    `_publish_timeline_via_dispatcher()` from
+    `app/agents/delivery.py`
+  - moved delegated-result and delegation-ready parent timeline
+    publication onto the existing
+    `services.control_plane.conversation_projection` seam
+  - preserved live egress behavior in delivery:
+    `dispatcher.egress_ready_for_ref(...)` and real
+    `dispatcher.create_egress(...)` still own readiness and actual
+    parent-conversation output
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'startup_race or channel_action_and_control_dispatch or legacy_surface_input_kind or legacy_surface_action_kind or missing_registry_id_for_registry_owned_kinds'`
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_integration.py -k 'registry_delivery_projects_parent_timeline or delegated_result'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `_egress_bot` and `_publish_timeline_via_dispatcher`
+    no longer exist in `app/agents/delivery.py`
+  - verified every `build_registry_delivery_runtime(...)` call site now
+    threads explicit services
+  Review:
+  - this slice closed the remaining delivery-side concern split
+    cleanly: projection now uses the projection port directly, while
+    live output and readiness remain on the dispatcher/egress seam
+  Verified:
+  - parent timeline projection no longer depends on fabricated bot
+    presence or egress construction
+  - startup-race behavior still retries later when real live egress is
+    not ready
+  - full suite status after Phase 13A: `1953 passed, 23 skipped`
 
 - Complete: Phase 12A remediation — guard terminal and degraded routed-task state in both stores.
   Scope:

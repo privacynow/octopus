@@ -21,6 +21,7 @@ from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
+from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from app.agents.state import (
     load_bot_identity_state,
@@ -701,6 +702,7 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
 
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
     published: list[dict[str, object]] = []
+    egress_calls: list[str] = []
 
     with fresh_env(
         config_overrides={
@@ -710,27 +712,41 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
     ) as (_data_dir, config, prov):
         parent_conversation_ref = telegram_conversation_ref(config, 12345)
         dispatcher = current_runtime().channel_dispatcher
+        services = current_runtime().services
 
-        class _FakeEgress:
-            async def publish_timeline(self, event):
-                published.append(
-                    {
-                        "conversation_ref": event.conversation_id,
-                        "kind": event.kind,
-                        "title": event.title,
-                        "body": event.body,
-                        "status": event.status,
-                        "metadata": event.metadata or {},
-                    }
-                )
+        async def fake_publish_external_timeline(
+            *,
+            conversation_ref,
+            kind,
+            title,
+            body="",
+            status="",
+            progress=None,
+            metadata=None,
+            event_id=None,
+        ):
+            del progress, event_id
+            published.append(
+                {
+                    "conversation_ref": conversation_ref,
+                    "kind": kind,
+                    "title": title,
+                    "body": body,
+                    "status": status,
+                    "metadata": metadata or {},
+                }
+            )
 
         def fake_create_egress(conversation_ref, *, config, **kwargs):
-            del config
-            assert conversation_ref == parent_conversation_ref
-            if kwargs["bot"] is None:
-                raise RuntimeError("Telegram channel requires a bot instance")
-            return _FakeEgress()
+            del config, kwargs
+            egress_calls.append(str(conversation_ref))
+            raise AssertionError("projection-only registry delivery should not build egress")
 
+        monkeypatch.setattr(
+            services.control_plane.conversation_projection,
+            "publish_external_timeline",
+            fake_publish_external_timeline,
+        )
         monkeypatch.setattr(dispatcher, "create_egress", fake_create_egress)
         outcome = await handle_registry_delivery(
             config,
@@ -750,12 +766,14 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
             runtime=build_registry_delivery_runtime(
                 provider_name=prov.name,
                 provider_state_factory=prov.new_provider_state,
+                services=services,
                 bot=None,
                 dispatcher=dispatcher,
             ),
         )
 
         assert outcome == "retry_later"
+        assert egress_calls == []
         assert published == [
             {
                 "conversation_ref": parent_conversation_ref,
@@ -812,6 +830,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
         runtime = build_registry_delivery_runtime(
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
             bot=None,
         )
 
@@ -894,6 +913,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
         runtime=build_registry_delivery_runtime(
             provider_name="claude",
             provider_state_factory=dict,
+            services=build_noop_bot_services(),
             bot=None,
             dispatcher=_RejectingDispatcher(),
         ),
@@ -913,6 +933,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
         runtime = build_registry_delivery_runtime(
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
             bot=None,
         )
 
@@ -941,6 +962,7 @@ async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
+            services=current_runtime().services,
             bot=None,
         )
 

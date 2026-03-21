@@ -739,6 +739,31 @@ def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path
     assert items[0]["title"] == "Telegram chat 123"
 
 
+def test_registry_bind_conversation_requires_origin_channel(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "telegram:dev-bot:999",
+            "title": "Telegram chat 999",
+            "external_id": "999",
+        },
+    )
+    assert bind.status_code == 422
+    assert "origin_channel" in bind.json()["detail"]
+
+    conversations = client.get(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert conversations.status_code == 200
+    assert conversations.json()["conversations"] == []
+
+
 def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

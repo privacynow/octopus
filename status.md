@@ -9,9 +9,9 @@
 
 ## Current State
 
-- Phases 1-14 are implemented and closed.
 - Phases 1-15 are implemented and closed.
-- Phase 15C landed green: the invariant-first seam-closure pass is complete, and the final closeout reran the full suite after the final shared-string / rollout-marker sweep.
+- Phase 16 is active.
+- Phase 16A landed green: the registry bind/origin-channel invariant is now closed at the store seam and the raw registry HTTP bind endpoint returns `422` for invalid payloads instead of persisting an implicit Telegram default.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -29,8 +29,9 @@
 - Protected routed-task status coverage spans the full shared status set across SQLite and Postgres, rejected protected-state updates cannot append timeline rows, and the remaining bridge-cleanup seams now have narrow secondary regression checks.
 - Registry ref qualification now treats already-qualified refs generically instead of hardcoding Telegram/registry prefixes, and the helper seam has direct contract coverage plus live caller regressions for registry `channel_action` and `routed_result`.
 - Shared preflight and registry metadata no longer leak stale Telegram-specific wording on shared/product seams, and the registry UI conversation empty state is now channel-neutral.
+- Registry bind persistence no longer invents `origin_channel="telegram"` when callers omit the field; invalid bind payloads now fail at the owning store seam and are surfaced as `422` at the raw registry HTTP edge.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `1991 passed, 23 skipped`.
+- Latest verified full-suite run: `1996 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -57,6 +58,30 @@
   - `15A` generic ref qualification and contract tests
   - `15B` stale channel-name removal from shared prompts and API title
   - `15C` invariant closeout sweep and status/doc update
+- Phase 16 is the boundary validation and helper-contract cleanup track:
+  - `16A` bind/origin-channel invariant closure
+  - `16B` external-id helper contract clarification
+  - `16C` closeout
+
+## Phase 16 Slice Log
+
+- Complete: Phase 16A remediation — close the bind/origin-channel invariant at the owning store seam instead of letting caller discipline hide a bad default.
+  Scope:
+  - added `validated_bind_conversation_payload(...)` to `app/registry_service/store_base.py`
+  - removed the hidden `origin_channel="telegram"` fallback from both `app/registry_service/store.py` and `app/registry_service/store_postgres.py`
+  - updated `app/channels/registry/http.py` so invalid bind payloads surface as `422` instead of server errors
+  - added direct negative contract tests in `tests/contracts/test_registry_store_contract.py` proving missing and blank `origin_channel` payloads are rejected without creating conversation rows
+  - added an API regression in `tests/test_registry_service.py` proving the raw registry bind endpoint now returns `422` for missing `origin_channel` and does not create a conversation
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_registry_store_contract.py -k 'bind_conversation'`
+  - `./.venv/bin/python -m pytest -q tests/test_registry_service.py -k 'bind_conversation'`
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_integration.py::test_registry_only_bot_projects_without_telegram_runtime`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the bind persistence seam no longer invents a Telegram origin when callers omit `origin_channel`
+  - invalid bind payloads now fail at the owning store seam and map to `422` at the raw HTTP edge
+  - explicit valid `origin_channel` values still project through the real control-plane bind path into the registry store
+  - full suite status after Phase 16A: `1996 passed, 23 skipped`
 
 ## Phase 15 Slice Log
 

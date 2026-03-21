@@ -15,6 +15,10 @@ class AbstractCredentialStore(ABC):
         """Return plaintext credentials as {skill_name: {cred_key: value}}."""
 
     @abstractmethod
+    def load_for_skills(self, actor_key: str, skill_names: list[str]) -> dict[str, dict[str, str]]:
+        """Return plaintext credentials only for the requested skills."""
+
+    @abstractmethod
     def save(
         self,
         actor_key: str,

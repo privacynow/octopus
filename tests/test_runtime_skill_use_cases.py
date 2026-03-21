@@ -8,6 +8,8 @@ import httpx
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from app.identity import telegram_actor_key
+from app.provider_guidance_service import get_provider_guidance_service
+from app.skill_catalog_service import get_skill_catalog_service
 from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases
 from app.workflows.runtime_skills.activation import get_runtime_skill_activation_use_cases
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
@@ -131,6 +133,29 @@ def test_provider_guidance_preview_use_case_returns_effective_prompt(tmp_path: P
         assert preview.provider == "claude"
         assert preview.prompt_weight > 0
         assert "summary first" in preview.system_prompt.lower()
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_preflight_context_excludes_raw_skill_instruction_bodies(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        guidance = get_provider_guidance_service()
+        track = get_skill_catalog_service().resolve_runtime_track("code-review")
+        assert track is not None
+
+        run_ctx = guidance.build_run_context("Senior engineer", ["code-review"], ["/tmp/uploads"])
+        preflight_ctx = guidance.build_preflight_context(
+            "Senior engineer",
+            ["code-review"],
+            ["/tmp/uploads"],
+        )
+
+        assert track.revision.instruction_body in run_ctx.system_prompt
+        assert track.revision.instruction_body not in preflight_ctx.system_prompt
+        assert track.display_name in preflight_ctx.system_prompt
+        assert "Senior engineer" in preflight_ctx.system_prompt
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()
@@ -264,6 +289,83 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
         assert outcome.first_requirement is not None
         assert session.awaiting_skill_setup is not None
         assert session.awaiting_skill_setup.skill == "github-integration"
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypatch, tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        calls: list[tuple[str, tuple[str, ...]]] = []
+
+        class FakeCredentials:
+            def load(self, actor_key):
+                raise AssertionError(f"unexpected full credential load for {actor_key}")
+
+            def load_for_skills(self, actor_key, skill_names):
+                calls.append((actor_key, tuple(skill_names)))
+                return {"github-integration": {}}
+
+            def missing_requirements(self, requirements, credential_values):
+                del credential_values
+                return list(requirements)
+
+        monkeypatch.setattr(
+            "app.workflows.runtime_skills.activation.get_credential_service",
+            lambda: FakeCredentials(),
+        )
+
+        outcome = get_runtime_skill_activation_use_cases().begin_activate(
+            session,
+            user_id=telegram_actor_key(42),
+            skill_name="github-integration",
+        )
+
+        assert outcome.status == "needs_setup"
+        assert calls == [(telegram_actor_key(42), ("github-integration",))]
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_setup_use_case_checks_credentials_only_for_active_skills(monkeypatch, tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session.active_skills = ["github-integration"]
+        calls: list[tuple[str, tuple[str, ...]]] = []
+
+        class FakeCredentials:
+            def load(self, actor_key):
+                raise AssertionError(f"unexpected full credential load for {actor_key}")
+
+            def load_for_skills(self, actor_key, skill_names):
+                calls.append((actor_key, tuple(skill_names)))
+                return {"github-integration": {}}
+
+            def missing_requirements(self, requirements, credential_values):
+                del credential_values
+                return list(requirements)
+
+            def build_env(self, active_skills, user_credentials):
+                del active_skills, user_credentials
+                return {}
+
+        monkeypatch.setattr(
+            "app.workflows.runtime_skills.setup.get_credential_service",
+            lambda: FakeCredentials(),
+        )
+
+        outcome = get_runtime_skill_setup_use_cases().check_satisfaction(
+            session,
+            user_id=telegram_actor_key(42),
+            active_skills=["github-integration"],
+        )
+
+        assert outcome.status == "needs_setup"
+        assert calls == [(telegram_actor_key(42), ("github-integration",))]
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

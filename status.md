@@ -11,6 +11,7 @@
 
 - Phases 1-19 are implemented and closed.
 - Phase 20 is in progress: the remaining security/runtime boundary findings are now being closed sequentially with focused regression coverage plus a full-suite rerun after each slice.
+- Phase 20A3 landed green: runtime-owned credential consumers now load only the requested active-skill subset, credential-validation host matching now accepts only exact hosts or intended `*.` suffixes, and preflight context no longer embeds raw runtime skill instruction bodies.
 - Phase 20A2 landed green: registry enroll/login now throttle repeated failed auth attempts per client host, UI session signing no longer regenerates per process when `REGISTRY_SESSION_SECRET` is unset, and `/healthz` now exposes only the minimal liveness contract.
 - Phase 20A1 landed green: webhook config/runtime now reject insecure remote webhook targets, and completion-webhook delivery refuses private/metadata destinations before posting any payload.
 - Phase 19 is closed: Tracks A-E landed sequentially with focused regression coverage plus a green final full-suite rerun.
@@ -100,7 +101,7 @@
   - `formatTime(...)` returns `(invalid date)` instead of echoing arbitrary raw timestamp strings back into the UI shell
   - the source-level shell contract is updated to match the new fallback without overclaiming browser-executed behavior
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2097 passed, 23 skipped`.
+- Latest verified full-suite run: `2105 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -156,6 +157,22 @@
   - `20C4` durable inbound transport provenance
 
 ## Phase 20 Slice Log
+
+- Complete: Phase 20A3 remediation — minimize credential and preflight exposure at the owner seams instead of trusting every runtime caller to filter correctly.
+  Scope:
+  - replaced permissive `fnmatch` host matching in `app/credential_validation.py` with exact-host plus strict `*.` suffix matching, while rejecting unsupported broad wildcard patterns from `BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS`
+  - extended the credential-store/service contract with `load_for_skills(...)` and implemented it in both SQLite and Postgres so runtime-owned callers can request only the active skill subset they actually need
+  - switched runtime-skill activation/setup and runtime-health session diagnostics to the filtered-load path, keeping full credential loads only on explicit management surfaces
+  - sanitized `ProviderGuidanceService.build_preflight_context(...)` so preflight carries role text, active-skill labels, and capability summary without embedding raw execution-time instruction bodies
+  - updated the skill-test helper preflight builder to match the new production shape and added focused coverage across credential validation, credential-store contracts, runtime-skill use cases, runtime health, and preflight prompt construction
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_credential_store_contract.py tests/test_handlers_credentials.py tests/test_runtime_skill_use_cases.py tests/test_runtime_health.py tests/test_skills.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - credential validation now accepts only exact allowed hosts and intended subdomain wildcards, and rejects overly broad wildcard patterns like `*.com`
+  - runtime activation/setup/health paths no longer receive unrelated stored credentials for the same actor
+  - preflight context no longer ships raw runtime skill instruction bodies while run context still does
+  - full suite status after Phase 20A3: `2105 passed, 23 skipped`
 
 - Complete: Phase 20A2 remediation — harden the registry auth/session boundary instead of relying on static secrets and unlimited retries at the raw HTTP edge.
   Scope:

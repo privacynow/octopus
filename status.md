@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-14 are implemented and closed.
-- Phase 14E landed green: the final ownership and hygiene cleanup is closed, and this status document was re-verified against a final full-suite rerun.
+- Phase 15 is active. Slice 15A landed green and reopened the rollout under an invariant-first closeout standard rather than another path-local cleanup.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -26,7 +26,8 @@
 - Agent cards no longer leak the internal `phase-19-foundation` rollout marker; blank versions render through the existing registry UI fallback as `unknown`.
 - Dead routed-result warning surface has been removed from worker/finalization code.
 - Protected routed-task status coverage spans the full shared status set across SQLite and Postgres, rejected protected-state updates cannot append timeline rows, and the remaining bridge-cleanup seams now have narrow secondary regression checks.
-- Latest verified full-suite run: `1972 passed, 23 skipped`.
+- Registry ref qualification now treats already-qualified refs generically instead of hardcoding Telegram/registry prefixes, and the helper seam has direct contract coverage plus live caller regressions for registry `channel_action` and `routed_result`.
+- Latest verified full-suite run: `1988 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -49,6 +50,26 @@
   - `14C` internal version-label removal
   - `14D` behavior-first guardrail hardening
   - `14E` status/doc closeout
+- Phase 15 is the invariant-first seam closure track:
+  - `15A` generic ref qualification and contract tests
+  - `15B` stale channel-name removal from shared prompts and API title
+  - `15C` invariant closeout sweep and status/doc update
+
+## Phase 15 Slice Log
+
+- Complete: Phase 15A remediation — close the ref-qualification invariant at the owning seam instead of only at caller paths.
+  Scope:
+  - changed `app/channels/registry/refs.py:qualify_registry_conversation_ref()` to preserve any already-qualified ref generically via `":" in conversation_ref` instead of a hardcoded Telegram/registry prefix list
+  - added a dedicated helper contract suite in `tests/test_registry_refs.py` covering bare ids, empty input, Telegram refs, registry conversation refs, registry task refs, future-surface refs, `parse_registry_ref()`, and `registry_ref_external_id()`
+  - added live caller regressions in `tests/test_agents.py` proving qualified future-surface refs remain unchanged through both registry `channel_action` and registry `routed_result` handling
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_refs.py tests/test_agents.py -k 'registry_ref or preserves_already_qualified_future_surface_ref or handle_registry_channel_action_and_control_dispatch or routed_result_publishes_parent_timeline_before_retry_on_startup_race'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - already-qualified refs now pass through unchanged at the owning helper seam, not just for Telegram and registry
+  - the direct helper contract is now tested independently of callers
+  - registry `channel_action` and `routed_result` callers preserve qualified future-surface refs without rewrapping them
+  - full suite status after Phase 15A: `1988 passed, 23 skipped`
 
 ## Phase 14 Slice Log
 

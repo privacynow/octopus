@@ -904,6 +904,40 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
         )
 
 
+async def test_handle_registry_channel_action_preserves_already_qualified_future_surface_ref(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
+            bot=None,
+        )
+        qualified_ref = "slack:eng:12345"
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-approve",
+                "registry_id": "prod",
+                "kind": "channel_action",
+                "payload": {"conversation_id": qualified_ref, "action": "approve"},
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        payload = work_queue.get_update_payload(data_dir, "reg:d-slack-approve")
+        assert payload is not None
+        event = deserialize_inbound("action", payload)
+        assert event.conversation_ref == qualified_ref
+        assert event.conversation_key == qualified_ref
+
+
 async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 
@@ -995,6 +1029,58 @@ async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry
             },
             runtime=runtime,
         ) == "rejected"
+
+
+async def test_handle_registry_routed_result_preserves_already_qualified_future_surface_parent_ref(
+    monkeypatch,
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        seen_ready_refs: list[tuple[str, str]] = []
+
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del config
+                seen_ready_refs.append(
+                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+                )
+                return False
+
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_noop_bot_services(),
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+        qualified_ref = "slack:eng:12345"
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": qualified_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "retry_later"
+        assert seen_ready_refs == [(qualified_ref, qualified_ref)]
         assert await handle_registry_delivery(
             cfg,
             {

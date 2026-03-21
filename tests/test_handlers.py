@@ -856,6 +856,8 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
 
         published: list[tuple[str, str, str]] = []
         status_updates: list[tuple[str, object]] = []
+        warning_sends: list[str] = []
+        real_send_text = RegistryChannelEgress.send_text
 
         async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
             del routed_task_id, authority_ref, result
@@ -868,6 +870,12 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             del self, status, progress, metadata, event_id
             published.append((kind, title, body))
 
+        async def fake_send_text(self, text: str, **kwargs):
+            if "could not be delivered to the requesting conversation" in text:
+                warning_sends.append(text)
+                raise AssertionError("routed-result warning send path should be unreachable")
+            return await real_send_text(self, text, **kwargs)
+
         monkeypatch.setattr(
             current_runtime().services.control_plane.task_routing,
             "report_routed_task_result",
@@ -879,6 +887,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             fake_update_routed_task_status,
         )
         monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+        monkeypatch.setattr(RegistryChannelEgress, "send_text", fake_send_text)
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
@@ -902,6 +911,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
 
         assert len(prov.run_calls) == 1
         assert published == []
+        assert warning_sends == []
         assert [entry[1].status for entry in status_updates] == [
             "running",
             "running",

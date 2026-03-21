@@ -300,7 +300,7 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
+async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) -> None:
     status_updates: list[tuple[str, object]] = []
 
     class FailingTaskRouting:
@@ -338,7 +338,6 @@ async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
         )
 
     assert result.routed_result_status == "report_failed"
-    assert "could not be delivered to the requesting conversation" in result.routed_result_warning_text
     assert any("Failed to report routed task result" in record.message for record in caplog.records)
     assert len(status_updates) == 1
     authority_ref, update = status_updates[0]

@@ -43,7 +43,6 @@ class FinalizationContext:
 class FinalizationOutcome:
     delegation_status: str = ""
     routed_result_status: str = ""
-    routed_result_warning_text: str = ""
     usage_status: str = "skipped"
     timeline_status: str = "skipped"
     webhook_status: str = "skipped"
@@ -116,7 +115,6 @@ async def finalize_execution(
             context.save_session(context.runtime_chat, session)
 
     routed_result_status = ""
-    routed_result_warning_text = ""
     authority_ref = _routed_result_authority_ref(context)
     if context.routed_task_id and context.task_routing is not None and authority_ref:
         full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
@@ -142,9 +140,6 @@ async def finalize_execution(
                 routed_result_status = "reported"
             else:
                 routed_result_status = "report_failed"
-                routed_result_warning_text = (
-                    "Your request completed, but the result could not be delivered to the requesting conversation."
-                )
                 await _publish_routed_result_delivery_failure(
                     context=context,
                     authority_ref=authority_ref,
@@ -157,9 +152,6 @@ async def finalize_execution(
                 )
         except Exception:
             routed_result_status = "report_failed"
-            routed_result_warning_text = (
-                "Your request completed, but the result could not be delivered to the requesting conversation."
-            )
             await _publish_routed_result_delivery_failure(
                 context=context,
                 authority_ref=authority_ref,
@@ -252,7 +244,6 @@ async def finalize_execution(
     return FinalizationOutcome(
         delegation_status=delegation_status,
         routed_result_status=routed_result_status,
-        routed_result_warning_text=routed_result_warning_text,
         usage_status=usage_status,
         timeline_status=timeline_status,
         webhook_status=webhook_status,

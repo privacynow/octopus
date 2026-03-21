@@ -19,6 +19,10 @@
   human-readable on the registry UI surface, with visible badge text
   routed through a label helper instead of exposing raw internal
   status codes.
+- Phase 13C landed green: the dead routed-result warning contract
+  surface has been removed from finalization/worker code, and
+  degraded routed-task state remains the only failure signal on that
+  concern boundary.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -89,8 +93,40 @@
   `1953 passed, 23 skipped`.
 - Full-suite status after Phase 13B:
   `1954 passed, 23 skipped`.
+- Full-suite status after Phase 13C:
+  `1954 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13C remediation — delete the dead routed-result
+  warning surface.
+  Scope:
+  - removed `routed_result_warning_text` from
+    `FinalizationOutcome` in
+    `app/workflows/execution/finalization.py`
+  - deleted the unreachable routed-result warning send branch from
+    `app/channels/telegram/worker.py`
+  - updated finalization/worker regression tests so the oracle is now
+    the real contract:
+    `routed_result_status="report_failed"` plus the existing
+    `partialfailed` fallback state, not a dead warning string
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_execution_finalization.py -k 'report_failure_emits_partialfailed_fallback'`
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py -k 'registry_routed_task_result_report_failure_does_not_escape_worker'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `routed_result_warning_text` no longer exists in
+    production or test code
+  - verified the routed-task worker failure-path test now fails if a
+    warning send is attempted instead of silently accepting no output
+  Review:
+  - this slice removed stale contract residue rather than preserving a
+    misleading field for a notification path the architecture does not
+    own
+  Verified:
+  - routed-task result-report failure is surfaced only through
+    degraded task state on the existing task-routing seam
+  - full suite status after Phase 13C: `1954 passed, 23 skipped`
 
 - Complete: Phase 13B remediation — humanize routed-task degraded
   status in the registry UI.

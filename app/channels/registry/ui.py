@@ -691,6 +691,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           submitted: "badge-pending",
           failed: "badge-failed",
           partialfailed: "badge-failed",
+          timedout: "badge-failed",
           cancelled: "badge-failed",
           running: "badge-running",
           open: "badge-open",
@@ -700,6 +701,16 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           unhealthy: "badge-failed",
         }};
         return map[s] || "";
+      }}
+
+      function statusLabel(status) {{
+        if (!status) return "Open";
+        const value = String(status);
+        const labels = {{
+          partialfailed: "Delivery failed",
+          timed_out: "Timed out",
+        }};
+        return labels[value] || value.replace(/_/g, " ").replace(/\\b\\w/g, c => c.toUpperCase());
       }}
 
       function ensureEditorHost(textarea) {{
@@ -844,7 +855,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
 
       function stateBadge(item) {{
         const state = item?.connectivity_state || item?.status || "unknown";
-        return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(state)}}</span>`;
+        return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(statusLabel(state))}}</span>`;
       }}
 
       function renderRuntimeHealthSummary(summary) {{
@@ -852,7 +863,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         const oldestClaim = formatAgeSeconds(summary.oldest_claim_age_seconds);
         return `
           <div class="meta meta-row">
-            <span class="badge ${{getBadgeClass(summary.status || "healthy")}}">${{escapeHtml(summary.status || "healthy")}}</span>
+            <span class="badge ${{getBadgeClass(summary.status || "healthy")}}">${{escapeHtml(statusLabel(summary.status || "healthy"))}}</span>
             <span>${{escapeHtml(String(summary.healthy_worker_count || 0))}} healthy</span>
             <span>${{escapeHtml(String(summary.stale_worker_count || 0))}} stale</span>
             <span>${{escapeHtml(String(summary.fresh_queued_count || 0))}} queued</span>
@@ -961,7 +972,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
             <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(item.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(statusLabel(item.status || "open"))}}</span>
               <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
             </div>
             ${{
@@ -1106,7 +1117,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           <button type="button" class="item item-button" data-task-id="${{escapeHtml(item.routed_task_id)}}">
             <strong>${{escapeHtml(item.title)}}</strong>
             <div class="meta">${{escapeHtml(item.origin_display_name || item.origin_agent_id)}} → ${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
-            <div class="meta meta-row"><span class="badge ${{getBadgeClass(item.status || "queued")}}">${{escapeHtml(item.status || "queued")}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
+            <div class="meta meta-row"><span class="badge ${{getBadgeClass(item.status || "queued")}}">${{escapeHtml(statusLabel(item.status || "queued"))}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
           </button>
         `, "tasks");
         document.querySelectorAll("[data-task-id]").forEach(node => {{
@@ -1741,7 +1752,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           <div class="detail-card">
             <strong>${{escapeHtml(task.title || task.routed_task_id)}}</strong>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(task.status || "queued")}}">${{escapeHtml(task.status || "queued")}}</span>
+              <span class="badge ${{getBadgeClass(task.status || "queued")}}">${{escapeHtml(statusLabel(task.status || "queued"))}}</span>
               <span>${{escapeHtml(task.origin_display_name || task.origin_agent_id)}} → ${{escapeHtml(task.target_display_name || task.target_agent_id)}}</span>
             </div>
           </div>
@@ -1863,7 +1874,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
             <strong>${{escapeHtml(conversation.title || conversation.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(conversation.target_display_name || conversation.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(conversation.status || "open")}}">${{escapeHtml(conversation.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(conversation.status || "open")}}">${{escapeHtml(statusLabel(conversation.status || "open"))}}</span>
               <span>${{escapeHtml(String(conversation.timeline_event_count ?? events.length))}} event(s)</span>
             </div>
             <div class="meta">Created ${{escapeHtml(formatTime(conversation.created_at))}}</div>

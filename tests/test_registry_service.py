@@ -834,6 +834,26 @@ def test_registry_ui_shell_treats_partialfailed_as_failed_for_status_filter():
     assert '"partialfailed" ? "failed"' in html_text
 
 
+def test_registry_ui_shell_humanizes_visible_status_labels():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert "function statusLabel(status)" in html_text
+    assert 'partialfailed: "Delivery failed"' in html_text
+    assert 'timed_out: "Timed out"' in html_text
+    assert 'if (!status) return "Open";' in html_text
+    assert '${escapeHtml(statusLabel(item.status || "open"))}' in html_text
+    assert '${escapeHtml(statusLabel(item.status || "queued"))}' in html_text
+    assert '${escapeHtml(statusLabel(task.status || "queued"))}' in html_text
+    assert '${escapeHtml(statusLabel(conversation.status || "open"))}' in html_text
+    assert '${escapeHtml(statusLabel(state))}' in html_text
+    assert 'timedout: "badge-failed"' in html_text
+
+
 def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():
     signature = inspect.signature(ui.render_shell_html)
     assert "csrf_token" in signature.parameters

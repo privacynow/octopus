@@ -15,6 +15,10 @@
   `ConversationProjectionPort` directly, the dummy-bot egress-proxy
   helper path is gone from `app/agents/delivery.py`, and the live
   egress readiness/resume paths remain unchanged.
+- Phase 13B landed green: routed-task degraded status is now
+  human-readable on the registry UI surface, with visible badge text
+  routed through a label helper instead of exposing raw internal
+  status codes.
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
 - Phase 9 remediation landed and the repo was green at the end of that pass.
 - A deeper post-Phase-9 architecture review found additional
@@ -83,8 +87,41 @@
   `1953 passed, 23 skipped`.
 - Full-suite status after Phase 13A:
   `1953 passed, 23 skipped`.
+- Full-suite status after Phase 13B:
+  `1954 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 13B remediation — humanize routed-task degraded
+  status in the registry UI.
+  Scope:
+  - added a `statusLabel(...)` helper in
+    `app/channels/registry/ui.py` so visible badge text no longer
+    exposes raw internal values like `partialfailed`
+  - kept stored/raw status values on the existing CSS/filter seams
+    while changing only the visible render path
+  - added normalized badge-class support for timed-out statuses
+    without changing filter/storage vocabulary
+  - widened static-shell regression coverage in
+    `tests/test_registry_service.py` to prove the helper, mappings,
+    and visible status render sites are present in the rendered
+    HTML/JS
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_service.py -k 'humanizes_visible_status_labels or partialfailed_as_failed_for_status_filter or render_shell_helper_uses_local_editors'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified visible conversation/task/status badge sites now route
+    through `statusLabel(...)` instead of raw
+    `escapeHtml(...status...)`
+  - verified filter normalization still treats `partialfailed` as
+    failed without changing the stored status value
+  Review:
+  - this slice stayed on the product/render seam only: no backend
+    vocabulary changed, no new UI runtime path was introduced, and the
+    test oracle stayed aligned with the current static-shell test seam
+  Verified:
+  - operators no longer see raw `partialfailed` in visible badge text
+  - full suite status after Phase 13B: `1954 passed, 23 skipped`
 
 - Complete: Phase 13A remediation — remove delivery-side egress proxy
   for projection.

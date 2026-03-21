@@ -52,10 +52,15 @@
   overwrite protected completed/degraded task states in either store
   backend, and later successful routed-task results remain
   authoritative over degraded fallback state.
+- Phase 12B landed green: routed-task result-report failure now leaves
+  durable degraded task state (`partialfailed`) through the existing
+  task-routing/store seam, and the registry UI/test surface treats
+  that degraded state intentionally instead of as an accidental badge
+  leftover.
 - Current status should now be read as: rollout complete through
-  Phase 11, Phase 12 remediation in progress with 12A complete.
-- Full-suite status after Phase 12A:
-  `1946 passed, 23 skipped`.
+  Phase 11, Phase 12 remediation in progress with 12A-12B complete.
+- Full-suite status after Phase 12B:
+  `1948 passed, 23 skipped`.
 
 ## Slice Log
 
@@ -96,6 +101,43 @@
   - late routed-task progress no longer regresses protected task state
   - a later successful routed-task result still repairs degraded state
   - full suite status after Phase 12A: `1946 passed, 23 skipped`
+
+- Complete: Phase 12B remediation — persist degraded routed-task state on result-delivery failure.
+  Scope:
+  - extended `finalize_execution()` so failed routed-task result
+    delivery now emits a fire-and-forget `update_routed_task_status()`
+    on the existing task-routing seam with `status="partialfailed"`
+  - kept the fix concern-owned: no direct Telegram send, no raw bot
+    call, and no new delivery subsystem
+  - normalized the registry UI conversation/task status filter so
+    `partialfailed` is treated as a first-class degraded failure state
+    rather than a badge-only leftover
+  - widened regression coverage across the finalization seam, the real
+    worker entry point, the bus/processor/store integration path, and
+    the registry UI shell source
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_execution_finalization.py::test_finalization_report_failure_sets_user_warning tests/test_handlers.py::test_registry_routed_task_result_report_failure_does_not_escape_worker tests/test_control_plane_integration.py::test_routed_task_report_failure_persists_partialfailed_status tests/test_registry_service.py::test_registry_ui_shell_treats_partialfailed_as_failed_for_status_filter`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified routed-task report failure still does not publish task-ref
+    surface events
+  - verified fallback degraded status reaches the registry store
+    through the existing bus-backed task-routing seam
+  - verified `partialfailed` now participates in the UI’s failed-state
+    filter normalization
+  Review:
+  - this slice preserved the architecture boundary we agreed on:
+    routed-task failure is surfaced on the task itself, not through a
+    channel-specific notification hack
+  - the first focused worker assertion was too narrow because it
+    forgot the existing in-flight `running` updates still occur before
+    the fallback degraded update; tightening that assertion made the
+    test match the real contract instead of hiding it
+  Verified:
+  - failed routed-task result delivery now leaves durable degraded task
+    state
+  - no direct Telegram/raw channel notification path was introduced
+  - full suite status after Phase 12B: `1948 passed, 23 skipped`
 
 - Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
   Scope:

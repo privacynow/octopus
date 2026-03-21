@@ -980,7 +980,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         var now = Date.now();
         var cutoffs = {{ today: 86400000, '7d': 7 * 86400000, '30d': 30 * 86400000 }};
         var filtered = conversations.filter(function(c) {{
-          var normalizedStatus = (c.status || "") === "completed" ? "done" : (c.status || "");
+          var normalizedStatus = (c.status || "") === "completed"
+            ? "done"
+            : ((c.status || "") === "partialfailed" ? "failed" : (c.status || ""));
           if (status && normalizedStatus !== status) return false;
           if (dateRange && cutoffs[dateRange]) {{
             var t = new Date(c.updated_at).getTime();

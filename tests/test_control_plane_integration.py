@@ -36,11 +36,13 @@ from app.control_plane.directory import build_control_plane_directory
 from app.control_plane.processor_runner import ProcessorRunner
 from app.identity import telegram_conversation_key
 from app.ports.health_publication import HealthReport
+from app.ports.task_routing import TaskResultReport
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices, build_bus_bot_services
 from app.storage import ensure_data_dirs
 from app.workflows.execution.contracts import RequestExecutionOutcome
+from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
 
@@ -873,3 +875,76 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
     assert task["summary"] == "halfway"
     assert timeline[0]["event_id"] == "evt-1"
     assert timeline[0]["progress"] == 50
+
+
+@pytest.mark.asyncio
+async def test_routed_task_report_failure_persists_partialfailed_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry = make_registry_connection(
+        registry_id="fallback",
+        url="http://registry.fallback",
+        registry_scope="full",
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(registry,),
+    )
+    _init_backend(config)
+    stores_dir = tmp_path / "registry-stores"
+    stores_dir.mkdir()
+    seeded = _seed_registry(
+        data_dir=tmp_path,
+        registry=registry,
+        stores_dir=stores_dir,
+        with_origin_agent=True,
+    )
+    _install_store_backed_clients(monkeypatch, [seeded])
+    services = _services_for_config(config)
+    seeded.store.create_routed_task(
+        {
+            "routed_task_id": "task-fallback-1",
+            "parent_conversation_id": "parent-fallback-1",
+            "origin_agent_id": seeded.origin_agent_id,
+            "target_agent_id": seeded.local_agent_id,
+            "title": "Fallback task",
+            "instructions": "Keep me safe",
+        }
+    )
+
+    async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+        del routed_task_id, authority_ref, result
+        return TaskResultReport(status="failed", error="registry unavailable")
+
+    monkeypatch.setattr(
+        services.control_plane.task_routing,
+        "report_routed_task_result",
+        fake_report_routed_task_result,
+    )
+
+    async with _running_registry_processor(config):
+        result = await finalize_execution(
+            RequestExecutionOutcome(status="completed", reply_text="done"),
+            context=FinalizationContext(
+                config=config,
+                item_id="item-fallback-1",
+                conversation_key="registry:fallback:task:task-fallback-1",
+                runtime_chat="registry:fallback:task:task-fallback-1",
+                conversation_ref="registry:fallback:task:task-fallback-1",
+                routed_task_id="task-fallback-1",
+                authority_ref=registry_authority_ref("fallback"),
+                task_routing=services.control_plane.task_routing,
+            ),
+        )
+        await _wait_for(
+            lambda: seeded.store.list_tasks()[0]["status"] == "partialfailed",
+            message="fallback routed-task status did not reach registry store",
+        )
+
+    task = seeded.store.list_tasks()[0]
+
+    assert result.routed_result_status == "report_failed"
+    assert task["status"] == "partialfailed"
+    assert "could not be delivered" in task["summary"]

@@ -791,10 +791,14 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
+        status_updates: list[tuple[str, object]] = []
 
         async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
             del routed_task_id, authority_ref, result
             return TaskResultReport(status="failed", error="registry unavailable")
+
+        async def fake_update_routed_task_status(*, update, authority_ref):
+            status_updates.append((authority_ref, update))
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
             del self, status, progress, metadata, event_id
@@ -804,6 +808,11 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             current_runtime().services.control_plane.task_routing,
             "report_routed_task_result",
             fake_report_routed_task_result,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "update_routed_task_status",
+            fake_update_routed_task_status,
         )
         monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
         prov.run_results = [RunResult(text="Delegated review complete.")]
@@ -829,6 +838,16 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
 
         assert len(prov.run_calls) == 1
         assert published == []
+        assert [entry[1].status for entry in status_updates] == [
+            "running",
+            "running",
+            "partialfailed",
+        ]
+        authority_ref, update = status_updates[-1]
+        assert authority_ref == "registry:default"
+        assert update.routed_task_id == "routed-task-2"
+        assert update.status == "partialfailed"
+        assert "could not be delivered" in update.summary
 
 
 async def test_registry_routed_task_interactive_block_reports_failure(monkeypatch):

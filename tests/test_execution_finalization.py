@@ -260,10 +260,15 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
 
 @pytest.mark.asyncio
 async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
+    status_updates: list[tuple[str, object]] = []
+
     class FailingTaskRouting:
         async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
             del routed_task_id, authority_ref, result
             return TaskResultReport(status="failed", error="registry internal stacktrace")
+
+        async def update_routed_task_status(self, *, update, authority_ref):
+            status_updates.append((authority_ref, update))
 
     with caplog.at_level(logging.ERROR):
         result = await finalize_execution(
@@ -294,3 +299,9 @@ async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
     assert result.routed_result_status == "report_failed"
     assert "could not be delivered to the requesting conversation" in result.routed_result_warning_text
     assert any("Failed to report routed task result" in record.message for record in caplog.records)
+    assert len(status_updates) == 1
+    authority_ref, update = status_updates[0]
+    assert authority_ref == registry_authority_ref("default")
+    assert update.routed_task_id == "task-5"
+    assert update.status == "partialfailed"
+    assert "could not be delivered" in update.summary

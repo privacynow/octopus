@@ -823,6 +823,17 @@ def test_registry_ui_render_shell_helper_uses_local_editors():
     assert "const token =" not in html_text
 
 
+def test_registry_ui_shell_treats_partialfailed_as_failed_for_status_filter():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert '"partialfailed" ? "failed"' in html_text
+
+
 def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():
     signature = inspect.signature(ui.render_shell_html)
     assert "csrf_token" in signature.parameters

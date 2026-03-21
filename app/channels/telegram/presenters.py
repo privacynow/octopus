@@ -17,6 +17,7 @@ from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
 from app.registry_errors import registry_error_summary
 from app.session_state import PendingDelegation
+from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidancePreview,
@@ -861,7 +862,31 @@ def cannot_send_path_message(raw_path: str) -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=f"[Cannot send: {raw_path}]")
 
 
-def delegation_plan_message(delegation: PendingDelegation) -> TelegramRenderedMessage:
+def _delegation_preview_lines(preview: DelegationTargetPreview | None) -> list[str]:
+    if preview is None:
+        return []
+    if preview.status == "resolved":
+        if not preview.authority_ref:
+            return []
+        return [f"Status: ready via <code>{html.escape(preview.authority_ref)}</code>"]
+    if preview.status == "missing_target":
+        lines = ["Status: <b>missing target agent</b>"]
+    elif preview.status == "unavailable":
+        lines = ["Status: <b>registry unavailable</b>"]
+    else:
+        lines = ["Status: <b>target not available yet</b>"]
+    if preview.detail:
+        lines.append(html.escape(preview.detail))
+    return lines
+
+
+def delegation_plan_message(
+    delegation: PendingDelegation,
+    *,
+    previews: Iterable[DelegationTargetPreview] | None = None,
+) -> TelegramRenderedMessage:
+    preview_items = list(previews or ())
+    has_blockers = any(item.status != "resolved" for item in preview_items)
     lines = [
         "<b>Delegation plan</b>",
         "",
@@ -869,11 +894,19 @@ def delegation_plan_message(delegation: PendingDelegation) -> TelegramRenderedMe
         "",
     ]
     for index, task in enumerate(delegation.tasks, start=1):
+        preview = preview_items[index - 1] if index - 1 < len(preview_items) else None
         lines.extend([
             f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
             f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
-            "",
         ])
+        lines.extend(_delegation_preview_lines(preview))
+        lines.append("")
+    if has_blockers:
+        lines.append(
+            "Some targets are not ready yet. Approval will check ownership again"
+            " before sending any requests."
+        )
+        lines.append("")
     lines.append("Approve to send these requests, or cancel to continue without delegation.")
     return _html_message("\n".join(lines))
 

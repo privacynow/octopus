@@ -41,6 +41,7 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidancePreview,
 )
 from app.session_state import DelegatedTask, PendingDelegation
+from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
@@ -261,13 +262,48 @@ def test_delegation_plan_message_renders_expected_html():
                     target_agent_id="agent-reviewer",
                 ),
             ],
-        )
+        ),
+        previews=[
+            DelegationTargetPreview(
+                routed_task_id="task-1",
+                status="resolved",
+                authority_ref="registry:default",
+            )
+        ],
     )
 
     assert rendered.parse_mode == ParseMode.HTML
     assert "Delegation plan" in rendered.text
     assert "Review docs" in rendered.text
     assert "agent-reviewer" in rendered.text
+    assert "ready via" in rendered.text
+    assert "registry:default" in rendered.text
+
+
+def test_delegation_plan_message_marks_unavailable_targets_before_approval():
+    rendered = delegation_plan_message(
+        PendingDelegation(
+            conversation_ref="conv-1",
+            tasks=[
+                DelegatedTask(
+                    routed_task_id="task-1",
+                    title="Review docs",
+                    target_agent_id="agent-reviewer",
+                ),
+            ],
+        ),
+        previews=[
+            DelegationTargetPreview(
+                routed_task_id="task-1",
+                status="unavailable",
+                detail="The agent registry could not be reached.",
+            )
+        ],
+    )
+
+    assert "registry unavailable" in rendered.text.lower()
+    assert "could not be reached" in rendered.text.lower()
+    assert "approval will check ownership again" in rendered.text.lower()
 
 
 def test_welcome_message_mentions_current_modes():

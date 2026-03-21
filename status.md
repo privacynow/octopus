@@ -9,14 +9,13 @@
 
 ## Current State
 
-- Phases 1-13 are implemented and closed.
-- Phase 14 is active.
-- Phase 14D landed green: behavior tests remain the primary ownership oracle, and the repo now has narrow secondary checks that specifically guard the removed bridge shim and the removed Telegram/workflow bridge-helper imports.
-- Phase 14C landed green: the agent card no longer leaks the internal `phase-19-foundation` rollout marker, and the registry UI continues to fall back to `unknown` for blank bot versions.
-- Phase 14B landed green: generic ref/text helpers now live on the existing identity/formatting seams, and recovery/inbound ref resolution share one data-driven helper instead of carrying Telegram-specific fallback logic in multiple places.
-- Phase 14A landed green: bridge admission no longer fabricates bot presence for registry `channel_input` refs, while the legitimate registry conversation bind/timeline path remains intact.
-- Phase 13G landed green: the status document now matches the real control-plane/remediation track, uses a present-tense current-state summary, and was verified against a final full-suite rerun.
+- Phases 1-14 are implemented and closed.
+- Phase 14E landed green: the final ownership and hygiene cleanup is closed, and this status document was re-verified against a final full-suite rerun.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
+- Bridge admission and recovery/ref resolution now stay on their intended seams:
+  - registry `channel_input` admission no longer fabricates bot presence
+  - generic ref/text helpers live on `app/identity.py` and `app/formatting.py`
+  - inbound and recovery share one data-driven ref resolver instead of Telegram-specific fallback branches
 - Routed-task lifecycle is owned by the task-routing/store seam:
   - protected/degraded task states resist late in-flight status updates
   - failed routed-result delivery leaves durable degraded task state
@@ -24,8 +23,9 @@
   - routed-task recovery does not bind or send notices through task-ref egress
   - throttled progress updates stay on the existing Telegram progress boundary
 - Registry UI shell routes visible degraded/timed-out status text through human-readable labels instead of exposing raw internal codes.
+- Agent cards no longer leak the internal `phase-19-foundation` rollout marker; blank versions render through the existing registry UI fallback as `unknown`.
 - Dead routed-result warning surface has been removed from worker/finalization code.
-- Protected routed-task status coverage now spans the full shared status set across SQLite and Postgres, and rejected protected-state updates cannot append timeline rows.
+- Protected routed-task status coverage spans the full shared status set across SQLite and Postgres, rejected protected-state updates cannot append timeline rows, and the remaining bridge-cleanup seams now have narrow secondary regression checks.
 - Latest verified full-suite run: `1972 passed, 23 skipped`.
 
 ## Phase Summary
@@ -43,7 +43,7 @@
   - `13E` concern-neutral progress logging
   - `13F` timeline-upsert guard parity
   - `13G` status/doc closeout
-- Phase 14 is the remaining ownership and hygiene cleanup track:
+- Phase 14 closed the remaining ownership and hygiene cleanup track:
   - `14A` bridge fake-bot shim removal
   - `14B` bridge helper extraction and generic recovery ref resolution
   - `14C` internal version-label removal
@@ -51,6 +51,18 @@
   - `14E` status/doc closeout
 
 ## Phase 14 Slice Log
+
+- Complete: Phase 14E closeout — rewrite the status document for the true final Phase 14 state and verify it against a final full-suite rerun.
+  Scope:
+  - collapsed the “Phase 14 is active” wording into a closed-phase current-state summary
+  - rewrote the top-level current-state bullets to describe the final bridge/recovery/version/guardrail outcomes instead of listing in-progress slice landings
+  - updated the phase summary so Phase 14 is presented as closed ownership and hygiene cleanup rather than a remaining track
+  - reran the full suite after the doc closeout before marking the phase complete
+  Tests:
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - the status document now matches the real final state of the control-plane, routed-task, and ownership-cleanup rollout
+  - final full suite status after Phase 14E: `1972 passed, 23 skipped`
 
 - Complete: Phase 14D remediation — rebalance guardrails toward behavior-level proof.
   Scope:

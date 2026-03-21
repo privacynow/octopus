@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19A4 landed green: new guided installs now receive an active independent `BOT_CREDENTIAL_KEY`, while the legacy Telegram-token fallback now emits one stronger owner-seam error with rotation guidance.
+- Phase 19B1 landed green: bot identity and registry connection state now persist through atomic replace writes, so a failed rename can no longer truncate or partially overwrite the last good state file.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -60,8 +60,9 @@
   - `skip_permissions=True` is now explicitly documented and regression-guarded as an approval/retry-only grant, not a provider-layer policy
 - Claude provider MCP setup now cleans up temporary config files on all normal return/exception/timeout paths and no longer leaves those files world-readable by default.
 - New guided bot env files now include an active `BOT_CREDENTIAL_KEY`; legacy configs without one still function through the fallback path, but the credential-store seam now logs an explicit `ERROR` telling operators to set the key before rotating the Telegram bot token.
+- Local agent state persistence now uses atomic same-directory replace writes for both stable bot identity and registry connection state, preserving the last good file if a rename fails mid-save.
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2052 passed, 23 skipped`.
+- Latest verified full-suite run: `2054 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -107,6 +108,19 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19B1 remediation — make local agent state-file writes atomic at the persistence seam instead of relying on direct overwrite writes.
+  Scope:
+  - added one shared atomic private-json writer in `app/agents/state.py` and routed both bot-identity and registry-connection persistence through it
+  - kept the change narrow to the two owner-seam state files instead of widening it into unrelated file-writing paths
+  - added failure-path regression tests in `tests/test_agents.py` proving a failed `os.replace(...)` leaves the last good file intact and does not strand temp files
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py -k 'bot_identity or registry_connection_state'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - bot identity and registry connection state now update through same-directory atomic replace writes
+  - failed rename paths preserve the last good on-disk state instead of partially overwriting it
+  - full suite status after Phase 19B1: `2054 passed, 23 skipped`
 
 - Complete: Phase 19A4 remediation — make the credential-key fallback guidance real for new installs instead of only warning after the fact.
   Scope:

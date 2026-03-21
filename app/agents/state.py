@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,10 +33,23 @@ def _new_bot_identity() -> BotIdentityState:
     )
 
 
-def _save_bot_identity_state(path: Path, state: BotIdentityState) -> None:
+def _atomic_write_private_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
-    path.chmod(0o600)
+    tmp_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _save_bot_identity_state(path: Path, state: BotIdentityState) -> None:
+    _atomic_write_private_json(path, asdict(state))
 
 
 def load_bot_identity_state(data_dir: Path) -> BotIdentityState:
@@ -117,6 +131,4 @@ def load_runtime_registry_connection_state(
 
 def save_registry_connection_state(data_dir: Path, state: RegistryConnectionState) -> None:
     path = registry_connection_state_path(data_dir, state.registry_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
-    path.chmod(0o600)
+    _atomic_write_private_json(path, asdict(state))

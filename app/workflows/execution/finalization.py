@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from app.agents.bridge import summarize_text
-from app.agents.types import RoutedTaskResult
+from app.agents.types import RoutedTaskResult, RoutedTaskUpdate
 from app.ports.task_routing import TaskRoutingPort
 from app.session_state import SessionState
 from app.workflows.delegation.coordination import finalize_resumed_delegation
@@ -55,6 +55,39 @@ def _result_full_text(outcome: RequestExecutionOutcome, *, last_status_text: str
 
 def _routed_result_authority_ref(context: FinalizationContext) -> str:
     return context.authority_ref
+
+
+def _routed_result_delivery_failure_summary(result_status: str) -> str:
+    if result_status == "completed":
+        return "Execution completed, but the result could not be delivered to the requesting conversation."
+    return summarize_text(
+        f"Execution finished with status {result_status}, but the result could not be delivered to the requesting conversation."
+    )
+
+
+async def _publish_routed_result_delivery_failure(
+    *,
+    context: FinalizationContext,
+    authority_ref: str,
+    result_status: str,
+) -> None:
+    if context.task_routing is None or not context.routed_task_id:
+        return
+    try:
+        await context.task_routing.update_routed_task_status(
+            update=RoutedTaskUpdate(
+                routed_task_id=context.routed_task_id,
+                status="partialfailed",
+                summary=_routed_result_delivery_failure_summary(result_status),
+            ),
+            authority_ref=authority_ref,
+        )
+    except Exception:
+        log.warning(
+            "Fallback routed-task status update failed for %s",
+            context.routed_task_id,
+            exc_info=True,
+        )
 
 
 async def finalize_execution(
@@ -112,6 +145,11 @@ async def finalize_execution(
                 routed_result_warning_text = (
                     "Your request completed, but the result could not be delivered to the requesting conversation."
                 )
+                await _publish_routed_result_delivery_failure(
+                    context=context,
+                    authority_ref=authority_ref,
+                    result_status=result_status,
+                )
                 log.error(
                     "Failed to report routed task result for %s: %s",
                     context.routed_task_id,
@@ -121,6 +159,11 @@ async def finalize_execution(
             routed_result_status = "report_failed"
             routed_result_warning_text = (
                 "Your request completed, but the result could not be delivered to the requesting conversation."
+            )
+            await _publish_routed_result_delivery_failure(
+                context=context,
+                authority_ref=authority_ref,
+                result_status=result_status,
             )
             log.error(
                 "Failed to report routed task result for %s",

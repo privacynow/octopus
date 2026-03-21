@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from time import monotonic
 
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.models import ControlCommand
 from app.control_plane.processor_base import ControlProcessor
+
+log = logging.getLogger(__name__)
 
 
 def _allowed_pairs(capabilities: dict[str, set[str]]) -> set[tuple[str, str]]:
@@ -125,6 +128,12 @@ class ProcessorRunner:
     async def _run_command(self, command: ControlCommand) -> None:
         processor = self._processor_by_pair.get((command.authority_ref, command.capability))
         if processor is None:
+            log.warning(
+                "Dead-lettering control-plane command %s: no processor registered for %s/%s",
+                command.command_id,
+                command.authority_ref,
+                command.capability,
+            )
             await self._bus.dead_letter(
                 command.command_id,
                 claimed_at=command.claimed_at,
@@ -146,6 +155,12 @@ class ProcessorRunner:
         try:
             reply = await processor.process(command)
         except Exception as exc:
+            log.exception(
+                "Control-plane processor crashed for command %s (%s/%s)",
+                command.command_id,
+                command.authority_ref,
+                command.capability,
+            )
             await self._bus.fail(
                 command.command_id,
                 claimed_at=command.claimed_at,

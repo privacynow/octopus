@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19C1 landed green: control-plane completed/dead-letter command retention and usage-log retention now run inline on the existing processor/worker cadences instead of depending on process restarts.
+- Phase 19C3 landed green: processor-runner crashes and unowned-pair dead-letter decisions are now visible in logs, and Track C is closed.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -68,6 +68,9 @@
   - processor reclaim cycles purge completed/dead-letter bus commands older than 72 hours
   - worker sweep cycles purge usage-log rows older than 7 days, gated to at most once per hour
   - both retention seams now have direct SQLite/Postgres contract coverage plus loop-level regression checks
+- ProcessorRunner now logs the failure paths it owns instead of failing or dead-lettering silently:
+  - processor exceptions emit one `ERROR` with stack context
+  - unowned authority/capability pairs emit one `WARNING` before dead-lettering
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
 - Latest verified full-suite run: `2068 passed, 23 skipped`.
 
@@ -115,6 +118,20 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19C3 remediation — add ownership-level logging to the generic processor runner instead of leaving processor crashes and unowned pairs silent.
+  Scope:
+  - added module logging in `app/control_plane/processor_runner.py`
+  - processor exceptions now log one `ERROR` with stack context before the existing fail/retry path runs
+  - unowned authority/capability pairs now log one `WARNING` before the existing dead-letter path runs
+  - added regression coverage in `tests/test_control_plane_processor_runner.py` for both log paths without changing the underlying bus semantics
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_processor_runner.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - processor-runner-owned failure paths are now operator-visible instead of only mutating durable state
+  - existing fail/dead-letter behavior and lease-renewal behavior stayed unchanged
+  - full suite status after Phase 19C3: `2068 passed, 23 skipped`
 
 - Complete: Phase 19C1 remediation — move control-plane command and usage-log retention onto the existing processor/worker loops instead of relying on startup-only cleanup.
   Scope:

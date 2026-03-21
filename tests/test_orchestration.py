@@ -4,6 +4,7 @@ from app.workflows.delegation.coordination import (
     apply_routed_result,
     build_delegation_completion_message,
     build_delegation_plan,
+    expire_stale_delegations,
 )
 from app.agents.types import RoutedTaskResult
 
@@ -259,3 +260,57 @@ def test_build_delegation_completion_message_completed_is_explicitly_preliminary
 
     assert "All delegated tasks completed." in message
     assert "while I synthesize the final answer." in message
+
+
+def test_expire_stale_delegations_transitions_submitted_tasks_to_failed():
+    plan = build_delegation_plan(
+        "registry:conv-timeout",
+        "Spec delegation",
+        "Resume when both child tasks return.",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Implement",
+                "target_agent_id": "developer-1",
+                "instructions": "Build it.",
+            },
+            {
+                "routed_task_id": "task-2",
+                "title": "Review",
+                "target_agent_id": "reviewer-1",
+                "instructions": "Review it.",
+            },
+        ],
+    )
+    for task in plan.tasks:
+        task.status = "submitted"
+    plan.created_at = 0.0
+
+    outcome = expire_stale_delegations(plan, timeout_seconds=3600)
+
+    assert outcome.expired is True
+    assert outcome.pending is not None
+    assert outcome.pending.status == "partial_failed"
+    assert [task.status for task in outcome.pending.tasks] == ["failed", "failed"]
+    assert "delegation timed out" in outcome.pending.tasks[0].summary
+
+
+def test_expire_stale_delegations_within_timeout_leaves_pending_unchanged():
+    plan = build_delegation_plan(
+        "registry:conv-fresh",
+        "Spec delegation",
+        "Resume when both child tasks return.",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Implement",
+                "target_agent_id": "developer-1",
+                "instructions": "Build it.",
+            },
+        ],
+    )
+
+    outcome = expire_stale_delegations(plan, timeout_seconds=3600)
+
+    assert outcome.expired is False
+    assert outcome.pending is plan

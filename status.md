@@ -10,7 +10,7 @@
 ## Current State
 
 - Phases 1-18 are implemented and closed. Phase 19 is active.
-- Phase 19C3 landed green: processor-runner crashes and unowned-pair dead-letter decisions are now visible in logs, and Track C is closed.
+- Phase 19D1 landed green: stale delegations now expire through the existing delegation machine instead of lingering forever in submitted/proposed state.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -71,8 +71,13 @@
 - ProcessorRunner now logs the failure paths it owns instead of failing or dead-lettering silently:
   - processor exceptions emit one `ERROR` with stack context
   - unowned authority/capability pairs emit one `WARNING` before dead-lettering
+- Delegation staleness is now machine-owned and explicit:
+  - `BOT_DELEGATION_TIMEOUT_SECONDS` defaults to 3600 seconds and validates at config load
+  - stale delegation plans fail remaining non-terminal child tasks through the existing `submitted/proposed -> failed` transitions
+  - approval callbacks now reject expired plans instead of submitting stale work
+  - the Telegram worker path expires stale parent delegations before processing the next message on that conversation
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2068 passed, 23 skipped`.
+- Latest verified full-suite run: `2074 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -118,6 +123,21 @@
   - Track E error-handling and polish
 
 ## Phase 19 Slice Log
+
+- Complete: Phase 19D1 remediation — expire stale delegations through the existing delegation machine instead of leaving them indefinitely proposed/submitted.
+  Scope:
+  - added `BOT_DELEGATION_TIMEOUT_SECONDS` to the config contract with a default of 3600 seconds and positive-value validation
+  - added `expire_stale_delegations(...)` to `app/workflows/delegation/coordination.py`, using the existing child-task `failed` transition to expire stale non-terminal tasks without inventing new state vocabulary
+  - updated approval handling in `app/agents/delegation.py` to reject expired plans before submission, and updated the Telegram worker message path to expire stale parent delegations on next touch
+  - added config, coordination, approval, and worker-path regression tests covering stale submitted tasks, within-timeout no-ops, and stale-approval rejection
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_orchestration.py tests/test_handlers_delegation.py tests/test_config.py -k 'delegation or timeout'`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - stale delegation plans/results now resolve through the existing machine-owned `failed` path instead of staying pending forever
+  - approval callbacks no longer submit expired delegation plans
+  - the worker path expires stale parent delegations before continuing with the next message on that conversation
+  - full suite status after Phase 19D1: `2074 passed, 23 skipped`
 
 - Complete: Phase 19C3 remediation — add ownership-level logging to the generic processor runner instead of leaving processor crashes and unowned pairs silent.
   Scope:

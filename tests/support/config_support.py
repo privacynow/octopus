@@ -116,6 +116,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         process_role="all",
         claim_lease_ttl_seconds=300,
         claim_sweep_interval_seconds=60.0,
+        delegation_timeout_seconds=3600,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,

@@ -854,6 +854,17 @@ def test_registry_ui_shell_humanizes_visible_status_labels():
     assert 'timedout: "badge-failed"' in html_text
 
 
+def test_registry_ui_shell_bot_detail_version_falls_back_to_unknown():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        csrf_token="csrf-secret",
+    )
+
+    assert '<strong>Version:</strong> ${escapeHtml(bot.version || "unknown")}' in html_text
+
+
 def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():
     signature = inspect.signature(ui.render_shell_html)
     assert "csrf_token" in signature.parameters

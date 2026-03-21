@@ -97,7 +97,7 @@ class AgentRuntime:
             current_capacity=0,
             max_capacity=1,
             channel_capabilities=self._channel_capabilities(),
-            version="phase-19-foundation",
+            version="",
         )
 
     def _client(self) -> AgentRegistryClient:

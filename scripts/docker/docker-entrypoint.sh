@@ -5,6 +5,11 @@ if [ -d /home/bot/.provider-auth ]; then
   provider="${BOT_PROVIDER:-claude}"
   case "$provider" in
     claude)
+      # Force-replace any local Claude paths before linking them into the
+      # shared provider-auth mount. `ln -sfn` does not replace a real
+      # directory, which can leave `/home/bot/.claude` shadowing the mount.
+      rm -rf /home/bot/.claude
+      rm -f /home/bot/.claude.json
       ln -sfn /home/bot/.provider-auth/.claude /home/bot/.claude
       ln -sfn /home/bot/.provider-auth/.claude.json /home/bot/.claude.json
       ;;

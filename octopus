@@ -1619,6 +1619,13 @@ cmd_clean() {
     rm -rf .deploy
   fi
 
+  # Remove bot Docker images so the next run rebuilds with current code
+  local image
+  for image in $(docker image ls --filter "reference=octopus-agent:*" --format "{{.Repository}}:{{.Tag}}" 2>/dev/null); do
+    echo "Removing image: $image"
+    docker image rm "$image" 2>/dev/null || true
+  done
+
   # Remove build marker and legacy env files
   rm -f .bot-image-build-rev
   # shellcheck disable=SC2086

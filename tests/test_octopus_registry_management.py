@@ -341,6 +341,42 @@ cat verify.txt
     assert "restart:example-bot:local" in result.stdout
     assert "verify:example-bot:local" in result.stdout
     assert "Bot example-bot is now connected to the local registry." in result.stdout
+    assert "Registry UI: http://localhost:8787/ui" in result.stdout
+
+
+def test_registry_connect_cmd_shows_first_create_password_when_local_registry_is_bootstrapped(tmp_path: Path) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=standalone\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+stdin_is_tty() {{ return 0; }}
+ensure_local_registry() {{
+  mkdir -p .deploy/registry
+  cat > .deploy/registry/.env <<'EOF'
+REGISTRY_PORT=9004
+REGISTRY_ENROLL_TOKEN=token
+REGISTRY_UI_TOKEN=ui-secret
+EOF
+  REGISTRY_WAS_CREATED=1
+}}
+verify_registry_enrollment() {{ return 0; }}
+restart_bot_after_config_change() {{ :; }}
+registry_connect_cmd example-bot
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "Registry started: http://localhost:9004/ui" in result.stdout
+    assert "UI password (shown once): ui-secret" in result.stdout
+    assert "Bot example-bot is now connected to the local registry." in result.stdout
 
 
 def test_registry_connect_cmd_noops_for_already_enrolled_local_connection(tmp_path: Path) -> None:
@@ -439,12 +475,31 @@ cat .deploy/bots/charlie/.env
     result = _run_bash(script, cwd=tmp_path)
     assert "Connecting Alpha... done" in result.stdout
     assert "Connecting Charlie... done" in result.stdout
-    assert "2 connected." in result.stdout
+    assert "Bravo — already enrolled on local registry, skipping" in result.stdout
+    assert "2 connected, 1 skipped." in result.stdout
     assert "alpha:local" in result.stdout
     assert "charlie:local" in result.stdout
     assert "BOT_AGENT_REGISTRY_1_SCOPE=coordination" in result.stdout
     assert "BOT_AGENT_REGISTRY_1_SCOPE=full" in result.stdout
     assert "BOT_AGENT_REGISTRY_2_URL=https://remote.example.com" in result.stdout
+
+
+def test_registry_connect_cmd_all_reports_no_bots_configured_when_empty(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+if registry_connect_cmd --all >out.txt 2>err.txt; then
+  exit 1
+fi
+cat out.txt
+cat err.txt >&2
+"""
+    result = _run_bash(script, cwd=tmp_path, check=False)
+    assert result.returncode == 0
+    assert "No bots configured. Run ./octopus to get started." in result.stderr
 
 
 def test_connect_bot_to_local_registry_menu_marks_local_enrollment_and_noops_selected_bot(tmp_path: Path) -> None:
@@ -483,6 +538,161 @@ printf '2\\n' | connect_bot_to_local_registry_menu
     result = _run_bash(script, cwd=tmp_path)
     assert "Bravo — enrolled on local registry" in result.stdout
     assert "Bravo is already enrolled on the local registry." in result.stdout
+
+
+def test_connect_bot_to_local_registry_menu_all_passes_enrolled_bots_to_batch_helper(tmp_path: Path) -> None:
+    for slug in ("alpha", "bravo", "charlie"):
+        env_dir = tmp_path / ".deploy" / "bots" / slug
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / ".env").write_text(
+            f"BOT_SLUG={slug}\nBOT_DISPLAY_NAME={slug}\nBOT_PROVIDER=claude\nBOT_AGENT_MODE=standalone\n"
+        )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_local_registry_connection_state() {{
+  case "$1" in
+    bravo) printf 'enrolled\\n' ;;
+    *) printf 'none\\n' ;;
+  esac
+}}
+prompt_registry_scope() {{ printf 'coordination\\n'; }}
+connect_bots_to_local_registry_batch() {{ printf 'batch:%s:%s\\n' "$1" "$*"; }}
+printf 'a\\n' | connect_bot_to_local_registry_menu
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "batch:coordination:coordination alpha bravo charlie" in result.stdout
+
+
+def test_registry_start_cmd_ignores_invalid_followup_selection_and_still_succeeds(tmp_path: Path) -> None:
+    alpha_dir = tmp_path / ".deploy" / "bots" / "alpha"
+    bravo_dir = tmp_path / ".deploy" / "bots" / "bravo"
+    alpha_dir.mkdir(parents=True, exist_ok=True)
+    bravo_dir.mkdir(parents=True, exist_ok=True)
+    (alpha_dir / ".env").write_text(
+        "BOT_SLUG=alpha\n"
+        "BOT_DISPLAY_NAME=Alpha\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=standalone\n"
+    )
+    (bravo_dir / ".env").write_text(
+        "BOT_SLUG=bravo\n"
+        "BOT_DISPLAY_NAME=Bravo\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=standalone\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+stdin_is_tty() {{ return 0; }}
+registry_is_running() {{ return 1; }}
+ensure_local_registry() {{
+  mkdir -p .deploy/registry
+  cat > .deploy/registry/.env <<'EOF'
+REGISTRY_PORT=9014
+REGISTRY_ENROLL_TOKEN=token
+REGISTRY_UI_TOKEN=ui-secret
+EOF
+  REGISTRY_WAS_CREATED=1
+}}
+( printf 'bogus\\nn\\n' | registry_start_cmd ) >out.txt 2>err.txt
+printf 'rc:%s\\n' "$?" >rc.txt
+cat out.txt
+cat err.txt >&2
+cat rc.txt
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "Registry started: http://localhost:9014/ui" in result.stdout
+    assert "No bot named 'bogus' is configured." in result.stderr
+    assert "rc:0" in result.stdout
+
+
+def test_registry_start_cmd_returns_failure_when_followup_connect_fails(tmp_path: Path) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_DISPLAY_NAME=Example Bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=standalone\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+stdin_is_tty() {{ return 0; }}
+registry_is_running() {{ return 1; }}
+ensure_local_registry() {{
+  mkdir -p .deploy/registry
+  cat > .deploy/registry/.env <<'EOF'
+REGISTRY_PORT=9015
+REGISTRY_ENROLL_TOKEN=token
+REGISTRY_UI_TOKEN=ui-secret
+EOF
+  REGISTRY_WAS_CREATED=1
+}}
+prompt_registry_scope() {{ printf 'full\\n'; }}
+connect_bot_to_local_registry_once() {{ echo 'connect failed' >&2; return 1; }}
+if printf '\\n' | registry_start_cmd >out.txt 2>err.txt; then
+  exit 1
+fi
+cat out.txt
+cat err.txt >&2
+"""
+    result = _run_bash(script, cwd=tmp_path, check=False)
+    assert result.returncode == 0
+    assert "Registry started: http://localhost:9015/ui" in result.stdout
+    assert "connect failed" in result.stderr
+
+
+def test_registry_start_cmd_batch_prompt_passes_enrolled_bots_to_batch_helper(tmp_path: Path) -> None:
+    for slug in ("alpha", "bravo", "charlie"):
+        env_dir = tmp_path / ".deploy" / "bots" / slug
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / ".env").write_text(
+            f"BOT_SLUG={slug}\nBOT_DISPLAY_NAME={slug}\nBOT_PROVIDER=claude\nBOT_AGENT_MODE=standalone\n"
+        )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+stdin_is_tty() {{ return 0; }}
+registry_is_running() {{ return 1; }}
+ensure_local_registry() {{
+  mkdir -p .deploy/registry
+  cat > .deploy/registry/.env <<'EOF'
+REGISTRY_PORT=9016
+REGISTRY_ENROLL_TOKEN=token
+REGISTRY_UI_TOKEN=ui-secret
+EOF
+  REGISTRY_WAS_CREATED=1
+}}
+bot_local_registry_connection_state() {{
+  case "$1" in
+    bravo) printf 'enrolled\\n' ;;
+    *) printf 'none\\n' ;;
+  esac
+}}
+prompt_registry_scope() {{ printf 'full\\n'; }}
+connect_bots_to_local_registry_batch() {{ printf 'batch:%s:%s\\n' "$1" "$*"; }}
+printf 'a\\n' | registry_start_cmd
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "batch:full:full alpha bravo charlie" in result.stdout
 
 
 def test_registry_status_cmd_groups_local_connection_states(tmp_path: Path) -> None:
@@ -529,3 +739,121 @@ registry_status_cmd
     assert "Bravo    scope: coordination    state: enrollment failed" in result.stdout
     assert "retry: ./octopus registry connect bravo" in result.stdout
     assert "Charlie" in result.stdout
+
+
+def test_bot_local_registry_runtime_state_reports_starting_without_state_row(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_local_registry_connection_id() {{ printf 'local\\n'; }}
+bot_registry_has_identity() {{ return 0; }}
+bot_is_running() {{ return 0; }}
+bot_registry_state_rows() {{ :; }}
+bot_local_registry_runtime_state example-bot
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert result.stdout.strip() == "starting"
+
+
+def test_bot_local_registry_connection_state_caches_identity_probe_per_slug(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_local_registry_connection_id() {{ printf 'local\\n'; }}
+bot_registry_has_identity() {{
+  printf x >> identity-count.txt
+  return 0
+}}
+first="$(bot_local_registry_connection_state example-bot)"
+second="$(bot_local_registry_connection_state example-bot)"
+count="$(wc -c < identity-count.txt | tr -d ' ')"
+printf '%s\\n%s\\ncount:%s\\n' "$first" "$second" "$count"
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert result.stdout.splitlines() == ["enrolled", "enrolled", "count:1"]
+
+
+def test_registry_state_cache_file_is_unique_per_invocation(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+registry_state_cache_file connection
+"""
+    first = _run_bash(script, cwd=tmp_path).stdout.strip()
+    second = _run_bash(script, cwd=tmp_path).stdout.strip()
+    assert first != second
+    assert first.endswith("/connection.cache")
+    assert second.endswith("/connection.cache")
+
+
+def test_bot_local_registry_runtime_state_caches_runtime_probe_per_slug(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_local_registry_connection_id() {{ printf 'local\\n'; }}
+bot_registry_has_identity() {{
+  printf x >> identity-count.txt
+  return 0
+}}
+bot_is_running() {{ return 0; }}
+bot_registry_state_rows() {{
+  printf x >> rows-count.txt
+  printf 'local|connected|\\n'
+}}
+first="$(bot_local_registry_runtime_state example-bot)"
+second="$(bot_local_registry_runtime_state example-bot)"
+identity_count="$(wc -c < identity-count.txt | tr -d ' ')"
+rows_count="$(wc -c < rows-count.txt | tr -d ' ')"
+printf '%s\\n%s\\nidentity:%s\\nrows:%s\\n' "$first" "$second" "$identity_count" "$rows_count"
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert result.stdout.splitlines() == ["connected", "connected", "identity:1", "rows:1"]
+
+
+def test_registry_status_cmd_probes_identity_once_per_enrolled_bot(tmp_path: Path) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / "alpha"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text(
+        "BOT_SLUG=alpha\n"
+        "BOT_DISPLAY_NAME=Alpha\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=registry\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
+    )
+    registry_dir = tmp_path / ".deploy" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    (registry_dir / ".env").write_text("REGISTRY_PORT=8787\n")
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+registry_is_running() {{ return 0; }}
+bot_registry_has_identity() {{
+  printf x >> identity-count.txt
+  return 0
+}}
+bot_is_running() {{ return 0; }}
+bot_registry_state_rows() {{ printf 'local|connected|\\n'; }}
+registry_status_cmd >/dev/null
+printf 'count:%s\\n' "$(wc -c < identity-count.txt | tr -d ' ')"
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert result.stdout.strip() == "count:1"

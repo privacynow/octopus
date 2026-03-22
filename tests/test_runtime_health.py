@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import runtime_backend, work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime_health import (
+    CanonicalRuntimeHealthProvider,
     QueueSnapshot,
     RuntimeDiagnostic,
     RuntimeHealthReport,
@@ -94,6 +95,44 @@ async def test_runtime_health_provider_checks_auth_health_for_worker_role(tmp_pa
 
     assert any(item.code == "provider.auth_unavailable" for item in report.diagnostics)
     assert report.summary.status == "unhealthy"
+
+
+async def test_runtime_health_provider_checks_auth_once_per_process_lifetime(tmp_path: Path):
+    class CountingProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.auth_checks = 0
+
+        async def check_auth_health(self):
+            self.auth_checks += 1
+            return []
+
+    config = make_config(
+        data_dir=tmp_path,
+        working_dir=tmp_path,
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        allow_open=False,
+        allowed_actor_keys=frozenset({telegram_actor_key(42)}),
+        admin_users_explicit=True,
+    )
+    provider = CountingProvider()
+    runtime_health_provider = CanonicalRuntimeHealthProvider()
+
+    await collect_runtime_health_report(
+        config,
+        provider,
+        runtime_health_provider=runtime_health_provider,
+    )
+    await collect_runtime_health_report(
+        config,
+        provider,
+        runtime_health_provider=runtime_health_provider,
+    )
+
+    assert provider.auth_checks == 1
 
 
 async def test_runtime_health_provider_live_probe_is_opt_in(tmp_path: Path):

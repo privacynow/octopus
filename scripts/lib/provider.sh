@@ -45,7 +45,26 @@ update_provider_auth_hint() {
   fi
 }
 
+provider_has_auth_files() {
+  # Fast local check: do auth files exist on disk?
+  local provider="$1"
+  case "$provider" in
+    claude)
+      [ -d ".deploy/provider-auth/claude/.claude" ] && [ -f ".deploy/provider-auth/claude/.claude.json" ]
+      ;;
+    codex)
+      [ -d ".deploy/provider-auth/codex/.codex" ] && [ -f ".deploy/provider-auth/codex/.codex/auth.json" ]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 provider_is_authed() {
+  # Full check: run the provider health command inside a container.
+  # This includes both auth verification and API ping. Use
+  # provider_has_auth_files() for fast checks that don't need the API.
   local provider="$1"
   local exit_code=0
   ensure_provider_auth_dir "$provider"

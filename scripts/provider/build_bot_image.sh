@@ -23,4 +23,3 @@ echo "Building bot image for provider: $provider"
 docker build -f infra/docker/Dockerfile.bot --build-arg BOT_PROVIDER="$provider" -t "octopus-agent:$provider" "$REPO_DIR"
 # Record repo rev so octopus can detect pulls/deletions and force rebuild
 git rev-parse HEAD 2>/dev/null > "$REPO_DIR/.bot-image-build-rev" || true
-echo "Done. Create or update a bot with: ./octopus"

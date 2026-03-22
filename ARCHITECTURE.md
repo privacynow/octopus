@@ -443,6 +443,14 @@ Hardened in the current codebase:
 
 Current UI rendering behavior reflected in code and tests:
 
+- one shell renders seven operator surfaces:
+  - bot directory
+  - conversation list
+  - shared detail panel for bot/task/conversation views
+  - routed-task board
+  - runtime-skills manager
+  - provider-guidance manager
+  - capabilities manager
 - routed-task statuses such as degraded or timed-out are humanized before
   display
 - badge classes are mapped from normalized event/status kinds
@@ -454,7 +462,8 @@ Current UI rendering behavior reflected in code and tests:
 Accepted limitation:
 
 - the repo has strong source-level UI shell tests
-- it does not yet carry browser-rendered DOM automation as part of the normal
+- browser screenshot regeneration for docs is an explicit script
+  (`scripts/generate_registry_docs_assets.py`), not part of the normal
   automated suite
 
 ## Testing And Guardrails
@@ -466,6 +475,7 @@ The repository uses multiple proof layers:
 - integration tests for control-plane, registry runtime, and registry service
 - compose/E2E tests for operator flows
 - README/operator tests for the shipped CLI contract
+- registry-guide asset/reference checks for screenshot consistency
 - architectural skeleton/import guardrails for package ownership
 
 Current codebase themes reinforced by tests:

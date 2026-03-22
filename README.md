@@ -198,11 +198,16 @@ Log in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`.
 Typical operator uses:
 
 - inspect connected bots, connectivity, capacity, and runtime health
+- open bot, routed-task, and conversation detail surfaces from one shell
 - browse conversations, timelines, exports, and follow-up actions
 - follow routed-task and delegated-result state
 - manage runtime skills, provider guidance, and capability kill switches
 
 ![Registry UI screenshot](registry-ui-screenshot.png)
+
+The registry guide includes the full dashboard plus focused bot detail,
+routed-task detail, conversation timeline, runtime-skills, capabilities, and
+provider-guidance screens regenerated from the current UI shell.
 
 ## Storage and Runtime Notes
 
@@ -284,6 +289,7 @@ If the registry UI is not updating:
 - [ARCHITECTURE.md](ARCHITECTURE.md): current deployment, runtime,
   control-plane, registry, and store architecture
 - [docs/registry-guide.md](docs/registry-guide.md): step-by-step local and
-  remote registry guide with current screenshots and SVG flows
+  remote registry guide with current dashboard, detail, and management screens
+  plus the CLI SVG flows
 - [status.md](status.md): rollout history and the latest recorded full-suite
   verification status

@@ -1152,8 +1152,25 @@ prepare_new_bot_setup() {
 
   existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
   if [ -n "$existing_slug" ]; then
-    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
-    return 1
+    if bot_is_running "$existing_slug"; then
+      octopus_error "This Telegram bot is already running as '$existing_slug'. Run ./octopus to manage the existing bot."
+      return 1
+    fi
+    # Bot env exists but setup never completed (image build / auth / doctor
+    # failed on a previous run). Resume setup for the existing slug instead
+    # of re-asking all prompts.
+    printf 'Resuming incomplete setup for %s...\n' "$existing_slug"
+    local provider
+    provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$existing_slug")")"
+    ensure_provider_image_ready "${provider:-claude}"
+    ensure_provider_auth_ready "${provider:-claude}"
+    ensure_network
+    run_bot_doctor_until_ready "$existing_slug"
+    start_bot_until_running "$existing_slug"
+    local existing_username
+    existing_username="$(read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$existing_slug")")"
+    print_first_bot_success "${existing_username:-$existing_slug}"
+    exit 0
   fi
 
   NEW_BOT_SLUG="$(normalize_slug "$username")"

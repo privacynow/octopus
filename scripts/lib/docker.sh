@@ -34,6 +34,14 @@ bot_compose() {
   local provider_auth_dir=".deploy/provider-auth/${provider:-claude}"
   mkdir -p "$provider_auth_dir"
   chmod 700 "$provider_auth_dir" 2>/dev/null || true
+  # Workspace compose override: volumes + env_file for workspace-member bots.
+  # Must be last in the -f chain so workspace env_file entries are appended
+  # after the bot .env (last-wins for duplicate keys like BOT_PROJECTS).
+  local workspace_compose=".deploy/bots/$slug/docker-compose.workspace.yml"
+  local workspace_flags=""
+  if [ -f "$workspace_compose" ]; then
+    workspace_flags="-f $workspace_compose"
+  fi
   ensure_network
   OCTOPUS_NETWORK="octopus-net" \
   PROVIDER_AUTH_DIR="$provider_auth_dir" \
@@ -44,6 +52,7 @@ bot_compose() {
     --project-directory . \
     -p "octopus-${slug}" \
     -f infra/compose/docker-compose.yml \
+    $workspace_flags \
     --profile bot \
     --env-file "$env_file" \
     "$@"
@@ -63,6 +72,12 @@ bot_shared_compose() {
   local provider_auth_dir=".deploy/provider-auth/${provider:-claude}"
   mkdir -p "$provider_auth_dir"
   chmod 700 "$provider_auth_dir" 2>/dev/null || true
+  # Workspace override is LAST: base → shared → workspace
+  local workspace_compose=".deploy/bots/$slug/docker-compose.workspace.yml"
+  local workspace_flags=""
+  if [ -f "$workspace_compose" ]; then
+    workspace_flags="-f $workspace_compose"
+  fi
   ensure_network
   OCTOPUS_NETWORK="octopus-net" \
   PROVIDER_AUTH_DIR="$provider_auth_dir" \
@@ -73,6 +88,7 @@ bot_shared_compose() {
     -p "octopus-${slug}" \
     -f infra/compose/docker-compose.yml \
     -f infra/compose/docker-compose.shared.yml \
+    $workspace_flags \
     --env-file "$env_file" \
     "$@"
 }

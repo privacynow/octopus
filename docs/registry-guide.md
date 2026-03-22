@@ -294,3 +294,13 @@ The bot should be local but still shows remote behavior
 - open the bot management flow again
 - choose `Switch to local registry`
 - re-run `./octopus status` and `./octopus doctor`
+
+Everything is broken and you want to start over
+
+```bash
+./octopus clean
+```
+
+This stops all bots and the registry, removes all Docker volumes and networks,
+and deletes `.deploy/`. The next `./octopus` run starts the first-bot flow as
+if the repo were freshly cloned.

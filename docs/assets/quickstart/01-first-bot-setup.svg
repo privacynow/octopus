@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">First bot quick setup</title>
+  <desc id="desc">Terminal panel showing the quick-path first bot setup: token prompt, identity detection, and provider choice.</desc>
+  <style>
+    .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
+    .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
+    .dot { fill: #5a665a; }
+    .label { fill: #cfd8c9; font: 600 16px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.2px; }
+    .line { fill: #98ff64; font: 19px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.05px; }
+    .glow-copy { opacity: 0.42; filter: url(#crt-glow); }
+    .prompt { fill: #f1ffe6; }
+    .dim { fill: #5a8a3a; }
+  </style>
+  <defs>
+    <filter id="crt-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.55 0 0 0 0 1 0 0 0 0 0.35 0 0 0 0.45 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(28 24)">
+    <rect class="panel" x="0" y="0" width="1144" height="464" rx="10"/>
+    <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
+    <text class="label" x="102" y="34">first bot — quick setup</text>
+    <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
+    <g id="copy-first-bot-setup">
+      <text class="line" xml:space="preserve">
+        <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
+        <tspan x="34" dy="35">Let's set up your first bot.</tspan>
+        <tspan x="34" dy="35">Paste your Telegram bot token: <tspan class="dim">••••••••••••••••••••</tspan></tspan>
+        <tspan x="34" dy="35">This token belongs to My Bot (@my_bot).</tspan>
+        <tspan x="34" dy="35">Provider (claude or codex) [claude]: <tspan class="dim">claude</tspan></tspan>
+        <tspan x="34" dy="35">Press Enter for quick setup, or type 'full' for advanced options:</tspan>
+        <tspan x="34" dy="35"></tspan>
+        <tspan x="34" dy="35">Building bot image for claude... (first time only)</tspan>
+        <tspan x="34" dy="35">Provider auth: claude already authenticated.</tspan>
+        <tspan x="34" dy="35">Starting bot...</tspan>
+      </text>
+    </g>
+    <use href="#copy-first-bot-setup" class="glow-copy"/>
+    <use href="#copy-first-bot-setup"/>
+  </g>
+</svg>

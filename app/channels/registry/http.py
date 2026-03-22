@@ -1151,9 +1151,20 @@ if _UI_DIR.is_dir():
     if (_UI_DIR / "vendor").is_dir():
         app.mount("/ui/vendor", _StaticFiles(directory=str(_UI_DIR / "vendor")), name="ui-vendor")
 
+    @app.get("/ui/{path:path}", response_class=HTMLResponse)
+    def ui_spa_subpath(request: Request, path: str) -> HTMLResponse:
+        """Serve SPA index for client-side routes so /ui/conversations etc. work on refresh/bookmark."""
+        if path == "login":
+            raise HTTPException(status_code=404)
+        require_ui_session(request)
+        return HTMLResponse(
+            (_UI_DIR / "index.html").read_text(),
+            headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
+        )
+
     @app.get("/ui/spa/{path:path}", response_class=HTMLResponse)
     def ui_spa_catchall(request: Request, path: str = ""):
-        """Serve the SPA index.html for all /ui/spa/* routes (client-side routing)."""
+        """Legacy: Serve the SPA index.html for all /ui/spa/* routes (client-side routing)."""
         require_ui_session(request)
         return HTMLResponse(
             (_UI_DIR / "index.html").read_text(),

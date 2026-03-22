@@ -42,16 +42,22 @@ const API = (() => {
         return resp.text();
     }
 
+    async function unwrap(key, promise) {
+        const data = await promise;
+        if (data && typeof data === 'object' && key in data) return data[key];
+        return data;
+    }
+
     return {
         setCsrfToken,
         // Agents
-        listAgents: () => request('GET', '/v1/agents'),
+        listAgents: () => unwrap('agents', request('GET', '/v1/agents')),
         getAgentStatus: (id) => request('GET', `/v1/agents/${id}/status`),
         getAgentConversations: (id, opts = {}) =>
-            request('GET', `/v1/agents/${id}/conversations`, { params: opts }),
+            unwrap('conversations', request('GET', `/v1/agents/${id}/conversations`, { params: opts })),
         // Conversations
         listConversations: (opts = {}) =>
-            request('GET', '/v1/conversations', { params: opts }),
+            unwrap('conversations', request('GET', '/v1/conversations', { params: opts })),
         getConversation: (id) => request('GET', `/v1/conversations/${id}`),
         createConversation: (body) => request('POST', '/v1/conversations', { body }),
         getEvents: (id, opts = {}) =>
@@ -64,7 +70,7 @@ const API = (() => {
             request('POST', `/v1/conversations/${id}/actions`, { body: { action, ...payload } }),
         exportConversation: (id) => request('GET', `/v1/conversations/${id}/export`),
         // Tasks
-        listTasks: (opts = {}) => request('GET', '/v1/tasks', { params: opts }),
+        listTasks: (opts = {}) => unwrap('tasks', request('GET', '/v1/tasks', { params: opts })),
         // Capabilities
         listCapabilities: () => request('GET', '/v1/capabilities'),
         enableCapability: (name) => request('POST', `/v1/capabilities/${name}/enable`),

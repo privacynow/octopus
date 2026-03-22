@@ -1,0 +1,12 @@
+{
+  "name": "registry-ui-screenshots",
+  "private": true,
+  "description": "Capture Registry UI screenshots for docs (Playwright + Chromium)",
+  "scripts": {
+    "capture": "playwright test capture-guide.spec.ts",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

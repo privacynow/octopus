@@ -7,8 +7,7 @@ Octopus has two operator-facing layers:
 - `app.main` owns the runtime: Telegram ingress, worker execution, optional
   registry runtime, and the optional registry-backed control-plane processor.
 
-This document describes the code as it runs today. For rollout history and the
-phase-by-phase change log, read [status.md](status.md).
+This document describes the code as it runs today.
 
 ## Deployment Overview
 
@@ -21,8 +20,8 @@ flowchart LR
     User["Telegram user"] --> TG["Telegram"]
     Browser["Operator browser"] --> UI["Registry UI /ui"]
 
-    Compose --> Bot["Bot container<br/>python -m app.main"]
-    Compose --> Registry["Registry service<br/>uvicorn app.channels.registry.http:app"]
+    Compose --> Bot["Bot container<br/>python -m app.main<br/>includes registry_sdk/"]
+    Compose --> Registry["Registry service<br/>uvicorn app.channels.registry.http:app<br/>includes registry_sdk/ + ui/"]
     Compose --> PG["Optional Postgres"]
     Compose --> Auth["Provider auth mounts"]
 
@@ -166,6 +165,20 @@ Telegram refs are keyed by a stable local `bot_id`, not by a registry-issued
 - `./octopus` owns `.deploy/*.env`
 - the Python runtime owns the `BOT_DATA_DIR/agent/*` state files
 
+## Registry SDK
+
+`registry_sdk/` is a standalone package at the repo root.
+
+Import direction: `app/` → `registry_sdk/` is allowed; `registry_sdk/` → `app/`
+is forbidden. The SDK defines the contract; bots translate their transport data
+into SDK types.
+
+Key components:
+
+- `ConversationEvent` model with required `event_id` and typed metadata per kind
+- `EVENT_METADATA_SCHEMAS`: 12 event kinds with Pydantic validation
+- `RegistryClient` for bot→registry HTTP calls
+
 ### Scope-Driven Channel Registration
 
 Each configured registry connection has a scope:
@@ -190,7 +203,7 @@ The control plane is capability-scoped and authority-addressed.
 
 `BotServices.control_plane` exposes four ports:
 
-- `ConversationProjectionPort`
+- `ConversationProjectionPort` — `create_conversation` + `publish_events`
 - `TaskRoutingPort`
 - `AgentDirectoryPort`
 - `HealthPublicationPort`
@@ -227,9 +240,9 @@ Current control-plane rules:
 - projection-only work stays on control-plane ports instead of borrowing live
   channel egress
 
-That is why delegated-result timeline publication happens through
-`ConversationProjectionPort`, while live completion messages still go through
-channel egress.
+`BOT_REGISTRY_PUBLISH_LEVEL` controls which event kinds are published through
+`ConversationProjectionPort`. Delegated-result event publication happens through
+this port, while live completion messages still go through channel egress.
 
 ## Registry Runtime And Delivery Adaptation
 
@@ -251,6 +264,11 @@ Registry-delivery adaptation is split intentionally:
   - `routed_result`
 
 ### Delivery Kinds
+
+Delivery kinds (`channel_input`, `channel_action`, `routed_task`,
+`routed_result`) are a separate vocabulary from event kinds (`message.user`,
+`message.bot`, `task.status`, `error`, etc.). The `events` table uses SDK kinds
+from `EVENT_METADATA_SCHEMAS`; the `deliveries` table uses transport kinds.
 
 | Delivery kind | Handler | Local effect |
 |---|---|---|
@@ -358,7 +376,7 @@ Octopus has multiple durable seams:
 | control-plane bus store | SQLite + Postgres | commands, replies, leases, dead-letter / purge lifecycle |
 | content store | SQLite + Postgres | built-in/runtime content and guidance data |
 | credential store | SQLite + Postgres | encrypted per-user skill credentials |
-| registry service store | SQLite + Postgres | agents, conversations, deliveries, timelines, routed tasks |
+| registry service store | SQLite + Postgres | agents, conversations, deliveries, events, routed tasks, runtime_skills, skill_revisions, skill_approvals, provider_guidance, guidance_revisions, guidance_approvals |
 
 Backend-selection rules:
 
@@ -374,10 +392,12 @@ Boundary rules that matter:
 - content store seeds built-in content on initialization
 - credential store derives an encryption key from `BOT_CREDENTIAL_KEY`, with a
   logged Telegram-token fallback only for legacy configs
+- conversation table has `origin_channel` + `external_conversation_ref` with a
+  unique constraint for idempotent create
 
 ## HTTP Surfaces
 
-The registry service exposes two distinct surfaces.
+The registry service exposes three distinct surfaces.
 
 ### Agent API
 
@@ -386,7 +406,7 @@ The registry service exposes two distinct surfaces.
 Used by registry-connected runtimes and the control-plane processor for:
 
 - enroll/register/heartbeat
-- conversation binding and timeline publication
+- conversation binding and event publication
 - routed-task submission, status, and result delivery
 - search/discovery
 - delivery poll and ack
@@ -394,22 +414,31 @@ Used by registry-connected runtimes and the control-plane processor for:
 These endpoints validate their payloads against store contracts and use scope
 checks instead of assuming happy-path callers.
 
-### Operator UI
+### Resource API
 
-`/ui` and `/v1/ui/*`
+`/v1/*`
 
-Used by the browser shell for:
+Resource-oriented endpoints replacing the old `/v1/ui/*` surface. Scoped auth:
+agent tokens see own data, operator sessions see everything.
 
-- live bot directory and health detail
-- conversation list, detail, follow-up messaging, export, and cancel
-- routed-task board
-- runtime skill management
-- provider-guidance management and preview
-- capability kill switches
+- `/v1/agents`, `/v1/conversations`, `/v1/tasks`, `/v1/capabilities`,
+  `/v1/usage`
+- Event publishing: `POST /v1/conversations/{id}/events` with SDK validation
+- Catalog: `/v1/catalog/skills/*`, `/v1/provider-guidance/*`
 
-The UI is a server-rendered HTML shell with browser-side JavaScript. Login uses
-session cookies, and state-changing UI requests carry CSRF headers instead of
-embedding the master UI token in page JavaScript.
+### Operator SPA
+
+`/ui`
+
+Vanilla HTML/JS/CSS single-page application served as static files from `ui/`.
+
+- Web Components with client-side routing (`history.pushState`)
+- No framework, no build step, no `node_modules`
+- Components: agent list, agent detail, conversation list/detail (chat-like
+  timeline), task board, capabilities, skills catalog, usage
+- Markdown rendering via vendored `marked.js` + DOMPurify sanitization
+- Real-time updates via WebSocket (`/v1/ws`, operator session cookie only)
+- Login uses session cookies; state-changing requests carry CSRF headers
 
 ## Security Boundaries
 
@@ -439,18 +468,14 @@ Hardened in the current codebase:
 - **Attachment size limits**: Telegram file downloads are validated against a
   size limit before the download starts.
 
-## Registry UI Rendering
+## Registry SPA Architecture
 
-Current UI rendering behavior reflected in code and tests:
+The operator UI is a vanilla SPA under `ui/` with no build step.
 
-- one shell renders seven operator surfaces:
-  - bot directory
-  - conversation list
-  - shared detail panel for bot/task/conversation views
-  - routed-task board
-  - runtime-skills manager
-  - provider-guidance manager
-  - capabilities manager
+- Web Components define each view (agent list, agent detail, conversation
+  list/detail, task board, capabilities, skills catalog, usage)
+- a lightweight client-side router maps URL paths to components via
+  `history.pushState`
 - routed-task statuses such as degraded or timed-out are humanized before
   display
 - badge classes are mapped from normalized event/status kinds
@@ -458,10 +483,7 @@ Current UI rendering behavior reflected in code and tests:
 - diagnostic levels are normalized to supported CSS classes
 - search snippets are HTML-escaped through one helper before `<b>` tags are
   reintroduced
-
-Accepted limitation:
-
-- the repo has strong source-level UI shell tests
+- real-time updates arrive over a single WebSocket connection (`/v1/ws`)
 - browser screenshot regeneration for docs is an explicit script
   (`scripts/generate_registry_docs_assets.py`), not part of the normal
   automated suite
@@ -502,3 +524,6 @@ Current codebase themes reinforced by tests:
 9. SQLite and Postgres behavior must stay aligned through contract tests.
 10. Invalid or unqualified registry inputs fail fast instead of selecting a
     default registry implicitly.
+11. `registry_sdk/` defines the event and conversation contract. All events
+    persisted in the `events` table use SDK kinds from `EVENT_METADATA_SCHEMAS`.
+    Delivery kinds in the `deliveries` table are a separate vocabulary.

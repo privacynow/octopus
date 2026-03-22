@@ -73,8 +73,8 @@ resolve_bot_slug() {
       ;;
   esac
 
-  printf 'Select a bot:\n'
-  print_bot_choices
+  printf 'Select a bot:\n' >&2
+  print_bot_choices >&2
   while true; do
     read -r -p "Bot slug or number: " choice || return 1
     case "$choice" in

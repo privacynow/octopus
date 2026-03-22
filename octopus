@@ -1011,15 +1011,25 @@ ensure_provider_image_ready() {
 
 ensure_provider_auth_ready() {
   local provider="$1"
-  if provider_is_authed "$provider" >/dev/null 2>&1; then
+
+  # Fast check: do auth files already exist on disk?
+  if provider_has_auth_files "$provider"; then
+    update_provider_auth_hint "$provider" "true"
     return 0
   fi
+
+  # No auth files — need to run the login flow.
   octopus_error "Provider authentication is required. Starting the login flow now."
   provider_compose "$provider" run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
-  if ! provider_is_authed "$provider" >/dev/null 2>&1; then
-    octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
-    return 1
+
+  # After login, check auth files again (fast, no API ping).
+  if provider_has_auth_files "$provider"; then
+    update_provider_auth_hint "$provider" "true"
+    return 0
   fi
+
+  octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
+  return 1
 }
 
 reset_bot_setup_overrides() {

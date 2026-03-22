@@ -1507,7 +1507,6 @@ add_bot_flow() {
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
-  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
   start_bot_until_running "$NEW_BOT_SLUG"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
@@ -1533,7 +1532,6 @@ first_bot_flow() {
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
-  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
   start_bot_until_running "$NEW_BOT_SLUG"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
@@ -1684,7 +1682,10 @@ main() {
           ensure_provider_image_ready "${provider:-claude}"
           ensure_provider_auth_ready "${provider:-claude}"
           ensure_network
-          run_bot_doctor_until_ready "$only_slug"
+          # Skip the pre-start doctor check on resume — it runs the full
+          # provider health check including API ping, which can time out
+          # and block setup. Start the bot directly; the user can run
+          # ./octopus doctor afterwards to verify health.
           start_bot_until_running "$only_slug"
           local username
           username="$(read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$only_slug")")"

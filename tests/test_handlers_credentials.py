@@ -455,9 +455,10 @@ async def test_cross_user_credential_isolation():
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["pending_approval"]["request_user_id"] == telegram_actor_key(100)
+        callback_token = session["pending_approval"]["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         update = FakeUpdate(user=bob, chat=chat, callback_query=query)
         update.effective_message = cb_msg
         await _th.handle_callback(update, FakeContext())
@@ -1564,3 +1565,55 @@ async def test_validate_credential_allows_configured_host_and_logs_target(monkey
     assert detail == ""
     assert "registry.example.test" in caplog.text
     assert "registry-skill" in caplog.text
+
+
+async def test_validate_credential_allows_strict_subdomain_pattern(monkeypatch):
+    req = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={
+            "method": "GET",
+            "url": "https://api.us.example.test/health",
+            "header": "Authorization: Bearer ${API_KEY}",
+            "expect_status": 200,
+        },
+    )
+
+    async def fake_request(self, method, url, *, headers=None):
+        del self
+        return httpx.Response(200, request=httpx.Request(method, url, headers=headers))
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    monkeypatch.setenv("BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS", "*.example.test")
+
+    ok, detail = await validate_credential(req, "some-key-value", skill_name="subdomain-skill")
+
+    assert ok is True
+    assert detail == ""
+
+
+async def test_validate_credential_rejects_overly_broad_wildcard_pattern(monkeypatch):
+    req = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={
+            "method": "GET",
+            "url": "https://evil.com/health",
+            "header": "Authorization: Bearer ${API_KEY}",
+            "expect_status": 200,
+        },
+    )
+
+    async def unexpected_request(self, method, url, *, headers=None):
+        del self, method, url, headers
+        raise AssertionError("validation request should not be sent for overly broad wildcard patterns")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", unexpected_request)
+    monkeypatch.setenv("BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS", "*.com")
+
+    ok, detail = await validate_credential(req, "some-key-value", skill_name="wildcard-skill")
+
+    assert ok is False
+    assert "unapproved host" in detail.lower()

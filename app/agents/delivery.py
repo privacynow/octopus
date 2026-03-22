@@ -8,21 +8,26 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import work_queue
+from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
     build_registry_message_delivery,
-    conversation_key_for_ref,
-    publish_timeline_event,
+    qualify_registry_parent_ref,
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
+from app.identity import conversation_key_for_ref
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
-from app.channel_egress_factory import create_channel_egress
-from app.runtime import composition
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import BotServices
+from app.runtime.session_runtime import (
+    apply_runtime_delegation_result,
+    load_runtime_session,
+    save_runtime_session,
+)
 from app.skill_activation_service import get_skill_activation_service
-from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
+from app.workflows.delegation.coordination import send_delegation_completion_message
 
 log = logging.getLogger(__name__)
 
@@ -31,19 +36,25 @@ log = logging.getLogger(__name__)
 class RegistryDeliveryRuntime:
     provider_name: str
     provider_state_factory: Callable[[], dict[str, Any]]
+    services: BotServices
     bot: Any | None = None
+    dispatcher: ChannelDispatcher | None = None
 
 
 def build_registry_delivery_runtime(
     *,
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
+    services: BotServices,
     bot: Any | None = None,
+    dispatcher: ChannelDispatcher | None = None,
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
+        services=services,
         bot=bot,
+        dispatcher=dispatcher,
     )
 
 
@@ -80,6 +91,7 @@ def _registry_semantic_action(
     action: str,
     payload: dict[str, object],
     delivery_id: str,
+    registry_id: str,
 ):
     semantic = {
         "approve": "approve_pending",
@@ -108,6 +120,31 @@ def _registry_semantic_action(
         action_payload=params,
         actor_ref=f"registry-ui:{conversation_ref}",
         delivery_id=delivery_id,
+        registry_id=registry_id,
+    )
+
+
+async def _publish_timeline(
+    *,
+    services: BotServices,
+    conversation_ref: str,
+    kind: str,
+    title: str,
+    body: str = "",
+    status: str = "",
+    progress: int | None = None,
+    metadata: dict[str, object] | None = None,
+    event_id: str | None = None,
+) -> None:
+    await services.control_plane.conversation_projection.publish_external_timeline(
+        conversation_ref=conversation_ref,
+        kind=kind,
+        title=title,
+        body=body,
+        status=status,
+        progress=progress,
+        metadata=metadata,
+        event_id=event_id,
     )
 
 
@@ -119,16 +156,24 @@ async def handle_registry_delivery(
 ) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
+    registry_id = str(delivery.get("registry_id", "") or "")
     if kind in {"channel_input", "routed_task"}:
-        return await admit_registry_delivery(config, delivery)
+        return await admit_registry_delivery(
+            config,
+            delivery,
+            dispatcher=runtime.dispatcher,
+        )
 
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
     if kind == "channel_action":
+        if not registry_id:
+            return "rejected"
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"
+        conversation_ref = qualify_registry_parent_ref(registry_id, conversation_ref)
         action_payload = payload.get("payload", {})
         if not isinstance(action_payload, dict):
             action_payload = {}
@@ -141,6 +186,7 @@ async def handle_registry_delivery(
             action=action,
             payload=action_payload,
             delivery_id=delivery_id,
+            registry_id=registry_id,
         )
         if envelope is None:
             return "rejected"
@@ -165,8 +211,13 @@ async def handle_registry_delivery(
         return "accepted"
 
     if kind == "routed_result":
+        if not registry_id:
+            return "rejected"
         routed_task_id = str(payload.get("routed_task_id", ""))
-        parent_conversation_id = str(payload.get("parent_conversation_id", ""))
+        parent_conversation_id = qualify_registry_parent_ref(
+            registry_id,
+            str(payload.get("parent_conversation_id", "")),
+        )
         result = payload.get("result", {})
         if not parent_conversation_id or not routed_task_id or not isinstance(result, dict):
             return "rejected"
@@ -179,8 +230,33 @@ async def handle_registry_delivery(
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        await publish_timeline_event(
-            config,
+        if runtime.dispatcher is None:
+            raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
+        if not runtime.dispatcher.egress_ready_for_ref(
+            parent_conversation_id,
+            config=config,
+            bot=runtime.bot,
+            conversation_key=conversation_key_for_ref(parent_conversation_id),
+            source="registry",
+        ):
+            return "retry_later"
+        conversation_key = conversation_key_for_ref(parent_conversation_id)
+        applied = apply_runtime_delegation_result(
+            config.data_dir,
+            conversation_key,
+            routed_task_id=routed_task_id,
+            authority_ref=registry_authority_ref(registry_id),
+            result=routed_result,
+        )
+        if not applied.matched:
+            log.warning(
+                "Routed result for task %s from authority %s did not match any pending delegation task",
+                routed_task_id,
+                registry_authority_ref(registry_id),
+            )
+            return "accepted"
+        await _publish_timeline(
+            services=runtime.services,
             conversation_ref=parent_conversation_id,
             kind="delegated_result",
             title="Delegated result received",
@@ -189,20 +265,6 @@ async def handle_registry_delivery(
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        channel_name = composition.conversation_channel_name(parent_conversation_id)
-        if channel_name == "telegram" and runtime.bot is None:
-            return "retry_later"
-        conversation_key = conversation_key_for_ref(parent_conversation_id)
-        session = _load_session(config, runtime, conversation_key)
-        applied = apply_routed_result(
-            session.pending_delegation,
-            routed_task_id=routed_task_id,
-            result=routed_result,
-        )
-        if not applied.matched:
-            return "accepted"
-        session.pending_delegation = applied.pending
-        _save_session(config, conversation_key, session)
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
         continuation_text = applied.resume_prompt
@@ -214,6 +276,7 @@ async def handle_registry_delivery(
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
             delivery_id=resume_delivery_id,
+            registry_id=registry_id,
             skip_approval=True,
         )
         admit_status, _ = work_queue.record_and_admit_message(
@@ -225,7 +288,9 @@ async def handle_registry_delivery(
             serialized,
         )
         if admit_status == "admitted":
-            channel_egress = create_channel_egress(
+            if runtime.dispatcher is None:
+                raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
+            channel_egress = runtime.dispatcher.create_egress(
                 parent_conversation_id,
                 config=config,
                 bot=runtime.bot,
@@ -240,8 +305,8 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
-            await publish_timeline_event(
-                config,
+            await _publish_timeline(
+                services=runtime.services,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",
                 title="All delegated results received",
@@ -250,8 +315,8 @@ async def handle_registry_delivery(
                 event_id=f"delegation-ready:{parent_conversation_id}",
             )
         elif admit_status == "duplicate":
-            await publish_timeline_event(
-                config,
+            await _publish_timeline(
+                services=runtime.services,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",
                 title="All delegated results received",

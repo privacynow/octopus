@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 from telegram import Update
 
 from app import access
+from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.normalization import normalize_user
 from app.channels.telegram.state import TelegramRuntime
@@ -72,14 +73,33 @@ def _is_allowed(runtime: TelegramPendingRuntime, user) -> bool:
     return access.is_allowed_user_with_override(runtime.state.config, user, override)
 
 
+def _pending_callback_matches(pending, callback_token: str | None) -> bool:
+    if callback_token is None:
+        return True
+    if pending is None:
+        return True
+    expected = str(getattr(pending, "callback_token", "") or "").strip()
+    actual = str(callback_token or "").strip()
+    if not expected:
+        return not actual
+    return expected == actual
+
+
 async def approve_pending(
     chat_id: int | str,
     message,
     *,
+    callback_token: str | None = None,
     cancel_event: asyncio.Event | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
     session = _load(runtime, chat_id)
+    if not _pending_callback_matches(session.pending_approval or session.pending_retry, callback_token):
+        rendered = telegram_presenters.pending_plain_outcome_message(
+            _msg.approval_request_no_longer_valid()
+        )
+        await message.reply_text(rendered.text, **rendered.kwargs())
+        return
     outcome = _flows().pending.requests.approve(
         session,
         cfg=runtime.state.config,
@@ -91,21 +111,34 @@ async def approve_pending(
         rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
         await message.reply_text(rendered.text, **rendered.kwargs())
         return
-    await runtime.execute_request(
+    return await runtime.execute_request(
         chat_id,
         outcome.execution_plan.prompt,
         list(outcome.execution_plan.image_paths),
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
         request_user_id=outcome.execution_plan.request_user_id,
+        # This exact plan was explicitly approved by the user.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,
     )
 
 
-async def reject_pending(chat_id: int | str, message, *, runtime: TelegramPendingRuntime) -> None:
+async def reject_pending(
+    chat_id: int | str,
+    message,
+    *,
+    callback_token: str | None = None,
+    runtime: TelegramPendingRuntime,
+) -> None:
     session = _load(runtime, chat_id)
+    if not _pending_callback_matches(session.pending_approval or session.pending_retry, callback_token):
+        rendered = telegram_presenters.pending_plain_outcome_message(
+            _msg.approval_request_no_longer_valid()
+        )
+        await message.reply_text(rendered.text, **rendered.kwargs())
+        return
     outcome = _flows().pending.requests.reject(session)
     if outcome.mutated:
         _save(runtime, chat_id, session)
@@ -113,8 +146,20 @@ async def reject_pending(chat_id: int | str, message, *, runtime: TelegramPendin
     await message.reply_text(rendered.text, **rendered.kwargs())
 
 
-async def retry_skip_pending(chat_id: int | str, message, *, runtime: TelegramPendingRuntime) -> None:
+async def retry_skip_pending(
+    chat_id: int | str,
+    message,
+    *,
+    callback_token: str | None = None,
+    runtime: TelegramPendingRuntime,
+) -> None:
     session = _load(runtime, chat_id)
+    if not _pending_callback_matches(session.pending_retry, callback_token):
+        rendered = telegram_presenters.pending_plain_outcome_message(
+            _msg.approval_request_no_longer_valid()
+        )
+        await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
+        return
     outcome = _flows().pending.requests.retry_skip(session)
     if outcome.mutated:
         _save(runtime, chat_id, session)
@@ -126,10 +171,17 @@ async def retry_allow_pending(
     chat_id: int | str,
     message,
     *,
+    callback_token: str | None = None,
     cancel_event: asyncio.Event | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
     session = _load(runtime, chat_id)
+    if not _pending_callback_matches(session.pending_retry, callback_token):
+        rendered = telegram_presenters.pending_plain_outcome_message(
+            _msg.approval_request_no_longer_valid()
+        )
+        await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
+        return
     outcome = _flows().pending.requests.retry_allow(
         session,
         cfg=runtime.state.config,
@@ -148,6 +200,7 @@ async def retry_allow_pending(
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
         request_user_id=outcome.execution_plan.request_user_id,
+        # This retry is the explicit user-approved continuation path.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,
@@ -160,24 +213,49 @@ async def handle_pending_callback(event, query, *, runtime: TelegramPendingRunti
     async with runtime.chat_lock(chat_id, query=query) as already_answered:
         if not already_answered:
             await query.answer()
-        if event.data == "approval_approve":
+        parsed = telegram_presenters.parse_pending_callback_data(event.data)
+        if parsed is None:
+            return
+        action, callback_token = parsed
+        if action == "approval_approve":
             await query.edit_message_reply_markup(reply_markup=None)
-            await approve_pending(chat_id, query.message, runtime=runtime)
+            await approve_pending(
+                chat_id,
+                query.message,
+                callback_token=callback_token,
+                runtime=runtime,
+            )
             return
 
-        if event.data == "approval_reject":
+        if action == "approval_reject":
             await query.edit_message_reply_markup(reply_markup=None)
-            await reject_pending(chat_id, query.message, runtime=runtime)
+            await reject_pending(
+                chat_id,
+                query.message,
+                callback_token=callback_token,
+                runtime=runtime,
+            )
             return
 
-        if event.data == "retry_skip":
+        if action == "retry_skip":
             await query.edit_message_reply_markup(reply_markup=None)
-            await retry_skip_pending(chat_id, query.message, runtime=runtime)
+            await retry_skip_pending(
+                chat_id,
+                query.message,
+                callback_token=callback_token,
+                runtime=runtime,
+            )
             return
 
-        if event.data == "retry_allow":
+        if action == "retry_allow":
             await query.edit_message_reply_markup(reply_markup=None)
-            await retry_allow_pending(chat_id, query.message, runtime=runtime)
+            await retry_allow_pending(
+                chat_id,
+                query.message,
+                callback_token=callback_token,
+                runtime=runtime,
+            )
+            return
 
 
 async def handle_recovery_callback(update: Update, context, *, runtime: TelegramPendingRuntime) -> None:
@@ -238,6 +316,7 @@ async def handle_recovery_action(
         worker_id=runtime.state.boot_id,
         ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
         config=cfg,
+        dispatcher=getattr(runtime.state, "channel_dispatcher", None),
     )
     if outcome.toast_message:
         await answer_action(outcome.toast_message, show_alert=outcome.show_alert)
@@ -317,19 +396,41 @@ async def handle_worker_pending_action(
 ) -> bool:
     if event.action == "approve_pending":
         await channel_message.edit_reply_markup(reply_markup=None)
-        await approve_pending(runtime_chat, channel_message, cancel_event=cancel_event, runtime=runtime)
+        await approve_pending(
+            runtime_chat,
+            channel_message,
+            callback_token=str(params.get("callback_token") or ""),
+            cancel_event=cancel_event,
+            runtime=runtime,
+        )
         return True
     if event.action == "reject_pending":
         await channel_message.edit_reply_markup(reply_markup=None)
-        await reject_pending(runtime_chat, channel_message, runtime=runtime)
+        await reject_pending(
+            runtime_chat,
+            channel_message,
+            callback_token=str(params.get("callback_token") or ""),
+            runtime=runtime,
+        )
         return True
     if event.action == "retry_skip":
         await channel_message.edit_reply_markup(reply_markup=None)
-        await retry_skip_pending(runtime_chat, channel_message, runtime=runtime)
+        await retry_skip_pending(
+            runtime_chat,
+            channel_message,
+            callback_token=str(params.get("callback_token") or ""),
+            runtime=runtime,
+        )
         return True
     if event.action == "retry_allow":
         await channel_message.edit_reply_markup(reply_markup=None)
-        await retry_allow_pending(runtime_chat, channel_message, cancel_event=cancel_event, runtime=runtime)
+        await retry_allow_pending(
+            runtime_chat,
+            channel_message,
+            callback_token=str(params.get("callback_token") or ""),
+            cancel_event=cancel_event,
+            runtime=runtime,
+        )
         return True
     if event.action in {"recovery_replay", "recovery_discard"}:
         update_id = int(params.get("update_id") or 0)

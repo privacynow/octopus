@@ -1,9 +1,11 @@
 """Configuration loading, validation, and fail-fast checks."""
 
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -13,10 +15,22 @@ from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
+from app.agents.types import RegistryConnectionConfig
 from app.identity import parse_actor_key, telegram_numeric_id
+from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
+_WEBHOOK_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_COMPLETION_WEBHOOK_METADATA_HOSTS = {
+    "metadata",
+    "metadata.aws.internal",
+    "metadata.google.internal",
+    "metadata.azure.internal",
+}
+_COMPLETION_WEBHOOK_METADATA_IPS = {
+    ipaddress.ip_address("169.254.169.254"),
+}
 
 
 def load_dotenv_file(path: Path) -> dict[str, str]:
@@ -106,6 +120,86 @@ def _is_local_http_url(raw: str) -> bool:
     return host in {"registry", "localhost", "127.0.0.1", "::1"}
 
 
+def _is_local_webhook_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    return host in _WEBHOOK_LOCAL_HTTP_HOSTS
+
+
+def _http_url_policy_error(raw: str, *, setting_name: str) -> str | None:
+    if not raw:
+        return None
+    if not _has_valid_http_url(raw):
+        return f"{setting_name} must be a valid http:// or https:// URL when set"
+    if raw.startswith("http://") and not _is_local_webhook_http_url(raw):
+        return (
+            f"{setting_name} uses plain HTTP over a non-local address. "
+            "Use https:// for remote webhook targets."
+        )
+    return None
+
+
+def completion_webhook_target_block_reason(raw: str) -> str | None:
+    """Return a security rejection reason for a completion webhook target."""
+
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if not host:
+        return "missing host"
+    if host in _COMPLETION_WEBHOOK_METADATA_HOSTS:
+        return "cloud metadata host is not allowed"
+
+    allow_loopback = _is_local_webhook_http_url(raw)
+
+    def _blocked_ip_reason(candidate: ipaddress._BaseAddress) -> str | None:
+        if candidate in _COMPLETION_WEBHOOK_METADATA_IPS:
+            return "cloud metadata address is not allowed"
+        if candidate.is_loopback:
+            return None if allow_loopback else "loopback addresses are not allowed"
+        if candidate.is_link_local:
+            return "link-local addresses are not allowed"
+        if candidate.is_private:
+            return "private addresses are not allowed"
+        if candidate.is_multicast:
+            return "multicast addresses are not allowed"
+        if candidate.is_unspecified:
+            return "unspecified addresses are not allowed"
+        if candidate.is_reserved:
+            return "reserved addresses are not allowed"
+        return None
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        return _blocked_ip_reason(ip)
+
+    try:
+        resolved = socket.getaddrinfo(
+            host,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return "host resolution failed"
+
+    seen_addresses: set[ipaddress._BaseAddress] = set()
+    for family, _, _, _, sockaddr in resolved:
+        del family
+        address_text = sockaddr[0].split("%", 1)[0]
+        try:
+            candidate = ipaddress.ip_address(address_text)
+        except ValueError:
+            continue
+        if candidate in seen_addresses:
+            continue
+        seen_addresses.add(candidate)
+        if (reason := _blocked_ip_reason(candidate)) is not None:
+            return reason
+    return None
+
+
 def _has_valid_postgres_url(raw: str) -> bool:
     parsed = urlparse(raw)
     return (parsed.scheme == "postgresql" or parsed.scheme.startswith("postgresql+")) and bool(parsed.netloc)
@@ -174,14 +268,14 @@ class BotConfig:
     agent_tags: tuple[str, ...]
     agent_description: str
     agent_capabilities: tuple[str, ...]
-    agent_registry_url: str
-    agent_registry_enroll_token: str
+    agent_registries: tuple[RegistryConnectionConfig, ...]
     agent_poll_interval_seconds: float
     # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
     process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
     claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
     claim_sweep_interval_seconds: float  # BOT_CLAIM_SWEEP_INTERVAL_SECONDS, periodic stale-claim sweep cadence
+    delegation_timeout_seconds: int  # BOT_DELEGATION_TIMEOUT_SECONDS, max age for pending delegations before expiry
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
@@ -267,6 +361,43 @@ def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
     return tuple(projects)
 
 
+def _parse_agent_registries(
+    *,
+    get,
+    env_keys: set[str],
+    default_scope: str,
+    default_poll_interval_seconds: float,
+) -> tuple[RegistryConnectionConfig, ...]:
+    indexed_pattern = re.compile(r"^BOT_AGENT_REGISTRY_(\d+)_(ID|URL|ENROLL_TOKEN|SCOPE)$")
+    indices = sorted(
+        {
+            int(match.group(1))
+            for key in env_keys
+            if (match := indexed_pattern.match(key))
+        }
+    )
+    registries: list[RegistryConnectionConfig] = []
+    for index in indices:
+        url = get(f"BOT_AGENT_REGISTRY_{index}_URL").strip()
+        enroll_token = get(f"BOT_AGENT_REGISTRY_{index}_ENROLL_TOKEN").strip()
+        registry_id = get(f"BOT_AGENT_REGISTRY_{index}_ID", f"registry-{index}").strip() or f"registry-{index}"
+        registry_scope = (
+            get(f"BOT_AGENT_REGISTRY_{index}_SCOPE", default_scope).strip().lower() or default_scope
+        )
+        if not url and not enroll_token:
+            continue
+        registries.append(
+            RegistryConnectionConfig(
+                registry_id=registry_id,
+                url=url,
+                enroll_token=enroll_token,
+                registry_scope=registry_scope,
+                poll_interval_seconds=default_poll_interval_seconds,
+            )
+        )
+    return tuple(registries)
+
+
 def load_config(instance: str | None = None) -> BotConfig:
     """Load config from env file + environment variables.
 
@@ -282,6 +413,7 @@ def load_config(instance: str | None = None) -> BotConfig:
     # Build a merged config dict: env file as base, os.environ overrides
     env_file = env_path_for_instance(instance)
     file_vars = load_dotenv_file(env_file) if env_file.exists() else {}
+    env_keys = set(file_vars) | set(os.environ)
 
     def get(key: str, default: str = "") -> str:
         """Env var wins over file, file wins over default."""
@@ -303,6 +435,13 @@ def load_config(instance: str | None = None) -> BotConfig:
             return float(raw)
         except ValueError:
             raise SystemExit(f"CONFIG ERROR: {key} must be a number, got '{raw}'")
+
+    def get_codex_sandbox(key: str, default: str) -> str:
+        raw = get(key, default)
+        try:
+            return validate_codex_sandbox(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
 
     default_data = Path.home() / ".octopus-agent" / instance
 
@@ -329,9 +468,15 @@ def load_config(instance: str | None = None) -> BotConfig:
     )
 
     agent_display_name = get("BOT_AGENT_DISPLAY_NAME", instance).strip() or instance
-    agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
+    agent_poll_interval_seconds = max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0"))
+    agent_registries = _parse_agent_registries(
+        get=get,
+        env_keys=env_keys,
+        default_scope="full",
+        default_poll_interval_seconds=agent_poll_interval_seconds,
+    )
     raw_agent_mode = get("BOT_AGENT_MODE", "").strip().lower()
-    agent_mode = raw_agent_mode or ("registry" if agent_registry_url else "standalone")
+    agent_mode = raw_agent_mode or ("registry" if agent_registries else "standalone")
     agent_role = get("BOT_AGENT_ROLE").strip()
     agent_tags = tuple(
         s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
@@ -381,7 +526,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         typing_interval_seconds=get_float(
             "BOT_TYPING_INTERVAL", "4.0"
         ),
-        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_sandbox=get_codex_sandbox("CODEX_SANDBOX", "workspace-write"),
         codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
@@ -417,13 +562,13 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_tags=agent_tags,
         agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
         agent_capabilities=agent_capabilities,
-        agent_registry_url=agent_registry_url,
-        agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
-        agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
+        agent_registries=agent_registries,
+        agent_poll_interval_seconds=agent_poll_interval_seconds,
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
         claim_sweep_interval_seconds=max(0.1, get_float("BOT_CLAIM_SWEEP_INTERVAL_SECONDS", "60.0")),
+        delegation_timeout_seconds=get_int("BOT_DELEGATION_TIMEOUT_SECONDS", "3600"),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
@@ -458,6 +603,13 @@ def load_config_provider_health() -> BotConfig:
         except ValueError:
             return float(default)
 
+    def get_codex_sandbox(key: str, default: str) -> str:
+        raw = get(key, default)
+        try:
+            return validate_codex_sandbox(raw)
+        except ValueError as exc:
+            raise SystemExit(f"CONFIG ERROR: {exc}") from exc
+
     instance = get("BOT_INSTANCE", "default")
     default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -482,7 +634,7 @@ def load_config_provider_health() -> BotConfig:
         default_skills=(),
         stream_update_interval_seconds=get_float("BOT_STREAM_UPDATE_INTERVAL", "1.0"),
         typing_interval_seconds=get_float("BOT_TYPING_INTERVAL", "4.0"),
-        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_sandbox=get_codex_sandbox("CODEX_SANDBOX", "workspace-write"),
         codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
@@ -516,13 +668,13 @@ def load_config_provider_health() -> BotConfig:
         agent_tags=(),
         agent_description="",
         agent_capabilities=(),
-        agent_registry_url="",
-        agent_registry_enroll_token="",
+        agent_registries=(),
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         process_role="all",
         claim_lease_ttl_seconds=300,
         claim_sweep_interval_seconds=60.0,
+        delegation_timeout_seconds=3600,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -534,9 +686,15 @@ def validate_config(config: BotConfig) -> list[str]:
     """Return list of errors. Empty means healthy."""
     errors: list[str] = []
 
-    if not config.telegram_token:
+    has_registry_ingress_channel = (
+        config.agent_mode == AgentMode.REGISTRY.value
+        and any(registry.registry_scope in {"channel", "full"} for registry in config.agent_registries)
+    )
+    if not config.telegram_token and not has_registry_ingress_channel:
         errors.append(
-            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in your bot env file, or run ./octopus."
+            "At least one ingress-capable channel is required. Set TELEGRAM_BOT_TOKEN in your bot env file, "
+            "or configure a registry connection with BOT_AGENT_REGISTRY_SCOPE=channel/full "
+            "(or BOT_AGENT_REGISTRY_<n>_SCOPE=channel/full), or run ./octopus."
         )
 
     if config.provider_name not in ProviderName._value2member_map_:
@@ -572,6 +730,10 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
+    try:
+        validate_codex_sandbox(config.codex_sandbox)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     if config.bot_mode not in BotMode._value2member_map_:
         errors.append(
@@ -583,15 +745,28 @@ def validate_config(config: BotConfig) -> list[str]:
             f"BOT_AGENT_MODE must be 'registry' or 'standalone', got '{config.agent_mode}'"
         )
 
-    if config.agent_registry_url and not _has_valid_http_url(config.agent_registry_url):
-        errors.append(
-            "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
-        )
-    elif config.agent_registry_url.startswith("http://") and not _is_local_http_url(config.agent_registry_url):
-        errors.append(
-            "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address. "
-            "Use https:// for remote registries."
-        )
+    seen_registry_ids: set[str] = set()
+    for registry in config.agent_registries:
+        if not registry.registry_id:
+            errors.append("Each registry connection must have a non-empty BOT_AGENT_REGISTRY_<n>_ID")
+        elif registry.registry_id in seen_registry_ids:
+            errors.append(f"Duplicate registry connection id: '{registry.registry_id}'")
+        seen_registry_ids.add(registry.registry_id)
+        if not _has_valid_http_url(registry.url):
+            errors.append(
+                f"BOT_AGENT_REGISTRY_<n>_URL must be a valid http:// or https:// URL when set "
+                f"(connection '{registry.registry_id}')"
+            )
+        elif registry.url.startswith("http://") and not _is_local_http_url(registry.url):
+            errors.append(
+                f"Registry connection '{registry.registry_id}' uses plain HTTP over a non-local address. "
+                "Use https:// for remote registries."
+            )
+        if registry.registry_scope not in {"channel", "coordination", "full"}:
+            errors.append(
+                f"Registry connection '{registry.registry_id}' has invalid scope '{registry.registry_scope}'. "
+                "Use channel, coordination, or full."
+            )
 
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
@@ -601,6 +776,9 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.claim_sweep_interval_seconds <= 0:
         errors.append("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0")
+
+    if config.delegation_timeout_seconds <= 0:
+        errors.append("BOT_DELEGATION_TIMEOUT_SECONDS must be greater than 0")
 
     if config.runtime_mode == RuntimeMode.SHARED.value:
         if config.bot_mode != BotMode.WEBHOOK.value:
@@ -631,6 +809,9 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+    if config.webhook_url:
+        if error := _http_url_policy_error(config.webhook_url, setting_name="BOT_WEBHOOK_URL"):
+            errors.append(error)
 
     if config.telegram_api_base_url and not _has_valid_http_url(config.telegram_api_base_url):
         errors.append(
@@ -642,11 +823,16 @@ def validate_config(config: BotConfig) -> list[str]:
             "BOT_TELEGRAM_FILE_API_BASE_URL must be a valid http:// or https:// URL when set"
         )
 
-    if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
-        log.warning(
-            "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
-            sanitize_url_for_logging(config.completion_webhook_url),
-        )
+    if config.completion_webhook_url:
+        if error := _http_url_policy_error(
+            config.completion_webhook_url,
+            setting_name="BOT_COMPLETION_WEBHOOK_URL",
+        ):
+            errors.append(error)
+        elif reason := completion_webhook_target_block_reason(config.completion_webhook_url):
+            errors.append(
+                f"BOT_COMPLETION_WEBHOOK_URL target is not allowed: {reason}"
+            )
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(

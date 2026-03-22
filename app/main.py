@@ -12,14 +12,23 @@ from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_conf
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
+from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import build_control_plane_directory
+from app.control_plane.processor_runner import ProcessorRunner
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.runtime import start_agent_runtime_task
+from app.agents.registry_capabilities import registry_authority_capabilities
+from app.agents.registry_control_processor import RegistryControlProcessor
+from app.agents.registry_runtime import RegistryRuntime
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram.channel import TelegramChannelBootstrap
+from app.channels.telegram.bootstrap import build_worker_bundle
+from app.channels.registry.channel import register_registry_channels
+from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
@@ -95,7 +104,10 @@ async def _run_provider_health(provider: Provider) -> None:
 
 
 def _runs_ingress(config: BotConfig) -> bool:
-    return config.process_role in {ProcessRole.ALL.value, ProcessRole.WEBHOOK.value}
+    return bool(config.telegram_token) and config.process_role in {
+        ProcessRole.ALL.value,
+        ProcessRole.WEBHOOK.value,
+    }
 
 
 def _runs_worker(config: BotConfig) -> bool:
@@ -140,8 +152,13 @@ def _exit_startup_failure(exc: BaseException, config: BotConfig, *, mode: str) -
     raise SystemExit(1)
 
 
-async def run_worker_process(app) -> None:
-    """Initialize the Telegram app globals and keep worker-owned tasks alive."""
+async def run_dispatcher_process(
+    dispatcher: ChannelDispatcher,
+    *,
+    startup=None,
+    shutdown=None,
+) -> None:
+    """Start all dispatcher-owned ingresses and wait for shutdown."""
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -151,15 +168,16 @@ async def run_worker_process(app) -> None:
         except NotImplementedError:
             continue
 
-    await app.initialize()
     try:
-        if app.post_init:
-            await app.post_init(app)
+        if startup is not None:
+            await startup(stop_event)
+        await dispatcher.start_all_ingresses(stop_event=stop_event)
         await stop_event.wait()
     finally:
-        if app.post_shutdown:
-            await app.post_shutdown(app)
-        await app.shutdown()
+        stop_event.set()
+        await dispatcher.stop_all_ingresses()
+        if shutdown is not None:
+            await shutdown()
 
 
 def main() -> None:
@@ -233,12 +251,16 @@ def main() -> None:
     log.info("Data dir: %s", config.data_dir)
     log.info("Agent mode: %s", config.agent_mode)
     if config.agent_mode == "registry":
-        registry_url = (
-            sanitize_url_for_logging(config.agent_registry_url)
-            if config.agent_registry_url
-            else "(degraded: not configured)"
-        )
-        log.info("Agent registry: %s", registry_url)
+        if config.agent_registries:
+            for registry in config.agent_registries:
+                log.info(
+                    "Registry connection [%s] (%s): %s",
+                    registry.registry_id,
+                    registry.registry_scope,
+                    sanitize_url_for_logging(registry.url) if registry.url else "(missing url)",
+                )
+        else:
+            log.info("Registry connections: (none configured)")
 
     if config.allowed_actor_keys or config.allowed_usernames:
         log.info("Allowed actor keys: %s", sorted(config.allowed_actor_keys))
@@ -247,9 +269,37 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     log.info("Process role: %s", config.process_role)
-    telegram_bootstrap = build_bootstrap(config, provider)
-    app = telegram_bootstrap.application
-    boot_id = telegram_bootstrap.runtime.boot_id
+    bus = ControlPlaneBus(config.data_dir)
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
+    )
+    directory = build_control_plane_directory(authority_capabilities)
+    services = (
+        build_bus_bot_services(bus, directory)
+        if authority_capabilities
+        else build_noop_bot_services()
+    )
+    dispatcher = ChannelDispatcher()
+    telegram_ingress = None
+    worker_runtime_bundle = None
+    app = None
+    if config.telegram_token:
+        dispatcher.register(TelegramChannelBootstrap(config, provider, services))
+        dispatcher.build_all_ingresses(config=config, delivery_handler=lambda *_args, **_kwargs: None)
+        telegram_ingress = dispatcher.get_ingress("telegram")
+        if telegram_ingress is None:
+            raise RuntimeError("Telegram channel ingress was not built")
+        telegram_ingress.runtime.channel_dispatcher = dispatcher
+        worker_runtime_bundle = telegram_ingress
+        app = telegram_ingress.application
+    else:
+        worker_runtime_bundle = build_worker_bundle(config, provider, services=services)
+        worker_runtime_bundle.runtime.channel_dispatcher = dispatcher
+
+    assert worker_runtime_bundle is not None
+    boot_id = worker_runtime_bundle.runtime.boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -265,63 +315,110 @@ def main() -> None:
     # worker loop catches items that survived a crash or were left behind.
     _worker_task = None
     _worker_stop = None
-    _agent_task = None
-    _agent_stop = None
+    registry_runtime = None
+    control_plane_runner = None
+    control_plane_runner_task = None
+    if config.agent_registries:
+        register_registry_channels(config, config.agent_registries, dispatcher)
+    if _runs_registry_runtime(config):
+        delivery_runtime = build_registry_delivery_runtime(
+            provider_name=provider.name,
+            provider_state_factory=provider.new_provider_state,
+            services=services,
+            bot=app.bot if app is not None else None,
+            dispatcher=dispatcher,
+        )
+        registry_runtime = RegistryRuntime(
+            config.agent_registries,
+            dispatcher,
+            lambda delivery: handle_registry_delivery(
+                config,
+                delivery,
+                runtime=delivery_runtime,
+            ),
+            config=config,
+            runtime_health_provider=CanonicalRuntimeHealthProvider(),
+            provider=provider,
+        )
+        control_plane_runner = ProcessorRunner(bus)
+        control_plane_runner.register(RegistryControlProcessor(registry_runtime))
 
-    async def _on_post_init(_app) -> None:
-        nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
+    async def _start_background_runtime(stop_event: asyncio.Event) -> None:
+        nonlocal _worker_task, _worker_stop, control_plane_runner_task
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
                 boot_id,
-                telegram_bootstrap.worker_dispatch,
-                deserialize_failure_notifier=telegram_bootstrap.worker_deserialize_failure_notifier,
+                worker_runtime_bundle.worker_dispatch,
+                deserialize_failure_notifier=worker_runtime_bundle.worker_deserialize_failure_notifier,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,
                 process_role=config.process_role,
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )
-        if _runs_registry_runtime(config):
-            delivery_runtime = build_registry_delivery_runtime(
-                provider_name=provider.name,
-                provider_state_factory=provider.new_provider_state,
-                bot=app.bot,
-            )
-            _agent_task, _agent_stop = start_agent_runtime_task(
-                config,
-                delivery_handler=lambda delivery: handle_registry_delivery(
-                    config,
-                    delivery,
-                    runtime=delivery_runtime,
-                ),
-                runtime_health_provider=CanonicalRuntimeHealthProvider(),
-                provider=provider,
+        if registry_runtime is not None:
+            await registry_runtime.start(stop_event=stop_event)
+        if control_plane_runner is not None:
+            await bus.reconcile_orphans(allowed_pairs=directory.all_pairs())
+            control_plane_runner_task = asyncio.create_task(
+                control_plane_runner.run(stop_event=stop_event)
             )
 
-    async def _on_post_shutdown(_app) -> None:
-        if _agent_stop:
-            _agent_stop.set()
+    async def _stop_background_runtime() -> None:
+        nonlocal control_plane_runner_task
+        if control_plane_runner is not None:
+            await control_plane_runner.stop()
+        if control_plane_runner_task is not None:
+            try:
+                await asyncio.wait_for(control_plane_runner_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                control_plane_runner_task.cancel()
+            finally:
+                control_plane_runner_task = None
+        if registry_runtime is not None:
+            await registry_runtime.stop()
         if _worker_stop:
             _worker_stop.set()
-        if _agent_task:
-            try:
-                await asyncio.wait_for(_agent_task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                _agent_task.cancel()
         if _worker_task:
             try:
                 await asyncio.wait_for(_worker_task, timeout=5.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 _worker_task.cancel()
 
-    app.post_init = _on_post_init
-    app.post_shutdown = _on_post_shutdown
+    if app is not None:
+        async def _on_post_init(_app) -> None:
+            process_stop_event = _app.bot_data.get("dispatcher_stop_event")
+            if not isinstance(process_stop_event, asyncio.Event):
+                raise RuntimeError("Dispatcher stop event is not attached to the Telegram application")
+            await _start_background_runtime(process_stop_event)
 
-    if config.process_role == ProcessRole.WORKER.value:
+        async def _on_post_shutdown(_app) -> None:
+            await _stop_background_runtime()
+
+        app.post_init = _on_post_init
+        app.post_shutdown = _on_post_shutdown
+
+    if not config.telegram_token:
+        log.info("Bot starting (registry-only)...")
+        try:
+            asyncio.run(
+                run_dispatcher_process(
+                    dispatcher,
+                    startup=_start_background_runtime,
+                    shutdown=_stop_background_runtime,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        except Exception as exc:
+            _exit_startup_failure(exc, config, mode="registry-only")
+        finally:
+            _close_runtime_resources(config)
+    elif config.process_role == ProcessRole.WORKER.value:
         log.info("Bot starting (worker-only)...")
         try:
-            asyncio.run(run_worker_process(app))
+            asyncio.run(run_dispatcher_process(dispatcher))
         except KeyboardInterrupt:
             pass
         except Exception as exc:
@@ -333,13 +430,9 @@ def main() -> None:
         log.info("Webhook URL: %s", sanitize_url_for_logging(config.webhook_url))
         log.info("Listening on %s:%d", config.webhook_listen, config.webhook_port)
         try:
-            app.run_webhook(
-                listen=config.webhook_listen,
-                port=config.webhook_port,
-                webhook_url=config.webhook_url,
-                secret_token=config.webhook_secret or None,
-                url_path="/webhook",
-            )
+            asyncio.run(run_dispatcher_process(dispatcher))
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             _exit_startup_failure(exc, config, mode="webhook")
         finally:
@@ -365,7 +458,9 @@ def main() -> None:
 
         log.info("Bot starting (long-poll)...")
         try:
-            app.run_polling()
+            asyncio.run(run_dispatcher_process(dispatcher))
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             _exit_startup_failure(exc, config, mode="polling")
         finally:

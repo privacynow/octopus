@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from app.agents.types import RoutedTaskResult
 from app.identity import telegram_conversation_key
+from app.session_state import session_from_dict, session_to_dict
 from app.session_defaults import default_session
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
+from app.workflows.delegation.coordination import apply_routed_result
 
 _SCHEMA_VERSION = 2
 
@@ -32,15 +37,51 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _execute_sql_script(conn: sqlite3.Connection, script: str) -> None:
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                conn.execute(statement)
+            buffer = ""
+    statement = buffer.strip()
+    if statement:
+        conn.execute(statement)
+
+
+def _run_migration_step(
+    conn: sqlite3.Connection,
+    version: int,
+    migration: Callable[[sqlite3.Connection], None],
+) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        migration(conn)
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+            (str(version),),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 class SQLiteSessionStore:
     """Session store backed by SQLite. One instance per backend; owns its connection cache."""
 
     def __init__(self) -> None:
-        self._connections: dict[Path, sqlite3.Connection] = {}
+        self._connections: dict[tuple[Path, int], sqlite3.Connection] = {}
+
+    def _connection_key(self, data_dir: Path) -> tuple[Path, int]:
+        return data_dir, threading.get_ident()
 
     def _db(self, data_dir: Path) -> sqlite3.Connection:
-        if data_dir in self._connections:
-            return self._connections[data_dir]
+        key = self._connection_key(data_dir)
+        if key in self._connections:
+            return self._connections[key]
         db_path = data_dir / "sessions.db"
         conn = sqlite3.connect(str(db_path), isolation_level="DEFERRED")
         try:
@@ -69,22 +110,19 @@ class SQLiteSessionStore:
         except Exception:
             conn.close()
             raise
-        self._connections[data_dir] = conn
+        self._connections[key] = conn
         return conn
 
     def _run_migrations(self, conn: sqlite3.Connection, stored_version: int) -> None:
         version = stored_version
         if version < 2:
-            self._migrate_v1_to_v2(conn)
+            _run_migration_step(conn, 2, self._migrate_v1_to_v2)
             version = 2
-        conn.execute(
-            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
-            (str(version),),
-        )
-        conn.commit()
+        return None
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
-        conn.executescript(
+        _execute_sql_script(
+            conn,
             """
             CREATE TABLE sessions_v2 (
                 conversation_key TEXT PRIMARY KEY,
@@ -109,7 +147,7 @@ class SQLiteSessionStore:
             DROP TABLE sessions;
             ALTER TABLE sessions_v2 RENAME TO sessions;
             CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions (updated_at);
-            """
+            """,
         )
 
     def _migrate_json_files(self, data_dir: Path, conn: sqlite3.Connection) -> None:
@@ -223,6 +261,46 @@ class SQLiteSessionStore:
         self._upsert(conn, conversation_key, session)
         conn.commit()
 
+    def apply_delegation_result_atomically(
+        self,
+        data_dir: Path,
+        conversation_key: str,
+        *,
+        routed_task_id: str,
+        authority_ref: str,
+        result: RoutedTaskResult,
+    ) -> DelegationUpdateOutcome:
+        conn = self._db(data_dir)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT data FROM sessions WHERE conversation_key = ?",
+                (conversation_key,),
+            ).fetchone()
+            raw: dict[str, Any] = {}
+            if row is not None:
+                try:
+                    decoded = json.loads(row[0])
+                    if isinstance(decoded, dict):
+                        raw = decoded
+                except json.JSONDecodeError:
+                    raw = {}
+            session = session_from_dict(raw)
+            applied = apply_routed_result(
+                session.pending_delegation,
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=result,
+            )
+            if applied.matched:
+                session.pending_delegation = applied.pending
+                self._upsert(conn, conversation_key, session_to_dict(session))
+            conn.commit()
+            return applied
+        except Exception:
+            conn.rollback()
+            raise
+
     def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         conn = self._db(data_dir)
         conn.execute("DELETE FROM sessions WHERE conversation_key = ?", (conversation_key,))
@@ -254,9 +332,11 @@ class SQLiteSessionStore:
         return results
 
     def close_db(self, data_dir: Path) -> None:
-        conn = self._connections.pop(data_dir, None)
-        if conn:
-            conn.close()
+        keys = [key for key in self._connections if key[0] == data_dir]
+        for key in keys:
+            conn = self._connections.pop(key, None)
+            if conn:
+                conn.close()
 
     def close_all_db(self) -> None:
         for data_dir in list(self._connections.keys()):

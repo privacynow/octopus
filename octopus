@@ -112,6 +112,59 @@ bot_mode_label() {
   printf '%s\n' "${mode:-standalone}"
 }
 
+bot_registry_state_rows() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot-provider python -c '
+from pathlib import Path
+import json
+import os
+
+data_dir = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent"
+registries_dir = data_dir / "registries"
+
+def emit(path, fallback_id):
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return
+    registry_id = str(data.get("registry_id") or fallback_id)
+    connectivity = str(data.get("connectivity_state") or "unknown")
+    last_error = str(data.get("last_error") or "")
+    print(f"{registry_id}|{connectivity}|{last_error}")
+
+if registries_dir.exists():
+    for path in sorted(registries_dir.glob("*.json")):
+        emit(path, path.stem)
+' 2>/dev/null || true
+}
+
+print_bot_registry_connection_lines() {
+  local slug="$1" record="" state_rows="" running=0
+  local registry_id="" registry_url="" enroll_token="" registry_scope=""
+  local state_id="" connectivity="" last_error="" connection_state=""
+  if bot_is_running "$slug"; then
+    running=1
+    state_rows="$(bot_registry_state_rows "$slug" || true)"
+  fi
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ -n "$registry_id" ] || continue
+    connection_state="stopped"
+    if [ "$running" -eq 1 ]; then
+      connection_state="starting"
+    fi
+    while IFS='|' read -r state_id connectivity last_error; do
+      [ -n "$state_id" ] || continue
+      if [ "$state_id" = "$registry_id" ]; then
+        connection_state="$connectivity"
+        break
+      fi
+    done <<< "$state_rows"
+    printf '      %s    %s    %s    %s\n' "$registry_id" "$registry_scope" "$connection_state" "$registry_url"
+  done < <(bot_registry_connection_records "$slug")
+}
+
 cmd_status() {
   local slug="" provider="" mode="" running="" detail="" raw_status="" label=""
   if [ "$(count_bots)" -eq 0 ]; then
@@ -132,6 +185,9 @@ cmd_status() {
       [ -n "$raw_status" ] && detail="(${raw_status})"
     fi
     printf '  %s    %s   %s   %s   %s\n' "$label" "$provider" "$mode" "$running" "$detail"
+    if bot_is_registry "$slug"; then
+      print_bot_registry_connection_lines "$slug"
+    fi
   done
 
   printf '\nRegistry:\n'
@@ -193,61 +249,158 @@ read_local_registry_enroll_token() {
   read_bot_env_value REGISTRY_ENROLL_TOKEN .deploy/registry/.env
 }
 
+registry_connection_id_exists() {
+  local slug="$1" candidate="$2" registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ "$registry_id" = "$candidate" ] && return 0
+  done < <(bot_registry_connection_records "$slug")
+  return 1
+}
+
+registry_connection_url_exists() {
+  local slug="$1" candidate="$2" registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ "$registry_url" = "$candidate" ] && return 0
+  done < <(bot_registry_connection_records "$slug")
+  return 1
+}
+
+derive_registry_connection_id() {
+  local slug="$1" registry_kind="$2" registry_url="$3" base="" host="" candidate="" suffix=2
+  if [ "$registry_kind" = "local" ] || registry_url_is_local "$registry_url"; then
+    base="local"
+  else
+    host="${registry_url#*://}"
+    host="${host%%/*}"
+    host="${host%%:*}"
+    base="$(normalize_slug "$host")"
+    [ -n "$base" ] || base="registry"
+  fi
+  candidate="$base"
+  while registry_connection_id_exists "$slug" "$candidate"; do
+    candidate="${base}-${suffix}"
+    suffix=$((suffix + 1))
+  done
+  printf '%s\n' "$candidate"
+}
+
 configure_bot_for_registry() {
-  local slug="$1" registry_url="$2" enroll_token="$3" env_file=""
+  local slug="$1" registry_url="$2" enroll_token="$3" registry_scope="${4:-full}" registry_id="${5:-default}" env_file=""
   env_file="$(bot_env_file "$slug")"
   upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
-  upsert_env_file_value BOT_AGENT_REGISTRY_URL "$registry_url" "$env_file"
-  upsert_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$enroll_token" "$env_file"
+  write_registry_connection_records "$env_file" "${registry_id}|${registry_url}|${enroll_token}|${registry_scope}"
+}
+
+add_bot_registry_connection() {
+  local slug="$1" registry_url="$2" enroll_token="$3" registry_scope="${4:-full}" registry_id="${5:-}" env_file=""
+  local records=()
+  local record=""
+  env_file="$(bot_env_file "$slug")"
+  if [ -z "$registry_id" ]; then
+    octopus_error "Registry connection id is required."
+    return 1
+  fi
+  if registry_connection_id_exists "$slug" "$registry_id"; then
+    octopus_error "Registry connection '$registry_id' is already configured for this bot."
+    return 1
+  fi
+  if registry_connection_url_exists "$slug" "$registry_url"; then
+    octopus_error "Registry $registry_url is already configured for this bot."
+    return 1
+  fi
+  while IFS= read -r record; do
+    [ -n "$record" ] || continue
+    records+=("$record")
+  done < <(bot_registry_connection_records "$slug")
+  records+=("${registry_id}|${registry_url}|${enroll_token}|${registry_scope}")
+  upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
+  write_registry_connection_records "$env_file" "${records[@]}"
+}
+
+remove_bot_registry_connection() {
+  local slug="$1" registry_id="$2" env_file="" record="" existing_id="" registry_url="" enroll_token="" registry_scope=""
+  local kept_records=()
+  env_file="$(bot_env_file "$slug")"
+  while IFS='|' read -r existing_id registry_url enroll_token registry_scope; do
+    [ "$existing_id" = "$registry_id" ] && continue
+    kept_records+=("${existing_id}|${registry_url}|${enroll_token}|${registry_scope}")
+  done < <(bot_registry_connection_records "$slug")
+  if [ "${#kept_records[@]}" -eq 0 ]; then
+    configure_bot_for_standalone "$slug"
+    return 0
+  fi
+  upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
+  write_registry_connection_records "$env_file" "${kept_records[@]}"
 }
 
 configure_bot_for_standalone() {
   local slug="$1" env_file=""
   env_file="$(bot_env_file "$slug")"
   upsert_env_file_value BOT_AGENT_MODE "standalone" "$env_file"
-  remove_env_file_value BOT_AGENT_REGISTRY_URL "$env_file"
-  remove_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$env_file"
+  clear_registry_connection_values "$env_file"
 }
 
 clear_bot_registry_state() {
   local slug="$1"
-  bot_compose "$slug" run --rm bot-provider sh -lc 'rm -f "$BOT_DATA_DIR/agent/registry_state.json"' >/dev/null 2>&1 || true
+  shift || true
+  local registry_ids="${*:-}"
+  bot_compose "$slug" run --rm -e OCTOPUS_CLEAR_REGISTRY_IDS="$registry_ids" bot-provider python -c '
+from pathlib import Path
+import os
+
+data_dir = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent"
+registries_dir = data_dir / "registries"
+registry_ids = [item for item in os.environ.get("OCTOPUS_CLEAR_REGISTRY_IDS", "").split() if item]
+
+if not registry_ids:
+    if registries_dir.exists():
+        for path in registries_dir.glob("*.json"):
+            path.unlink(missing_ok=True)
+else:
+    for registry_id in registry_ids:
+        if registries_dir.exists():
+            (registries_dir / f"{registry_id}.json").unlink(missing_ok=True)
+' >/dev/null 2>&1 || true
 }
 
 restart_bot_after_config_change() {
   local slug="$1"
-  clear_bot_registry_state "$slug"
+  shift || true
+  clear_bot_registry_state "$slug" "$@"
   bot_compose "$slug" stop bot >/dev/null 2>&1 || true
   start_bot_until_running "$slug"
 }
 
-bot_registry_state_json() {
-  local slug="$1"
-  bot_compose "$slug" run --rm bot-provider python -c '
-from pathlib import Path
-import os
-
-path = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent" / "registry_state.json"
-if path.exists():
-    print(path.read_text())
-'
-}
-
 bot_registry_has_identity() {
-  local slug="$1" state_json=""
-  state_json="$(bot_registry_state_json "$slug" 2>/dev/null || true)"
-  [ -n "$state_json" ] || return 1
-  printf '%s' "$state_json" | python3 -c '
+  local slug="$1" registry_id="${2:-}"
+  bot_compose "$slug" run --rm -e OCTOPUS_REGISTRY_ID="$registry_id" bot-provider python -c '
+from pathlib import Path
 import json
+import os
 import sys
 
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    raise SystemExit(1)
+data_dir = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent"
+registry_id = os.environ.get("OCTOPUS_REGISTRY_ID", "").strip()
+paths = []
+if registry_id:
+    paths.append(data_dir / "registries" / f"{registry_id}.json")
+else:
+    registries_dir = data_dir / "registries"
+    if registries_dir.exists():
+        paths.extend(sorted(registries_dir.glob("*.json")))
 
-raise SystemExit(0 if data.get("agent_id") and data.get("agent_token") else 1)
-'
+for path in paths:
+    if not path.exists():
+        continue
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+    if data.get("agent_id") and data.get("agent_token"):
+        raise SystemExit(0)
+
+raise SystemExit(1)
+' >/dev/null 2>&1
 }
 
 registry_logs_excerpt() {
@@ -258,9 +411,9 @@ registry_logs_excerpt() {
 }
 
 verify_registry_enrollment() {
-  local slug="$1" doctor_output="" log_excerpt="" attempt=0
+  local slug="$1" registry_id="${2:-}" doctor_output="" log_excerpt="" attempt=0
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    if bot_registry_has_identity "$slug"; then
+    if bot_registry_has_identity "$slug" "$registry_id"; then
       return 0
     fi
     sleep 2
@@ -277,11 +430,13 @@ verify_registry_enrollment() {
 }
 
 bots_using_local_registry_count() {
-  local slug="" count=0
+  local slug="" count=0 registry_id="" registry_url="" enroll_token="" registry_scope=""
   for slug in $(list_bot_slugs); do
-    if bot_uses_local_reg "$slug"; then
+    while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+      [ "$registry_url" = "http://registry:8787" ] || continue
       count=$((count + 1))
-    fi
+      break
+    done < <(bot_registry_connection_records "$slug")
   done
   printf '%s\n' "$count"
 }
@@ -334,11 +489,28 @@ prompt_remote_registry_token() {
   done
 }
 
+prompt_registry_scope() {
+  local registry_scope="" default_scope="${1:-full}"
+  while true; do
+    registry_scope="$(prompt_with_default "Registry scope (full, channel, coordination)" "$default_scope")"
+    case "$registry_scope" in
+      full|channel|coordination)
+        printf '%s\n' "$registry_scope"
+        return 0
+        ;;
+      *)
+        octopus_error "Choose 'full', 'channel', or 'coordination'."
+        ;;
+    esac
+  done
+}
+
 prompt_registry_target() {
   local default_mode="${1:-local}" choice="" lowered="" registry_url="" enroll_token=""
   REGISTRY_TARGET_KIND=""
   REGISTRY_TARGET_URL=""
   REGISTRY_TARGET_TOKEN=""
+  REGISTRY_TARGET_SCOPE=""
   while true; do
     case "$default_mode" in
       local_existing)
@@ -366,6 +538,7 @@ prompt_registry_target() {
         REGISTRY_TARGET_KIND="local"
         REGISTRY_TARGET_URL="http://registry:8787"
         REGISTRY_TARGET_TOKEN="$enroll_token"
+        REGISTRY_TARGET_SCOPE="$(prompt_registry_scope)" || return 1
         return 0
         ;;
       remote)
@@ -374,6 +547,7 @@ prompt_registry_target() {
         REGISTRY_TARGET_KIND="remote"
         REGISTRY_TARGET_URL="$registry_url"
         REGISTRY_TARGET_TOKEN="$enroll_token"
+        REGISTRY_TARGET_SCOPE="$(prompt_registry_scope)" || return 1
         return 0
         ;;
       *)
@@ -388,6 +562,7 @@ prompt_new_bot_registry_target() {
   REGISTRY_TARGET_KIND="standalone"
   REGISTRY_TARGET_URL=""
   REGISTRY_TARGET_TOKEN=""
+  REGISTRY_TARGET_SCOPE=""
   read -r -p "Connect to registry? [y/N] " answer || return 1
   lowered="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
   case "$lowered" in
@@ -414,8 +589,61 @@ print_registry_connection_success() {
   fi
 }
 
+choose_registry_connection_id() {
+  local slug="$1" prompt="${2:-Choose a registry connection}" choice=""
+  local records=() registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ -n "$registry_id" ] || continue
+    records+=("${registry_id}|${registry_url}|${enroll_token}|${registry_scope}")
+  done < <(bot_registry_connection_records "$slug")
+
+  case "${#records[@]}" in
+    0)
+      octopus_error "No registry connections are configured for this bot."
+      return 1
+      ;;
+    1)
+      IFS='|' read -r registry_id registry_url enroll_token registry_scope <<< "${records[0]}"
+      printf '%s\n' "$registry_id"
+      return 0
+      ;;
+  esac
+
+  printf 'Registry connections:\n'
+  local index=1
+  for choice in "${records[@]}"; do
+    IFS='|' read -r registry_id registry_url enroll_token registry_scope <<< "$choice"
+    printf '  %d. %s (%s) %s\n' "$index" "$registry_id" "$registry_scope" "$registry_url"
+    index=$((index + 1))
+  done
+
+  while true; do
+    read -r -p "${prompt} (id or number): " choice || return 1
+    case "$choice" in
+      '' )
+        octopus_error "Choose one of the configured registry connections."
+        ;;
+      *[!0-9]*)
+        if registry_connection_id_exists "$slug" "$choice"; then
+          printf '%s\n' "$choice"
+          return 0
+        fi
+        octopus_error "No registry connection named '$choice' is configured."
+        ;;
+      *)
+        if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#records[@]}" ]; then
+          IFS='|' read -r registry_id registry_url enroll_token registry_scope <<< "${records[$((choice - 1))]}"
+          printf '%s\n' "$registry_id"
+          return 0
+        fi
+        octopus_error "Choose one of the listed registry connections."
+        ;;
+    esac
+  done
+}
+
 connect_bot_to_registry_flow() {
-  local slug="${1:-}"
+  local slug="${1:-}" registry_id=""
   slug="$(resolve_bot_slug "$slug")" || return 1
   if bot_is_registry "$slug"; then
     octopus_error "This bot is already connected to a registry. Choose switch or disconnect instead."
@@ -426,25 +654,47 @@ connect_bot_to_registry_flow() {
   else
     prompt_registry_target local_new || return 1
   fi
-  configure_bot_for_registry "$slug" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
-  restart_bot_after_config_change "$slug" || return 1
-  verify_registry_enrollment "$slug" || return 1
+  registry_id="$(derive_registry_connection_id "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
+  configure_bot_for_registry "$slug" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "$REGISTRY_TARGET_SCOPE" "$registry_id"
+  restart_bot_after_config_change "$slug" "$registry_id" || return 1
+  verify_registry_enrollment "$slug" "$registry_id" || return 1
+  print_registry_connection_success "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+}
+
+add_registry_connection_flow() {
+  local slug="${1:-}" registry_id=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if has_local_registry; then
+    prompt_registry_target local_existing || return 1
+  else
+    prompt_registry_target local_new || return 1
+  fi
+  registry_id="$(derive_registry_connection_id "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
+  add_bot_registry_connection "$slug" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "$REGISTRY_TARGET_SCOPE" "$registry_id" || return 1
+  restart_bot_after_config_change "$slug" "$registry_id" || return 1
+  verify_registry_enrollment "$slug" "$registry_id" || return 1
   print_registry_connection_success "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
 }
 
 disconnect_bot_from_registry_flow() {
-  local slug="${1:-}" answer=""
+  local slug="${1:-}" answer="" registry_id="" remaining_count=0
   slug="$(resolve_bot_slug "$slug")" || return 1
   if ! bot_is_registry "$slug"; then
     octopus_error "This bot is already running standalone."
     return 1
   fi
-  read -r -p "Disconnect ${slug} from registry? Bot data is preserved. [y/N] " answer || return 1
+  registry_id="$(choose_registry_connection_id "$slug" "Disconnect which registry connection")" || return 1
+  read -r -p "Disconnect registry connection '${registry_id}' from ${slug}? Bot data is preserved. [y/N] " answer || return 1
   case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
     y|yes)
-      configure_bot_for_standalone "$slug"
-      restart_bot_after_config_change "$slug" || return 1
-      printf 'Bot %s is now running standalone.\n' "$slug"
+      remove_bot_registry_connection "$slug" "$registry_id"
+      restart_bot_after_config_change "$slug" "$registry_id" || return 1
+      remaining_count="$(bot_registry_connection_count "$slug")"
+      if [ "$remaining_count" -eq 0 ]; then
+        printf 'Bot %s is now running standalone.\n' "$slug"
+      else
+        printf "Registry connection %s has been removed from bot %s.\n" "$registry_id" "$slug"
+      fi
       offer_stop_unused_local_registry
       ;;
     *)
@@ -454,28 +704,44 @@ disconnect_bot_from_registry_flow() {
 }
 
 switch_local_bot_to_remote_registry_flow() {
-  local slug="${1:-}" remote_url="" enroll_token=""
+  local slug="${1:-}" remote_url="" enroll_token="" current_id="" current_scope="" new_registry_id=""
   slug="$(resolve_bot_slug "$slug")" || return 1
+  if [ "$(bot_registry_connection_count "$slug")" -ne 1 ]; then
+    octopus_error "Switching registry targets is only available when exactly one registry connection is configured."
+    return 1
+  fi
   if ! bot_uses_local_reg "$slug"; then
     octopus_error "This bot is not using the local registry."
     return 1
   fi
+  while IFS='|' read -r current_id _current_url _current_token current_scope; do
+    break
+  done < <(bot_registry_connection_records "$slug")
   remote_url="$(prompt_remote_registry_url)" || return 1
   enroll_token="$(prompt_remote_registry_token)" || return 1
-  configure_bot_for_registry "$slug" "$remote_url" "$enroll_token"
-  restart_bot_after_config_change "$slug" || return 1
-  verify_registry_enrollment "$slug" || return 1
+  REGISTRY_TARGET_SCOPE="$(prompt_registry_scope "${current_scope:-full}")" || return 1
+  new_registry_id="$(derive_registry_connection_id "$slug" "remote" "$remote_url")"
+  configure_bot_for_registry "$slug" "$remote_url" "$enroll_token" "$REGISTRY_TARGET_SCOPE" "$new_registry_id"
+  restart_bot_after_config_change "$slug" "$current_id" "$new_registry_id" || return 1
+  verify_registry_enrollment "$slug" "$new_registry_id" || return 1
   printf 'Bot %s is now connected to the registry at %s.\n' "$slug" "$remote_url"
   offer_stop_unused_local_registry
 }
 
 switch_remote_bot_to_local_registry_flow() {
-  local slug="${1:-}" enroll_token=""
+  local slug="${1:-}" enroll_token="" current_id="" current_scope=""
   slug="$(resolve_bot_slug "$slug")" || return 1
+  if [ "$(bot_registry_connection_count "$slug")" -ne 1 ]; then
+    octopus_error "Switching registry targets is only available when exactly one registry connection is configured."
+    return 1
+  fi
   if ! bot_uses_remote_reg "$slug"; then
     octopus_error "This bot is not using a remote registry."
     return 1
   fi
+  while IFS='|' read -r current_id _current_url _current_token current_scope; do
+    break
+  done < <(bot_registry_connection_records "$slug")
   ensure_local_registry || {
     octopus_error "Could not start the local registry. Run ./octopus registry and try again."
     return 1
@@ -485,15 +751,16 @@ switch_remote_bot_to_local_registry_flow() {
     octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
     return 1
   fi
-  configure_bot_for_registry "$slug" "http://registry:8787" "$enroll_token"
-  restart_bot_after_config_change "$slug" || return 1
-  verify_registry_enrollment "$slug" || return 1
+  REGISTRY_TARGET_SCOPE="$(prompt_registry_scope "${current_scope:-full}")" || return 1
+  configure_bot_for_registry "$slug" "http://registry:8787" "$enroll_token" "$REGISTRY_TARGET_SCOPE" "local"
+  restart_bot_after_config_change "$slug" "$current_id" "local" || return 1
+  verify_registry_enrollment "$slug" "local" || return 1
   printf 'Bot %s is now connected to the local registry.\n' "$slug"
   printf 'Registry UI: %s\n' "$(registry_ui_url)"
 }
 
 manage_bot_registry_flow() {
-  local slug="${1:-}" choice=""
+  local slug="${1:-}" choice="" connection_count=0
   slug="$(resolve_bot_slug "$slug")" || return 1
   if bot_is_standalone "$slug"; then
     connect_bot_to_registry_flow "$slug"
@@ -501,28 +768,46 @@ manage_bot_registry_flow() {
   fi
 
   while true; do
-    if bot_uses_local_reg "$slug"; then
+    connection_count="$(bot_registry_connection_count "$slug")"
+    if [ "$connection_count" -gt 1 ]; then
       printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
-      printf '  1. Switch to remote registry\n'
-      printf '  2. Disconnect from registry\n'
+      print_bot_registry_connection_lines "$slug"
+      printf '\n  1. Add registry connection\n'
+      printf '  2. Remove registry connection\n'
       printf '  3. Back\n'
       read -r -p "Choose an option: " choice || return 1
       case "$choice" in
-        1) switch_local_bot_to_remote_registry_flow "$slug"; return $? ;;
+        1) add_registry_connection_flow "$slug"; return $? ;;
         2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
         3) return 0 ;;
         *) octopus_error "Choose one of the listed options." ;;
       esac
-    else
+    elif bot_uses_local_reg "$slug"; then
       printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
-      printf '  1. Switch to local registry\n'
-      printf '  2. Disconnect from registry\n'
-      printf '  3. Back\n'
+      printf '  1. Add registry connection\n'
+      printf '  2. Switch to remote registry\n'
+      printf '  3. Disconnect from registry\n'
+      printf '  4. Back\n'
       read -r -p "Choose an option: " choice || return 1
       case "$choice" in
-        1) switch_remote_bot_to_local_registry_flow "$slug"; return $? ;;
-        2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
-        3) return 0 ;;
+        1) add_registry_connection_flow "$slug"; return $? ;;
+        2) switch_local_bot_to_remote_registry_flow "$slug"; return $? ;;
+        3) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        4) return 0 ;;
+        *) octopus_error "Choose one of the listed options." ;;
+      esac
+    else
+      printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
+      printf '  1. Add registry connection\n'
+      printf '  2. Switch to local registry\n'
+      printf '  3. Disconnect from registry\n'
+      printf '  4. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) add_registry_connection_flow "$slug"; return $? ;;
+        2) switch_remote_bot_to_local_registry_flow "$slug"; return $? ;;
+        3) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        4) return 0 ;;
         *) octopus_error "Choose one of the listed options." ;;
       esac
     fi
@@ -750,6 +1035,7 @@ reset_bot_setup_overrides() {
   REGISTRY_TARGET_KIND="standalone"
   REGISTRY_TARGET_URL=""
   REGISTRY_TARGET_TOKEN=""
+  REGISTRY_TARGET_SCOPE=""
 }
 
 prompt_timeout_seconds_value() {
@@ -882,9 +1168,13 @@ write_first_bot_env() {
   local skills="${BOT_SETUP_SKILLS:-}" allowed_users="${BOT_SETUP_ALLOWED_USERS:-}"
   local timeout_seconds="${BOT_SETUP_TIMEOUT_SECONDS:-3600}" working_dir="${BOT_SETUP_WORKING_DIR:-/home/bot}"
   local completion_webhook_url="${BOT_SETUP_COMPLETION_WEBHOOK_URL:-}"
+  local credential_key="${BOT_SETUP_CREDENTIAL_KEY:-}"
   bot_dir=".deploy/bots/$slug"
   env_file="$bot_dir/.env"
   mkdir -p "$bot_dir"
+  if [ -z "$credential_key" ]; then
+    credential_key="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  fi
   {
     write_env_assignment_line BOT_INSTANCE "$slug"
     write_env_assignment_line BOT_SLUG "$slug"
@@ -920,6 +1210,7 @@ write_first_bot_env() {
     write_env_assignment_line BOT_TIMEOUT_SECONDS "$timeout_seconds"
     write_env_assignment_line BOT_WORKING_DIR "$working_dir"
     write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
+    write_env_assignment_line BOT_CREDENTIAL_KEY "$credential_key"
     if [ -n "$completion_webhook_url" ]; then
       write_env_assignment_line BOT_COMPLETION_WEBHOOK_URL "$completion_webhook_url"
     fi
@@ -1193,6 +1484,7 @@ EOF
 
 add_bot_flow() {
   local mode="${1:-quick}"
+  local registry_id=""
   prepare_new_bot_setup "$mode" || return 1
   if [ "${NEW_BOT_SETUP_MODE:-$mode}" = "quick" ]; then
     prompt_new_bot_registry_target || return 1
@@ -1202,12 +1494,13 @@ add_bot_flow() {
   ensure_network
   write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
-    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+    registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
   run_bot_doctor_until_ready "$NEW_BOT_SLUG"
   start_bot_until_running "$NEW_BOT_SLUG"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
-    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+    verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
   fi
   print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
@@ -1217,18 +1510,20 @@ add_bot_flow() {
 
 first_bot_flow() {
   local mode="${1:-quick}"
+  local registry_id=""
   prepare_new_bot_setup "$mode" || return 1
   ensure_provider_image_ready "$NEW_BOT_PROVIDER"
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
   write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
-    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+    registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
   run_bot_doctor_until_ready "$NEW_BOT_SLUG"
   start_bot_until_running "$NEW_BOT_SLUG"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
-    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+    verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
   fi
   print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then

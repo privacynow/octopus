@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="810" viewBox="0 0 1200 810" role="img" aria-labelledby="title desc">
   <title id="title">Add a new bot directly into local registry mode</title>
-  <desc id="desc">Two terminal panels showing a new bot being added into local registry mode and the alternate prompt shown when no local registry exists yet.</desc>
+  <desc id="desc">Two terminal panels showing a new bot being added into local registry mode, including the scope prompt and the alternate prompt shown when no local registry exists yet.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -20,7 +20,7 @@
     </filter>
   </defs>
   <g transform="translate(28 24)">
-    <rect class="panel" x="0" y="0" width="1144" height="524" rx="10"/>
+    <rect class="panel" x="0" y="0" width="1144" height="594" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
     <text class="label" x="102" y="34">add a new bot directly into local registry mode</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
@@ -37,22 +37,25 @@
         <tspan x="34" dy="29">Paste your Telegram bot token:</tspan>
         <tspan x="34" dy="29">This token belongs to Work Bot (@work_bot).</tspan>
         <tspan x="34" dy="29">Provider (claude or codex) [claude]:</tspan>
+        <tspan x="34" dy="29">Press Enter for quick setup, or type 'full' for advanced options:</tspan>
         <tspan x="34" dy="29">Connect to registry? [y/N] y</tspan>
         <tspan x="34" dy="29">Press Enter to use the local registry, or type 'remote' to use a remote registry:</tspan>
+        <tspan x="34" dy="29">Registry scope (full, channel, coordination) [full]:</tspan>
         <tspan x="34" dy="29">Bot work-bot is now connected to the local registry.</tspan>
         <tspan x="34" dy="29">Registry UI: http://localhost:8787/ui</tspan>
+        <tspan x="34" dy="29">Bot is running!</tspan>
       </text>
     </g>
     <use href="#copy-add-bot-local" class="glow-copy"/>
     <use href="#copy-add-bot-local"/>
 
-    <rect class="panel" x="0" y="546" width="1144" height="140" rx="10"/>
-    <circle class="dot" cx="26" cy="574" r="6.5"/><circle class="dot" cx="48" cy="574" r="6.5"/><circle class="dot" cx="70" cy="574" r="6.5"/>
-    <text class="label" x="102" y="580">alternate prompt when no local registry exists yet</text>
-    <line class="rule" x1="0" y1="604" x2="1144" y2="604"/>
+    <rect class="panel" x="0" y="616" width="1144" height="140" rx="10"/>
+    <circle class="dot" cx="26" cy="644" r="6.5"/><circle class="dot" cx="48" cy="644" r="6.5"/><circle class="dot" cx="70" cy="644" r="6.5"/>
+    <text class="label" x="102" y="650">alternate prompt when no local registry exists yet</text>
+    <line class="rule" x1="0" y1="674" x2="1144" y2="674"/>
     <g id="copy-add-bot-local-alt">
       <text class="line" xml:space="preserve">
-        <tspan x="34" y="640">Press Enter to start a local registry, or type 'remote' to use a remote registry:</tspan>
+        <tspan x="34" y="710">Press Enter to start a local registry, or type 'remote' to use a remote registry:</tspan>
       </text>
     </g>
     <use href="#copy-add-bot-local-alt" class="glow-copy"/>

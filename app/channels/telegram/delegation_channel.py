@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.formatting import summarize_text
+from app.identity import telegram_conversation_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
-from app.agents.bridge import publish_timeline_event, summarize_text, telegram_conversation_ref
 from app.agents.delegation import (
     DelegationRuntime,
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
+    preview_delegation_targets,
 )
 from app.agents.types import TimelineEvent
 from app.session_state import PendingDelegation, SessionState
@@ -64,12 +66,7 @@ async def publish_delegation_proposed_event(
         body=body,
         status=delegation.status,
     )
-    publisher = getattr(message, "publish_timeline", None)
-    if callable(publisher):
-        await publisher(event)
-        return
-    await publish_timeline_event(
-        runtime.config,
+    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
         conversation_ref=delegation.conversation_ref,
         kind=event.kind,
         title=event.title,
@@ -95,12 +92,19 @@ async def propose_delegation_plan(
         result.delegation_resume_instruction,
         list(result.delegation_tasks),
     )
+    previews = await preview_delegation_targets(
+        delegation,
+        agent_directory=runtime.services.control_plane.agent_directory,
+    )
     session.pending_delegation = delegation
     save_session(runtime, chat_id, session)
     await publish_delegation_proposed_event(runtime, message, delegation)
 
     send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
-    rendered = telegram_presenters.delegation_plan_message(delegation)
+    rendered = telegram_presenters.delegation_plan_message(
+        delegation,
+        previews=previews,
+    )
     await send_plan(
         rendered.text,
         parse_mode=rendered.parse_mode,

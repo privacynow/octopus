@@ -39,6 +39,7 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
+from app.identity import telegram_conversation_ref
 from app.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,
@@ -46,7 +47,7 @@ from app.execution_context import (
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.providers.base import RunResult
 from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
-from app.runtime.work_admission import trust_tier_for_source
+from app.runtime.work_admission import trust_tier_for_ref
 from app.session_state import (
     PendingApproval,
     PendingRetry,
@@ -891,7 +892,12 @@ async def test_export_uses_resolved_skills_not_raw_session():
 
         # Verify the resolved context gives [] for public users
         session_after = telegram_load_session(current_runtime(), 8005)
-        trust = trust_tier_for_source("telegram", normalize_user(public_user), config=current_runtime().config)
+        trust = trust_tier_for_ref(
+            telegram_conversation_ref(current_runtime().config, chat.id),
+            normalize_user(public_user),
+            config=current_runtime().config,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
         resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (
             f"Public user should resolve to zero skills, got: {resolved.active_skills}"

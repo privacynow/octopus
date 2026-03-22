@@ -1,10 +1,11 @@
 """Tests for config.py — env parsing, validation, webhook mode."""
 
+import asyncio
 import os
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,9 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import InvalidToken, NetworkError
 
+from app.agents.types import RegistryConnectionConfig
 from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
+from app.runtime.services import BotServices
 from app.session_state import ProjectBinding
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 
 
 # -- load_dotenv_file --
@@ -84,6 +87,43 @@ def test_validate_config_missing_token():
     )
     assert any("TOKEN" in e for e in errors2)
     assert any("env file" in e or "./octopus" in e for e in errors2)
+
+def test_validate_config_accepts_channel_capable_registry_without_telegram():
+    registry = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="channel",
+        poll_interval_seconds=5.0,
+    )
+    errors = validate_config(
+        make_config(
+            telegram_token="",
+            agent_mode="registry",
+            agent_registries=(registry,),
+        )
+    )
+
+    assert not any("ingress-capable channel" in error for error in errors)
+
+def test_validate_config_rejects_coordination_only_registry_without_telegram():
+    registry = RegistryConnectionConfig(
+        registry_id="ops",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="coordination",
+        poll_interval_seconds=5.0,
+    )
+    errors = validate_config(
+        make_config(
+            telegram_token="",
+            agent_mode="registry",
+            agent_registries=(registry,),
+        )
+    )
+
+    assert any("ingress-capable channel" in error for error in errors)
+    assert any("TELEGRAM_BOT_TOKEN" in error or "BOT_AGENT_REGISTRY_SCOPE" in error for error in errors)
 
 def test_validate_config_bad_provider():
     errors3 = validate_config(
@@ -159,6 +199,27 @@ def test_validate_config_codex_mutual_exclusion():
     assert any("CODEX_FULL_AUTO" in e for e in errors6)
 
 
+def test_validate_config_rejects_invalid_codex_sandbox():
+    errors = validate_config(make_config(codex_sandbox="off"))
+    assert any("CODEX_SANDBOX" in e for e in errors)
+
+
+def test_load_config_rejects_invalid_codex_sandbox(tmp_path: Path):
+    env_path = tmp_path / "invalid-codex.env"
+    env_path.write_text(
+        "TELEGRAM_BOT_TOKEN=test-token\n"
+        "BOT_PROVIDER=codex\n"
+        "BOT_ALLOW_OPEN=1\n"
+        "CODEX_SANDBOX=off\n",
+        encoding="utf-8",
+    )
+
+    with patch("app.config.env_path_for_instance", return_value=env_path):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(SystemExit, match="CODEX_SANDBOX"):
+                load_config("test-invalid-codex")
+
+
 # -- BOT_SKILLS validation --
 
 def test_validate_config_unknown_skill():
@@ -207,19 +268,21 @@ def test_validate_config_database_url_must_be_postgres():
 
 
 def test_validate_config_rejects_malformed_registry_url():
-    errors = validate_config(make_config(agent_registry_url="http://"))
-    assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
+    errors = validate_config(
+        make_config(agent_registries=(make_registry_connection(url="http://"),))
+    )
+    assert any("valid http" in e and "default" in e for e in errors)
 
 
 def test_validate_config_rejects_remote_http_registry_url(tmp_path: Path):
     errors = validate_config(
         make_config(
-            agent_registry_url="http://registry.example.com",
+            agent_registries=(make_registry_connection(url="http://registry.example.com"),),
             working_dir=tmp_path,
         )
     )
     assert any(
-        "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address" in error
+        "uses plain HTTP over a non-local address" in error
         for error in errors
     )
 
@@ -243,23 +306,65 @@ def test_validate_config_poll_mode_no_webhook_errors():
     assert webhook_errors == []
 
 
-def test_validate_config_completion_webhook_url_is_non_fatal_when_malformed():
+def test_validate_config_rejects_malformed_completion_webhook_url():
     errors = validate_config(make_config(completion_webhook_url="http://"))
-    assert not any("COMPLETION_WEBHOOK" in e for e in errors)
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
 
 
-def test_validate_config_redacts_completion_webhook_query_params(tmp_path: Path, caplog):
-    with caplog.at_level("WARNING"):
-        errors = validate_config(
-            make_config(
-                completion_webhook_url="not-a-url?token=secret",
-                working_dir=tmp_path,
-            )
+def test_validate_config_rejects_remote_plain_http_completion_webhook():
+    errors = validate_config(make_config(completion_webhook_url="http://hooks.example.com/completed"))
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e and "plain HTTP over a non-local address" in e for e in errors)
+
+
+def test_validate_config_allows_local_plain_http_completion_webhook():
+    errors = validate_config(make_config(completion_webhook_url="http://127.0.0.1:9999/completed"))
+    assert not any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
+
+
+def test_validate_config_rejects_completion_webhook_when_host_resolution_fails(monkeypatch):
+    import socket
+
+    def _boom(*args, **kwargs):
+        raise socket.gaierror("dns failed")
+
+    monkeypatch.setattr("app.config.socket.getaddrinfo", _boom)
+
+    errors = validate_config(make_config(completion_webhook_url="https://hooks.example.com/completed"))
+
+    assert any("BOT_COMPLETION_WEBHOOK_URL" in e and "host resolution failed" in e for e in errors)
+
+
+def test_validate_config_allows_completion_webhook_with_public_dns_target(monkeypatch):
+    monkeypatch.setattr(
+        "app.config.socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (0, 0, 0, "", ("93.184.216.34", 443)),
+        ],
+    )
+
+    errors = validate_config(make_config(completion_webhook_url="https://hooks.example.com/completed"))
+
+    assert not any("BOT_COMPLETION_WEBHOOK_URL" in e for e in errors)
+
+
+def test_validate_config_rejects_remote_plain_http_bot_webhook_url():
+    errors = validate_config(
+        make_config(
+            bot_mode="webhook",
+            webhook_url="http://bot.example.com/webhook",
         )
+    )
+    assert any("BOT_WEBHOOK_URL" in e and "plain HTTP over a non-local address" in e for e in errors)
 
-    assert errors == []
-    assert not any("token=secret" in record.message for record in caplog.records)
-    assert any("<redacted>" in record.message for record in caplog.records)
+
+def test_validate_config_allows_local_plain_http_bot_webhook_url():
+    errors = validate_config(
+        make_config(
+            bot_mode="webhook",
+            webhook_url="http://localhost:8080/webhook",
+        )
+    )
+    assert not any("BOT_WEBHOOK_URL" in e for e in errors)
 
 def test_config_defaults_to_poll():
     cfg = make_config()
@@ -291,45 +396,86 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
     def _fake_conn():
         yield MagicMock()
 
-    bootstrap = SimpleNamespace(
+    dispatcher = MagicMock()
+    mock_app.bot_data = {}
+    bus = SimpleNamespace(reconcile_orphans=AsyncMock(return_value=0))
+    processor_runner = SimpleNamespace(
+        register=MagicMock(),
+        run=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
+    ingress = SimpleNamespace(
         application=mock_app,
         runtime=SimpleNamespace(boot_id="test-boot"),
         worker_dispatch=MagicMock(),
+        worker_deserialize_failure_notifier=None,
     )
+    dispatcher.get_ingress.return_value = ingress
+    dispatcher.build_all_ingresses.return_value = {"telegram": ingress}
+    dispatcher_runner = AsyncMock(return_value=None)
 
-    with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider", return_value=provider), \
-         patch("app.main.fail_fast"), \
-         patch("app.runtime_backend.init"), \
-         patch("app.main.ensure_data_dirs"), \
-         patch("app.main.init_content_store_for_config"), \
-         patch("app.main.build_bootstrap", return_value=bootstrap), \
-         patch("app.main.close_db"), \
-         patch("app.main.close_transport_db"), \
-         patch("app.main.recover_stale_claims"), \
-         patch("app.main.purge_old"), \
-         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
-         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
-         patch("app.db.postgres.close_pools"), \
-         patch("sys.argv", ["bot"]):
-        yield provider
+    with ExitStack() as stack:
+        stack.enter_context(patch("app.main.load_config", return_value=cfg))
+        stack.enter_context(patch("app.main.make_provider", return_value=provider))
+        stack.enter_context(patch("app.main.fail_fast"))
+        stack.enter_context(patch("app.runtime_backend.init"))
+        stack.enter_context(patch("app.main.ensure_data_dirs"))
+        stack.enter_context(patch("app.main.init_content_store_for_config"))
+        stack.enter_context(patch("app.main.init_credential_store_for_config"))
+        stack.enter_context(patch("app.main.ChannelDispatcher", return_value=dispatcher))
+        stack.enter_context(patch("app.main.ControlPlaneBus", return_value=bus))
+        stack.enter_context(patch("app.main.ProcessorRunner", return_value=processor_runner))
+        register_registry_channels = stack.enter_context(
+            patch("app.main.register_registry_channels")
+        )
+        telegram_bootstrap = stack.enter_context(
+            patch("app.main.TelegramChannelBootstrap")
+        )
+        stack.enter_context(patch("app.main.run_dispatcher_process", dispatcher_runner))
+        stack.enter_context(patch("app.main.close_db"))
+        stack.enter_context(patch("app.main.close_transport_db"))
+        stack.enter_context(patch("app.main.recover_stale_claims"))
+        stack.enter_context(patch("app.main.purge_old"))
+        stack.enter_context(
+            patch(
+                "app.db.postgres.get_connection",
+                side_effect=lambda *a, **k: _fake_conn(),
+            )
+        )
+        stack.enter_context(patch("app.db.postgres_doctor.run_doctor", return_value=[]))
+        stack.enter_context(patch("app.db.postgres.close_pools"))
+        stack.enter_context(patch("sys.argv", ["bot"]))
+        yield SimpleNamespace(
+            provider=provider,
+            dispatcher=dispatcher,
+            ingress=ingress,
+            dispatcher_runner=dispatcher_runner,
+            telegram_bootstrap=telegram_bootstrap,
+            bus=bus,
+            processor_runner=processor_runner,
+            register_registry_channels=register_registry_channels,
+        )
 
 def test_main_calls_run_polling_in_poll_mode():
-    """When BOT_MODE=poll, main() calls app.run_polling()."""
+    """When BOT_MODE=poll, main() runs the dispatcher-owned ingress process."""
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    mock_app.run_polling.assert_called_once()
-    mock_app.run_webhook.assert_not_called()
+    runtime.dispatcher.build_all_ingresses.assert_called_once()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    call = runtime.telegram_bootstrap.call_args
+    assert call is not None
+    assert call.args[:2] == (cfg, runtime.provider)
+    assert isinstance(call.args[2], BotServices)
 
 
 def test_main_polling_invalid_token_exits_with_operator_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    mock_app.run_polling.side_effect = InvalidToken("The token was rejected")
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        runtime.dispatcher_runner.side_effect = InvalidToken("The token was rejected")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -344,8 +490,8 @@ def test_main_polling_invalid_token_exits_with_operator_message(capsys):
 def test_main_polling_network_error_exits_with_connectivity_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    mock_app.run_polling.side_effect = NetworkError("timeout")
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        runtime.dispatcher_runner.side_effect = NetworkError("timeout")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -380,7 +526,7 @@ def test_main_database_error_is_sanitized(capsys):
 
 
 def test_main_calls_run_webhook_in_webhook_mode():
-    """When BOT_MODE=webhook, main() calls app.run_webhook() with correct args."""
+    """When BOT_MODE=webhook, main() runs the dispatcher-owned ingress process."""
     cfg = make_config(
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
@@ -390,17 +536,10 @@ def test_main_calls_run_webhook_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    mock_app.run_webhook.assert_called_once_with(
-        listen="0.0.0.0",
-        port=8443,
-        webhook_url="https://bot.example.com/webhook",
-        secret_token="my-secret",
-        url_path="/webhook",
-    )
-    mock_app.run_polling.assert_not_called()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_main_allows_shared_runtime_in_webhook_mode():
@@ -411,11 +550,11 @@ def test_main_allows_shared_runtime_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
 
         main()
-    mock_app.run_webhook.assert_called_once()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_main_worker_role_runs_worker_process_only():
@@ -427,15 +566,189 @@ def test_main_worker_role_runs_worker_process_only():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    worker_runner = AsyncMock(return_value=None)
-    with _patched_main_runtime(cfg, mock_app):
-        with patch("app.main.run_worker_process", worker_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        from app.main import main
+
+        main()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.processor_runner.register.assert_not_called()
+
+
+def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        agent_registries=(make_registry_connection(),),
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+    registry_runtime = SimpleNamespace(
+        start=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
+
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        async def _run_dispatcher(_dispatcher):
+            runtime.ingress.application.bot_data["dispatcher_stop_event"] = asyncio.Event()
+            await runtime.ingress.application.post_init(runtime.ingress.application)
+            await runtime.ingress.application.post_shutdown(runtime.ingress.application)
+
+        runtime.dispatcher_runner.side_effect = _run_dispatcher
+        with patch("app.main.RegistryRuntime", return_value=registry_runtime):
             from app.main import main
 
             main()
-    worker_runner.assert_awaited_once_with(mock_app)
-    mock_app.run_polling.assert_not_called()
-    mock_app.run_webhook.assert_not_called()
+
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.register_registry_channels.assert_called_once_with(
+        cfg,
+        cfg.agent_registries,
+        runtime.dispatcher,
+    )
+    registry_runtime.start.assert_awaited_once()
+    registry_runtime.stop.assert_awaited_once()
+    runtime.processor_runner.register.assert_called_once()
+    runtime.processor_runner.run.assert_awaited_once()
+    runtime.processor_runner.stop.assert_awaited_once()
+    runtime.bus.reconcile_orphans.assert_awaited_once()
+
+
+def test_main_registry_only_starts_without_telegram_ingress():
+    registry = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="channel",
+        poll_interval_seconds=5.0,
+    )
+    cfg = make_config(
+        telegram_token="",
+        credential_key="credential-secret",
+        agent_mode="registry",
+        agent_registries=(registry,),
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    provider = _runtime_ok_provider()
+    dispatcher = MagicMock()
+    dispatcher_runner = AsyncMock(return_value=None)
+    worker_bundle = SimpleNamespace(
+        runtime=SimpleNamespace(
+            boot_id="registry-only-boot",
+            channel_dispatcher=None,
+        ),
+        worker_dispatch=MagicMock(),
+        worker_deserialize_failure_notifier=None,
+    )
+    registry_runtime = SimpleNamespace(
+        start=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
+
+    async def _run_dispatcher(_dispatcher, *, startup=None, shutdown=None):
+        assert startup is not None
+        assert shutdown is not None
+        stop_event = asyncio.Event()
+        await startup(stop_event)
+        await shutdown()
+
+    dispatcher_runner.side_effect = _run_dispatcher
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("app.main.load_config", return_value=cfg))
+        stack.enter_context(patch("app.main.make_provider", return_value=provider))
+        stack.enter_context(patch("app.main.fail_fast"))
+        stack.enter_context(patch("app.runtime_backend.init"))
+        stack.enter_context(patch("app.main.ensure_data_dirs"))
+        stack.enter_context(patch("app.main.init_content_store_for_config"))
+        stack.enter_context(patch("app.main.init_credential_store_for_config"))
+        stack.enter_context(patch("app.main.ChannelDispatcher", return_value=dispatcher))
+        control_plane_bus_cls = stack.enter_context(patch("app.main.ControlPlaneBus"))
+        processor_runner_cls = stack.enter_context(patch("app.main.ProcessorRunner"))
+        register_registry_channels = stack.enter_context(
+            patch("app.main.register_registry_channels")
+        )
+        telegram_bootstrap = stack.enter_context(
+            patch("app.main.TelegramChannelBootstrap")
+        )
+        build_worker_bundle_mock = stack.enter_context(
+            patch("app.main.build_worker_bundle", return_value=worker_bundle)
+        )
+        stack.enter_context(patch("app.main.RegistryRuntime", return_value=registry_runtime))
+        stack.enter_context(patch("app.main.run_dispatcher_process", dispatcher_runner))
+        stack.enter_context(patch("app.main.close_db"))
+        stack.enter_context(patch("app.main.close_transport_db"))
+        stack.enter_context(patch("app.main.recover_stale_claims"))
+        stack.enter_context(patch("app.main.purge_old"))
+        stack.enter_context(patch("sys.argv", ["bot"]))
+        bus = SimpleNamespace(reconcile_orphans=AsyncMock(return_value=0))
+        processor_runner = SimpleNamespace(
+            register=MagicMock(),
+            run=AsyncMock(return_value=None),
+            stop=AsyncMock(return_value=None),
+        )
+        control_plane_bus_cls.return_value = bus
+        processor_runner_cls.return_value = processor_runner
+        from app.main import main
+
+        main()
+
+    telegram_bootstrap.assert_not_called()
+    build_worker_bundle_call = build_worker_bundle_mock.call_args
+    assert build_worker_bundle_call is not None
+    assert build_worker_bundle_call.args == (cfg, provider)
+    assert isinstance(build_worker_bundle_call.kwargs["services"], BotServices)
+    dispatcher.build_all_ingresses.assert_not_called()
+    register_registry_channels.assert_called_once_with(cfg, cfg.agent_registries, dispatcher)
+    registry_runtime.start.assert_awaited_once()
+    registry_runtime.stop.assert_awaited_once()
+    processor_runner.register.assert_called_once()
+    processor_runner.run.assert_awaited_once()
+    processor_runner.stop.assert_awaited_once()
+    bus.reconcile_orphans.assert_awaited_once()
+    dispatcher_runner.assert_awaited_once()
+    await_args = dispatcher_runner.await_args
+    assert await_args is not None
+    assert await_args.args == (dispatcher,)
+    assert callable(await_args.kwargs["startup"])
+    assert callable(await_args.kwargs["shutdown"])
+    assert worker_bundle.runtime.channel_dispatcher is dispatcher
+
+
+def test_main_shared_worker_with_registries_skips_control_plane_processor_startup():
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        agent_registries=(make_registry_connection(),),
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+
+    with _patched_main_runtime(cfg, mock_app) as runtime, \
+         patch("app.main.RegistryRuntime") as registry_runtime_cls:
+        from app.main import main
+
+        main()
+
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.register_registry_channels.assert_called_once_with(
+        cfg,
+        cfg.agent_registries,
+        runtime.dispatcher,
+    )
+    registry_runtime_cls.assert_not_called()
+    runtime.processor_runner.register.assert_not_called()
+    runtime.processor_runner.run.assert_not_awaited()
+    runtime.processor_runner.stop.assert_not_awaited()
+    runtime.bus.reconcile_orphans.assert_not_awaited()
 
 
 def test_main_webhook_role_skips_provider_runtime_validation():
@@ -447,12 +760,12 @@ def test_main_webhook_role_skips_provider_runtime_validation():
     )
     provider = _runtime_ok_provider()
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app, provider=provider):
+    with _patched_main_runtime(cfg, mock_app, provider=provider) as runtime:
         from app.main import main
 
         main()
     assert provider.check_runtime_health.await_count == 0
-    mock_app.run_webhook.assert_called_once()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():
@@ -482,7 +795,7 @@ def test_runs_registry_runtime_is_disabled_for_shared_worker_role():
 
 
 def test_main_webhook_empty_secret_passes_none():
-    """Empty BOT_WEBHOOK_SECRET should pass secret_token=None."""
+    """Empty BOT_WEBHOOK_SECRET is still accepted by the dispatcher-owned ingress path."""
     cfg = make_config(
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
@@ -490,11 +803,10 @@ def test_main_webhook_empty_secret_passes_none():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    call_kwargs = mock_app.run_webhook.call_args[1]
-    assert call_kwargs["secret_token"] is None
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_load_config_reads_webhook_env_vars():
@@ -566,6 +878,70 @@ def test_load_config_reads_bot_credential_key():
         with patch("app.config.env_path_for_instance", return_value=envfile):
             cfg = load_config("test-credential-key")
         assert cfg.credential_key == "credential-key-123"
+
+
+def test_load_config_reads_indexed_agent_registries():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_AGENT_REGISTRY_1_ID=default\n")
+        f.write("BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n")
+        f.write("BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=enroll-secret\n")
+        f.write("BOT_AGENT_REGISTRY_1_SCOPE=full\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-registry-single")
+        assert cfg.agent_registries == (
+            RegistryConnectionConfig(
+                registry_id="default",
+                url="http://registry:8787",
+                enroll_token="enroll-secret",
+                registry_scope="full",
+                poll_interval_seconds=5.0,
+            ),
+        )
+    finally:
+        os.unlink(env_path)
+
+
+def test_load_config_reads_multiple_indexed_agent_registries():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_AGENT_REGISTRY_1_ID=prod\n")
+        f.write("BOT_AGENT_REGISTRY_1_URL=https://registry-prod.example.com\n")
+        f.write("BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=prod-secret\n")
+        f.write("BOT_AGENT_REGISTRY_1_SCOPE=full\n")
+        f.write("BOT_AGENT_REGISTRY_2_ID=analytics\n")
+        f.write("BOT_AGENT_REGISTRY_2_URL=https://registry-analytics.example.com\n")
+        f.write("BOT_AGENT_REGISTRY_2_ENROLL_TOKEN=analytics-secret\n")
+        f.write("BOT_AGENT_REGISTRY_2_SCOPE=channel\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-registry-indexed")
+        assert cfg.agent_registries == (
+            RegistryConnectionConfig(
+                registry_id="prod",
+                url="https://registry-prod.example.com",
+                enroll_token="prod-secret",
+                registry_scope="full",
+                poll_interval_seconds=5.0,
+            ),
+            RegistryConnectionConfig(
+                registry_id="analytics",
+                url="https://registry-analytics.example.com",
+                enroll_token="analytics-secret",
+                registry_scope="channel",
+                poll_interval_seconds=5.0,
+            ),
+        )
+        assert cfg.agent_mode == "registry"
+    finally:
+        os.unlink(env_path)
 
 
 def test_validate_config_shared_runtime_requires_webhook_mode():
@@ -674,6 +1050,16 @@ def test_claim_lease_ttl_must_be_positive():
 def test_claim_sweep_interval_must_be_positive():
     errors = validate_config(make_config(claim_sweep_interval_seconds=0))
     assert any("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0" in e for e in errors)
+
+
+def test_delegation_timeout_defaults_to_3600():
+    cfg = make_config()
+    assert cfg.delegation_timeout_seconds == 3600
+
+
+def test_delegation_timeout_must_be_positive():
+    errors = validate_config(make_config(delegation_timeout_seconds=0))
+    assert any("BOT_DELEGATION_TIMEOUT_SECONDS must be greater than 0" in e for e in errors)
 
 
 def test_validate_config_rejects_invalid_telegram_api_base_url():

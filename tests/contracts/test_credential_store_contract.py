@@ -33,6 +33,15 @@ def test_roundtrip_save_and_load(store):
     assert loaded == {"github": {"GITHUB_ORG": "acme", "GITHUB_TOKEN": "ghp_test"}}
 
 
+def test_load_for_skills_filters_to_requested_skill_names(store):
+    store.save("tg:42", "alpha", "ALPHA_TOKEN", "a")
+    store.save("tg:42", "beta", "BETA_TOKEN", "b")
+
+    loaded = store.load_for_skills("tg:42", ["beta", "missing", "beta"])
+
+    assert loaded == {"beta": {"BETA_TOKEN": "b"}}
+
+
 def test_per_user_isolation(store):
     store.save("tg:100", "alpha", "API_TOKEN", "alice")
     store.save("tg:200", "alpha", "API_TOKEN", "bob")

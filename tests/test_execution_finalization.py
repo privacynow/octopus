@@ -3,7 +3,9 @@ import logging
 
 import pytest
 
+from app.agents.registry_capabilities import registry_authority_ref
 from app.session_state import DelegatedTask, PendingDelegation, SessionState
+from app.ports.task_routing import TaskResultReport
 from app.workflows.execution.contracts import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 
@@ -99,12 +101,18 @@ async def test_finalization_clears_resumed_delegation_after_outcome() -> None:
 
 @pytest.mark.asyncio
 async def test_finalization_reports_routed_task_result() -> None:
-    reported: list[tuple[str, object]] = []
+    reported: list[dict[str, object]] = []
 
-    class FakeClient:
-        async def routed_task_result(self, routed_task_id, result):
-            reported.append((routed_task_id, result))
-            return {"ok": True}
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            reported.append(
+                {
+                    "routed_task_id": routed_task_id,
+                    "authority_ref": authority_ref,
+                    "result": result,
+                }
+            )
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
 
     outcome = RequestExecutionOutcome(
         status="completed_with_denials",
@@ -114,22 +122,115 @@ async def test_finalization_reports_routed_task_result() -> None:
     result = await finalize_execution(
         outcome,
         context=FinalizationContext(
-            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "",
+                },
+            )(),
             item_id="item-3",
             conversation_key="registry:conv-3",
             runtime_chat="registry:conv-3",
             conversation_ref="registry:conv-3",
             routed_task_id="task-3",
-            registry_client_factory=lambda config: FakeClient(),
+            authority_ref=registry_authority_ref("default"),
+            task_routing=FakeTaskRouting(),
         ),
     )
 
     assert result.routed_result_status == "reported"
     assert len(reported) == 1
-    routed_task_id, payload = reported[0]
-    assert routed_task_id == "task-3"
+    assert reported[0]["routed_task_id"] == "task-3"
+    assert reported[0]["authority_ref"] == registry_authority_ref("default")
+    payload = reported[0]["result"]
     assert payload.status == "completed"
     assert "Partial completion" in payload.full_text
+
+
+@pytest.mark.asyncio
+async def test_finalization_reports_routed_task_result_through_explicit_authority_ref() -> None:
+    reported: list[dict[str, object]] = []
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            reported.append(
+                {
+                    "routed_task_id": routed_task_id,
+                    "authority_ref": authority_ref,
+                    "result": result,
+                }
+            )
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(status="completed", reply_text="done"),
+        context=FinalizationContext(
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "",
+                },
+            )(),
+            item_id="item-3b",
+            conversation_key="registry:prod:task:task-3b",
+            runtime_chat="registry:prod:task:task-3b",
+            conversation_ref="registry:prod:task:task-3b",
+            routed_task_id="task-3b",
+            authority_ref=registry_authority_ref("prod"),
+            task_routing=FakeTaskRouting(),
+        ),
+    )
+
+    assert result.routed_result_status == "reported"
+    assert reported and reported[0]["routed_task_id"] == "task-3b"
+    assert reported[0]["authority_ref"] == registry_authority_ref("prod")
+
+
+@pytest.mark.asyncio
+async def test_finalization_skips_completion_webhook_for_routed_task() -> None:
+    webhook_calls: list[dict[str, object]] = []
+
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del authority_ref, result
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+    async def fake_webhook(url, **kwargs):
+        webhook_calls.append({"url": url, **kwargs})
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(status="completed", reply_text="done"),
+        context=FinalizationContext(
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "https://hooks.example.com/completed",
+                },
+            )(),
+            item_id="item-3c",
+            conversation_key="registry:prod:task:task-3c",
+            runtime_chat="registry:prod:task:task-3c",
+            conversation_ref="registry:prod:task:task-3c",
+            routed_task_id="task-3c",
+            authority_ref=registry_authority_ref("prod"),
+            task_routing=FakeTaskRouting(),
+            completion_webhook_sender=fake_webhook,
+        ),
+    )
+    await asyncio.sleep(0)
+
+    assert result.routed_result_status == "reported"
+    assert result.webhook_status == "skipped"
+    assert webhook_calls == []
 
 
 @pytest.mark.asyncio
@@ -168,11 +269,47 @@ async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
-    class FailingClient:
-        async def routed_task_result(self, routed_task_id, result):
-            del routed_task_id, result
-            raise RuntimeError("registry internal stacktrace")
+async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
+    timeline_calls: list[dict[str, object]] = []
+
+    async def fake_publish_timeline(config, **kwargs):
+        del config
+        timeline_calls.append(kwargs)
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(
+            status="completed",
+            reply_text="done",
+            prompt_tokens=1,
+            completion_tokens=2,
+        ),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            item_id="item-4b",
+            conversation_key="registry:prod:task:task-4b",
+            runtime_chat="registry:prod:task:task-4b",
+            conversation_ref="registry:prod:task:task-4b",
+            routed_task_id="task-4b",
+            authority_ref=registry_authority_ref("prod"),
+            publish_timeline_event=fake_publish_timeline,
+        ),
+    )
+
+    assert result.timeline_status == "skipped_routed_task"
+    assert timeline_calls == []
+
+
+@pytest.mark.asyncio
+async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) -> None:
+    status_updates: list[tuple[str, object]] = []
+
+    class FailingTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref, result
+            return TaskResultReport(status="failed", error="registry internal stacktrace")
+
+        async def update_routed_task_status(self, *, update, authority_ref):
+            status_updates.append((authority_ref, update))
 
     with caplog.at_level(logging.ERROR):
         result = await finalize_execution(
@@ -181,16 +318,30 @@ async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
                 reply_text="done",
             ),
             context=FinalizationContext(
-                config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+                config=type(
+                    "Cfg",
+                    (),
+                    {
+                        "data_dir": "/tmp/data",
+                        "provider_name": "claude",
+                        "completion_webhook_url": "",
+                    },
+                )(),
                 item_id="item-5",
                 conversation_key="registry:conv-5",
                 runtime_chat="registry:conv-5",
                 conversation_ref="registry:conv-5",
                 routed_task_id="task-5",
-                registry_client_factory=lambda config: FailingClient(),
+                authority_ref=registry_authority_ref("default"),
+                task_routing=FailingTaskRouting(),
             ),
         )
 
     assert result.routed_result_status == "report_failed"
-    assert "could not be delivered to the requesting conversation" in result.routed_result_warning_text
     assert any("Failed to report routed task result" in record.message for record in caplog.records)
+    assert len(status_updates) == 1
+    authority_ref, update = status_updates[0]
+    assert authority_ref == registry_authority_ref("default")
+    assert update.routed_task_id == "task-5"
+    assert update.status == "partialfailed"
+    assert "could not be delivered" in update.summary

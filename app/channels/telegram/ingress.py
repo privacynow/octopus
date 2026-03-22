@@ -22,8 +22,6 @@ from app.session_state import (
     SessionState,
     session_to_dict,
 )
-from app.agents.client import RegistryClientError
-from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery
 from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
@@ -49,6 +47,7 @@ from app.channels.telegram.progress import (
     heartbeat,
     keep_typing,
     progress_timeline_callback,
+    routed_task_progress_callback,
 )
 from app.channels.telegram import conversation as telegram_conversation
 from app.channels.telegram import normalization as telegram_normalization
@@ -83,6 +82,7 @@ from app.channels.telegram.pending import (
     handle_recovery_callback as pending_handle_recovery_callback,
     reject_pending as pending_reject_pending,
 )
+from app.channels.telegram.inbound_context import event_trust_tier
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
 from app.workflows.execution.requests import (
@@ -94,7 +94,6 @@ from app.runtime.inbound_types import (
 )
 from app.runtime.work_admission import (
     admit_fresh_message,
-    trust_tier_for_source,
 )
 from app.storage import (
     resolve_allowed_path,
@@ -106,12 +105,8 @@ from app import work_queue
 from app.workflows.recovery.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
-
-
 class ClaimBlocked(Exception):
     """Raised when a worker already owns the claimed item for this chat."""
-
-
 def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRuntime:
     if context is not None:
         runtime = getattr(context, "telegram_runtime", None)
@@ -124,8 +119,6 @@ def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRunti
             if isinstance(runtime, TelegramRuntime):
                 return runtime
     raise RuntimeError("Telegram runtime is not attached to the handler context")
-
-
 @contextlib.asynccontextmanager
 async def _chat_lock(
     runtime: TelegramRuntime,
@@ -244,6 +237,7 @@ def _bound_execution_runtime(runtime: TelegramRuntime):
         keep_typing_fn=keep_typing,
         heartbeat_fn=heartbeat,
         progress_timeline_callback_fn=progress_timeline_callback,
+        routed_task_progress_callback_fn=routed_task_progress_callback,
         propose_delegation_plan_fn=propose_delegation_plan,
     )
     return build_execution_runtime(runtime, collaborators=collaborators)
@@ -504,7 +498,11 @@ async def cmd_session(
 ) -> None:
     session = telegram_session_io.load(runtime, event.chat_id)
     cfg = runtime.config
-    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
+    trust = event_trust_tier(
+        config=runtime.config,
+        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        event=event,
+    )
     resolved = resolve_context(runtime, session, trust_tier=trust)
     pstate = session.provider_state
 
@@ -632,7 +630,11 @@ async def cmd_send(runtime: TelegramRuntime, event, update: Update, context: Con
     resolved_ctx = resolve_context(
         runtime,
         session,
-        trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+        trust_tier=event_trust_tier(
+            config=runtime.config,
+            dispatcher=getattr(runtime, "channel_dispatcher", None),
+            event=event,
+        ),
     )
     resolved = resolve_allowed_path(raw_path, allowed_roots(runtime, event.chat_id, resolved_ctx))
     if not resolved:
@@ -672,7 +674,11 @@ async def cmd_doctor(
         resolved = resolve_context(
             runtime,
             session,
-            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+            trust_tier=event_trust_tier(
+                config=runtime.config,
+                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                event=event,
+            ),
         )
         session_context = SessionHealthContext(
             session=session_to_dict(session),
@@ -690,7 +696,11 @@ async def cmd_doctor(
         resolved = resolve_context(
             runtime,
             session,
-            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+            trust_tier=event_trust_tier(
+                config=runtime.config,
+                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                event=event,
+            ),
         )
         prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
     rendered = telegram_presenters.doctor_report_message(
@@ -753,41 +763,41 @@ def _parse_discovery_query(
 
 
 @_command_handler
-async def cmd_discover(
-    runtime: TelegramRuntime,
-    event,
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     cfg = runtime.config
     if cfg.agent_mode == "standalone":
         rendered = telegram_presenters.discover_unavailable_standalone_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    state = load_agent_runtime_state(cfg.data_dir)
-    if state.connectivity_state != "connected":
-        rendered = telegram_presenters.discover_degraded_message(state.last_error)
+    summary = runtime.services.control_plane.health_publication.connection_summary()
+    coordination_authorities = [
+        authority
+        for authority in summary.authorities
+        if "agent_directory" in authority.capabilities
+    ]
+    if not coordination_authorities:
+        rendered = telegram_presenters.discover_not_enrolled_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    query, error = _parse_discovery_query(event.args, exclude_agent_id=state.agent_id)
+    query, error = _parse_discovery_query(event.args)
     if error is not None or query is None:
         rendered = telegram_presenters.discover_usage_message()
         await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
-    client = runtime.registry_client_factory(cfg)
-    if client is None:
-        rendered = telegram_presenters.discover_not_enrolled_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        return
     try:
-        agents = await client.search(query)
-    except RegistryClientError as exc:
-        rendered = telegram_presenters.discover_failed_message(exc.error_code)
+        search = await runtime.services.control_plane.agent_directory.search_agents(query=query)
+    except Exception:
+        rendered = telegram_presenters.discover_failed_message("registry_request_failed")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    rendered = telegram_presenters.discover_results_message(agents)
+    if search.status == "unavailable":
+        rendered = telegram_presenters.discover_degraded_message("registry_unreachable")
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    rendered = telegram_presenters.discover_results_message(search.agents)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+
 
 @_command_handler
 async def cmd_export(
@@ -807,7 +817,11 @@ async def cmd_export(
 
     # Add session metadata header — use resolved context for user-visible data
     session = telegram_session_io.load(runtime, chat_id)
-    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
+    trust = event_trust_tier(
+        config=runtime.config,
+        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        event=event,
+    )
     resolved = resolve_context(runtime, session, trust_tier=trust)
     skills = resolved.active_skills
     header_lines = [
@@ -1084,7 +1098,11 @@ async def handle_message(
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
-    msg = await telegram_normalization.normalize_message(update, context, runtime.config.data_dir)
+    try:
+        msg = await telegram_normalization.normalize_message(update, context, runtime.config.data_dir)
+    except telegram_normalization.TelegramAttachmentTooLarge as exc:
+        await update.effective_message.reply_text(str(exc))
+        return
     if msg is None:
         return
 
@@ -1096,6 +1114,8 @@ async def handle_message(
 
     cfg = runtime.config
     needs_welcome = not session_exists(cfg.data_dir, telegram_session_io.conversation_key(chat_id))
+    if not msg.conversation_ref:
+        msg = telegram_normalization.normalize_message_with_conversation_ref(msg, config=cfg, chat_id=chat_id)
 
     data_dir = cfg.data_dir
     if await runtime_skill_maybe_handle_setup_message(

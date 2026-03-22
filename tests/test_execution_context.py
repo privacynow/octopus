@@ -133,10 +133,12 @@ async def test_approval_hash_round_trip(combo):
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
+        session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        callback_token = session["pending_approval"]["callback_token"]
 
         # Approve immediately — must NOT say "Context changed"
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())
@@ -195,10 +197,12 @@ async def test_retry_hash_round_trip(combo):
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
+        session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        callback_token = session["pending_retry"]["callback_token"]
 
         # Retry immediately
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        query = FakeCallbackQuery(f"retry_allow:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())
@@ -319,10 +323,13 @@ def test_default_working_dir_in_resolved_context():
 _SANDBOX_OVERRIDES = [
     pytest.param({}, id="no-provider-config"),
     pytest.param({"sandbox": "workspace-write"}, id="sandbox-workspace-write"),
-    pytest.param({"sandbox": "off"}, id="sandbox-off"),
+    pytest.param({"sandbox": "danger-full-access"}, id="sandbox-danger-full-access"),
     pytest.param({"sandbox": "read-only"}, id="sandbox-read-only"),
     pytest.param(
-        {"sandbox": "workspace-write", "config_overrides": ["x=y"]},
+        {
+            "sandbox": "workspace-write",
+            "config_overrides": ['sandbox_permissions=["disk-full-read-access"]'],
+        },
         id="sandbox+overrides",
     ),
 ]
@@ -599,7 +606,12 @@ async def test_resolve_execution_context_matches_handler_adapter():
 
 _EXEC_CONFIG_FIELDS = [
     pytest.param("model", "gpt-4", "gpt-3.5", id="model"),
-    pytest.param("codex_sandbox", "networking", "off", id="codex-sandbox"),
+    pytest.param(
+        "codex_sandbox",
+        "danger-full-access",
+        "workspace-write",
+        id="codex-sandbox",
+    ),
     pytest.param("codex_full_auto", True, False, id="codex-full-auto"),
     pytest.param("codex_dangerous", True, False, id="codex-dangerous"),
     pytest.param("codex_profile", "fast", "", id="codex-profile"),

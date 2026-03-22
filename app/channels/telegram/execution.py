@@ -9,7 +9,6 @@ from typing import Any, Awaitable, Callable
 
 from telegram.error import BadRequest
 
-from app.agents.bridge import telegram_conversation_ref
 from app.agents.delegation import build_delegation_runtime
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import TelegramConversationRuntime
@@ -19,6 +18,7 @@ from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.credential_validation import validate_credential
 from app.execution_context import ResolvedExecutionContext
+from app.identity import telegram_conversation_ref
 from app.runtime.dispatch import RuntimeDispatchRuntime
 from app.runtime.inbound_types import InboundAttachment
 from app.runtime.session_runtime import resolve_session_context
@@ -45,7 +45,8 @@ class TelegramExecutionCollaborators:
     progress_factory: type
     keep_typing: Callable[[Any], Any]
     heartbeat: Callable[..., Any]
-    build_timeline_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
+    build_conversation_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
+    build_routed_task_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
     propose_delegation_plan: Callable[
         [int | str, Any, SessionState, str, Any],
         Awaitable[RequestExecutionOutcome],
@@ -59,17 +60,27 @@ def bind_execution_collaborators(
     keep_typing_fn: Callable[[Any], Any],
     heartbeat_fn: Callable[..., Any],
     progress_timeline_callback_fn: Callable[..., Awaitable[None]],
+    routed_task_progress_callback_fn: Callable[..., Awaitable[None]],
     propose_delegation_plan_fn: Callable[..., Awaitable[RequestExecutionOutcome]],
 ) -> TelegramExecutionCollaborators:
     return TelegramExecutionCollaborators(
         progress_factory=progress_factory,
         keep_typing=lambda chat: keep_typing_fn(chat, runtime=runtime),
         heartbeat=heartbeat_fn,
-        build_timeline_callback=lambda conversation_ref, routed_task_id: (
+        build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: progress_timeline_callback_fn(
                 runtime,
                 conversation_ref,
                 routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        build_routed_task_progress_callback=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: routed_task_progress_callback_fn(
+                runtime,
+                routed_task_id,
+                authority_ref,
                 html_text,
                 force=force,
             )
@@ -223,13 +234,13 @@ async def show_setup_prompt(message, missing_skill: str, first_requirement: dict
     await message.reply_text(rendered.text, **rendered.kwargs())
 
 
-async def send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
-    rendered = telegram_presenters.retry_prompt(denials)
+async def send_retry_prompt(message, denials: tuple[dict[str, Any], ...], callback_token: str) -> None:
+    rendered = telegram_presenters.retry_prompt(denials, callback_token)
     await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 
-async def send_approval_prompt(message) -> None:
-    rendered = telegram_presenters.approval_prompt()
+async def send_approval_prompt(message, callback_token: str) -> None:
+    rendered = telegram_presenters.approval_prompt(callback_token)
     await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 
@@ -275,6 +286,8 @@ def build_dispatch_runtime(
         boot_id=runtime.boot_id,
         cancellations=runtime.cancellation_registry,
         progress_factory=collaborators.progress_factory,
+        send_status=lambda message, label: message.reply_text(label),
+        typing_target=lambda message: getattr(message, "chat", message),
         keep_typing=collaborators.keep_typing,
         heartbeat=collaborators.heartbeat,
         format_provider_error=lambda raw_text, returncode: format_provider_error(
@@ -291,13 +304,23 @@ def execution_channel_metadata(
     message,
     chat_id: int | str,
 ) -> ExecutionChannelMetadata:
-    caps = getattr(message, "capabilities", None)
+    conversation_ref = getattr(message, "conversation_ref", "")
+    dispatcher = getattr(runtime, "channel_dispatcher", None)
+    descriptor = None
+    resolved_ref = conversation_ref
+    if not resolved_ref and isinstance(chat_id, int):
+        resolved_ref = telegram_conversation_ref(
+            runtime.config,
+            telegram_chat_id(chat_id),
+        )
+    if dispatcher is not None and resolved_ref:
+        descriptor = dispatcher.descriptor_for_ref(resolved_ref)
     return ExecutionChannelMetadata(
-        channel_name=getattr(caps, "channel_name", "telegram"),
-        message_conversation_ref=getattr(message, "conversation_ref", ""),
+        descriptor=descriptor,
+        message_conversation_ref=conversation_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
+        authority_ref=getattr(message, "authority_ref", ""),
         chat_id=chat_id,
-        agent_mode=runtime.config.agent_mode,
     )
 
 
@@ -314,7 +337,8 @@ def build_execution_runtime(
                 runtime.config,
                 telegram_chat_id(numeric_chat_id),
             ),
-            timeline_callback_factory=collaborators.build_timeline_callback,
+            conversation_callback_factory=collaborators.build_conversation_progress_callback,
+            routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
         ),
         render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,
@@ -339,6 +363,8 @@ def build_delegation_channel_runtime(runtime: TelegramRuntime):
         config=runtime.config,
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
+        task_routing=runtime.services.control_plane.task_routing,
+        agent_directory=runtime.services.control_plane.agent_directory,
     )
 
 

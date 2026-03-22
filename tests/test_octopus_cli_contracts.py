@@ -37,13 +37,15 @@ ensure_deploy_dirs
 test "$(count_bots)" = "0"
 mkdir -p .deploy/bots/alpha .deploy/bots/bravo .deploy/bots/charlie
 printf 'BOT_AGENT_MODE=standalone\\n' > .deploy/bots/alpha/.env
-printf 'BOT_AGENT_MODE=registry\\nBOT_AGENT_REGISTRY_URL=http://registry:8787\\n' > .deploy/bots/bravo/.env
-printf 'BOT_AGENT_MODE=registry\\nBOT_AGENT_REGISTRY_URL=https://remote.example.com\\n' > .deploy/bots/charlie/.env
+printf 'BOT_AGENT_MODE=registry\\nBOT_AGENT_REGISTRY_1_ID=local\\nBOT_AGENT_REGISTRY_1_URL=http://registry:8787\\nBOT_AGENT_REGISTRY_1_SCOPE=full\\nBOT_AGENT_REGISTRY_2_ID=analytics\\nBOT_AGENT_REGISTRY_2_URL=https://analytics.example.com\\nBOT_AGENT_REGISTRY_2_SCOPE=channel\\n' > .deploy/bots/bravo/.env
+printf 'BOT_AGENT_MODE=registry\\nBOT_AGENT_REGISTRY_1_ID=remote-example-com\\nBOT_AGENT_REGISTRY_1_URL=https://remote.example.com\\nBOT_AGENT_REGISTRY_1_SCOPE=coordination\\n' > .deploy/bots/charlie/.env
 test "$(count_bots)" = "3"
 bot_is_standalone alpha
 bot_is_registry bravo
 bot_uses_local_reg bravo
 bot_uses_remote_reg charlie
+test "$(bot_registry_connection_count bravo)" = "2"
+test "$(bot_registry_scope charlie)" = "coordination"
 printf '%s\\n' "$(list_bot_slugs | tr '\n' ' ')"
 """
     result = _run_bash(script, cwd=tmp_path)
@@ -154,6 +156,64 @@ provider_compose() {{ return 1; }}
 ! provider_auth_hint claude
 """
     _run_bash(script, cwd=tmp_path)
+
+
+def test_write_registry_connection_records_rewrites_indexed_env(tmp_path: Path) -> None:
+    env_file = tmp_path / ".deploy" / "bots" / "example-bot" / ".env"
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text(
+        "BOT_AGENT_MODE=registry\n"
+        "BOT_AGENT_REGISTRY_URL=http://legacy.example.com\n"
+        "BOT_AGENT_REGISTRY_ENROLL_TOKEN=legacy-token\n"
+    )
+
+    script = f"""
+set -euo pipefail
+source "{REPO}/scripts/lib/bot.sh"
+cd "{tmp_path}"
+write_registry_connection_records ".deploy/bots/example-bot/.env" \
+  "local|http://registry:8787|local-enroll|full" \
+  "analytics|https://analytics.example.com|analytics-enroll|channel"
+cat .deploy/bots/example-bot/.env
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "BOT_AGENT_REGISTRY_URL=" not in result.stdout
+    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=" not in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ID=local" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=http://registry:8787" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_ID=analytics" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_SCOPE=channel" in result.stdout
+
+
+def test_print_bot_registry_connection_lines_formats_scope_and_connectivity(tmp_path: Path) -> None:
+    bot_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    (bot_dir / ".env").write_text(
+        "BOT_AGENT_MODE=registry\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
+        "BOT_AGENT_REGISTRY_2_ID=analytics\n"
+        "BOT_AGENT_REGISTRY_2_URL=https://analytics.example.com\n"
+        "BOT_AGENT_REGISTRY_2_SCOPE=channel\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_is_running() {{ return 0; }}
+bot_registry_state_rows() {{
+  printf 'local|connected|\\n'
+  printf 'analytics|degraded|registry_timeout\\n'
+}}
+print_bot_registry_connection_lines example-bot
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "local    full    connected    http://registry:8787" in result.stdout
+    assert "analytics    channel    degraded    https://analytics.example.com" in result.stdout
 
 
 def test_bot_compose_rejects_unknown_slug(tmp_path: Path) -> None:

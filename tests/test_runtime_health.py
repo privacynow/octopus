@@ -9,6 +9,7 @@ from app.runtime_health import (
     RuntimeDiagnostic,
     RuntimeHealthReport,
     RuntimeHealthSummary,
+    SessionHealthContext,
     SharedRuntimeSnapshot,
     WorkerHeartbeat,
     collect_runtime_health_report,
@@ -242,3 +243,39 @@ async def test_runtime_health_classifies_session_schema_mismatch_without_raw_tex
     assert diagnostics
     assert "schema is newer" in diagnostics[0].lower()
     assert "schema_version=99" not in diagnostics[0]
+
+
+async def test_runtime_health_loads_credentials_only_for_resolved_active_skills(tmp_path: Path, monkeypatch):
+    config = make_config(data_dir=tmp_path, working_dir=tmp_path)
+    provider = FakeProvider()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class FakeCredentialService:
+        def load(self, actor_key):
+            raise AssertionError(f"unexpected full credential load for {actor_key}")
+
+        def load_for_skills(self, actor_key, skill_names):
+            calls.append((actor_key, tuple(skill_names)))
+            return {"github-integration": {}}
+
+        def missing_requirements(self, requirements, credential_values):
+            del credential_values
+            return list(requirements)
+
+    monkeypatch.setattr(
+        "app.credential_service.get_credential_service",
+        lambda: FakeCredentialService(),
+    )
+
+    report = await collect_runtime_health_report(
+        config,
+        provider,
+        session_context=SessionHealthContext(
+            session={},
+            user_id=telegram_actor_key(42),
+            resolved_active_skills=("github-integration",),
+        ),
+    )
+
+    assert calls == [(telegram_actor_key(42), ("github-integration",))]
+    assert any(item.code == "skills.missing_credentials" for item in report.diagnostics)

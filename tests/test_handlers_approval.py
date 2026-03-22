@@ -1,6 +1,7 @@
 """Handler integration tests for approval and pending-request flows."""
 
 import time
+from pathlib import Path
 
 from app.providers.base import PreflightContext, RunResult
 from app.storage import default_session, save_session
@@ -66,16 +67,16 @@ async def test_approval_flow():
         cb_values = []
         for m in current_bot_instance().sent_messages:
             cb_values = get_callback_data_values(m)
-            if "approval_approve" in cb_values:
+            if any(value.startswith("approval_approve:") for value in cb_values):
                 break
-        assert "approval_approve" in cb_values
-        assert "approval_reject" in cb_values
-
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is not None
+        callback_token = session["pending_approval"]["callback_token"]
+        assert f"approval_approve:{callback_token}" in cb_values
+        assert f"approval_reject:{callback_token}" in cb_values
 
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
@@ -89,6 +90,18 @@ async def test_approval_flow():
         assert approved_ctx.skip_permissions is True
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+def test_skip_permissions_grant_sites_are_limited_to_pending_approval_paths():
+    repo = Path(__file__).resolve().parent.parent
+    app_dir = repo / "app"
+    hits: list[str] = []
+    for path in app_dir.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "skip_permissions=True" in text:
+            hits.append(str(path.relative_to(repo)))
+
+    assert hits == ["app/channels/telegram/pending.py"]
 
 
 async def test_approval_wording():
@@ -159,17 +172,18 @@ async def test_denial_retry_flow():
         retry_cbs = []
         for m in current_bot_instance().sent_messages:
             retry_cbs = get_callback_data_values(m)
-            if retry_cbs:
+            if any(value.startswith("retry_allow:") for value in retry_cbs):
                 break
-        assert "retry_allow" in retry_cbs
-        assert "retry_skip" in retry_cbs
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_retry") is not None
         assert session["pending_retry"].get("denials") is not None
+        callback_token = session["pending_retry"]["callback_token"]
+        assert f"retry_allow:{callback_token}" in retry_cbs
+        assert f"retry_skip:{callback_token}" in retry_cbs
 
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        query = FakeCallbackQuery(f"retry_allow:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
@@ -223,6 +237,37 @@ async def test_retry_skip():
         edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
         from app.user_messages import retry_skip_confirmation
         assert any(retry_skip_confirmation() in t for t in edit_texts)
+
+
+async def test_stale_bare_approval_callback_does_not_approve_current_pending_request():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        prov.preflight_results = [RunResult(text="Plan: read files")]
+        setup_globals(cfg, prov)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="read my files")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.channels.telegram.ingress as th
+
+        await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
+
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        cb_update.effective_message = cb_msg
+
+        await th.handle_callback(cb_update, FakeContext())
+
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session.get("pending_approval") is not None
+        assert len(prov.run_calls) == 0
+        assert has_markup_removal(cb_msg)
+        assert "no longer valid" in last_reply(cb_msg).lower()
 
 
 async def test_retry_allow_no_pending():
@@ -315,9 +360,10 @@ async def test_cross_user_approval():
         pending = session.get("pending_approval")
         assert pending is not None
         assert pending["request_user_id"] == "tg:100"
+        callback_token = pending["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=bob, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())
@@ -657,10 +703,11 @@ async def test_approval_with_project_active():
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is not None
+        callback_token = session["pending_approval"]["callback_token"]
 
         # Approve — this must NOT say "Context changed"
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        query = FakeCallbackQuery(f"approval_approve:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())
@@ -719,10 +766,11 @@ async def test_retry_with_project_active():
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_retry") is not None
+        callback_token = session["pending_retry"]["callback_token"]
 
         # Retry — must NOT say "Context changed"
         cb_msg = FakeMessage(chat=chat)
-        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        query = FakeCallbackQuery(f"retry_allow:{callback_token}", message=cb_msg)
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
         await th.handle_callback(cb_update, FakeContext())

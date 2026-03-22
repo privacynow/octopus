@@ -667,6 +667,131 @@ def test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic() ->
         assert token not in text, f"{token} still referenced in {worker_path}"
 
 
+def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    import_block_match = re.search(
+        r"from app\.agents\.bridge import \((?P<body>[\s\S]*?)\n\)",
+        text,
+    )
+    if import_block_match is None:
+        return
+    import_block = import_block_match.group("body")
+    forbidden_tokens = (
+        "publish_timeline_event",
+        "_publish_timeline_event",
+        "bind_conversation",
+        "_bind_conversation",
+    )
+    for token in forbidden_tokens:
+        assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
+
+
+def test_worker_timeline_helper_has_no_dispatcher_or_surface_split() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    match = re.search(
+        r"async def _publish_timeline_event_for_runtime\([\s\S]*?\nasync def _execute_worker_action\(",
+        text,
+    )
+    assert match is not None, "_publish_timeline_event_for_runtime block missing"
+    helper_block = match.group(0)
+    forbidden = (
+        "_channel_dispatcher(",
+        "channel_type_for_ref(",
+        "create_egress(",
+    )
+    for token in forbidden:
+        assert token not in helper_block, f"{token} leaked back into _publish_timeline_event_for_runtime"
+
+
+def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    inbound_types_path = repo_root / "app" / "runtime" / "inbound_types.py"
+    session_state_path = repo_root / "app" / "session_state.py"
+    coordination_path = repo_root / "app" / "workflows" / "delegation" / "coordination.py"
+    presenters_path = repo_root / "app" / "channels" / "telegram" / "presenters.py"
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+
+    inbound_text = inbound_types_path.read_text()
+    assert '"user_id" in data' not in inbound_text
+    assert '"chat_id" in data' not in inbound_text
+    assert '"registry_id"' not in inbound_text
+    assert "telegram_actor_key(" not in inbound_text
+    assert "telegram_conversation_key(" not in inbound_text
+    assert "registry_authority_ref(" not in inbound_text
+
+    session_text = session_state_path.read_text()
+    assert "registry_authority_ref(" not in session_text
+
+    coordination_text = coordination_path.read_text()
+    assert "registry_authority_ref(" not in coordination_text
+
+    presenters_text = presenters_path.read_text()
+    assert 'agent.get("registry_id"' not in presenters_text
+
+    worker_text = worker_path.read_text()
+    assert "_resolve_registry_authority_ref" not in worker_text
+    assert "parse_registry_ref(" not in worker_text
+
+
+def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_selection() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bridge_path = repo_root / "app" / "agents" / "bridge.py"
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    registry_egress_path = repo_root / "app" / "channels" / "registry" / "egress.py"
+    runtime_path = repo_root / "app" / "agents" / "runtime.py"
+    agent_types_path = repo_root / "app" / "agents" / "types.py"
+
+    bridge_text = bridge_path.read_text()
+    assert 'or "default"' not in bridge_text
+
+    delivery_text = delivery_path.read_text()
+    assert 'or "default"' not in delivery_text
+
+    registry_egress_text = registry_egress_path.read_text()
+    assert 'else "default"' not in registry_egress_text
+
+    runtime_text = runtime_path.read_text()
+    assert "config.agent_registries[0]" not in runtime_text
+    assert 'else "default"' not in runtime_text
+
+    agent_types_text = agent_types_path.read_text()
+    assert 'registry_id: str = "default"' not in agent_types_text
+
+
+def test_dead_registry_runtime_api_is_deleted() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    registry_runtime_path = repo_root / "app" / "agents" / "registry_runtime.py"
+    registry_runtime_text = registry_runtime_path.read_text()
+    assert "def runtime_for_registry(" not in registry_runtime_text
+    assert "def resolve_target_registry_id(" not in registry_runtime_text
+
+    for path in repo_root.joinpath("app").rglob("*.py"):
+        if path == registry_runtime_path:
+            continue
+        text = path.read_text()
+        assert "runtime_for_registry(" not in text, f"runtime_for_registry survived in {path}"
+        assert "resolve_target_registry_id(" not in text, (
+            f"resolve_target_registry_id survived in {path}"
+        )
+
+
+def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_names() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    work_admission_path = repo_root / "app" / "runtime" / "work_admission.py"
+
+    delivery_text = delivery_path.read_text()
+    assert 'channel_name == "telegram"' not in delivery_text
+
+    work_admission_text = work_admission_path.read_text()
+    assert 'channel_type != "telegram"' not in work_admission_text
+    assert 'channel_type == "telegram"' not in work_admission_text
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
@@ -993,3 +1118,132 @@ def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_bridge_module_has_no_fake_bot_helper() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bridge_path = repo_root / "app" / "agents" / "bridge.py"
+    text = bridge_path.read_text()
+
+    assert "_egress_bot(" not in text, f"_egress_bot helper still referenced in {bridge_path}"
+
+
+def test_selected_telegram_and_workflow_modules_no_longer_import_bridge_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    guarded_paths = (
+        repo_root / "app" / "channels" / "telegram" / "execution.py",
+        repo_root / "app" / "channels" / "telegram" / "inbound_context.py",
+        repo_root / "app" / "channels" / "telegram" / "normalization.py",
+        repo_root / "app" / "channels" / "telegram" / "worker.py",
+        repo_root / "app" / "channels" / "telegram" / "delegation_channel.py",
+        repo_root / "app" / "workflows" / "execution" / "finalization.py",
+        repo_root / "app" / "workflows" / "recovery" / "replay.py",
+    )
+    for path in guarded_paths:
+        text = path.read_text()
+        assert "app.agents.bridge" not in text, (
+            f"bridge helper import still referenced in {path}"
+        )
+
+
+def _non_registry_orchestration_paths() -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    excluded_files = {
+        app_root / "main.py",
+        app_root / "agents" / "bridge.py",
+        app_root / "agents" / "registry_runtime.py",
+        app_root / "agents" / "registry_control_processor.py",
+    }
+    excluded_dirs = {
+        app_root / "channels" / "registry",
+        app_root / "registry_service",
+        app_root / "db" / "migrations",
+    }
+    paths: list[Path] = []
+    for path in sorted(app_root.rglob("*.py")):
+        if "__pycache__" in path.parts or path in excluded_files:
+            continue
+        if any(excluded_dir in path.parents for excluded_dir in excluded_dirs):
+            continue
+        paths.append(path)
+    return paths
+
+
+def test_non_registry_orchestration_has_no_registry_runtime_or_factory_tokens() -> None:
+    forbidden = (
+        "registry_runtime",
+        "registry_client_factory",
+    )
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_non_registry_orchestration_has_no_registry_connection_helpers() -> None:
+    forbidden = (
+        "registry_connection_client",
+        "resolve_registry_connection",
+    )
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_non_registry_orchestration_has_no_registry_runtime_presence_branch() -> None:
+    pattern = re.compile(r"if\s+.*registry_runtime.*is\s+not\s+None")
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        assert pattern.search(text) is None, (
+            f"registry_runtime presence branch still referenced in {path}"
+        )
+
+
+def test_removed_registry_fanout_helpers_do_not_reappear() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden = (
+        "bind_conversation_to_registries",
+        "publish_timeline_to_registries",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_removed_bridge_http_helpers_do_not_reappear() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden = (
+        "_bind_conversation(",
+        "_publish_timeline_event(",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_generic_health_and_discover_paths_do_not_reference_registry_scope() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate_paths = (
+        repo_root / "app" / "ports" / "health_publication.py",
+        repo_root / "app" / "control_plane" / "adapters" / "health_publication.py",
+        repo_root / "app" / "channels" / "telegram" / "ingress.py",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        assert "registry_scope" not in text, f"registry_scope still referenced in {path}"

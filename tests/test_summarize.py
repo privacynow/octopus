@@ -6,7 +6,17 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from app.summarize import _RING_SIZE, _SHORT_THRESHOLD, export_chat_history, load_raw, load_raw_by_slot, save_raw, summarize
+from app.summarize import (
+    _RING_SIZE,
+    _SHORT_THRESHOLD,
+    export_chat_history,
+    format_provider_error,
+    load_raw,
+    load_raw_by_slot,
+    save_raw,
+    sanitize_provider_error_text,
+    summarize,
+)
 
 
 class _FakeProc:
@@ -122,6 +132,69 @@ def test_successful_summarize_returns_summary():
         return_value=_FakeProc(b"Short mobile summary"),
     ):
         assert asyncio.run(summarize(long_text, "fake-model")) == "Short mobile summary"
+
+
+def test_sanitize_provider_error_text_redacts_paths_and_secret_assignments():
+    text = (
+        "Provider failed at /Users/tinker/output/bots/telegram-agent-bot/app/providers/codex.py "
+        "with API_KEY=super-secret-value and token: abcdef1234567890"
+    )
+
+    sanitized = sanitize_provider_error_text(text)
+
+    assert "/Users/tinker/output" not in sanitized
+    assert "super-secret-value" not in sanitized
+    assert "abcdef1234567890" not in sanitized
+    assert "<path>" in sanitized
+    assert "<redacted>" in sanitized
+
+
+def test_format_provider_error_sanitizes_short_errors():
+    result = asyncio.run(
+        format_provider_error(
+            "Request failed in /tmp/codex-run.log with password=hunter2",
+            1,
+        )
+    )
+
+    assert "/tmp/codex-run.log" not in result
+    assert "hunter2" not in result
+    assert "<path>" in result
+    assert "<redacted>" in result
+
+
+def test_format_provider_error_sanitizes_summarized_output():
+    long_text = "provider failure " * 200
+    with patch(
+        "app.summarize.asyncio.create_subprocess_exec",
+        return_value=_FakeProc(
+            b"Failed at /app/work/request.txt with token=secret-token-value"
+        ),
+    ):
+        result = asyncio.run(format_provider_error(long_text, 1))
+
+    assert "/app/work/request.txt" not in result
+    assert "secret-token-value" not in result
+    assert "<path>" in result
+    assert "<redacted>" in result
+
+
+def test_format_provider_error_sanitizes_truncated_fallback():
+    long_text = (
+        "Failure in /var/folders/private/run.log password=top-secret "
+        "Bearer abcdefghijklmnopqrstuvwxyz123456 "
+    ) * 30
+    with patch(
+        "app.summarize.asyncio.create_subprocess_exec",
+        side_effect=OSError("summarizer unavailable"),
+    ):
+        result = asyncio.run(format_provider_error(long_text, 1))
+
+    assert "/var/folders/private/run.log" not in result
+    assert "top-secret" not in result
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in result
+    assert "<path>" in result
+    assert "<redacted>" in result or "<redacted-bearer-token>" in result
 
 
 # -- export_chat_history --

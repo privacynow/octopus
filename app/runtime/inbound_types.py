@@ -8,7 +8,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
+from app.identity import telegram_numeric_id
+
+
+_SOURCE_MISSING = object()
+
+
+def _validated_source(source: object) -> str:
+    if source is _SOURCE_MISSING:
+        raise ValueError("Inbound event source must be explicit")
+    value = str(source or "").strip()
+    if not value:
+        raise ValueError("Inbound event source must be non-empty")
+    return value
 
 
 @dataclass(frozen=True)
@@ -37,17 +49,20 @@ class InboundMessage:
     conversation_key: str
     text: str
     attachments: tuple[InboundAttachment, ...] = ()
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     routed_task_id: str = ""
+    authority_ref: str = ""
     skip_approval: bool = False
+    transport: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -58,15 +73,17 @@ class InboundCommand:
     conversation_key: str
     command: str
     args: tuple[str, ...] = ()
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    transport: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -76,15 +93,17 @@ class InboundCallback:
     user: InboundUser
     conversation_key: str
     data: str
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    transport: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -95,15 +114,18 @@ class InboundAction:
     conversation_key: str
     action: str
     params: dict[str, Any] = field(default_factory=dict)
-    source: str = "telegram"
+    source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    authority_ref: str = ""
+    transport: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source", _validated_source(self.source))
 
     @property
-    def chat_id(self) -> int:
+    def chat_id(self) -> int | str:
         value = telegram_numeric_id(self.conversation_key)
-        if value is None:
-            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
-        return value
+        return value if value is not None else self.conversation_key
 
 
 @dataclass(frozen=True)
@@ -131,9 +153,14 @@ class InboundEnvelope:
         return "unknown"
 
 
-def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback | InboundAction) -> str:
+def serialize_inbound(
+    event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+    *,
+    transport: str = "",
+) -> str:
     """Serialize a normalized inbound event to durable JSON."""
 
+    resolved_transport = str(transport or getattr(event, "transport", "") or "")
     if isinstance(event, InboundMessage):
         return json.dumps(
             {
@@ -142,8 +169,10 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "conversation_key": event.conversation_key,
                 "text": event.text,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
                 "routed_task_id": event.routed_task_id,
+                "authority_ref": event.authority_ref,
                 "skip_approval": event.skip_approval,
                 "attachments": [
                     {
@@ -165,6 +194,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "command": event.command,
                 "args": list(event.args),
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
             }
         )
@@ -176,6 +206,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "conversation_key": event.conversation_key,
                 "data": event.data,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
             }
         )
@@ -188,7 +219,9 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "action": event.action,
                 "params": event.params,
                 "source": event.source,
+                "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
+                "authority_ref": event.authority_ref,
             }
         )
     raise TypeError(f"Unknown inbound type: {type(event)}")
@@ -201,13 +234,25 @@ def deserialize_inbound(
     """Reconstruct a normalized inbound event from stored JSON."""
 
     data = json.loads(payload_json)
-    actor_key = data.get("actor_key")
-    if not actor_key and "user_id" in data:
-        actor_key = telegram_actor_key(data["user_id"])
-    conversation_key = data.get("conversation_key")
-    if not conversation_key and "chat_id" in data:
-        conversation_key = telegram_conversation_key(data["chat_id"])
-    user = InboundUser(id=str(actor_key or ""), username=data.get("username", ""))
+    actor_key = str(data.get("actor_key", "") or "")
+    conversation_key = str(data.get("conversation_key", "") or "")
+    if not actor_key or not conversation_key:
+        raise ValueError("Inbound payload missing canonical actor_key/conversation_key")
+    user = InboundUser(id=actor_key, username=data.get("username", ""))
+    # Shared runtime payloads must carry explicit provenance. Silently
+    # inventing Telegram here lets malformed registry payloads bypass the
+    # canonical authority_ref check below.
+    source = str(data.get("source", "") or "").strip()
+    if not source:
+        raise ValueError("Inbound payload missing canonical source")
+    # Legacy durable payloads predate explicit transport serialization. Fall
+    # back to the canonical source so replay keeps the best available
+    # provenance instead of dropping to blank forever.
+    transport = str(data.get("transport", "") or source).strip()
+    conversation_ref = str(data.get("conversation_ref", "") or "")
+    authority_ref = str(data.get("authority_ref", "") or "")
+    if source == "registry" and kind in {"message", "action"} and not authority_ref:
+        raise ValueError("Registry inbound payload missing canonical authority_ref")
     if kind == "message":
         attachments = tuple(
             InboundAttachment(
@@ -220,30 +265,34 @@ def deserialize_inbound(
         )
         return InboundMessage(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             text=data.get("text", ""),
             attachments=attachments,
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            transport=transport,
+            conversation_ref=conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
+            authority_ref=authority_ref,
             skip_approval=bool(data.get("skip_approval", False)),
         )
     if kind == "command":
         return InboundCommand(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             command=data["command"],
             args=tuple(data.get("args", [])),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            transport=transport,
+            conversation_ref=conversation_ref,
         )
     if kind == "callback":
         return InboundCallback(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             data=data.get("data", ""),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            transport=transport,
+            conversation_ref=conversation_ref,
         )
     if kind == "action":
         params = data.get("params", {})
@@ -251,10 +300,12 @@ def deserialize_inbound(
             params = {}
         return InboundAction(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             action=data.get("action", ""),
             params=dict(params),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            transport=transport,
+            conversation_ref=conversation_ref,
+            authority_ref=authority_ref,
         )
     raise ValueError(f"Unknown kind: {kind}")

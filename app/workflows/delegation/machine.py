@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 
 from app.session_state import DelegatedTask, PendingDelegation
@@ -106,10 +107,12 @@ class CancelDelegationAction:
 class UpdateTaskStatusAction:
     routed_task_id: str
     status: str
+    authority_ref: str = ""
     summary: str = ""
     full_text: str = ""
     follow_up_questions: tuple[str, ...] = ()
     completed_at: str = ""
+    submitted_at: float | str = 0.0
 
 
 @dataclass(frozen=True)
@@ -132,13 +135,18 @@ def _task_with_status(task: DelegatedTask, action: UpdateTaskStatusAction) -> De
     allowed = _ALLOWED_CHILD_TRANSITIONS.get(current_status, frozenset())
     if next_status not in allowed:
         return task
+    submitted_at = task.submitted_at
+    if next_status == "submitted":
+        submitted_at = action.submitted_at or task.submitted_at or time.time()
     return replace(
         task,
         status=next_status,
+        authority_ref=action.authority_ref or task.authority_ref,
         summary=action.summary or task.summary,
         full_text=action.full_text or task.full_text,
         follow_up_questions=list(action.follow_up_questions) if action.follow_up_questions else list(task.follow_up_questions),
         completed_at=action.completed_at or task.completed_at,
+        submitted_at=submitted_at,
     )
 
 
@@ -149,6 +157,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         tasks = tuple(
             DelegatedTask(
                 routed_task_id=item.routed_task_id,
+                authority_ref=item.authority_ref,
                 title=item.title,
                 target_agent_id=item.target_agent_id,
                 instructions=item.instructions,
@@ -202,6 +211,9 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         tasks: list[DelegatedTask] = []
         for task in pending.tasks:
             if task.routed_task_id != action.routed_task_id:
+                tasks.append(task)
+                continue
+            if action.authority_ref and task.authority_ref and task.authority_ref != action.authority_ref:
                 tasks.append(task)
                 continue
             next_task = _task_with_status(task, action)

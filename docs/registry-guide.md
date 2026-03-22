@@ -1,15 +1,17 @@
 # Registry Guide
 
-This guide covers the full registry lifecycle in `./octopus`.
+This guide covers the registry lifecycle exposed by `./octopus` and the
+Registry UI.
 
 Use registry mode when you want:
 
-- a local browser UI for connected bots
+- a local or remote browser UI for connected bots
+- routed-task coordination and shared agent discovery
 - one registry shared by multiple bots in this deployment
-- a clean way to switch a bot between standalone, local registry, and remote registry modes
+- one bot connected to multiple registries with different scopes
 
 Text-mode flows are shown as styled terminal panels. Browser screenshots are
-kept only for the actual Registry UI stages where they add value.
+kept for the actual Registry UI stages where they add value.
 
 ## Registry Modes
 
@@ -22,8 +24,22 @@ Local registry:
 Remote registry:
 
 - uses your hosted `https://...` registry URL
-- no local browser UI is involved
+- no local browser URL is involved
 - requires a remote enrollment token
+
+## Registry Scopes
+
+Octopus prompts for a scope whenever you add or switch a registry connection.
+
+- `full`
+  - conversation + coordination surfaces
+  - local UI/timelines plus routed tasks
+- `channel`
+  - conversation/UI/timeline surfaces only
+  - no routed-task intake on that connection
+- `coordination`
+  - routed tasks, agent discovery, and health only
+  - no conversation-channel surface on that connection
 
 ## Workflow 1: Check Local Registry Status
 
@@ -75,26 +91,31 @@ Representative flow for an existing standalone bot:
 
 ![Connect existing bot to local registry](assets/registry/04-connect-local.svg)
 
-Verify with:
+After the reconnect/restart path lands, `./octopus status` shows one registry
+connection row per bot with:
 
-```bash
-./octopus status
-```
-
-Representative status output is included in the panel above.
+- `registry_id`
+- `scope`
+- current connection state
+- URL
 
 ## Workflow 5: Add A New Bot Directly Into Registry Mode
 
-If you add another bot with `./octopus`, Octopus asks whether the new bot should
-connect to a registry.
+If you add another bot with `./octopus`, Octopus asks whether the new bot
+should connect to a registry.
 
 Representative flow:
 
 ![Add new bot directly into local registry mode](assets/registry/05-add-bot-local.svg)
 
+If no local registry exists yet, the prompt changes to:
+
+- `Press Enter to start a local registry, or type 'remote' to use a remote registry:`
+
 ## Workflow 6: Connect A Bot To A Remote Registry
 
-Octopus supports remote registries per bot. The URL must start with `https://`.
+Octopus supports remote registries per bot. The URL must start with
+`https://`.
 
 Representative flow:
 
@@ -103,12 +124,28 @@ Representative flow:
 For remote registries:
 
 - Octopus never prints a local `localhost` UI URL
-- the bot keeps its own remote registry URL and enrollment token in its env file
+- the bot keeps its own remote registry URL, enrollment token, and scope in
+  its env file
 - local registry state is unaffected unless you explicitly switch away from it
 
-## Workflow 7: Switch A Bot From Local Registry To Remote Registry
+## Workflow 7: Add Or Remove Extra Registry Connections
 
-Open the manage flow for a bot that already uses the local registry.
+Registry-backed bots can carry more than one registry connection.
+
+Representative multi-connection management flow:
+
+![Manage multiple registry connections](assets/registry/10-manage-registry-connections.svg)
+
+Use this path when you want to:
+
+- add a second remote registry without losing the first connection
+- remove one connection while keeping the bot in registry mode
+- separate `channel` and `coordination` authorities intentionally
+
+## Workflow 8: Switch A Single-Connection Bot From Local Registry To Remote Registry
+
+Switch flows are only available when exactly one registry connection is
+configured for the bot.
 
 Representative flow:
 
@@ -116,7 +153,7 @@ Representative flow:
 
 If no other bots still use the local registry, Octopus may offer to stop it.
 
-## Workflow 8: Switch A Bot From Remote Registry To Local Registry
+## Workflow 9: Switch A Single-Connection Bot From Remote Registry To Local Registry
 
 Representative flow:
 
@@ -124,17 +161,19 @@ Representative flow:
 
 If the local registry is not running yet, Octopus starts it automatically.
 
-## Workflow 9: Disconnect A Bot From Registry Mode
+## Workflow 10: Disconnect A Bot From Registry Mode
 
-Disconnecting a bot keeps bot data intact and changes only its registry mode.
+Disconnecting a bot preserves bot data and removes registry connections.
 
-Representative flow:
+Representative single-connection disconnect flow:
 
 ![Disconnect a bot from registry mode](assets/registry/09-disconnect-registry.svg)
 
-If no other bots use the local registry, Octopus offers to stop it.
+If the bot has only one registry connection, it returns to standalone mode. If
+the bot has multiple connections, removing one connection leaves the bot in
+registry mode with the remaining entries intact.
 
-## Workflow 10: Use The Registry Dashboard
+## Workflow 11: Use The Registry Dashboard
 
 Once bots are connected, the Registry UI becomes the main browser surface for
 registry-backed workflows.
@@ -143,11 +182,55 @@ registry-backed workflows.
 
 Typical uses from the UI:
 
-- inspect connected agents
-- review registry-backed activity
-- work with routing and timeline views
+- inspect connected bots, capacity, and health details
+- filter conversations and open full conversation detail
+- send follow-up messages, export transcripts, or cancel conversations
+- watch routed-task state and delegated-result progress
+- manage runtime skills, provider guidance, and capability kill switches
 
-## Workflow 11: Follow Logs Or Stop The Local Registry
+## Workflow 12: Inspect An Agent
+
+Click any agent row in the dashboard to see its detail view.
+
+![Agent detail](assets/registry/10-agent-detail.png)
+
+The agent detail shows:
+
+- display name, slug, role, and provider
+- connectivity state and version
+- registry scope and channel capabilities
+- runtime health (when available)
+
+## Workflow 13: View Conversation Detail And Timeline
+
+Click any conversation row to see the full conversation detail with
+timeline events.
+
+![Conversation detail with timeline](assets/registry/13-conversation-detail.png)
+
+From the conversation detail, you can:
+
+- read the full timeline (started, progress, completed, failed events)
+- send a follow-up message
+- export the conversation transcript
+- cancel the conversation
+
+## Workflow 14: Manage Capabilities And Provider Guidance
+
+The dashboard includes management surfaces for:
+
+- **Capabilities** — global kill switches for routed-task, discovery,
+  and other coordination features
+
+![Capabilities management](assets/registry/capabilities-tab.png)
+
+- **Provider guidance** — per-provider instruction drafts with a
+  lifecycle (draft → submitted → approved → published)
+
+![Provider guidance](assets/registry/guidance-tab.png)
+
+## Workflow 15: Follow Logs Or Stop The Local Registry
+
 
 When the local registry is already running, `./octopus registry` gives you two
 maintenance actions.
@@ -171,6 +254,8 @@ After any registry change, verify with:
 You want to see:
 
 - the bot listed in `registry` mode when it should be connected
+- one connection line per configured registry, with the expected `registry_id`,
+  `scope`, state, and URL
 - the local registry listed as `running` when using local mode
 - the doctor flow succeed without token or enrollment errors
 
@@ -184,6 +269,12 @@ Remote registry connect fails immediately
 
 - confirm the URL starts with `https://`
 - confirm the enrollment token is correct
+- re-run the flow and check the scope you selected
+
+Switch to local/remote is unavailable
+
+- switch flows require exactly one configured registry connection
+- remove extra registry connections first, or use the add/remove flow instead
 
 The browser UI does not load
 
@@ -191,11 +282,12 @@ The browser UI does not load
 - confirm `./octopus status` shows the local registry as `running`
 - restart it from `./octopus registry`
 
-The bot does not show up in the local UI
+The bot does not show up in the UI
 
 - run `./octopus status`
 - run `./octopus doctor`
-- reconnect the bot through the registry flow
+- inspect the per-connection state lines for `starting` or `degraded`
+- reconnect the bot through the registry flow if needed
 
 The bot should be local but still shows remote behavior
 

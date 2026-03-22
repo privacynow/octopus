@@ -61,6 +61,22 @@ class ProviderGuidanceService:
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
         return "\n".join(parts) if parts else ""
 
+    def preflight_prompt(self, role: str, active_skills: list[str]) -> str:
+        parts: list[str] = []
+        if role:
+            stripped = role.strip()
+            lower = stripped.lower()
+            is_sentence = any(lower.startswith(prefix) for prefix in ("you are", "you're", "act as", "as a"))
+            if "\n" in stripped or is_sentence:
+                parts.append(stripped + "\n")
+            else:
+                parts.append(f"You are a {stripped}.\n")
+        tracks = self._tracks(active_skills)
+        if tracks:
+            labels = ", ".join(record.display_name for record in tracks)
+            parts.append(f"Active runtime skills: {labels}.\n")
+        return "\n".join(parts) if parts else ""
+
     def prompt_weight(self, role: str, active_skills: list[str]) -> int:
         return len(self.system_prompt(role, active_skills))
 
@@ -233,7 +249,7 @@ class ProviderGuidanceService:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return PreflightContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.system_prompt(role, active_skills),
+            system_prompt=self.preflight_prompt(role, active_skills),
             capability_summary=capability_summary,
             working_dir=working_dir,
             file_policy=file_policy,

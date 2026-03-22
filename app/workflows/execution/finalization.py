@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from app.agents.bridge import summarize_text
-from app.agents.types import RoutedTaskResult
+from app.agents.types import RoutedTaskResult, RoutedTaskUpdate
+from app.formatting import summarize_text
+from app.ports.task_routing import TaskRoutingPort
 from app.session_state import SessionState
 from app.workflows.delegation.coordination import finalize_resumed_delegation
 from app.workflows.execution.contracts import RequestExecutionOutcome
@@ -27,11 +28,12 @@ class FinalizationContext:
     conversation_ref: str
     chat_id: int = 0
     routed_task_id: str = ""
+    authority_ref: str = ""
     skip_approval: bool = False
     last_status_text: str = ""
     load_session: Callable[[int | str], SessionState] | None = None
     save_session: Callable[[int | str, SessionState], None] | None = None
-    registry_client_factory: Callable[[Any], Any | None] | None = None
+    task_routing: TaskRoutingPort | None = None
     record_usage: Callable[..., None] | None = None
     publish_timeline_event: Callable[..., Awaitable[None]] | None = None
     completion_webhook_sender: Callable[..., Awaitable[None]] | None = None
@@ -41,7 +43,6 @@ class FinalizationContext:
 class FinalizationOutcome:
     delegation_status: str = ""
     routed_result_status: str = ""
-    routed_result_warning_text: str = ""
     usage_status: str = "skipped"
     timeline_status: str = "skipped"
     webhook_status: str = "skipped"
@@ -49,6 +50,43 @@ class FinalizationOutcome:
 
 def _result_full_text(outcome: RequestExecutionOutcome, *, last_status_text: str) -> str:
     return outcome.reply_text or html.unescape(last_status_text or "")
+
+
+def _routed_result_authority_ref(context: FinalizationContext) -> str:
+    return context.authority_ref
+
+
+def _routed_result_delivery_failure_summary(result_status: str) -> str:
+    if result_status == "completed":
+        return "Execution completed, but the result could not be delivered to the requesting conversation."
+    return summarize_text(
+        f"Execution finished with status {result_status}, but the result could not be delivered to the requesting conversation."
+    )
+
+
+async def _publish_routed_result_delivery_failure(
+    *,
+    context: FinalizationContext,
+    authority_ref: str,
+    result_status: str,
+) -> None:
+    if context.task_routing is None or not context.routed_task_id:
+        return
+    try:
+        await context.task_routing.update_routed_task_status(
+            update=RoutedTaskUpdate(
+                routed_task_id=context.routed_task_id,
+                status="partialfailed",
+                summary=_routed_result_delivery_failure_summary(result_status),
+            ),
+            authority_ref=authority_ref,
+        )
+    except Exception:
+        log.warning(
+            "Fallback routed-task status update failed for %s",
+            context.routed_task_id,
+            exc_info=True,
+        )
 
 
 async def finalize_execution(
@@ -77,39 +115,53 @@ async def finalize_execution(
             context.save_session(context.runtime_chat, session)
 
     routed_result_status = ""
-    routed_result_warning_text = ""
-    if context.routed_task_id and context.registry_client_factory is not None:
-        client = context.registry_client_factory(context.config)
-        if client is not None:
-            full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
-            result_status = (
-                "completed"
-                if outcome.status in {"completed", "completed_with_denials"}
-                else outcome.status
+    authority_ref = _routed_result_authority_ref(context)
+    if context.routed_task_id and context.task_routing is not None and authority_ref:
+        full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
+        result_status = (
+            "completed"
+            if outcome.status in {"completed", "completed_with_denials"}
+            else outcome.status
+        )
+        try:
+            report = await context.task_routing.report_routed_task_result(
+                routed_task_id=context.routed_task_id,
+                authority_ref=authority_ref,
+                result=RoutedTaskResult(
+                    routed_task_id=context.routed_task_id,
+                    status=result_status,
+                    summary=summarize_text(full_text or outcome.error_text or result_status),
+                    full_text=full_text or outcome.error_text,
+                    artifacts=(),
+                    follow_up_questions=(),
+                ),
             )
-            try:
-                await client.routed_task_result(
-                    context.routed_task_id,
-                    RoutedTaskResult(
-                        routed_task_id=context.routed_task_id,
-                        status=result_status,
-                        summary=summarize_text(full_text or outcome.error_text or result_status),
-                        full_text=full_text or outcome.error_text,
-                        artifacts=(),
-                        follow_up_questions=(),
-                    ),
-                )
+            if report.status == "reported":
                 routed_result_status = "reported"
-            except Exception:
+            else:
                 routed_result_status = "report_failed"
-                routed_result_warning_text = (
-                    "Your request completed, but the result could not be delivered to the requesting conversation."
+                await _publish_routed_result_delivery_failure(
+                    context=context,
+                    authority_ref=authority_ref,
+                    result_status=result_status,
                 )
                 log.error(
-                    "Failed to report routed task result for %s",
+                    "Failed to report routed task result for %s: %s",
                     context.routed_task_id,
-                    exc_info=True,
+                    report.error or report.status,
                 )
+        except Exception:
+            routed_result_status = "report_failed"
+            await _publish_routed_result_delivery_failure(
+                context=context,
+                authority_ref=authority_ref,
+                result_status=result_status,
+            )
+            log.error(
+                "Failed to report routed task result for %s",
+                context.routed_task_id,
+                exc_info=True,
+            )
 
     usage_status = "skipped"
     timeline_status = "skipped"
@@ -137,7 +189,9 @@ async def finalize_execution(
                     context.item_id,
                     exc_info=True,
                 )
-        if (
+        if context.routed_task_id:
+            timeline_status = "skipped_routed_task"
+        elif (
             context.conversation_ref
             and context.publish_timeline_event is not None
             and (outcome.prompt_tokens > 0 or outcome.completion_tokens > 0)
@@ -164,7 +218,11 @@ async def finalize_execution(
                 log.warning("Failed to publish usage timeline event", exc_info=True)
 
     webhook_status = "skipped"
-    if context.config.completion_webhook_url and outcome.status != "delegation_proposed":
+    if (
+        context.config.completion_webhook_url
+        and outcome.status != "delegation_proposed"
+        and not context.routed_task_id
+    ):
         sender = context.completion_webhook_sender
         if sender is None:
             from app.webhook import fire_completion_webhook as sender
@@ -186,7 +244,6 @@ async def finalize_execution(
     return FinalizationOutcome(
         delegation_status=delegation_status,
         routed_result_status=routed_result_status,
-        routed_result_warning_text=routed_result_warning_text,
         usage_status=usage_status,
         timeline_status=timeline_status,
         webhook_status=webhook_status,

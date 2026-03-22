@@ -20,7 +20,7 @@ from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 
 
 class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
-    """Canonical activation flows shared by Telegram and registry."""
+    """Canonical activation flows shared across channel entrypoints."""
 
     def _catalog(self):
         return get_runtime_skill_catalog_use_cases()
@@ -80,7 +80,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
 
         requirements = self._catalog().requirements(skill_name)
         if requirements:
-            user_creds = self._credentials().load(user_id)
+            user_creds = self._credentials().load_for_skills(user_id, [skill_name])
             missing = self._credentials().missing_requirements(
                 requirements,
                 user_creds.get(skill_name, {}),

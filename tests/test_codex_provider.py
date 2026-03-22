@@ -1,5 +1,6 @@
 """Tests for codex provider — command building, event parsing."""
 
+import logging
 import sys
 import tempfile
 import textwrap
@@ -203,6 +204,145 @@ async def test_provider_config_sandbox_applies_without_inspect():
     assert cmd[sandbox_idx + 1] == "read-only", (
         f"provider_config sandbox should apply when not in inspect mode, got {cmd[sandbox_idx + 1]}"
     )
+
+
+async def test_provider_config_invalid_sandbox_is_rejected(caplog):
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={"sandbox": "off"},
+        credential_env={},
+        file_policy="edit",
+    )
+
+    caplog.set_level(logging.WARNING)
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+
+    cmd, _ = calls[-1]
+    sandbox_idx = cmd.index("--sandbox")
+    assert cmd[sandbox_idx + 1] == "workspace-write"
+    assert "Rejected invalid Codex sandbox override" in caplog.text
+
+
+async def test_provider_config_allowlisted_override_is_passed_through():
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    override = 'sandbox_permissions=["disk-full-read-access"]'
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={"config_overrides": [override]},
+        credential_env={},
+        file_policy="edit",
+    )
+
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+
+    cmd, _ = calls[-1]
+    assert "-c" in cmd
+    assert override in cmd
+
+
+async def test_provider_config_non_allowlisted_override_is_rejected(caplog):
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    override = 'model="o3"'
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={"config_overrides": [override]},
+        credential_env={},
+        file_policy="edit",
+    )
+
+    caplog.set_level(logging.WARNING)
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+
+    cmd, _ = calls[-1]
+    assert override not in cmd
+    assert "not allowlisted" in caplog.text
+
+
+async def test_provider_config_flag_like_override_value_is_rejected(caplog):
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    override = "sandbox_permissions=--dangerously-bypass-approvals-and-sandbox"
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={"config_overrides": [override]},
+        credential_env={},
+        file_policy="edit",
+    )
+
+    caplog.set_level(logging.WARNING)
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+
+    cmd, _ = calls[-1]
+    assert override not in cmd
+    assert "must not look like a CLI flag" in caplog.text
+
+
+async def test_provider_config_flag_entry_is_rejected(caplog):
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    override = "--dangerously-bypass-approvals-and-sandbox"
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={"config_overrides": [override]},
+        credential_env={},
+        file_policy="edit",
+    )
+
+    caplog.set_level(logging.WARNING)
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+
+    cmd, _ = calls[-1]
+    assert override not in cmd
+    assert "CLI flags are not allowed" in caplog.text
 
 
 # -- skip_permissions behaviour --

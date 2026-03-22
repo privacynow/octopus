@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
+from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,6 +17,7 @@ from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
 from app.registry_errors import registry_error_summary
 from app.session_state import PendingDelegation
+from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidancePreview,
@@ -66,10 +68,44 @@ def _escaped_html_message(text: str) -> TelegramRenderedMessage:
     return _html_message(html.escape(text))
 
 
-def retry_prompt(denials: Iterable[dict[str, Any]]) -> TelegramRenderedMessage:
+_PENDING_CALLBACK_ACTIONS = frozenset({
+    "approval_approve",
+    "approval_reject",
+    "retry_allow",
+    "retry_skip",
+})
+
+
+def pending_callback_data(action: str, callback_token: str = "") -> str:
+    if action not in _PENDING_CALLBACK_ACTIONS:
+        raise ValueError(f"Unknown pending callback action: {action}")
+    token = str(callback_token or "").strip()
+    return f"{action}:{token}" if token else action
+
+
+def parse_pending_callback_data(data: str) -> tuple[str, str] | None:
+    text = str(data or "").strip()
+    if text in _PENDING_CALLBACK_ACTIONS:
+        return (text, "")
+    action, sep, callback_token = text.partition(":")
+    if not sep or action not in _PENDING_CALLBACK_ACTIONS:
+        return None
+    callback_token = callback_token.strip()
+    if not callback_token:
+        return None
+    return (action, callback_token)
+
+
+def retry_prompt(denials: Iterable[dict[str, Any]], callback_token: str = "") -> TelegramRenderedMessage:
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
-        InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
+        InlineKeyboardButton(
+            "\u2705 " + _msg.retry_button_grant(),
+            callback_data=pending_callback_data("retry_allow", callback_token),
+        ),
+        InlineKeyboardButton(
+            "\u274c " + _msg.retry_button_skip(),
+            callback_data=pending_callback_data("retry_skip", callback_token),
+        ),
     ]])
     return TelegramRenderedMessage(
         text=(
@@ -82,10 +118,16 @@ def retry_prompt(denials: Iterable[dict[str, Any]]) -> TelegramRenderedMessage:
     )
 
 
-def approval_prompt() -> TelegramRenderedMessage:
+def approval_prompt(callback_token: str = "") -> TelegramRenderedMessage:
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
-        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
+        InlineKeyboardButton(
+            "\u2705 " + _msg.approval_button_approve(),
+            callback_data=pending_callback_data("approval_approve", callback_token),
+        ),
+        InlineKeyboardButton(
+            "\u274c " + _msg.approval_button_reject(),
+            callback_data=pending_callback_data("approval_reject", callback_token),
+        ),
     ]])
     return TelegramRenderedMessage(
         text=_msg.approval_plan_question(),
@@ -860,7 +902,31 @@ def cannot_send_path_message(raw_path: str) -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=f"[Cannot send: {raw_path}]")
 
 
-def delegation_plan_message(delegation: PendingDelegation) -> TelegramRenderedMessage:
+def _delegation_preview_lines(preview: DelegationTargetPreview | None) -> list[str]:
+    if preview is None:
+        return []
+    if preview.status == "resolved":
+        if not preview.authority_ref:
+            return []
+        return [f"Status: ready via <code>{html.escape(preview.authority_ref)}</code>"]
+    if preview.status == "missing_target":
+        lines = ["Status: <b>missing target agent</b>"]
+    elif preview.status == "unavailable":
+        lines = ["Status: <b>registry unavailable</b>"]
+    else:
+        lines = ["Status: <b>target not available yet</b>"]
+    if preview.detail:
+        lines.append(html.escape(preview.detail))
+    return lines
+
+
+def delegation_plan_message(
+    delegation: PendingDelegation,
+    *,
+    previews: Iterable[DelegationTargetPreview] | None = None,
+) -> TelegramRenderedMessage:
+    preview_items = list(previews or ())
+    has_blockers = any(item.status != "resolved" for item in preview_items)
     lines = [
         "<b>Delegation plan</b>",
         "",
@@ -868,11 +934,19 @@ def delegation_plan_message(delegation: PendingDelegation) -> TelegramRenderedMe
         "",
     ]
     for index, task in enumerate(delegation.tasks, start=1):
+        preview = preview_items[index - 1] if index - 1 < len(preview_items) else None
         lines.extend([
             f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
             f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
-            "",
         ])
+        lines.extend(_delegation_preview_lines(preview))
+        lines.append("")
+    if has_blockers:
+        lines.append(
+            "Some targets are not ready yet. Approval will check ownership again"
+            " before sending any requests."
+        )
+        lines.append("")
     lines.append("Approve to send these requests, or cancel to continue without delegation.")
     return _html_message("\n".join(lines))
 
@@ -1153,14 +1227,24 @@ def discover_failed_message(error_code: str) -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=f"Agent discovery failed. {registry_error_summary(error_code)}")
 
 
-def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMessage:
+def _agent_view(agent: Any) -> dict[str, Any]:
+    if is_dataclass(agent):
+        return asdict(agent)
+    if isinstance(agent, dict):
+        return agent
+    return {}
+
+
+def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
     if not agents:
         return TelegramRenderedMessage(text="No matching agents found.")
     lines = ["<b>Matching agents</b>"]
-    for agent in agents[:8]:
+    for raw_agent in agents[:8]:
+        agent = _agent_view(raw_agent)
         display_name = html.escape(
             agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
         )
+        authority_ref = html.escape(str(agent.get("authority_ref", "") or ""))
         role = html.escape(agent.get("role") or "(unspecified)")
         state = html.escape(agent.get("connectivity_state") or "unknown")
         current_capacity = int(agent.get("current_capacity", 0) or 0)
@@ -1169,6 +1253,8 @@ def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMe
         lines.append(
             f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
         )
+        if authority_ref:
+            lines.append(f"Authority: <code>{authority_ref}</code>")
         capabilities = [str(value) for value in agent.get("capabilities", agent.get("skills", [])) if value]
         if capabilities:
             lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")

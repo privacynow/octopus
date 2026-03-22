@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import os
 import re
@@ -39,20 +38,49 @@ def credential_validation_target_host(req: SkillRequirement) -> str:
 
 def _allowed_validation_hosts() -> tuple[str, ...]:
     raw = os.environ.get("BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS", "")
-    configured = tuple(
-        pattern.strip().lower()
-        for pattern in raw.split(",")
-        if pattern.strip()
-    )
-    return _DEFAULT_ALLOWED_VALIDATION_HOSTS + configured
+    configured: list[str] = []
+    for pattern in raw.split(","):
+        normalized = pattern.strip().lower()
+        if not normalized:
+            continue
+        if _is_supported_host_pattern(normalized):
+            configured.append(normalized)
+            continue
+        log.warning(
+            "Ignoring unsupported BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS entry: %s",
+            normalized,
+        )
+    return _DEFAULT_ALLOWED_VALIDATION_HOSTS + tuple(configured)
+
+
+def _is_supported_host_pattern(pattern: str) -> bool:
+    if not pattern:
+        return False
+    if any(char in pattern for char in ("?", "[", "]")):
+        return False
+    if "*" not in pattern:
+        return True
+    if not pattern.startswith("*.") or pattern.count("*") != 1:
+        return False
+    suffix = pattern[2:]
+    return "." in suffix and all(part and "*" not in part for part in suffix.split("."))
 
 
 def _is_allowed_validation_host(host: str) -> bool:
     normalized = host.strip().lower()
-    return bool(normalized) and any(
-        fnmatch.fnmatch(normalized, pattern)
-        for pattern in _allowed_validation_hosts()
-    )
+    if not normalized:
+        return False
+    for pattern in _allowed_validation_hosts():
+        if "*" not in pattern:
+            if normalized == pattern:
+                return True
+            continue
+        if not _is_supported_host_pattern(pattern):
+            continue
+        suffix = pattern[1:]
+        if normalized.endswith(suffix) and normalized != pattern[2:]:
+            return True
+    return False
 
 
 async def validate_credential(

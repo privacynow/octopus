@@ -17,8 +17,8 @@ from app.credential_store import (
     init_credential_store_for_config,
     reset_for_test as reset_credential_store_for_test,
 )
-from app.agents.bridge import conversation_key_for_ref
 from app.channels.registry import presenters
+from app.identity import conversation_key_for_ref
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health

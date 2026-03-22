@@ -30,7 +30,7 @@ from app.workflows.runtime_skills.setup_machine import (
 
 
 class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
-    """Canonical setup workflows shared by Telegram and other channels."""
+    """Canonical setup workflows shared across channel entrypoints."""
 
     def _activation(self):
         return get_skill_activation_service()
@@ -132,7 +132,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 credential_env={},
             )
 
-        user_creds = self._credentials().load(user_id)
+        user_creds = self._credentials().load_for_skills(user_id, active_skills)
         all_missing: list[tuple[str, list[SkillRequirement]]] = []
         for skill_name in active_skills:
             requirements = self._catalog().requirements(skill_name)

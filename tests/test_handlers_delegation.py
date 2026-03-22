@@ -1,9 +1,14 @@
-from app.agents.bridge import telegram_conversation_ref
-from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+import time
+
+from app.identity import telegram_conversation_ref
 from app.identity import telegram_conversation_key
+from app.ports.agent_directory import AuthorityResolution
+from app.ports.task_routing import TaskSubmissionResult
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
+    current_runtime,
     current_bot_instance,
     drain_one_worker_item,
     fresh_env,
@@ -14,17 +19,27 @@ from tests.support.handler_support import (
 )
 
 
-async def test_execute_request_proposes_delegation_and_persists_pending_delegation():
+async def test_execute_request_proposes_delegation_and_persists_pending_delegation(monkeypatch):
     with fresh_env(
         config_overrides={
             "approval_mode": "off",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
+
+        async def fake_resolve_target_authority(*, target_agent_id):
+            if target_agent_id == "developer-1":
+                return AuthorityResolution(status="resolved", authority_ref="registry:dev")
+            return AuthorityResolution(status="resolved", authority_ref="registry:review")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -63,6 +78,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         ]
         assert any(
             "<b>Delegation plan</b>" in message.get("text", "")
+            and "ready via" in message.get("text", "")
             and message.get("reply_markup") is not None
             for message in current_bot_instance().sent_messages
         )
@@ -72,8 +88,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -81,19 +96,23 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
 
         submitted = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                submitted.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            assert target_agent_id == "developer-1"
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        async def fake_submit_routed_task(*, request, authority_ref):
+            submitted.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
         )
 
         chat = FakeChat()
@@ -119,12 +138,15 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         pending = session_after.get("pending_delegation")
         assert len(submitted) == 1
-        assert submitted[0].routed_task_id == "task-1"
-        assert submitted[0].origin_agent_id == "origin-agent"
-        assert submitted[0].target_agent_id == "developer-1"
-        assert submitted[0].instructions == "Build the feature end to end."
+        request, authority_ref = submitted[0]
+        assert request.routed_task_id == "task-1"
+        assert request.origin_agent_id == ""
+        assert request.target_agent_id == "developer-1"
+        assert request.instructions == "Build the feature end to end."
+        assert authority_ref == "registry:default"
         assert pending is not None
         assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["authority_ref"] == "registry:default"
         assert pending["tasks"][0]["status"] == "submitted"
         assert "Delegation approved. 1 request(s) sent to specialist bots." in last_reply(msg)
         assert query.answered is True
@@ -134,8 +156,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -143,12 +164,15 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
 
         called = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                called.append(request)
-                return {"ok": True}
+        async def fake_submit_routed_task(*, request, authority_ref):
+            called.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -181,8 +205,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -190,21 +213,23 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
 
         called = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                called.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            del target_agent_id
+            return AuthorityResolution(status="unavailable", error="registry_unreachable")
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="degraded",
-                last_error="registry_unreachable",
-                last_error_detail="Registry poll failed with ConnectError.",
-            ),
+        async def fake_submit_routed_task(*, request, authority_ref):
+            called.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
         )
 
         chat = FakeChat()
@@ -241,21 +266,11 @@ async def test_delegation_approve_no_pending_is_a_no_op():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, _, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
-
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
-        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -271,32 +286,29 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
-        from app.agents.client import RegistryClientError
         from tests.support.handler_support import FakeChat, FakeUser
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                del request
-                raise RegistryClientError(
-                    "Registry POST /v1/tasks failed: HTTP 503",
-                    error_code="registry_server_error",
-                    operator_detail="Registry POST /v1/tasks failed with HTTP 503 and proxy banner.",
-                    status_code=503,
-                )
+        async def fake_resolve_target_authority(*, target_agent_id):
+            del target_agent_id
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        async def fake_submit_routed_task(*, request, authority_ref):
+            del request, authority_ref
+            return TaskSubmissionResult(status="failed", error="registry_server_error")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
         )
 
         chat = FakeChat()
@@ -323,3 +335,162 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
         assert "temporarily unavailable" in text.lower()
         assert "proxy banner" not in text.lower()
         assert "http 503" not in text.lower()
+
+
+async def test_delegation_approve_rejects_stale_plan_without_submission(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "delegation_timeout_seconds": 3600,
+        }
+    ) as (data_dir, cfg, prov):
+        import app.channels.telegram.ingress as th
+        from tests.support.handler_support import FakeChat, FakeUser
+
+        called = []
+
+        async def fake_submit_routed_task(*, request, authority_ref):
+            called.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
+
+        chat = FakeChat()
+        user = FakeUser()
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_delegation"] = {
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
+            "title": "Feature delegation",
+            "created_at": 0.0,
+            "tasks": [
+                {
+                    "routed_task_id": "task-1",
+                    "title": "Implement feature",
+                    "target_agent_id": "developer-1",
+                    "instructions": "Build the feature end to end.",
+                    "status": "proposed",
+                }
+            ],
+        }
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        _, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
+
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        pending = session_after.get("pending_delegation")
+        assert called == []
+        assert pending is not None
+        assert pending["status"] == "partial_failed"
+        assert pending["tasks"][0]["status"] == "failed"
+        assert "Delegation plan expired before approval." in last_reply(msg)
+
+
+async def test_stale_submitted_delegation_expires_on_next_worker_message():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "delegation_timeout_seconds": 3600,
+        }
+    ) as (data_dir, _cfg, prov):
+        from tests.support.handler_support import FakeChat, FakeUser
+
+        chat = FakeChat()
+        user = FakeUser()
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_delegation"] = {
+            "conversation_ref": telegram_conversation_ref(_cfg, chat.id),
+            "title": "Feature delegation",
+            "created_at": 0.0,
+            "tasks": [
+                {
+                    "routed_task_id": "task-1",
+                    "title": "Implement feature",
+                    "target_agent_id": "developer-1",
+                    "instructions": "Build the feature end to end.",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        await send_text(chat, user, "continue please")
+        assert await drain_one_worker_item(data_dir) is True
+
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["status"] == "partial_failed"
+        assert pending["tasks"][0]["status"] == "failed"
+        assert "delegation timed out" in pending["tasks"][0]["summary"]
+
+
+async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_age(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "delegation_timeout_seconds": 3600,
+        }
+    ) as (data_dir, cfg, prov):
+        import app.channels.telegram.ingress as th
+        from tests.support.handler_support import FakeChat, FakeUser
+
+        async def fake_submit_routed_task(*, request, authority_ref):
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+
+        async def fake_resolve_target_authority(*, target_agent_id):
+            return AuthorityResolution(status="resolved", authority_ref="registry:dev")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
+        )
+
+        chat = FakeChat()
+        user = FakeUser()
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_delegation"] = {
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
+            "title": "Feature delegation",
+            "created_at": time.time() - 3599,
+            "tasks": [
+                {
+                    "routed_task_id": "task-1",
+                    "title": "Implement feature",
+                    "target_agent_id": "developer-1",
+                    "instructions": "Build the feature end to end.",
+                    "status": "proposed",
+                }
+            ],
+        }
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        _, approve_msg = await send_callback(
+            th.handle_delegation_callback,
+            chat,
+            user,
+            f"delegation_approve:{chat.id}",
+        )
+
+        assert "approved" in last_reply(approve_msg).lower()
+
+        await send_text(chat, user, "continue please")
+        assert await drain_one_worker_item(data_dir) is True
+
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["status"] == "submitted"
+        assert pending["tasks"][0]["submitted_at"] > pending["created_at"]

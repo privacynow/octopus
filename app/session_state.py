@@ -45,6 +45,7 @@ class PendingApproval:
     image_paths: list[str]
     attachment_dicts: list[dict[str, Any]]
     context_hash: str
+    callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
 
@@ -57,6 +58,7 @@ class PendingRetry:
     image_paths: list[str]
     context_hash: str
     denials: list[dict[str, Any]]
+    callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
 
@@ -74,6 +76,7 @@ class AwaitingSkillSetup:
 class DelegatedTask:
     """One child task tracked by a parent-side delegation plan."""
     routed_task_id: str
+    authority_ref: str = ""
     title: str = ""
     target_agent_id: str = ""
     instructions: str = ""
@@ -82,6 +85,7 @@ class DelegatedTask:
     full_text: str = ""
     follow_up_questions: list[str] = field(default_factory=list)
     completed_at: str = ""
+    submitted_at: float | str = 0.0
 
 
 @dataclass

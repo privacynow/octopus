@@ -86,6 +86,91 @@ remove_env_file_value() {
   restrict_secret_file_permissions "$env_file"
 }
 
+remove_env_file_matching_regex() {
+  local regex="$1" env_file=""
+  env_file="$(resolve_bot_env_file "${2:-}")" || return 1
+  local tmp_file line=""
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
+  if [ -f "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if printf '%s\n' "$line" | grep -Eq "$regex"; then
+        continue
+      fi
+      printf '%s\n' "$line" >> "$tmp_file"
+    done < "$env_file"
+    mv "$tmp_file" "$env_file"
+  else
+    rm -f "$tmp_file"
+  fi
+  restrict_secret_file_permissions "$env_file"
+}
+
+clear_registry_connection_values() {
+  local env_file=""
+  env_file="$(resolve_bot_env_file "${1:-}")" || return 1
+  remove_env_file_matching_regex \
+    '^[[:space:]]*BOT_AGENT_REGISTRY(_[0-9]+_(ID|URL|ENROLL_TOKEN|SCOPE)|_(URL|ENROLL_TOKEN|SCOPE))=' \
+    "$env_file"
+}
+
+list_registry_connection_indices() {
+  local env_file=""
+  env_file="$(resolve_bot_env_file "${1:-}")" || return 1
+  [ -f "$env_file" ] || return 0
+  grep -E '^[[:space:]]*BOT_AGENT_REGISTRY_[0-9]+_(ID|URL|ENROLL_TOKEN|SCOPE)=' "$env_file" 2>/dev/null \
+    | sed -E 's/^[[:space:]]*BOT_AGENT_REGISTRY_([0-9]+)_.*/\1/' \
+    | sort -n -u
+}
+
+list_registry_connection_records() {
+  local env_file="" found=0 index="" registry_id="" url="" enroll_token="" registry_scope=""
+  env_file="$(resolve_bot_env_file "${1:-}")" || return 1
+
+  while IFS= read -r index; do
+    [ -n "$index" ] || continue
+    found=1
+    registry_id="$(read_bot_env_value "BOT_AGENT_REGISTRY_${index}_ID" "$env_file")"
+    url="$(read_bot_env_value "BOT_AGENT_REGISTRY_${index}_URL" "$env_file")"
+    enroll_token="$(read_bot_env_value "BOT_AGENT_REGISTRY_${index}_ENROLL_TOKEN" "$env_file")"
+    registry_scope="$(read_bot_env_value "BOT_AGENT_REGISTRY_${index}_SCOPE" "$env_file")"
+    [ -n "$registry_id" ] || registry_id="registry-$index"
+    [ -n "$registry_scope" ] || registry_scope="full"
+    if [ -n "$url" ] || [ -n "$enroll_token" ]; then
+      printf '%s|%s|%s|%s\n' "$registry_id" "$url" "$enroll_token" "$registry_scope"
+    fi
+  done < <(list_registry_connection_indices "$env_file")
+
+  if [ "$found" -eq 1 ]; then
+    return 0
+  fi
+
+  url="$(read_bot_env_value BOT_AGENT_REGISTRY_URL "$env_file")"
+  enroll_token="$(read_bot_env_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$env_file")"
+  registry_scope="$(read_bot_env_value BOT_AGENT_REGISTRY_SCOPE "$env_file")"
+  [ -n "$registry_scope" ] || registry_scope="full"
+  if [ -n "$url" ] || [ -n "$enroll_token" ]; then
+    printf 'default|%s|%s|%s\n' "$url" "$enroll_token" "$registry_scope"
+  fi
+}
+
+write_registry_connection_records() {
+  local env_file="" record="" index=1 registry_id="" url="" enroll_token="" registry_scope=""
+  env_file="$(resolve_bot_env_file "${1:-}")" || return 1
+  shift || true
+  clear_registry_connection_values "$env_file"
+  for record in "$@"; do
+    [ -n "$record" ] || continue
+    IFS='|' read -r registry_id url enroll_token registry_scope <<< "$record"
+    [ -n "$registry_id" ] || registry_id="registry-$index"
+    [ -n "$registry_scope" ] || registry_scope="full"
+    upsert_env_file_value "BOT_AGENT_REGISTRY_${index}_ID" "$registry_id" "$env_file"
+    upsert_env_file_value "BOT_AGENT_REGISTRY_${index}_URL" "$url" "$env_file"
+    upsert_env_file_value "BOT_AGENT_REGISTRY_${index}_ENROLL_TOKEN" "$enroll_token" "$env_file"
+    upsert_env_file_value "BOT_AGENT_REGISTRY_${index}_SCOPE" "$registry_scope" "$env_file"
+    index=$((index + 1))
+  done
+}
+
 redact_value_for_prompt() {
   local channel="${1:-telegram}" value="${2:-}" visible=""
   case "$channel" in

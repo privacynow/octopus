@@ -10,10 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.agents.bridge import bind_conversation
-from app.agents.client import AgentRegistryClient
-from app.agents.state import load_agent_runtime_state
-from app.agents.types import TimelineEvent
+from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
 from app.ports.egress import (
@@ -21,9 +18,18 @@ from app.ports.egress import (
     ChannelEgress,
     EditableHandle,
 )
+from app.runtime.services import BotServices
 
 log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _binding_field(binding: Any, key: str, default: str = "") -> str:
+    if isinstance(binding, dict):
+        value = binding.get(key, default)
+    else:
+        value = getattr(binding, key, default)
+    return str(value or default)
 
 
 class RegistryEditableHandle(EditableHandle):
@@ -50,19 +56,35 @@ class RegistryChannelEgress(ChannelEgress):
         config: BotConfig,
         *,
         conversation_ref: str,
+        registry_id: str = "",
         routed_task_id: str = "",
+        authority_ref: str = "",
         title: str = "",
         output_log: list[dict[str, str]] | None = None,
+        external_id: str = "",
+        services: BotServices,
     ) -> None:
+        parsed_ref = parse_registry_ref(conversation_ref)
+        if parsed_ref is None:
+            raise ValueError(
+                f"Registry channel egress requires a qualified registry ref, got {conversation_ref!r}"
+            )
+        if registry_id and registry_id != parsed_ref[0]:
+            raise ValueError(
+                "Registry channel egress registry_id must match the qualified registry ref"
+            )
         self.config = config
         self.conversation_ref = conversation_ref
-        self.routed_task_id = routed_task_id
+        self._ref_kind = parsed_ref[1]
+        self.registry_id = parsed_ref[0]
+        self.routed_task_id = routed_task_id or (parsed_ref[2] if parsed_ref[1] == "task" else "")
+        self.authority_ref = authority_ref
         self.title = title or "Registry conversation"
+        self.external_id = external_id or binding_external_id_for_ref(conversation_ref)
         self.sent_messages: list[str] = []
         self.last_status_text = ""
         self._output_log = output_log
-        self._timeline_client: AgentRegistryClient | None = None
-        self._timeline_client_checked = False
+        self._services = services
         self._last_progress_published_at: float = 0.0
         self._PROGRESS_MIN_INTERVAL = 5.0
         self.chat = _RegistryChatShim(self)
@@ -74,11 +96,14 @@ class RegistryChannelEgress(ChannelEgress):
             can_answer_action=True,
             can_send_photo=False,
             can_send_document=False,
-            can_render_timeline=True,
+            can_render_timeline=(self._ref_kind == "conversation"),
             can_present_actions=True,
-            can_share_conversation=True,
+            can_share_conversation=(self._ref_kind == "conversation"),
             channel_name="registry",
         )
+
+    def _is_task_ref(self) -> bool:
+        return self._ref_kind == "task"
 
     def _metadata(self) -> dict[str, Any]:
         return {"routed_task_id": self.routed_task_id} if self.routed_task_id else {}
@@ -87,19 +112,6 @@ class RegistryChannelEgress(ChannelEgress):
         if self._output_log is None:
             return
         self._output_log.append({"type": kind, "text": text})
-
-    def _registry_client(self) -> AgentRegistryClient | None:
-        if self._timeline_client_checked:
-            return self._timeline_client
-        self._timeline_client_checked = True
-        state = load_agent_runtime_state(self.config.data_dir)
-        if not state.agent_token or not self.config.agent_registry_url:
-            return None
-        self._timeline_client = AgentRegistryClient(
-            self.config.agent_registry_url,
-            agent_token=state.agent_token,
-        )
-        return self._timeline_client
 
     def _plain_text_snippet(self, text: str, *, limit: int = 200) -> str:
         clean = html.unescape(_HTML_TAG_RE.sub(" ", text or ""))
@@ -119,25 +131,27 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
-        client = self._registry_client()
-        if client is None:
-            return
-        event = TimelineEvent(
-            event_id=event_id or uuid.uuid4().hex,
-            conversation_id=self.conversation_ref,
-            kind=kind,
-            title=title,
-            body=body,
-            status=status,
-            progress=progress,
-            metadata={**self._metadata(), **(metadata or {})},
-        )
         try:
-            await client.publish_timeline([event])
+            await self._services.control_plane.conversation_projection.publish_external_timeline(
+                conversation_ref=self.conversation_ref,
+                kind=kind,
+                title=title,
+                body=body,
+                status=status,
+                progress=progress,
+                metadata={**self._metadata(), **(metadata or {})},
+                event_id=event_id,
+            )
         except Exception:
-            log.warning("Timeline publish failed for %s (non-fatal)", self.conversation_ref, exc_info=True)
+            log.warning(
+                "Timeline publish failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
+        if self._is_task_ref():
+            return
         snippet = self._plain_text_snippet(html_text)
         if not snippet:
             return
@@ -157,15 +171,18 @@ class RegistryChannelEgress(ChannelEgress):
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
         self._append_output("send", text)
-        await self._publish_event(
-            kind="bot_message",
-            title="Bot reply",
-            body=text,
-            event_id=event_id,
-        )
+        if not self._is_task_ref():
+            await self._publish_event(
+                kind="bot_message",
+                title="Bot reply",
+                body=text,
+                event_id=event_id,
+            )
         return RegistryEditableHandle(self, event_id=event_id, kind="bot_message", title="Bot reply")
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
+        if self._is_task_ref():
+            return
         caption = kwargs.get("caption", "[photo]")
         self._append_output("send", caption)
         await self._publish_event(
@@ -175,6 +192,8 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
+        if self._is_task_ref():
+            return
         caption = kwargs.get("caption", "[document]")
         self._append_output("send", caption)
         await self._publish_event(
@@ -184,14 +203,20 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def send_action(self, action: str) -> None:
+        if self._is_task_ref():
+            return
         await self._publish_event(kind="channel_action", title="Bot action", body=action)
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
+        if self._is_task_ref():
+            return
         detail = text or ("alert" if show_alert else "ack")
         self._append_output("answer", detail)
         await self._publish_event(kind="action_answer", title="Action handled", body=detail)
 
     async def publish_timeline(self, event: Any) -> None:
+        if self._is_task_ref():
+            return
         body = getattr(event, "body", "") or getattr(event, "text", "") or ""
         await self._publish_event(
             kind=getattr(event, "kind", "timeline"),
@@ -203,19 +228,41 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def sync_binding(self, binding: Any) -> None:
-        del binding
-        return None
+        if self._is_task_ref():
+            return
+        try:
+            await self._services.control_plane.conversation_projection.bind_external_conversation(
+                conversation_ref=_binding_field(binding, "conversation_ref", self.conversation_ref),
+                title=_binding_field(binding, "title", self.title),
+                origin_channel=_binding_field(binding, "origin_channel", "registry"),
+                external_id=_binding_field(binding, "external_id", self.external_id),
+            )
+        except Exception:
+            log.warning(
+                "Conversation sync failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config
+        if self._is_task_ref():
+            self.title = title or self.title
+            return
         self.title = title or self.title
-        await bind_conversation(
-            self.config,
-            conversation_ref=self.conversation_ref,
-            title=self.title,
-            origin_channel="registry",
-            external_id=self.conversation_ref,
-        )
+        try:
+            await self._services.control_plane.conversation_projection.bind_external_conversation(
+                conversation_ref=self.conversation_ref,
+                title=self.title,
+                origin_channel="registry",
+                external_id=self.external_id,
+            )
+        except Exception:
+            log.warning(
+                "Conversation bind failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
         await self._publish_event(kind="started", title="Conversation started")
 
     async def on_message_received(self, text: str) -> None:
@@ -223,6 +270,8 @@ class RegistryChannelEgress(ChannelEgress):
         return None
 
     async def on_outcome(self, outcome: Any) -> None:
+        if self._is_task_ref():
+            return None
         if outcome is None:
             return None
         returncode = getattr(outcome, "returncode", 0)
@@ -265,6 +314,8 @@ class RegistryChannelEgress(ChannelEgress):
         skip_label: str,
         update_id: int,
     ) -> None:
+        if self._is_task_ref():
+            return
         del run_again_label, skip_label
         await self._publish_event(
             kind="recovery_notice",

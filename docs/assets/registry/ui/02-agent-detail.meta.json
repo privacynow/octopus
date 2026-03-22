@@ -1,0 +1,37 @@
+{
+  "rects": [
+    {
+      "x": 246,
+      "y": 18,
+      "width": 1088,
+      "height": 83.5,
+      "label": "Display name & connectivity badge",
+      "color": "#ff9800"
+    },
+    {
+      "x": 263,
+      "y": 179.5,
+      "width": 1054,
+      "height": 267.5,
+      "label": "Identity, scope, capabilities",
+      "color": "#2196f3"
+    },
+    {
+      "x": 265,
+      "y": 508,
+      "width": 1050,
+      "height": 116,
+      "label": "Worker processes (heartbeat)",
+      "color": "#9c27b0"
+    },
+    {
+      "x": 246,
+      "y": 643,
+      "width": 1088,
+      "height": 89,
+      "label": "Conversations → (scoped list)",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

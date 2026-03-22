@@ -2,16 +2,20 @@
 
 This guide explains **why** you use the registry, **how** `./octopus` fits in, and **how to use the Registry web UI** screen by screen. Terminal flows use the existing SVG assets under `docs/assets/registry/`; **browser** sections use screenshots captured from the current UI (see [Regenerating UI screenshots](#regenerating-ui-screenshots)).
 
+For a **complete inventory** of operator and product flows (including Octopus menus, Telegram commands, and Registry API surfaces), see **[flows-catalog.md](flows-catalog.md)**.
+
 ## Contents
 
 1. [When to use registry mode](#when-to-use-registry-mode)
 2. [Concepts (read this once)](#concepts-read-this-once)
 3. [CLI: lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
 4. [Browser: sign in](#browser-sign-in)
-5. [Browser: every screen](#browser-every-screen)
+5. [Browser: every screen](#browser-every-screen) — agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, **deep-linked agent & conversation URLs**
 6. [What the UI does *not* do yet](#what-the-ui-does-not-do-yet)
 7. [Verification & troubleshooting](#verification--troubleshooting)
 8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
+
+**Image set (under `docs/assets/registry/ui/`):** `00-login` … `09-usage`, plus `04b-conversations-filtered`, `10-agent-detail-deep-link`, and `11-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
 
 ---
 
@@ -80,6 +84,8 @@ After startup, note:
 
 The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conversations` load the same shell and are safe to **bookmark or refresh** (the server serves `index.html` for those paths when you are logged in).
 
+**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which **seeds synthetic data** so lists are not empty: several enrolled bots with distinct display names, **two conversations per bot** (mixed `origin_channel`), **multi-kind timelines** (messages, provider response, approval, task status, error), **three routed tasks** (one status-updated to `running`), **heartbeat + worker rows** for the first agent, **usage rows** inserted as `kind=usage` events via `seed_usage_sqlite.py` (not exposed through the public event POST schema), and **callouts** drawn from **DOM-measured rectangles** saved as `*.meta.json` next to each PNG (not fixed percentages), then rendered by `annotate.py`.
+
 ### Sidebar (applies to all pages)
 
 | Item | Route | Purpose |
@@ -119,6 +125,12 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 - **Search bar**: type **three or more** characters to filter (debounced).
 - Click a **row** → **Conversation detail**.
 
+### 4b. Search filter (same route)
+
+![Conversations filtered](assets/registry/ui/04b-conversations-filtered-annotated.png)
+
+- With **3+ characters** in the search field, the list narrows (FTS-backed). The capture run uses the query **`Acme`** to match the synthetic “Acme — …” bot titles.
+
 ### 5. Conversation detail (timeline)
 
 ![Conversation detail](assets/registry/ui/05-conversation-detail-annotated.png)
@@ -153,7 +165,19 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 ![Usage](assets/registry/ui/09-usage-annotated.png)
 
-- Aggregated **prompt/completion tokens and cost** by conversation when the store has usage rows.
+- Aggregated **prompt/completion tokens and cost** by conversation when the store has usage rows (in doc captures, rows come from seeded `usage` events).
+
+### 10. Direct URL to agent detail
+
+![Agent detail via URL](assets/registry/ui/10-agent-detail-deep-link-annotated.png)
+
+- Loading **`/ui/agents/{agent_id}`** directly (bookmark or paste) renders the same agent detail view as clicking from the list — useful when sharing links from logs or API responses.
+
+### 11. Direct URL to conversation detail
+
+![Conversation detail via URL](assets/registry/ui/11-conversation-deep-link-annotated.png)
+
+- Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** read-only timeline as choosing a row from the list — shareable from API responses or task links.
 
 ---
 
@@ -207,11 +231,11 @@ From the repo root (requires Node + project `.venv` with app dependencies):
 cd docs/registry-ui-screenshots
 npm install
 npx playwright install chromium   # once per machine
-npm run capture                   # starts uvicorn on 127.0.0.1:19987, seeds SQLite, saves PNGs
-./.venv/bin/python annotate.py
+npm run capture:all               # registry UI + manual fixtures → docs/assets/registry/ui + docs/assets/manual
+../../.venv/bin/python annotate.py  # writes *-annotated.png for both asset dirs (needs Pillow from requirements-dev.txt)
 ```
 
-The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwaway SQLite file under `docs/registry-ui-screenshots/.capture-registry.sqlite3`.
+The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwaway SQLite file under `docs/registry-ui-screenshots/.capture-registry.sqlite3`. **`seed_usage_sqlite.py`** runs at the end of the seed phase to insert **`usage`** events (the HTTP event API only accepts SDK `kind` values; `usage` is stored for billing-style rollups). **Yellow outlines** use **document coordinates** from Playwright at capture time so they track the real sidebar and cards; re-run capture if the layout changes significantly.
 
 ---
 

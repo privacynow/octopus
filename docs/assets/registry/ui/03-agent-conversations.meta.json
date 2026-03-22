@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 246,
+      "y": 112.5,
+      "width": 1088,
+      "height": 238,
+      "label": "Conversations where this agent is involved",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

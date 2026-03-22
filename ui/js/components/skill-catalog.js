@@ -13,7 +13,8 @@ function renderSkillCatalog(container) {
     // Skills are served via /v1/catalog/skills (existing route, unchanged)
     fetch('/v1/catalog/skills', { credentials: 'same-origin' })
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
-        .then(skills => {
+        .then(data => {
+            const skills = Array.isArray(data) ? data : (data.skills || []);
             const el = document.getElementById('skill-list');
             if (!skills || skills.length === 0) {
                 el.innerHTML = '<div class="empty-state">No skills installed</div>';

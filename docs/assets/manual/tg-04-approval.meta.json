@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 448,
+      "y": 194,
+      "width": 384,
+      "height": 31,
+      "label": "/approval · /approve · /reject",
+      "color": "#ff9800"
+    },
+    {
+      "x": 450,
+      "y": 84,
+      "width": 340,
+      "height": 116,
+      "label": "Plan preview before run (safe mode)",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

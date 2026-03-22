@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Octopus — clean</title>
+  <style>
+    body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#0d1117; color:#c9d1d9; padding:28px; }
+    .win { max-width:760px; border:1px solid #f85149; border-radius:10px; overflow:hidden; }
+    .title { background:#3d1a1a; padding:10px 14px; font-weight:700; color:#ff7b72; border-bottom:1px solid #f85149; }
+    .body { padding:18px 20px; white-space:pre-wrap; line-height:1.45; font-size:14px; }
+    .muted { color:#8b949e; }
+  </style>
+</head>
+<body>
+  <div class="win">
+    <div class="title">./octopus clean</div>
+    <div class="body"><div data-doc="warn">This will stop and remove ALL Octopus bots, the local registry,
+all Docker volumes, networks, and the .deploy/ directory.
+
+Provider auth (Claude/Codex login) will also be removed.
+
+Type 'yes' to confirm:</div> <span class="muted">_</span></div>
+  </div>
+</body>
+</html>

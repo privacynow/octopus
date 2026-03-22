@@ -116,9 +116,3 @@ def workflows() -> WorkflowComposition:
             management=get_provider_guidance_management_use_cases(),
         ),
     )
-
-
-def conversation_channel_name(conversation_ref: str) -> str:
-    if conversation_ref.startswith("telegram:"):
-        return "telegram"
-    return "registry"

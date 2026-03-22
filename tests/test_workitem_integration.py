@@ -341,10 +341,13 @@ async def test_preflight_and_execution_use_same_model():
         assert preflight_ctx.effective_model == "claude-fast-model", (
             f"Preflight model: {preflight_ctx.effective_model!r}"
         )
+        session = telegram_load_session(current_runtime(), chat_id)
+        callback_token = session.pending_approval.callback_token
+        assert callback_token
 
         # Approve it
         query = FakeCallbackQuery(
-            "approval_approve",
+            f"approval_approve:{callback_token}",
             message=FakeMessage(chat=chat),
             user=user,
         )
@@ -646,6 +649,7 @@ async def test_worker_dispatch_sends_recovery_notice():
                 conversation_key=_conv(chat_id),
                 text="do something dangerous",
                 attachments=(),
+                source="telegram",
             )
             item = {
                 "conversation_key": _conv(chat_id),
@@ -760,6 +764,7 @@ async def test_recovery_replay_callback_executes_original():
             conversation_key=_conv(chat_id),
             text="explain quantum computing",
             attachments=(),
+            source="telegram",
         )
         payload = serialize_inbound(event)
         _, item_id = work_queue.record_and_enqueue(
@@ -961,6 +966,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
             conversation_key=_conv(chat_id),
             text="stranded?",
             attachments=(),
+            source="telegram",
         )
         payload = serialize_inbound(event)
         _, item_id = work_queue.record_and_enqueue(
@@ -1012,6 +1018,7 @@ async def test_usage_recording_failure_keeps_item_done_via_worker_loop(monkeypat
             conversation_key=_conv(chat_id),
             text="count tokens",
             attachments=(),
+            source="telegram",
         )
         payload = serialize_inbound(event)
         _, item_id = work_queue.record_and_enqueue(
@@ -1274,6 +1281,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
             conversation_key=_conv(chat_id),
             text="replay me",
             attachments=(),
+            source="telegram",
         )
         payload = serialize_inbound(event)
         _, item_id_recovery = work_queue.record_and_enqueue(

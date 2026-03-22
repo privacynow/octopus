@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 import pytest
 
 from app import work_queue
-from app.agents.bridge import conversation_key_for_ref
+from app.identity import conversation_key_for_ref
+from app.channels.registry.refs import registry_conversation_ref
 from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     live_cancel_registry,
     FakeCallbackQuery,
@@ -228,7 +230,7 @@ async def test_simulator_recovery_notice_no_provider_call():
 
         wq.record_update(
             data_dir, _event(9001), _conv(12345), _actor(42), "message",
-            payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered"}',
+            payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered", "source": "telegram"}',
         )
         conn = work_queue.debug_transport_connection(data_dir)
         now = datetime.now(timezone.utc).isoformat()
@@ -281,13 +283,12 @@ async def test_simulator_registry_message_runs_through_registry_surface_output()
         cfg = make_config(
             data_dir,
             agent_mode="registry",
-            agent_registry_url="http://registry.test",
-            agent_registry_enroll_token="enroll-secret",
+            agent_registries=(make_registry_connection(),),
         )
         prov = FakeProvider("claude")
         sim = ConversationSimulator(data_dir, cfg, prov)
 
-        conversation_ref = "registry:sim-conv-1"
+        conversation_ref = registry_conversation_ref("default", "sim-conv-1")
         chat_id = _reg_conv(conversation_ref)
         session = default_session(prov.name, prov.new_provider_state(), "off")
         save_session(data_dir, chat_id, session)

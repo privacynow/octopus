@@ -77,19 +77,31 @@ class PostgresCredentialStore(AbstractCredentialStore):
                 rows = cur.fetchall()
         return [str(row["skill_name"]) for row in rows]
 
-    def load(self, actor_key: str) -> dict[str, dict[str, str]]:
+    def _load_rows(
+        self,
+        actor_key: str,
+        *,
+        skill_names: list[str] | None = None,
+    ) -> list[dict]:
+        query = f"""
+            SELECT skill_name, cred_key, encrypted_value
+            FROM {_SCHEMA}.credentials
+            WHERE actor_key = %s
+        """
+        params: list[object] = [actor_key]
+        if skill_names is not None:
+            normalized = [name for name in dict.fromkeys(skill_names) if name]
+            if not normalized:
+                return []
+            query += " AND skill_name = ANY(%s)"
+            params.append(normalized)
+        query += " ORDER BY skill_name, cred_key"
         with self._connect() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
-                    f"""
-                    SELECT skill_name, cred_key, encrypted_value
-                    FROM {_SCHEMA}.credentials
-                    WHERE actor_key = %s
-                    ORDER BY skill_name, cred_key
-                    """,
-                    (actor_key,),
-                )
-                rows = cur.fetchall()
+                cur.execute(query, params)
+                return cur.fetchall()
+
+    def _decode_rows(self, rows: list[dict], actor_key: str) -> dict[str, dict[str, str]]:
         result: dict[str, dict[str, str]] = {}
         saw_decrypt_failure = False
         for row in rows:
@@ -107,6 +119,12 @@ class PostgresCredentialStore(AbstractCredentialStore):
                 actor_key,
             )
         return result
+
+    def load(self, actor_key: str) -> dict[str, dict[str, str]]:
+        return self._decode_rows(self._load_rows(actor_key), actor_key)
+
+    def load_for_skills(self, actor_key: str, skill_names: list[str]) -> dict[str, dict[str, str]]:
+        return self._decode_rows(self._load_rows(actor_key, skill_names=skill_names), actor_key)
 
     def save(
         self,

@@ -4,6 +4,7 @@ from app.channels.telegram.presenters import (
     access_overrides_message,
     admin_sessions_summary_message,
     approval_prompt,
+    retry_prompt,
     compact_mode_status,
     compact_reply_blockquote_message,
     compact_reply_button_message,
@@ -41,6 +42,7 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidancePreview,
 )
 from app.session_state import DelegatedTask, PendingDelegation
+from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
@@ -54,6 +56,16 @@ def test_approval_prompt_renders_expected_buttons():
     assert rendered.text
     assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "approval_approve"
     assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "approval_reject"
+
+
+def test_pending_prompts_render_request_bound_callback_tokens():
+    approval = approval_prompt("abc123")
+    retry = retry_prompt((), "def456")
+
+    assert approval.reply_markup.inline_keyboard[0][0].callback_data == "approval_approve:abc123"
+    assert approval.reply_markup.inline_keyboard[0][1].callback_data == "approval_reject:abc123"
+    assert retry.reply_markup.inline_keyboard[0][0].callback_data == "retry_allow:def456"
+    assert retry.reply_markup.inline_keyboard[0][1].callback_data == "retry_skip:def456"
 
 
 def test_collapsed_response_message_renders_expand_button():
@@ -261,13 +273,48 @@ def test_delegation_plan_message_renders_expected_html():
                     target_agent_id="agent-reviewer",
                 ),
             ],
-        )
+        ),
+        previews=[
+            DelegationTargetPreview(
+                routed_task_id="task-1",
+                status="resolved",
+                authority_ref="registry:default",
+            )
+        ],
     )
 
     assert rendered.parse_mode == ParseMode.HTML
     assert "Delegation plan" in rendered.text
     assert "Review docs" in rendered.text
     assert "agent-reviewer" in rendered.text
+    assert "ready via" in rendered.text
+    assert "registry:default" in rendered.text
+
+
+def test_delegation_plan_message_marks_unavailable_targets_before_approval():
+    rendered = delegation_plan_message(
+        PendingDelegation(
+            conversation_ref="conv-1",
+            tasks=[
+                DelegatedTask(
+                    routed_task_id="task-1",
+                    title="Review docs",
+                    target_agent_id="agent-reviewer",
+                ),
+            ],
+        ),
+        previews=[
+            DelegationTargetPreview(
+                routed_task_id="task-1",
+                status="unavailable",
+                detail="The agent registry could not be reached.",
+            )
+        ],
+    )
+
+    assert "registry unavailable" in rendered.text.lower()
+    assert "could not be reached" in rendered.text.lower()
+    assert "approval will check ownership again" in rendered.text.lower()
 
 
 def test_welcome_message_mentions_current_modes():
@@ -331,6 +378,7 @@ def test_discover_results_message_renders_matching_agents():
     rendered = discover_results_message(
         [
             {
+                "authority_ref": "registry:prod",
                 "display_name": "Reviewer",
                 "role": "developer",
                 "connectivity_state": "connected",
@@ -346,6 +394,7 @@ def test_discover_results_message_renders_matching_agents():
     assert rendered.parse_mode == ParseMode.HTML
     assert "Matching agents" in rendered.text
     assert "Reviewer" in rendered.text
+    assert "registry:prod" in rendered.text
     assert "backend" in rendered.text
 
 

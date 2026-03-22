@@ -1,6 +1,7 @@
 """Tests for agent-mode config/runtime foundation."""
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -8,18 +9,29 @@ import httpx
 import pytest
 
 from app import work_queue
-from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
+import app.agents.state as agent_state_module
+import app.agents.runtime as agent_runtime_module
+from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
-from app.agents.state import AgentRuntimeState, load_agent_runtime_state
-from app.agents.types import AgentDiscoveryQuery
+from app.agents.state import bot_identity
+from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
+from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.config import derive_agent_slug
+from app.identity import conversation_key_for_ref, telegram_conversation_ref
 from app.runtime.inbound_types import deserialize_inbound
+from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
-from app.agents.state import save_agent_runtime_state
-from tests.support.config_support import make_config
-from tests.support.handler_support import fresh_env
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
+from app.agents.state import (
+    load_bot_identity_state,
+    load_registry_connection_state,
+    load_runtime_registry_connection_state,
+    save_registry_connection_state,
+)
+from tests.support.config_support import make_config, make_registry_connection
+from tests.support.handler_support import current_runtime, fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -44,42 +56,265 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
     assert card.capabilities == ()
 
 
-def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
-    state_path = tmp_path / "agent" / "registry_state.json"
+def test_requested_card_uses_neutral_version_when_no_product_version_is_defined(tmp_path: Path):
+    config = make_config(data_dir=tmp_path, agent_display_name="Product Bot")
+
+    card = AgentRuntime(config).requested_card()
+
+    assert card.version == ""
+    assert card.version != "phase-19-foundation"
+
+
+def test_agent_runtime_source_has_no_internal_rollout_version_marker() -> None:
+    assert "phase-19-foundation" not in Path(agent_runtime_module.__file__).read_text()
+
+
+def test_telegram_conversation_ref_uses_stable_bot_identity(tmp_path: Path):
+    config = make_config(data_dir=tmp_path)
+
+    conversation_ref = telegram_conversation_ref(config, 12345)
+
+    assert conversation_ref == f"telegram:{bot_identity(tmp_path)}:12345"
+
+
+def test_registry_connection_state_requires_explicit_registry_id() -> None:
+    with pytest.raises(TypeError):
+        RegistryConnectionState()
+
+
+def test_load_registry_connection_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{not-json", encoding="utf-8")
 
     with caplog.at_level(logging.WARNING):
-        state = load_agent_runtime_state(tmp_path)
+        state = load_registry_connection_state(tmp_path, "default")
 
-    assert state == AgentRuntimeState()
-    assert any("Agent runtime state load failed" in record.message for record in caplog.records)
+    assert state == RegistryConnectionState(registry_id="default")
+    assert any("Registry connection state load failed" in record.message for record in caplog.records)
 
 
-def test_load_agent_runtime_state_migrates_legacy_raw_last_error(tmp_path: Path):
-    state_path = tmp_path / "agent" / "registry_state.json"
+def test_load_registry_connection_state_normalizes_raw_last_error(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         '{"connectivity_state":"degraded","last_error":"registry unavailable"}',
         encoding="utf-8",
     )
 
-    state = load_agent_runtime_state(tmp_path)
+    state = load_registry_connection_state(tmp_path, "default")
 
     assert state.last_error == "registry_request_failed"
     assert state.last_error_detail == "registry unavailable"
 
 
-def test_save_agent_runtime_state_uses_private_file_permissions(tmp_path: Path):
-    save_agent_runtime_state(
+def test_save_registry_connection_state_uses_private_file_permissions(tmp_path: Path):
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(agent_id="agent-1", agent_token="secret-token"),
+        RegistryConnectionState(
+            registry_id="default",
+            agent_id="agent-1",
+            agent_token="secret-token",
+        ),
     )
 
-    state_path = tmp_path / "agent" / "registry_state.json"
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     mode = state_path.stat().st_mode & 0o777
 
     assert mode == 0o600
+
+
+def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    original = {
+        "bot_id": "stable-bot-id",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    identity_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_replace(src: Path, dst: Path) -> None:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="rename failed"):
+        agent_state_module._save_bot_identity_state(
+            identity_path,
+            agent_state_module.BotIdentityState(
+                bot_id="new-bot-id",
+                created_at="2026-02-01T00:00:00Z",
+            ),
+        )
+
+    assert json.loads(identity_path.read_text(encoding="utf-8")) == original
+    assert not list(identity_path.parent.glob("*.tmp"))
+
+
+def test_bot_identity_creates_and_reuses_stable_runtime_id(tmp_path: Path):
+    first = bot_identity(tmp_path)
+    second = bot_identity(tmp_path)
+    state = load_bot_identity_state(tmp_path)
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+
+    assert first == second == state.bot_id
+    assert len(first) == 32
+    assert state.created_at.endswith("Z")
+    assert identity_path.exists()
+    assert identity_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_bot_identity_regenerates_when_file_is_corrupt(tmp_path: Path, caplog):
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_path.write_text("{not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        new_id = bot_identity(tmp_path)
+
+    state = load_bot_identity_state(tmp_path)
+
+    assert new_id == state.bot_id
+    assert state.created_at.endswith("Z")
+    assert any("Bot identity load failed" in record.message for record in caplog.records)
+
+
+def test_registry_connection_state_round_trips_per_connection_file(tmp_path: Path):
+    state = RegistryConnectionState(
+        registry_id="prod",
+        registry_scope="coordination",
+        agent_id="agent-1",
+        agent_token="secret-token",
+        poll_cursor="42",
+    )
+
+    save_registry_connection_state(tmp_path, state)
+    restored = load_registry_connection_state(tmp_path, "prod")
+    state_path = tmp_path / "agent" / "registries" / "prod.json"
+
+    assert restored == state
+    assert state_path.exists()
+    assert state_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_registry_connection_state_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state_path = tmp_path / "agent" / "registries" / "prod.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    original = {
+        "registry_id": "prod",
+        "registry_scope": "full",
+        "agent_id": "agent-1",
+        "agent_token": "token-1",
+    }
+    state_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_replace(src: Path, dst: Path) -> None:
+        raise OSError("rename failed")
+
+    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="rename failed"):
+        save_registry_connection_state(
+            tmp_path,
+            RegistryConnectionState(
+                registry_id="prod",
+                registry_scope="coordination",
+                agent_id="agent-2",
+                agent_token="token-2",
+            ),
+        )
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == original
+    assert not list(state_path.parent.glob("*.tmp"))
+
+
+def test_registry_connection_state_uses_defaults_when_missing_or_corrupt(tmp_path: Path, caplog):
+    missing = load_registry_connection_state(tmp_path, "analytics")
+    assert missing == RegistryConnectionState(registry_id="analytics")
+
+    corrupt_path = tmp_path / "agent" / "registries" / "analytics.json"
+    corrupt_path.parent.mkdir(parents=True, exist_ok=True)
+    corrupt_path.write_text("{not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        restored = load_registry_connection_state(tmp_path, "analytics")
+
+    assert restored == RegistryConnectionState(registry_id="analytics")
+    assert any("Registry connection state load failed" in record.message for record in caplog.records)
+
+
+def test_runtime_registry_connection_state_applies_requested_scope_when_file_is_missing(tmp_path: Path):
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="coordination",
+    )
+
+
+def test_runtime_registry_connection_state_uses_requested_scope_when_file_omits_scope(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "registry_id": "default",
+                "agent_id": "agent-1",
+                "agent_token": "secret-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="coordination",
+        agent_id="agent-1",
+        agent_token="secret-token",
+    )
+
+
+def test_runtime_registry_connection_state_keeps_explicit_persisted_scope(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "registry_id": "default",
+                "registry_scope": "full",
+                "agent_id": "agent-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="full",
+        agent_id="agent-1",
+    )
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
@@ -91,7 +326,7 @@ async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = runtime.state
 
     assert result == "standalone"
     assert state.connectivity_state == "standalone"
@@ -103,19 +338,29 @@ async def test_agent_runtime_registry_without_url_degrades(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="",
-        agent_registry_enroll_token="token",
+        agent_registries=(make_registry_connection(url="", enroll_token="token"),),
         agent_display_name="Registry Bot",
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "degraded"
     assert state.connectivity_state == "degraded"
     assert state.last_error == "registry_url_missing"
     assert state.last_error_detail == "Registry URL not configured."
+
+
+def test_agent_runtime_registry_mode_requires_explicit_registry(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    with pytest.raises(ValueError, match="explicit registry connection"):
+        AgentRuntime(config)
 
 
 async def test_registry_client_error_omits_response_body():
@@ -174,13 +419,12 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "degraded"
     assert state.connectivity_state == "degraded"
@@ -222,13 +466,12 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_slug="product-bot",
         agent_role="product",
         agent_capabilities=("planning", "delegation"),
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "connected"
     assert state.connectivity_state == "connected"
@@ -298,13 +541,13 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
         provider_name="codex",
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(
         config,
         runtime_health_provider=FakeHealthProvider(),
         provider=object(),
+        registry=config.agent_registries[0],
     )
 
     assert await runtime.sync_once() == "connected"
@@ -360,9 +603,15 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {
+                        "delivery_id": "d1",
+                        "registry_id": "default",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    },
                     {
                         "delivery_id": "d2",
+                        "registry_id": "default",
                         "kind": "channel_action",
                         "payload": {"conversation_id": "c1", "action": "cancel_conversation"},
                     },
@@ -385,14 +634,13 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
         data_dir=tmp_path,
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config, delivery_handler=handler)
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
     assert await runtime.sync_once() == "connected"
 
     processed = await runtime.poll_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert processed == 2
     assert seen_deliveries == ["d1", "d2"]
@@ -453,10 +701,9 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         data_dir=tmp_path,
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config, delivery_handler=handler)
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
     assert await runtime.sync_once() == "connected"
 
     processed = await runtime.poll_once()
@@ -474,10 +721,9 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
     stop_event = asyncio.Event()
 
     async def fake_sync_once():
@@ -495,17 +741,21 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
 
 async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str]] = []
+    egress_kwargs: list[dict[str, object]] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            seen.append(("bind", str(binding.get("conversation_ref", ""))))
 
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+        async def publish_timeline(self, event):
+            seen.append(("timeline", str(event.conversation_id)))
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config
+            egress_kwargs.append(dict(kwargs))
+            return _FakeEgress()
+
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -513,8 +763,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
 
     outcome_message = await admit_registry_delivery(
@@ -522,14 +771,17 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
         {
             "kind": "channel_input",
             "delivery_id": "delivery-1",
+            "registry_id": "prod",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
+        dispatcher=_FakeDispatcher(),
     )
     outcome_task = await admit_registry_delivery(
         config,
         {
             "kind": "routed_task",
             "delivery_id": "delivery-2",
+            "registry_id": "prod",
             "payload": {
                 "routed_task_id": "task-1",
                 "title": "Review",
@@ -538,29 +790,49 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
                 "requested_capabilities": ["reviewer"],
             },
         },
+        dispatcher=_FakeDispatcher(),
     )
 
     assert outcome_message == "accepted"
     assert outcome_task == "accepted"
-    assert ("bind", "conv-1") in seen
-    assert ("timeline", "conv-1") in seen
-    assert ("bind", "task-1") in seen
-    assert ("timeline", "task-1") in seen
+    assert ("bind", registry_conversation_ref("prod", "conv-1")) in seen
+    assert ("timeline", registry_conversation_ref("prod", "conv-1")) in seen
+    assert ("bind", registry_task_ref("prod", "task-1")) not in seen
+    assert ("timeline", registry_task_ref("prod", "task-1")) not in seen
+    assert egress_kwargs == [
+        {
+            "conversation_key": _reg_conv(registry_conversation_ref("prod", "conv-1")),
+            "source": "registry",
+        }
+    ]
+    assert "bot" not in egress_kwargs[0]
 
 
-async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str]] = []
+async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_registry_ref(
+    monkeypatch,
+    tmp_path: Path,
+):
+    seen_bindings: list[dict[str, str]] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            seen_bindings.append(
+                {
+                    "conversation_ref": str(binding.get("conversation_ref", "")),
+                    "external_id": str(binding.get("external_id", "")),
+                    "origin_channel": str(binding.get("origin_channel", "")),
+                }
+            )
 
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+        async def publish_timeline(self, event):
+            del event
+            return None
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            return _FakeEgress()
+
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -568,8 +840,51 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "channel_input",
+            "delivery_id": "delivery-slack-1",
+            "registry_id": "prod",
+            "payload": {
+                "conversation_id": "slack:eng:C0123ABC",
+                "text": "hello from slack",
+            },
+        },
+        dispatcher=_FakeDispatcher(),
+    )
+
+    assert outcome == "accepted"
+    assert seen_bindings == [
+        {
+            "conversation_ref": "slack:eng:C0123ABC",
+            "external_id": "slack:eng:C0123ABC",
+            "origin_channel": "registry",
+        }
+    ]
+
+
+async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            seen.append("create_egress")
+            raise AssertionError("legacy surface input should not create egress")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
     )
 
     outcome = await admit_registry_delivery(
@@ -579,92 +894,135 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
             "delivery_id": "delivery-legacy",
             "payload": {"conversation_id": "conv-legacy", "text": "hello"},
         },
+        dispatcher=_FakeDispatcher(),
     )
 
     assert outcome == "rejected"
     assert seen == []
 
 
-async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
+async def test_handle_registry_routed_result_does_not_publish_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
     published: list[dict[str, object]] = []
+    egress_calls: list[str] = []
 
-    async def fake_publish_timeline_event(
-        config,
-        *,
-        conversation_ref: str,
-        kind: str,
-        title: str,
-        body: str = "",
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, object] | None = None,
-        event_id: str | None = None,
-    ) -> None:
-        del config, progress, event_id
-        published.append(
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, config, prov):
+        parent_conversation_ref = telegram_conversation_ref(config, 12345)
+        dispatcher = current_runtime().channel_dispatcher
+        services = current_runtime().services
+
+        async def fake_publish_external_timeline(
+            *,
+            conversation_ref,
+            kind,
+            title,
+            body="",
+            status="",
+            progress=None,
+            metadata=None,
+            event_id=None,
+        ):
+            del progress, event_id
+            published.append(
+                {
+                    "conversation_ref": conversation_ref,
+                    "kind": kind,
+                    "title": title,
+                    "body": body,
+                    "status": status,
+                    "metadata": metadata or {},
+                }
+            )
+
+        def fake_create_egress(conversation_ref, *, config, **kwargs):
+            del config, kwargs
+            egress_calls.append(str(conversation_ref))
+            raise AssertionError("projection-only registry delivery should not build egress")
+
+        monkeypatch.setattr(
+            services.control_plane.conversation_projection,
+            "publish_external_timeline",
+            fake_publish_external_timeline,
+        )
+        monkeypatch.setattr(dispatcher, "create_egress", fake_create_egress)
+        outcome = await handle_registry_delivery(
+            config,
             {
-                "conversation_ref": conversation_ref,
-                "kind": kind,
-                "title": title,
-                "body": body,
-                "status": status,
-                "metadata": metadata or {},
-            }
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": parent_conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Summary",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=build_registry_delivery_runtime(
+                provider_name=prov.name,
+                provider_state_factory=prov.new_provider_state,
+                services=services,
+                bot=None,
+                dispatcher=dispatcher,
+            ),
         )
 
-    monkeypatch.setattr("app.agents.delivery.publish_timeline_event", fake_publish_timeline_event)
+        assert outcome == "retry_later"
+        assert egress_calls == []
+        assert published == []
+
+
+async def test_admit_registry_delivery_rejects_missing_registry_id(monkeypatch, tmp_path: Path):
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            seen.append("create_egress")
+            raise AssertionError("missing registry_id should reject before egress creation")
+
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
 
-    outcome = await handle_registry_delivery(
+    outcome = await admit_registry_delivery(
         config,
         {
-            "kind": "routed_result",
-            "payload": {
-                "routed_task_id": "task-1",
-                "parent_conversation_id": "telegram:agent-1:12345",
-                "result": {
-                    "status": "completed",
-                    "summary": "Summary",
-                    "full_text": "Delegated task completed successfully.",
-                },
-            },
+            "kind": "channel_input",
+            "delivery_id": "delivery-missing-registry",
+            "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
-        runtime=build_registry_delivery_runtime(
-            provider_name="claude",
-            provider_state_factory=dict,
-            bot=None,
-        ),
+        dispatcher=_FakeDispatcher(),
     )
 
-    assert outcome == "retry_later"
-    assert published == [
-        {
-            "conversation_ref": "telegram:agent-1:12345",
-            "kind": "delegated_result",
-            "title": "Delegated result received",
-            "body": "Delegated task completed successfully.",
-            "status": "completed",
-            "metadata": {"routed_task_id": "task-1"},
-        }
-    ]
+    assert outcome == "rejected"
+    assert seen == []
 
 
 async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Path):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, _prov):
         runtime = build_registry_delivery_runtime(
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
             bot=None,
         )
 
@@ -672,6 +1030,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-approve",
+                "registry_id": "prod",
                 "kind": "channel_action",
                 "payload": {"conversation_id": "conv-approve", "action": "approve"},
             },
@@ -681,6 +1040,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-cancel",
+                "registry_id": "prod",
                 "kind": "channel_action",
                 "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
@@ -700,27 +1060,59 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             approve_event.action,
             approve_event.conversation_key,
             approve_event.conversation_ref,
-        ) == ("approve_pending", _reg_conv("conv-approve"), "conv-approve")
+        ) == (
+            "approve_pending",
+            _reg_conv(registry_conversation_ref("prod", "conv-approve")),
+            registry_conversation_ref("prod", "conv-approve"),
+        )
         assert (
             cancel_event.action,
             cancel_event.conversation_key,
             cancel_event.conversation_ref,
-        ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")
+        ) == (
+            "cancel_conversation",
+            _reg_conv(registry_conversation_ref("prod", "conv-cancel")),
+            registry_conversation_ref("prod", "conv-cancel"),
+        )
+
+
+async def test_handle_registry_channel_action_preserves_already_qualified_future_surface_ref(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
+            bot=None,
+        )
+        qualified_ref = "slack:eng:12345"
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-approve",
+                "registry_id": "prod",
+                "kind": "channel_action",
+                "payload": {"conversation_id": qualified_ref, "action": "approve"},
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        payload = work_queue.get_update_payload(data_dir, "reg:d-slack-approve")
+        assert payload is not None
+        event = deserialize_inbound("action", payload)
+        assert event.conversation_ref == qualified_ref
+        assert event.conversation_key == qualified_ref
 
 
 async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str]] = []
+    seen: list[str] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
-
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
-
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -728,9 +1120,14 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
+
+    class _RejectingDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del config, kwargs
+            seen.append(str(conversation_ref))
+            raise AssertionError("legacy surface input should not create egress")
 
     outcome = await handle_registry_delivery(
         config,
@@ -742,7 +1139,9 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
         runtime=build_registry_delivery_runtime(
             provider_name="claude",
             provider_state_factory=dict,
+            services=build_noop_bot_services(),
             bot=None,
+            dispatcher=_RejectingDispatcher(),
         ),
     )
 
@@ -754,13 +1153,13 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, _prov):
         runtime = build_registry_delivery_runtime(
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
+            services=current_runtime().services,
             bot=None,
         )
 
@@ -777,3 +1176,281 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
         assert outcome == "rejected"
         approve_payload = work_queue.get_update_payload(data_dir, "reg:d-legacy-approve")
         assert approve_payload is None
+
+
+async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry_owned_kinds(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=current_runtime().services,
+            bot=None,
+        )
+
+        assert await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-missing-action-registry",
+                "kind": "channel_action",
+                "payload": {"conversation_id": "conv-1", "action": "approve"},
+            },
+            runtime=runtime,
+        ) == "rejected"
+
+
+async def test_handle_registry_routed_result_preserves_already_qualified_future_surface_parent_ref(
+    monkeypatch,
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        seen_ready_refs: list[tuple[str, str]] = []
+
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del config
+                seen_ready_refs.append(
+                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+                )
+                return False
+
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_noop_bot_services(),
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+        qualified_ref = "slack:eng:12345"
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": qualified_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "retry_later"
+        assert seen_ready_refs == [(qualified_ref, qualified_ref)]
+        assert await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-missing-result-registry",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "telegram:bot-1:12345",
+                    "result": {"status": "completed", "summary": "done"},
+                },
+            },
+            runtime=runtime,
+        ) == "rejected"
+
+
+async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        published: list[dict[str, object]] = []
+
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del conversation_ref, config, kwargs
+                return True
+
+        async def fake_publish_external_timeline(
+            *,
+            conversation_ref,
+            kind,
+            title,
+            body="",
+            status="",
+            progress=None,
+            metadata=None,
+            event_id=None,
+        ):
+            del progress, event_id
+            published.append(
+                {
+                    "conversation_ref": conversation_ref,
+                    "kind": kind,
+                    "title": title,
+                    "body": body,
+                    "status": status,
+                    "metadata": metadata or {},
+                }
+            )
+
+        monkeypatch.setattr(
+            "app.agents.delivery.apply_runtime_delegation_result",
+            lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
+        )
+        services = build_noop_bot_services()
+        monkeypatch.setattr(
+            services.control_plane.conversation_projection,
+            "publish_external_timeline",
+            fake_publish_external_timeline,
+        )
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=services,
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            outcome = await handle_registry_delivery(
+                cfg,
+                {
+                    "delivery_id": "d-mismatch-result",
+                    "registry_id": "prod",
+                    "kind": "routed_result",
+                    "payload": {
+                        "routed_task_id": "task-1",
+                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "result": {
+                            "status": "completed",
+                            "summary": "done",
+                            "full_text": "Delegated task completed successfully.",
+                        },
+                    },
+                },
+                runtime=runtime,
+            )
+
+        assert outcome == "accepted"
+        assert any(
+            "Routed result for task task-1 from authority registry:prod did not match"
+            in record.message
+            for record in caplog.records
+        )
+        assert published == []
+
+
+async def test_handle_registry_routed_result_does_not_log_warning_when_result_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        published: list[dict[str, object]] = []
+
+        class _FakeDispatcher:
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del conversation_ref, config, kwargs
+                return True
+
+        async def fake_publish_external_timeline(
+            *,
+            conversation_ref,
+            kind,
+            title,
+            body="",
+            status="",
+            progress=None,
+            metadata=None,
+            event_id=None,
+        ):
+            del progress, event_id
+            published.append(
+                {
+                    "conversation_ref": conversation_ref,
+                    "kind": kind,
+                    "title": title,
+                    "body": body,
+                    "status": status,
+                    "metadata": metadata or {},
+                }
+            )
+
+        monkeypatch.setattr(
+            "app.agents.delivery.apply_runtime_delegation_result",
+            lambda *args, **kwargs: DelegationUpdateOutcome(
+                status="submitted",
+                matched=True,
+                ready_to_resume=False,
+            ),
+        )
+        services = build_noop_bot_services()
+        monkeypatch.setattr(
+            services.control_plane.conversation_projection,
+            "publish_external_timeline",
+            fake_publish_external_timeline,
+        )
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=services,
+            bot=None,
+            dispatcher=_FakeDispatcher(),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            outcome = await handle_registry_delivery(
+                cfg,
+                {
+                    "delivery_id": "d-match-result",
+                    "registry_id": "prod",
+                    "kind": "routed_result",
+                    "payload": {
+                        "routed_task_id": "task-1",
+                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "result": {
+                            "status": "completed",
+                            "summary": "done",
+                            "full_text": "Delegated task completed successfully.",
+                        },
+                    },
+                },
+                runtime=runtime,
+            )
+
+        assert outcome == "accepted"
+        assert not any(
+            "did not match any pending delegation task" in record.message
+            for record in caplog.records
+        )
+        assert published == [
+            {
+                "conversation_ref": "telegram:bot-1:12345",
+                "kind": "delegated_result",
+                "title": "Delegated result received",
+                "body": "Delegated task completed successfully.",
+                "status": "completed",
+                "metadata": {"routed_task_id": "task-1"},
+            }
+        ]

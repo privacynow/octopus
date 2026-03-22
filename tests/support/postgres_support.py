@@ -223,6 +223,7 @@ def truncate_runtime_tables(conn) -> None:
     never for dev/staging/production (see module docstring).
     """
     with conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE bot_runtime.control_plane_commands RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.sessions CASCADE")

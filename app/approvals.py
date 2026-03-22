@@ -1,4 +1,4 @@
-"""Approval flow data shaping. No Telegram I/O — pure functions only."""
+"""Approval flow data shaping. No channel I/O — pure functions only."""
 
 import html
 import json
@@ -7,7 +7,7 @@ from typing import Any
 
 def build_preflight_prompt(user_prompt: str, provider_name: str) -> str:
     return (
-        f"Preflight this user request for a Telegram bridge that runs {provider_name} CLI.\n"
+        f"Preflight this user request for a bot that runs {provider_name} CLI.\n"
         "Do not modify files. Do not run shell commands.\n"
         "Respond briefly in Markdown with these sections exactly:\n"
         "## Tool use\n"

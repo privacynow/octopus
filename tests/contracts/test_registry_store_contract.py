@@ -6,8 +6,11 @@ import re
 import pytest
 
 from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import hash_agent_token
 from app.registry_service.store_base import CapabilityDisabledError
+from app.registry_service.store_base import PROTECTED_ROUTED_TASK_STATUSES
+from app.registry_service.store_base import RegistryScopeError
+from app.registry_service.store_base import conversation_status_for_event
+from app.registry_service.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -19,11 +22,17 @@ from app.runtime_health import (
 )
 
 
-def _card(slug: str, capabilities: list[str] | None = None) -> dict:
+def _card(
+    slug: str,
+    capabilities: list[str] | None = None,
+    *,
+    registry_scope: str = "full",
+) -> dict:
     return {
         "display_name": slug,
         "slug": slug,
         "role": "developer",
+        "registry_scope": registry_scope,
         "capabilities": capabilities or ["python"],
         "tags": ["backend"],
         "description": f"{slug} description",
@@ -35,12 +44,18 @@ def _card(slug: str, capabilities: list[str] | None = None) -> dict:
     }
 
 
-def _enroll(store, slug: str, capabilities: list[str] | None = None) -> tuple[str, str]:
-    enrolled = store.enroll(_card(slug, capabilities))
+def _enroll(
+    store,
+    slug: str,
+    capabilities: list[str] | None = None,
+    *,
+    registry_scope: str = "full",
+) -> tuple[str, str]:
+    enrolled = store.enroll(_card(slug, capabilities, registry_scope=registry_scope))
     store.register(
         enrolled["agent_token"],
         {
-            "agent_card": _card(slug, capabilities),
+            "agent_card": _card(slug, capabilities, registry_scope=registry_scope),
             "connectivity_state": "connected",
             "current_capacity": 0,
             "max_capacity": 2,
@@ -114,10 +129,11 @@ def _stored_agent_token(store, agent_id: str) -> str:
         return str(row["agent_token"])
 
     from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
     with store._connect() as conn:
-        cur = conn.cursor()
+        cur = conn.cursor(row_factory=dict_row)
         try:
             cur.execute(
                 f"SELECT agent_token FROM {_SCHEMA}.agents WHERE agent_id = %s",
@@ -127,7 +143,56 @@ def _stored_agent_token(store, agent_id: str) -> str:
         finally:
             cur.close()
     assert row is not None
-    return str(row[0])
+    return str(row["agent_token"])
+
+
+def _routed_task_row(store, routed_task_id: str):
+    if isinstance(store, RegistrySQLiteStore):
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
+                (routed_task_id,),
+            ).fetchone()
+        assert row is not None
+        return row
+
+    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from psycopg.rows import dict_row
+
+    assert isinstance(store, RegistryPostgresStore)
+    with store._connect() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            cur.execute(
+                f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                (routed_task_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    assert row is not None
+    return row
+
+
+def _create_routed_task(store, *, routed_task_id: str = "task-1") -> tuple[dict, str, str, str]:
+    origin_id, _origin_token = _enroll(store, f"origin-{routed_task_id}")
+    target_id, target_token = _enroll(store, f"target-{routed_task_id}", ["reviewer"])
+    routed = store.create_routed_task(
+        {
+            "routed_task_id": routed_task_id,
+            "parent_conversation_id": f"conv-{routed_task_id}",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Review task",
+            "instructions": "Review the spec.",
+            "context": {},
+            "constraints": {},
+            "requested_capabilities": ["reviewer"],
+            "priority": "normal",
+            "created_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    return routed, origin_id, target_id, target_token
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -150,6 +215,34 @@ def test_enroll_and_register_returns_agent_id(store):
     agents = store.list_agents()
     assert len(agents) == 1
     assert agents[0]["agent_id"] == agent_id
+
+
+def test_enroll_persists_registry_scope(store):
+    agent_id, _agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+
+    agents = store.list_agents()
+
+    assert len(agents) == 1
+    assert agents[0]["agent_id"] == agent_id
+    assert agents[0]["registry_scope"] == "channel"
+
+
+def test_enroll_requires_explicit_registry_scope(store):
+    with pytest.raises(ValueError, match="registry_scope"):
+        store.enroll(
+            {
+                "display_name": "Missing Scope Bot",
+                "slug": "missing-scope-bot",
+                "role": "developer",
+                "capabilities": ["python"],
+                "tags": ["backend"],
+                "description": "Missing scope",
+                "provider": "codex",
+                "mode": "registry",
+                "channel_capabilities": ["registry"],
+                "version": "test",
+            }
+        )
 
 
 def test_enroll_hashes_agent_token_at_rest(store):
@@ -193,6 +286,30 @@ def test_ack_marks_delivery_done(store):
     assert store.poll(agent_token, cursor=0, limit=20)["deliveries"] == []
 
 
+def test_conversation_status_transitions_cover_running_terminal_and_cancelling_states():
+    assert conversation_status_for_event("started", "open") == "running"
+    assert conversation_status_for_event("progress", "running") == "running"
+    assert conversation_status_for_event("progress", "cancelling") == "cancelling"
+    assert conversation_status_for_event("control", "running") == "cancelling"
+    assert conversation_status_for_event("completed", "running") == "completed"
+    assert conversation_status_for_event("failed", "running") == "failed"
+    assert conversation_status_for_event("channel_input", "open") == "open"
+
+
+def test_ack_rejects_invalid_classification(store):
+    agent_id, agent_token = _enroll(store, "alpha-bot")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    polled = store.poll(agent_token, cursor=0, limit=20)
+    delivery_id = polled["deliveries"][0]["delivery_id"]
+
+    with pytest.raises(ValueError, match="classification"):
+        store.ack(agent_token, delivery_ids=[delivery_id], classification="later")
+
+
 def test_search_agents_by_capability(store):
     _enroll(store, "rust-bot", ["rust"])
 
@@ -211,23 +328,8 @@ def test_search_agents_excludes_offline(store):
 
 
 def test_create_routed_task_and_lookup(store):
-    origin_id, _ = _enroll(store, "origin-bot")
-    target_id, target_token = _enroll(store, "target-bot", ["reviewer"])
-
-    routed = store.create_routed_task(
-        {
-            "routed_task_id": "task-1",
-            "parent_conversation_id": "conv-1",
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Review task",
-            "instructions": "Review the spec.",
-            "context": {},
-            "constraints": {},
-            "requested_capabilities": ["reviewer"],
-            "priority": "normal",
-            "created_at": "2026-03-16T00:00:00+00:00",
-        }
+    routed, origin_id, target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-1"
     )
 
     deliveries = store.poll(target_token, cursor=0, limit=20)["deliveries"]
@@ -236,6 +338,224 @@ def test_create_routed_task_and_lookup(store):
     assert routed["delivery_id"]
     assert len(deliveries) == 1
     assert deliveries[0]["kind"] == "routed_task"
+
+
+def test_create_routed_task_requires_required_fields(store):
+    origin_id, _origin_token = _enroll(store, "origin-create")
+    target_id, _target_token = _enroll(store, "target-create", ["reviewer"])
+
+    with pytest.raises(ValueError, match="title"):
+        store.create_routed_task(
+            {
+                "routed_task_id": "task-missing-title",
+                "parent_conversation_id": "conv-create",
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "instructions": "Review the spec.",
+                "requested_capabilities": ["reviewer"],
+            }
+        )
+
+
+@pytest.mark.parametrize("protected_status", PROTECTED_ROUTED_TASK_STATUSES)
+def test_routed_task_status_updates_do_not_overwrite_protected_status(store, protected_status):
+    routed_task_id = f"task-status-{protected_status}"
+    protected_summary = f"{protected_status} summary"
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id=routed_task_id
+    )
+
+    if protected_status == "completed":
+        store.update_routed_task_result(
+            target_token,
+            routed_task_id,
+            {
+                "status": "completed",
+                "summary": protected_summary,
+                "full_text": "Full result",
+            },
+        )
+    else:
+        store.update_routed_task_status(
+            target_token,
+            routed_task_id,
+            {
+                "status": protected_status,
+                "summary": protected_summary,
+                "timeline_events": [],
+            },
+        )
+
+    store.update_routed_task_status(
+        target_token,
+        routed_task_id,
+        {
+            "status": "running",
+            "summary": "late progress",
+            "timeline_events": [],
+        },
+    )
+
+    task = _routed_task_row(store, routed_task_id)
+
+    assert task["status"] == protected_status
+    assert task["summary"] == protected_summary
+    if protected_status == "completed":
+        assert "Full result" in str(task["result_json"])
+
+
+def test_routed_task_result_can_overwrite_partialfailed(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-recovered"
+    )
+
+    store.update_routed_task_status(
+        target_token,
+        "task-status-recovered",
+        {
+            "status": "partialfailed",
+            "summary": "delivery failed",
+            "timeline_events": [],
+        },
+    )
+
+    store.update_routed_task_result(
+        target_token,
+        "task-status-recovered",
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "Recovered result",
+        },
+    )
+
+    task = _routed_task_row(store, "task-status-recovered")
+
+    assert task["status"] == "completed"
+    assert task["summary"] == "done"
+    assert "Recovered result" in str(task["result_json"])
+
+
+def test_routed_task_status_requires_explicit_non_empty_status(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-status-required"
+    )
+
+    with pytest.raises(ValueError, match="status"):
+        store.update_routed_task_status(
+            target_token,
+            "task-status-required",
+            {
+                "summary": "missing status",
+                "timeline_events": [],
+            },
+        )
+
+
+def test_routed_task_result_requires_explicit_non_empty_status(store):
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id="task-result-required"
+    )
+
+    with pytest.raises(ValueError, match="status"):
+        store.update_routed_task_result(
+            target_token,
+            "task-result-required",
+            {
+                "summary": "missing status",
+                "full_text": "No explicit status",
+            },
+        )
+
+
+def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
+    routed_task_id = "task-status-no-timeline-upsert"
+    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+        store, routed_task_id=routed_task_id
+    )
+
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "Final result",
+        },
+    )
+
+    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+
+    store.update_routed_task_status(
+        target_token,
+        routed_task_id,
+        {
+            "status": "running",
+            "summary": "late progress",
+            "timeline_events": [
+                {
+                    "event_id": "evt-blocked-timeline",
+                    "conversation_id": "conv-blocked-timeline",
+                    "kind": "progress",
+                    "title": "Late progress",
+                    "body": "This should not land.",
+                    "status": "running",
+                    "progress": None,
+                    "metadata": {},
+                    "created_at": "2026-03-16T00:00:05+00:00",
+                }
+            ],
+        },
+    )
+
+    task = _routed_task_row(store, routed_task_id)
+
+    assert task["status"] == "completed"
+    assert "Final result" in str(task["result_json"])
+    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+
+
+def test_assert_agent_scope_rejects_wrong_scope(store):
+    _, agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+
+    with pytest.raises(RegistryScopeError):
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
+
+
+def test_channel_scope_poll_filters_routed_deliveries(store):
+    agent_id, agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="routed_task",
+        payload={"routed_task_id": "task-1"},
+    )
+
+    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+
+    assert [item["kind"] for item in deliveries] == ["channel_input"]
+
+
+def test_coordination_scope_poll_filters_channel_deliveries(store):
+    agent_id, agent_token = _enroll(store, "coord-bot", registry_scope="coordination")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="routed_task",
+        payload={"routed_task_id": "task-1"},
+    )
+
+    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+
+    assert [item["kind"] for item in deliveries] == ["routed_task"]
 
 
 def test_create_routed_task_disabled_capability_raises(store):
@@ -277,6 +597,22 @@ def test_bind_conversation_is_visible(store):
     assert [item["conversation_id"] for item in conversations] == ["c1"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"conversation_id": "c1", "title": "Conversation 1"},
+        {"conversation_id": "c1", "title": "Conversation 1", "origin_channel": ""},
+    ),
+)
+def test_bind_conversation_requires_non_empty_origin_channel(store, payload):
+    _, agent_token = _enroll(store, "alpha-bot")
+
+    with pytest.raises(ValueError, match="origin_channel"):
+        store.bind_conversation(agent_token, payload)
+
+    assert store.list_conversations() == []
+
+
 def test_create_conversation_delivers_channel_input(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
 
@@ -291,6 +627,30 @@ def test_create_conversation_delivers_channel_input(store):
     assert len(deliveries) == 1
     assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["text"] == "hello from registry"
+
+
+def test_add_conversation_message_requires_non_empty_text(store):
+    agent_id, _agent_token = _enroll(store, "message-bot")
+    conversation = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Registry conversation",
+        message_text="hello from registry",
+    )
+
+    with pytest.raises(ValueError, match="message text"):
+        store.add_conversation_message(conversation["conversation_id"], "   ")
+
+
+def test_add_conversation_action_requires_non_empty_action(store):
+    agent_id, _agent_token = _enroll(store, "action-bot")
+    conversation = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Registry conversation",
+        message_text="hello from registry",
+    )
+
+    with pytest.raises(ValueError, match="action"):
+        store.add_conversation_action(conversation["conversation_id"], "   ")
 
 
 def test_timeline_publish_and_retrieve(store):
@@ -322,6 +682,31 @@ def test_timeline_publish_and_retrieve(store):
     assert len(events) == 1
     assert events[0]["kind"] == "progress"
     assert events[0]["body"] == "Doing the work"
+
+
+def test_publish_timeline_requires_required_event_fields(store):
+    _, agent_token = _enroll(store, "timeline-bot")
+    store.bind_conversation(
+        agent_token,
+        {
+            "conversation_id": "conv-missing-event-fields",
+            "title": "Bound conversation",
+            "origin_channel": "registry",
+        },
+    )
+
+    with pytest.raises(ValueError, match="title"):
+        store.publish_timeline(
+            agent_token,
+            [
+                {
+                    "event_id": "evt-missing-title",
+                    "conversation_id": "conv-missing-event-fields",
+                    "kind": "progress",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                }
+            ],
+        )
 
 
 def test_usage_summary_from_timeline(store):
@@ -416,6 +801,38 @@ def test_heartbeat_replaces_missing_worker_rows(store):
     assert [row["worker_id"] for row in detail["workers"]] == ["worker-1"]
 
 
+def test_register_preserves_omitted_capacity_and_card_lists(store):
+    agent_id, agent_token = _enroll(store, "partial-register-bot", ["python", "tests"])
+
+    store.heartbeat(
+        agent_token,
+        {
+            "connectivity_state": "connected",
+            "current_capacity": 2,
+            "max_capacity": 5,
+        },
+    )
+
+    updated = store.register(
+        agent_token,
+        {
+            "agent_card": {
+                "display_name": "Partial Register Bot",
+                "registry_scope": "coordination",
+            },
+            "connectivity_state": "connected",
+        },
+    )
+
+    assert updated["agent_id"] == agent_id
+    assert updated["current_capacity"] == 2
+    assert updated["max_capacity"] == 5
+    assert updated["capabilities"] == ["python", "tests"]
+    assert updated["tags"] == ["backend"]
+    assert updated["channel_capabilities"] == ["registry"]
+    assert updated["registry_scope"] == "coordination"
+
+
 def test_search_conversations_fts(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.bind_conversation(
@@ -452,6 +869,13 @@ def test_capability_override_disabled_excludes_from_search(store):
     store.set_capability_override("rust", enabled=False)
 
     assert store.search_agents({"capabilities": ["rust"], "required_state": "connected"}) == []
+
+
+def test_search_agents_rejects_string_filters(store):
+    _enroll(store, "alpha-bot", ["python"])
+
+    with pytest.raises(ValueError, match="capabilities"):
+        store.search_agents({"capabilities": "python", "required_state": "connected"})
 
 
 def test_list_capabilities_aggregates_declared(store):

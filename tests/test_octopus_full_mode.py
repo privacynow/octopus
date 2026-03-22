@@ -56,6 +56,7 @@ prepare_new_bot_setup() {{
   REGISTRY_TARGET_KIND=remote
   REGISTRY_TARGET_URL='https://registry.example.com'
   REGISTRY_TARGET_TOKEN='remote-enroll'
+  REGISTRY_TARGET_SCOPE='full'
 }}
 ensure_provider_image_ready() {{ :; }}
 ensure_provider_auth_ready() {{ :; }}
@@ -79,8 +80,10 @@ cat .deploy/bots/example-bot/.env
     assert "BOT_WORKING_DIR=/srv/bot" in result.stdout
     assert "BOT_COMPLETION_WEBHOOK_URL=https://hooks.example.com/done" in result.stdout
     assert "BOT_AGENT_MODE=registry" in result.stdout
-    assert "BOT_AGENT_REGISTRY_URL=https://registry.example.com" in result.stdout
-    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=remote-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ID=registry-example-com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=https://registry.example.com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=remote-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_SCOPE=full" in result.stdout
 
 
 def test_edit_bot_settings_updates_display_name(tmp_path: Path) -> None:

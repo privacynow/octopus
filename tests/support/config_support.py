@@ -3,8 +3,26 @@
 from pathlib import Path
 
 from app.config import BotConfig
+from app.agents.types import RegistryConnectionConfig
 from app.identity import telegram_actor_key
 from app.session_state import ProjectBinding
+
+
+def make_registry_connection(
+    *,
+    registry_id: str = "default",
+    url: str = "http://registry.test",
+    enroll_token: str = "enroll-secret",
+    registry_scope: str = "full",
+    poll_interval_seconds: float = 5.0,
+) -> RegistryConnectionConfig:
+    return RegistryConnectionConfig(
+        registry_id=registry_id,
+        url=url,
+        enroll_token=enroll_token,
+        registry_scope=registry_scope,
+        poll_interval_seconds=poll_interval_seconds,
+    )
 
 
 def _normalize_projects(projects):
@@ -92,13 +110,13 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         agent_tags=(),
         agent_description="",
         agent_capabilities=(),
-        agent_registry_url="",
-        agent_registry_enroll_token="",
+        agent_registries=(),
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         process_role="all",
         claim_lease_ttl_seconds=300,
         claim_sweep_interval_seconds=60.0,
+        delegation_timeout_seconds=3600,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,

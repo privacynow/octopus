@@ -1,6 +1,7 @@
 """Tests for registry index parsing, artifact handling, and import integration."""
 
 import http.server
+import io
 import json
 import tarfile
 import tempfile
@@ -223,6 +224,25 @@ def test_download_artifact_rejects_expanded_size_over_quota(monkeypatch):
         try:
             with pytest.raises(ValueError, match="expands beyond 32 bytes"):
                 download_artifact(f"{base_url}/expanded-size.tar.gz", tmp_path / "extracted")
+        finally:
+            server.shutdown()
+
+
+def test_download_artifact_rejects_path_traversal_member():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        tarball = tmp_path / "bad.tar.gz"
+        payload = b"---\nname: traversal-test\n---\n"
+        with tarfile.open(tarball, "w:gz") as tf:
+            info = tarfile.TarInfo("../extracted-evil/skill.md")
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+
+        server, base_url = _serve_dir(tmp)
+        try:
+            with pytest.raises(ValueError, match="path traversal"):
+                download_artifact(f"{base_url}/bad.tar.gz", tmp_path / "extracted")
+            assert not (tmp_path / "extracted-evil").exists()
         finally:
             server.shutdown()
 

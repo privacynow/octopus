@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app import work_queue
@@ -13,7 +14,8 @@ from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_d
 from app.channels.telegram.session_io import event_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.runtime.inbound_types import deserialize_inbound
+from app.runtime.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
+from app.runtime.work_admission import record_inbound_envelope
 from tests.support.handler_support import (
     current_boot_id,
     current_shared_runtime_builders,
@@ -87,6 +89,10 @@ async def test_shared_message_path_remains_persist_first():
         assert prov.run_calls == []
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
         assert any(item["kind"] == "message" and item["state"] == "queued" for item in items)
+        message_payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
+        assert message_payload is not None
+        message_event = deserialize_inbound("message", message_payload)
+        assert message_event.transport == "telegram"
 
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
@@ -113,8 +119,55 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
+        assert event.transport == "telegram"
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
+
+
+def test_record_inbound_envelope_persists_transport_from_envelope() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        event = InboundAction(
+            user=InboundUser(id="slack:alice", username="alice"),
+            conversation_key="slack:C123",
+            action="approve_pending",
+            params={},
+            source="slack",
+        )
+        envelope = InboundEnvelope(
+            transport="slack-webhook",
+            event_id="evt-slack-1",
+            conversation_key="slack:C123",
+            actor_key="slack:alice",
+            received_at=datetime.now(timezone.utc),
+            event=event,
+        )
+
+        assert record_inbound_envelope(data_dir, envelope) is True
+        payload = work_queue.get_update_payload(data_dir, "evt-slack-1")
+        restored = deserialize_inbound("action", payload)
+
+        assert restored.transport == "slack-webhook"
+
+
+async def test_shared_command_dispatch_replies_to_unknown_commands():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        message = FakeMessage(chat=chat, text="/definitelynotacommand")
+        update = FakeUpdate(message=message, user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+        assert prov.run_calls == []
+        assert "isn't recognized" in message.replies[-1]["text"]
 
 
 async def test_shared_callback_dispatch_persists_action_without_inline_execution():
@@ -216,7 +269,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         chat_id = 12345
         payload = (
             '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
-            '"text":"long running","attachments":[]}'
+            '"text":"long running","source":"telegram","attachments":[]}'
         )
         status, _item_id = work_queue.record_and_admit_message(
             data_dir,
@@ -410,7 +463,7 @@ async def test_worker_loop_heartbeat_tracks_current_item():
             _conv(12345),
             "tg:42",
             "message",
-            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345","text":"hello","attachments":[]}',
+            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345","text":"hello","source":"telegram","attachments":[]}',
         )
         assert status == "admitted"
 
@@ -449,3 +502,47 @@ async def test_worker_loop_heartbeat_tracks_current_item():
             await asyncio.wait_for(task, timeout=0.5)
 
         assert work_queue.list_worker_heartbeats(data_dir) == []
+
+
+async def test_worker_loop_usage_purge_runs_at_most_hourly():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        stop = asyncio.Event()
+        purge_calls: list[float] = []
+        monotonic_values = iter([0.0, 10.0, 20.0, 3701.0])
+        claim_calls = 0
+
+        def _monotonic() -> float:
+            try:
+                return next(monotonic_values)
+            except StopIteration:
+                return 3701.0
+
+        def _claim_none(*_args, **_kwargs):
+            nonlocal claim_calls
+            claim_calls += 1
+            if claim_calls >= 4:
+                stop.set()
+            return None
+
+        async def dispatch(_kind, _event, _item):
+            raise AssertionError("dispatch should not run in usage-purge test")
+
+        with patch("app.worker.time.monotonic", side_effect=_monotonic), \
+             patch("app.worker.work_queue.claim_next_any", side_effect=_claim_none), \
+             patch("app.worker.work_queue.recover_stale_claims", return_value=0), \
+             patch(
+                 "app.worker.work_queue.purge_old_usage",
+                 side_effect=lambda *_args, **_kwargs: purge_calls.append(time.time()) or 0,
+             ):
+            await worker_loop(
+                data_dir,
+                "usage-purge-worker",
+                dispatch,
+                poll_interval=0.0,
+                sweep_interval=0.0,
+                stop_event=stop,
+            )
+
+        assert len(purge_calls) == 2

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import app.work_queue_sqlite_impl as work_queue_sqlite_impl
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.workflows.recovery.results import TransportStateCorruption
 from app.work_queue import (
@@ -536,6 +537,7 @@ def test_serialize_message_round_trip():
             InboundAttachment(path=Path("/tmp/photo.jpg"), original_name="photo.jpg",
                               is_image=True, mime_type="image/jpeg"),
         ),
+        source="telegram",
     )
     payload = serialize_inbound(msg)
     restored = deserialize_inbound("message", payload)
@@ -552,6 +554,7 @@ def test_serialize_command_round_trip():
     cmd = InboundCommand(
         user=InboundUser(id=_actor(42), username="alice"),
         conversation_key=_conv(1), command="help", args=("topic",),
+        source="telegram",
     )
     payload = serialize_inbound(cmd)
     restored = deserialize_inbound("command", payload)
@@ -565,6 +568,7 @@ def test_serialize_callback_round_trip():
     cb = InboundCallback(
         user=InboundUser(id=_actor(42), username="alice"),
         conversation_key=_conv(1), data="approval_approve",
+        source="telegram",
     )
     payload = serialize_inbound(cb)
     restored = deserialize_inbound("callback", payload)
@@ -653,6 +657,7 @@ def test_claim_next_any_includes_payload(data_dir):
         user=InboundUser(id=_actor(42), username="alice"),
         conversation_key=_conv(5), text="test message",
         attachments=(),
+        source="telegram",
     )
     payload = serialize_inbound(msg)
     record_update(data_dir, _event(1300), conversation_key=_conv(5), actor_key=_actor(42), kind="message", payload=payload)
@@ -676,13 +681,13 @@ async def test_worker_loop_processes_items(data_dir):
     record_update(data_dir, _event(1400), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                   payload=serialize_inbound(InboundMessage(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(1), text="hello", attachments=())))
+                      conversation_key=_conv(1), text="hello", attachments=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1400))
 
     record_update(data_dir, _event(1401), conversation_key=_conv(2), actor_key=_actor(42), kind="command",
                   payload=serialize_inbound(InboundCommand(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(2), command="help", args=())))
+                      conversation_key=_conv(2), command="help", args=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(2), event_id=_event(1401))
 
     dispatched = []
@@ -719,7 +724,7 @@ async def test_worker_loop_handles_dispatch_failure(data_dir):
     record_update(data_dir, _event(1500), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                   payload=serialize_inbound(InboundMessage(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(1), text="fail", attachments=())))
+                      conversation_key=_conv(1), text="fail", attachments=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1500))
 
     async def failing_dispatch(kind, event, item):
@@ -778,6 +783,51 @@ async def test_worker_loop_handles_bad_payload(data_dir):
     assert row["error"] == "deserialize_error"
 
 
+async def test_worker_loop_rejects_payload_missing_canonical_source(data_dir):
+    """Worker loop fails malformed payloads that omit canonical provenance."""
+    from app.worker import worker_loop
+
+    record_update(
+        data_dir,
+        _event(1602),
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        kind="message",
+        payload=(
+            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
+            '"text":"hello","attachments":[]}'
+        ),
+    )
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1602))
+
+    dispatched: list[str] = []
+
+    async def dispatch(kind, event, item):
+        del event, item
+        dispatched.append(kind)
+
+    stop = asyncio.Event()
+
+    async def run_then_stop():
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    assert dispatched == []
+
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT state, error FROM work_items WHERE event_id = ?",
+        (_event(1602),),
+    ).fetchone()
+    assert row["state"] == "failed"
+    assert row["error"] == "deserialize_error"
+
+
 async def test_worker_loop_notifies_on_deserialize_failure(data_dir):
     from app.worker import worker_loop
 
@@ -823,7 +873,7 @@ async def test_worker_loop_respects_per_chat_serialization(data_dir):
         record_update(data_dir, _event(uid), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                       payload=serialize_inbound(InboundMessage(
                           user=InboundUser(id=_actor(42), username="alice"),
-                          conversation_key=_conv(1), text=f"msg-{uid}", attachments=())))
+                          conversation_key=_conv(1), text=f"msg-{uid}", attachments=(), source="telegram")))
         enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(uid))
 
     order = []
@@ -850,6 +900,7 @@ def test_handler_dedup_stores_command_payload(data_dir):
     cmd = InboundCommand(
         user=InboundUser(id=_actor(42), username="alice"),
         conversation_key=_conv(1), command="help", args=("skills",),
+        source="telegram",
     )
     payload = serialize_inbound(cmd)
     record_update(data_dir, _event(1800), conversation_key=_conv(1), actor_key=_actor(42), kind="command", payload=payload)
@@ -867,7 +918,7 @@ def test_recovery_after_crash(data_dir):
     record_update(data_dir, _event(1900), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                   payload=serialize_inbound(InboundMessage(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(1), text="before crash", attachments=())))
+                      conversation_key=_conv(1), text="before crash", attachments=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1900))
     item = claim_next(data_dir, conversation_key=_conv(1), worker_id="old-worker")
     assert item is not None
@@ -1231,7 +1282,7 @@ async def test_worker_replay_calls_dispatch_for_message(data_dir):
     record_update(data_dir, _event(2100), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                   payload=serialize_inbound(InboundMessage(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(1), text="replay me", attachments=())))
+                      conversation_key=_conv(1), text="replay me", attachments=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(2100))
     # Claim by old worker, then recover
     claim_next(data_dir, conversation_key=_conv(1), worker_id="old-worker")
@@ -1275,7 +1326,7 @@ async def test_worker_loop_leaves_interrupted_item_claimed(data_dir):
     record_update(data_dir, _event(2200), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
                   payload=serialize_inbound(InboundMessage(
                       user=InboundUser(id=_actor(42), username="alice"),
-                      conversation_key=_conv(1), text="recover me", attachments=())))
+                      conversation_key=_conv(1), text="recover me", attachments=(), source="telegram")))
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(2200))
 
     async def dispatch(kind, event, item):
@@ -1395,6 +1446,7 @@ async def test_worker_loop_stops_on_dispatch_path_corruption(data_dir):
             conversation_key=_conv(1),
             text="hi",
             attachments=(),
+            source="telegram",
         )
     )
     record_update(data_dir, _event(9001), conversation_key=_conv(1), actor_key=_actor(42), kind="message", payload=payload)
@@ -1643,6 +1695,38 @@ def test_run_migrations_adds_dispatch_mode_for_v2_db(data_dir):
     assert "dispatch_mode" in work_item_columns
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
     assert version == str(_SCHEMA_VERSION)
+    conn.close()
+
+
+def test_run_migrations_rolls_back_schema_version_when_step_fails(
+    data_dir,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '3')")
+    conn.commit()
+
+    def fail_migration(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(work_queue_sqlite_impl, "_MIGRATIONS", ((4, fail_migration),))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_migrations(conn)
+
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    assert version == "3"
+    assert "migration_probe" not in tables
     conn.close()
 
 

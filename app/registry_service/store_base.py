@@ -11,6 +11,16 @@ from typing import Any, Protocol
 from app.runtime_health import report_from_dict, report_to_dict
 
 _OFFLINE_AFTER_SECONDS = 60
+_MISSING = object()
+PROTECTED_ROUTED_TASK_STATUSES = (
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "partialfailed",
+)
+VALID_ACK_CLASSIFICATIONS = ("accepted", "rejected", "retry_later")
+VALID_REGISTRY_SCOPES = ("full", "channel", "coordination")
 
 
 def hash_agent_token(token: str) -> str:
@@ -20,6 +30,18 @@ def hash_agent_token(token: str) -> str:
 
 class CapabilityDisabledError(RuntimeError):
     """Raised when routing requests a capability that has been globally disabled."""
+
+
+class RegistryScopeError(PermissionError):
+    """Raised when an agent registry scope cannot access a protected action."""
+
+    def __init__(self, scope: str, required_scopes: set[str]) -> None:
+        self.scope = scope or "full"
+        self.required_scopes = tuple(sorted(required_scopes))
+        super().__init__(
+            f"Agent registry_scope '{self.scope}' cannot access this endpoint. "
+            f"Required: {', '.join(self.required_scopes)}"
+        )
 
 
 def utcnow_iso() -> str:
@@ -32,6 +54,307 @@ def ensure_json(value: Any) -> str:
     if is_dataclass(value):
         value = asdict(value)
     return json.dumps(value)
+
+
+def validated_bind_conversation_payload(payload: dict[str, Any]) -> dict[str, str]:
+    """Return the required conversation-bind fields or raise on invalid input."""
+    conversation_id = str(payload.get("conversation_id", "") or "")
+    origin_channel = str(payload.get("origin_channel", "") or "")
+    if not conversation_id.strip():
+        raise ValueError("bind_conversation requires non-empty conversation_id")
+    if not origin_channel.strip():
+        raise ValueError("bind_conversation requires non-empty origin_channel")
+    return {
+        "conversation_id": conversation_id,
+        "title": str(payload.get("title", "") or ""),
+        "origin_channel": origin_channel,
+    }
+
+
+def _require_mapping(value: Any, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return value
+
+
+def _required_text(value: Any, field_name: str) -> str:
+    text = str(value or "")
+    if not text.strip():
+        raise ValueError(f"{field_name} requires non-empty text")
+    return text.strip()
+
+
+def _optional_text_field(payload: dict[str, Any], field_name: str) -> str | object:
+    if field_name not in payload:
+        return _MISSING
+    return str(payload.get(field_name) or "")
+
+
+def _optional_int_field(
+    payload: dict[str, Any],
+    field_name: str,
+    *,
+    minimum: int,
+) -> int | object:
+    if field_name not in payload:
+        return _MISSING
+    value = payload.get(field_name)
+    if value in (None, ""):
+        raise ValueError(f"{field_name} requires an integer value")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} requires an integer value") from exc
+    if parsed < minimum:
+        comparator = "positive" if minimum == 1 else "non-negative"
+        raise ValueError(f"{field_name} requires a {comparator} integer value")
+    return parsed
+
+
+def _optional_dict_field(payload: dict[str, Any], field_name: str) -> dict[str, Any] | object:
+    if field_name not in payload:
+        return _MISSING
+    value = payload.get(field_name)
+    if value is None:
+        raise ValueError(f"{field_name} must be an object")
+    return _require_mapping(value, field_name)
+
+
+def _optional_string_list_field(payload: dict[str, Any], field_name: str) -> list[str] | object:
+    if field_name not in payload:
+        return _MISSING
+    value = payload.get(field_name)
+    if isinstance(value, str) or not isinstance(value, (list, tuple, set)):
+        raise ValueError(f"{field_name} must be a list")
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def validated_registry_scope(value: Any) -> str:
+    scope = str(value or "").strip().lower()
+    if not scope:
+        raise ValueError("registry_scope requires non-empty text")
+    if scope not in VALID_REGISTRY_SCOPES:
+        raise ValueError(
+            f"registry_scope must be one of: {', '.join(VALID_REGISTRY_SCOPES)}"
+        )
+    return scope
+
+
+def validated_agent_card_payload(
+    value: Any,
+    *,
+    require_registry_scope: bool,
+) -> dict[str, Any]:
+    card = _require_mapping(value, "agent_card")
+    normalized: dict[str, Any] = {}
+    for field_name in (
+        "display_name",
+        "slug",
+        "role",
+        "description",
+        "provider",
+        "mode",
+        "connectivity_state",
+        "version",
+    ):
+        field_value = _optional_text_field(card, field_name)
+        if field_value is not _MISSING:
+            normalized[field_name] = field_value
+    capabilities = _optional_string_list_field(card, "capabilities")
+    if capabilities is _MISSING:
+        capabilities = _optional_string_list_field(card, "skills")
+    if capabilities is not _MISSING:
+        normalized["capabilities"] = capabilities
+    tags = _optional_string_list_field(card, "tags")
+    if tags is not _MISSING:
+        normalized["tags"] = tags
+    channel_capabilities = _optional_string_list_field(card, "channel_capabilities")
+    if channel_capabilities is not _MISSING:
+        normalized["channel_capabilities"] = channel_capabilities
+    current_capacity = _optional_int_field(card, "current_capacity", minimum=0)
+    if current_capacity is not _MISSING:
+        normalized["current_capacity"] = current_capacity
+    max_capacity = _optional_int_field(card, "max_capacity", minimum=1)
+    if max_capacity is not _MISSING:
+        normalized["max_capacity"] = max_capacity
+    if require_registry_scope or "registry_scope" in card:
+        normalized["registry_scope"] = validated_registry_scope(card.get("registry_scope"))
+    return normalized
+
+
+def validated_register_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(payload, "register payload")
+    normalized: dict[str, Any] = {
+        "agent_card": validated_agent_card_payload(
+            data.get("agent_card"),
+            require_registry_scope=False,
+        )
+    }
+    connectivity_state = _optional_text_field(data, "connectivity_state")
+    if connectivity_state is not _MISSING:
+        normalized["connectivity_state"] = connectivity_state
+    current_capacity = _optional_int_field(data, "current_capacity", minimum=0)
+    if current_capacity is not _MISSING:
+        normalized["current_capacity"] = current_capacity
+    max_capacity = _optional_int_field(data, "max_capacity", minimum=1)
+    if max_capacity is not _MISSING:
+        normalized["max_capacity"] = max_capacity
+    return normalized
+
+
+def validated_heartbeat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(payload, "heartbeat payload")
+    normalized: dict[str, Any] = {}
+    connectivity_state = _optional_text_field(data, "connectivity_state")
+    if connectivity_state is not _MISSING:
+        normalized["connectivity_state"] = connectivity_state
+    current_capacity = _optional_int_field(data, "current_capacity", minimum=0)
+    if current_capacity is not _MISSING:
+        normalized["current_capacity"] = current_capacity
+    max_capacity = _optional_int_field(data, "max_capacity", minimum=1)
+    if max_capacity is not _MISSING:
+        normalized["max_capacity"] = max_capacity
+    runtime_health = _optional_dict_field(data, "runtime_health")
+    if runtime_health is not _MISSING:
+        normalized["runtime_health"] = runtime_health
+    return normalized
+
+
+def validated_timeline_events(value: Any, *, field_name: str = "events") -> list[dict[str, Any]]:
+    if isinstance(value, str) or not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    events: list[dict[str, Any]] = []
+    for index, raw_event in enumerate(value):
+        if not isinstance(raw_event, dict):
+            raise ValueError(f"{field_name}[{index}] must be an object")
+        metadata = raw_event.get("metadata", {})
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise ValueError(f"{field_name}[{index}].metadata must be an object")
+        progress = raw_event.get("progress")
+        if progress is not None:
+            try:
+                progress = int(progress)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field_name}[{index}].progress requires an integer value") from exc
+        events.append(
+            {
+                "event_id": _required_text(raw_event.get("event_id"), f"{field_name}[{index}].event_id"),
+                "conversation_id": _required_text(
+                    raw_event.get("conversation_id"),
+                    f"{field_name}[{index}].conversation_id",
+                ),
+                "kind": _required_text(raw_event.get("kind"), f"{field_name}[{index}].kind"),
+                "title": _required_text(raw_event.get("title"), f"{field_name}[{index}].title"),
+                "body": str(raw_event.get("body", "") or ""),
+                "status": str(raw_event.get("status", "") or ""),
+                "progress": progress,
+                "metadata": metadata,
+                "created_at": _required_text(
+                    raw_event.get("created_at"),
+                    f"{field_name}[{index}].created_at",
+                ),
+            }
+        )
+    return events
+
+
+def validated_search_query(query: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(query, "search_agents query")
+    normalized: dict[str, Any] = {}
+    for field_name in ("role", "required_state", "free_text"):
+        field_value = _optional_text_field(data, field_name)
+        if field_value is not _MISSING:
+            normalized[field_name] = field_value
+    capabilities = _optional_string_list_field(data, "capabilities")
+    if capabilities is _MISSING:
+        capabilities = _optional_string_list_field(data, "skills")
+    if capabilities is not _MISSING:
+        normalized["capabilities"] = capabilities
+    tags = _optional_string_list_field(data, "tags")
+    if tags is not _MISSING:
+        normalized["tags"] = tags
+    exclude = _optional_string_list_field(data, "exclude_agent_ids")
+    if exclude is not _MISSING:
+        normalized["exclude_agent_ids"] = exclude
+    return normalized
+
+
+def validated_routed_task_request(request: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(request, "create_routed_task payload")
+    normalized = dict(data)
+    for field_name in (
+        "routed_task_id",
+        "parent_conversation_id",
+        "origin_agent_id",
+        "target_agent_id",
+        "title",
+    ):
+        normalized[field_name] = _required_text(data.get(field_name), field_name)
+    for field_name in ("instructions", "priority", "created_at", "skill"):
+        field_value = _optional_text_field(data, field_name)
+        if field_value is not _MISSING:
+            normalized[field_name] = field_value
+    requested_capabilities = _optional_string_list_field(data, "requested_capabilities")
+    if requested_capabilities is not _MISSING:
+        normalized["requested_capabilities"] = requested_capabilities
+    for field_name in ("context", "constraints"):
+        field_value = _optional_dict_field(data, field_name)
+        if field_value is not _MISSING:
+            normalized[field_name] = field_value
+    return normalized
+
+
+def validated_ack_request(*, delivery_ids: Any, classification: Any) -> tuple[list[str], str]:
+    if isinstance(delivery_ids, str) or not isinstance(delivery_ids, list):
+        raise ValueError("delivery_ids must be a list")
+    ids = [_required_text(item, "delivery_ids[]") for item in delivery_ids]
+    normalized_classification = _required_text(classification, "classification").lower()
+    if normalized_classification not in VALID_ACK_CLASSIFICATIONS:
+        raise ValueError(
+            f"classification must be one of: {', '.join(VALID_ACK_CLASSIFICATIONS)}"
+        )
+    return ids, normalized_classification
+
+
+def validated_routed_task_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(payload, "routed_task_status payload")
+    normalized = {
+        "status": _required_text(data.get("status"), "status"),
+        "summary": str(data.get("summary", "") or ""),
+        "timeline_events": [],
+    }
+    if "timeline_events" in data:
+        normalized["timeline_events"] = validated_timeline_events(
+            data.get("timeline_events"),
+            field_name="timeline_events",
+        )
+    return normalized
+
+
+def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = _require_mapping(payload, "routed_task_result payload")
+    normalized = dict(data)
+    normalized["status"] = _required_text(data.get("status"), "status")
+    normalized["summary"] = str(data.get("summary", "") or "")
+    return normalized
+
+
+def validated_conversation_message_text(text: Any) -> str:
+    value = str(text or "")
+    if not value.strip():
+        raise ValueError("message text requires non-empty text")
+    return value
+
+
+def validated_conversation_action(action: Any, payload: Any) -> tuple[str, dict[str, Any]]:
+    normalized_action = _required_text(action, "action")
+    if payload in (None, ""):
+        return normalized_action, {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
+    return normalized_action, payload
 
 
 def decode_json_field(value: Any, default: Any) -> Any:
@@ -75,6 +398,36 @@ def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str
     except ValueError:
         pass
     return effective_state
+
+
+def registry_scope_for_agent_row(agent_row: Any) -> str:
+    """Return the stored registry scope for an authenticated agent row."""
+    try:
+        scope = agent_row["registry_scope"]
+    except Exception as exc:
+        raise PermissionError("Authenticated agent row missing registry_scope") from exc
+    try:
+        return validated_registry_scope(scope)
+    except ValueError as exc:
+        raise PermissionError("Authenticated agent row has invalid registry_scope") from exc
+
+
+def require_registry_scope(agent_row: Any, required_scopes: set[str]) -> str:
+    """Validate an agent row against the required registry scopes."""
+    scope = registry_scope_for_agent_row(agent_row)
+    if scope not in required_scopes:
+        raise RegistryScopeError(scope, required_scopes)
+    return scope
+
+
+def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | None:
+    """Return the delivery kinds visible to the provided registry scope."""
+    scope = validated_registry_scope(registry_scope)
+    if scope == "channel":
+        return ("channel_input", "channel_action")
+    if scope == "coordination":
+        return ("routed_task", "routed_result")
+    return None
 
 
 def runtime_health_summary(value: Any) -> dict[str, Any]:
@@ -125,6 +478,9 @@ class AbstractRegistryStore(Protocol):
 
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         """Return agents matching the requested discovery constraints."""
+
+    def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
+        """Validate that the authenticated agent token has one of the required scopes."""
 
     def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Queue a delivery for an agent and return its durable identifiers."""

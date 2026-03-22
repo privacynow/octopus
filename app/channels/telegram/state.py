@@ -9,12 +9,13 @@ import platform
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
 from app.providers.base import Provider
 from app.ratelimit import RateLimiter
+from app.runtime.services import BotServices, build_noop_bot_services
 
 
 def make_boot_id() -> str:
@@ -30,12 +31,6 @@ def _build_rate_limiter(config: BotConfig) -> RateLimiter:
     return RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
 
-def _default_registry_client_factory(config: BotConfig):
-    from app.agents.bridge import registry_client
-
-    return registry_client(config)
-
-
 @dataclass
 class TelegramRuntime:
     """Bootstrap-owned Telegram runtime instance.
@@ -47,6 +42,7 @@ class TelegramRuntime:
     provider: Provider
     boot_id: str
     rate_limiter: RateLimiter | None
+    services: BotServices = field(default_factory=build_noop_bot_services)
     bot_instance: Any = None
     cancellation_registry: TelegramCancellationRegistry = field(
         default_factory=TelegramCancellationRegistry
@@ -55,9 +51,7 @@ class TelegramRuntime:
         default_factory=lambda: defaultdict(asyncio.Lock)
     )
     pending_work_items: dict[int, str] = field(default_factory=dict)
-    registry_client_factory: Callable[[BotConfig], Any | None] = field(
-        default_factory=lambda: _default_registry_client_factory
-    )
+    channel_dispatcher: Any = None
     current_update_id: contextvars.ContextVar[int | None] = field(
         default_factory=lambda: contextvars.ContextVar(
             "telegram_current_update_id",
@@ -72,6 +66,7 @@ def build_telegram_runtime(
     *,
     boot_id: str | None = None,
     bot_instance: Any = None,
+    services: BotServices | None = None,
 ) -> TelegramRuntime:
     """Construct an explicit Telegram runtime instance."""
 
@@ -80,5 +75,6 @@ def build_telegram_runtime(
         provider=provider,
         boot_id=boot_id or make_boot_id(),
         rate_limiter=_build_rate_limiter(config),
+        services=services or build_noop_bot_services(),
         bot_instance=bot_instance,
     )

@@ -7,7 +7,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from app.agents.types import RoutedTaskResult
 from app.identity import filesystem_component_for_key
+from app.workflows.delegation.contracts import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
@@ -98,6 +100,24 @@ def load_session(
 def save_session(data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
     from app import runtime_backend
     runtime_backend.session_store().save_session(data_dir, conversation_key, session)
+
+
+def apply_delegation_result_atomically(
+    data_dir: Path,
+    conversation_key: str,
+    *,
+    routed_task_id: str,
+    authority_ref: str,
+    result: RoutedTaskResult,
+) -> DelegationUpdateOutcome:
+    from app import runtime_backend
+    return runtime_backend.session_store().apply_delegation_result_atomically(
+        data_dir,
+        conversation_key,
+        routed_task_id=routed_task_id,
+        authority_ref=authority_ref,
+        result=result,
+    )
 
 
 def delete_session(data_dir: Path, conversation_key: str) -> None:

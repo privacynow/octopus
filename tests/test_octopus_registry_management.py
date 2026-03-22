@@ -36,6 +36,7 @@ prompt_registry_target() {{
   REGISTRY_TARGET_KIND=local
   REGISTRY_TARGET_URL=http://registry:8787
   REGISTRY_TARGET_TOKEN=local-enroll
+  REGISTRY_TARGET_SCOPE=full
 }}
 restart_bot_after_config_change() {{ printf 'restart:%s\\n' "$1" > restart.txt; }}
 verify_registry_enrollment() {{ return 0; }}
@@ -45,8 +46,10 @@ cat restart.txt
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "BOT_AGENT_MODE=registry" in result.stdout
-    assert "BOT_AGENT_REGISTRY_URL=http://registry:8787" in result.stdout
-    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=local-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ID=local" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=http://registry:8787" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_SCOPE=full" in result.stdout
     assert "restart:example-bot" in result.stdout
     assert "Bot example-bot is now connected to the local registry." in result.stdout
 
@@ -70,6 +73,7 @@ prompt_new_bot_registry_target() {{
   REGISTRY_TARGET_KIND=local
   REGISTRY_TARGET_URL=http://registry:8787
   REGISTRY_TARGET_TOKEN=local-enroll
+  REGISTRY_TARGET_SCOPE=full
 }}
 ensure_provider_image_ready() {{ :; }}
 ensure_provider_auth_ready() {{ :; }}
@@ -84,8 +88,10 @@ cat .deploy/bots/example-bot/.env
     assert "BOT_SLUG=example-bot" in result.stdout
     assert "BOT_TELEGRAM_ID=123456789" in result.stdout
     assert "BOT_AGENT_MODE=registry" in result.stdout
-    assert "BOT_AGENT_REGISTRY_URL=http://registry:8787" in result.stdout
-    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=local-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ID=local" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=http://registry:8787" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_SCOPE=full" in result.stdout
     assert "Bot is running!" in result.stdout
     assert "Bot example-bot is now connected to the local registry." in result.stdout
     assert "Bot name" not in result.stdout + result.stderr
@@ -98,8 +104,10 @@ def test_disconnect_bot_from_registry_removes_registry_keys(tmp_path: Path) -> N
         "BOT_SLUG=example-bot\n"
         "BOT_PROVIDER=claude\n"
         "BOT_AGENT_MODE=registry\n"
-        "BOT_AGENT_REGISTRY_URL=http://registry:8787\n"
-        "BOT_AGENT_REGISTRY_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
     )
 
     script = f"""
@@ -115,8 +123,8 @@ cat .deploy/bots/example-bot/.env
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "BOT_AGENT_MODE=standalone" in result.stdout
-    assert "BOT_AGENT_REGISTRY_URL=" not in result.stdout
-    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=" not in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=" not in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=" not in result.stdout
     assert "Bot example-bot is now running standalone." in result.stdout
     assert "offer-stop" in result.stdout
 
@@ -128,8 +136,10 @@ def test_switch_local_bot_to_remote_registry_requires_https_and_updates_env(tmp_
         "BOT_SLUG=example-bot\n"
         "BOT_PROVIDER=claude\n"
         "BOT_AGENT_MODE=registry\n"
-        "BOT_AGENT_REGISTRY_URL=http://registry:8787\n"
-        "BOT_AGENT_REGISTRY_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
     )
 
     script = f"""
@@ -146,10 +156,51 @@ cat .deploy/bots/example-bot/.env
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "Remote registry URLs must start with https://" in result.stderr
-    assert "BOT_AGENT_REGISTRY_URL=https://remote.example.com" in result.stdout
-    assert "BOT_AGENT_REGISTRY_ENROLL_TOKEN=remote-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ID=remote-example-com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=https://remote.example.com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=remote-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_SCOPE=full" in result.stdout
     assert "Bot example-bot is now connected to the registry at https://remote.example.com." in result.stdout
     assert "offer-stop" in result.stdout
+
+
+def test_add_registry_connection_flow_appends_indexed_registry_vars(tmp_path: Path) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=registry\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+prompt_registry_target() {{
+  REGISTRY_TARGET_KIND=remote
+  REGISTRY_TARGET_URL=https://analytics.example.com
+  REGISTRY_TARGET_TOKEN=analytics-enroll
+  REGISTRY_TARGET_SCOPE=channel
+}}
+restart_bot_after_config_change() {{ :; }}
+verify_registry_enrollment() {{ return 0; }}
+add_registry_connection_flow example-bot
+cat .deploy/bots/example-bot/.env
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "BOT_AGENT_REGISTRY_1_ID=local" in result.stdout
+    assert "BOT_AGENT_REGISTRY_1_URL=http://registry:8787" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_ID=analytics-example-com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_URL=https://analytics.example.com" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_ENROLL_TOKEN=analytics-enroll" in result.stdout
+    assert "BOT_AGENT_REGISTRY_2_SCOPE=channel" in result.stdout
 
 
 def test_cmd_registry_can_start_local_registry_from_empty_state(tmp_path: Path) -> None:

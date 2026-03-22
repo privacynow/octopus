@@ -62,6 +62,8 @@ printf '123456:real-token\\n\\n' | first_bot_flow quick
     assert 'BOT_DISPLAY_NAME="Example Bot"' in env_text
     assert 'BOT_AGENT_DISPLAY_NAME="Example Bot"' in env_text
     assert "TELEGRAM_BOT_TOKEN=123456:real-token" in env_text
+    assert "BOT_CREDENTIAL_KEY=" in env_text
+    assert "BOT_CREDENTIAL_KEY=123456:real-token" not in env_text
     assert "BOT_PROVIDER=claude" in env_text
 
     mode = stat.S_IMODE(env_file.stat().st_mode)

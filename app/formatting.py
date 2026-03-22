@@ -12,6 +12,13 @@ def trim_text(text: str, limit: int) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
+def summarize_text(text: str, limit: int = 240) -> str:
+    clean = " ".join(text.strip().split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1] + "…"
+
+
 def md_to_telegram_html(text: str) -> str:
     """Convert common GitHub-flavored markdown into Telegram-safe HTML."""
     blocks: list[str] = []

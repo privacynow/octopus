@@ -3,11 +3,13 @@
 import asyncio
 import json
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.identity import filesystem_component_for_key
+from app.startup_diagnostics import redact_sensitive_startup_text
 from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
@@ -31,6 +33,14 @@ Response to summarize:
 """
 
 _ERROR_DISPLAY_LIMIT = 1500
+_PROVIDER_ERROR_PATH_RE = re.compile(
+    r"(?<![\w.-])(?:/Users|/home|/app|/tmp|/var|/srv|/opt|/etc)(?:/[^\s'\":]+)+"
+)
+_PROVIDER_ERROR_SECRET_RE = re.compile(
+    r"(?i)\b("
+    r"api[_-]?key|token|secret|password|passwd|authorization|credential"
+    r")(\s*[:=]\s*)([^\s,;]+)"
+)
 
 _ERROR_SUMMARY_PROMPT = """\
 Summarize the following provider error for a chat user.
@@ -45,6 +55,12 @@ Rules:
 Error (rc={rc}):
 {text}
 """
+
+
+def sanitize_provider_error_text(text: str) -> str:
+    redacted = redact_sensitive_startup_text(text or "")
+    redacted = _PROVIDER_ERROR_SECRET_RE.sub(r"\1\2<redacted>", redacted)
+    return _PROVIDER_ERROR_PATH_RE.sub("<path>", redacted)
 
 
 # -- Ring buffer ---------------------------------------------------------------
@@ -198,7 +214,7 @@ async def format_provider_error(
 ) -> str:
     """Return a plain-text provider error summary safe for channel-specific rendering."""
 
-    raw_text = raw_text.strip()
+    raw_text = sanitize_provider_error_text(raw_text.strip())
     if not raw_text:
         return f"Provider exited with code {returncode} (no output)."
     if len(raw_text) <= _ERROR_DISPLAY_LIMIT:
@@ -222,7 +238,9 @@ async def format_provider_error(
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         if proc.returncode == 0:
-            summary = stdout.decode("utf-8", errors="replace").strip()
+            summary = sanitize_provider_error_text(
+                stdout.decode("utf-8", errors="replace").strip()
+            )
             if summary:
                 return summary
     except Exception:

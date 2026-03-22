@@ -12,16 +12,23 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
+from app.agents.registry_capabilities import registry_authority_capabilities
 import app.channels.telegram.execution as _telegram_execution
 import app.channels.telegram.ingress as _th
 import app.channels.telegram.progress as _telegram_progress
 import app.channels.telegram.worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
+from app.channels.registry.channel import register_registry_channels
+from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
+from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
@@ -45,6 +52,7 @@ def current_execution_runtime():
         keep_typing_fn=_telegram_progress.keep_typing,
         heartbeat_fn=_telegram_progress.heartbeat,
         progress_timeline_callback_fn=_telegram_progress.progress_timeline_callback,
+        routed_task_progress_callback_fn=_telegram_progress.routed_task_progress_callback,
         propose_delegation_plan_fn=_propose_delegation_plan,
     )
     return _telegram_execution.build_execution_runtime(runtime, collaborators=collaborators)
@@ -389,7 +397,9 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
     return build_registry_delivery_runtime(
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
+        services=current_runtime().services,
         bot=bot,
+        dispatcher=current_runtime().channel_dispatcher,
     )
 
 
@@ -473,7 +483,14 @@ class MinimalFakeBot:
 
 
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
-    """Install explicit Telegram channel state for tests via bootstrap wiring."""
+    """Install explicit Telegram channel state for tests via bootstrap wiring.
+
+    The services decision intentionally mirrors production `main.py`: when
+    registries are configured, the harness builds bus-backed services even for
+    tests that later drive Telegram-owned handlers. Higher-level tests are still
+    responsible for deciding whether they are asserting production-shape startup
+    or a narrower seam in isolation.
+    """
     reset_handler_test_runtime()
     global _TEST_RUNTIME, _TEST_APPLICATION
     import app.content_store as _cs
@@ -501,12 +518,29 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                     )
                 )
     test_bot = bot_instance if bot_instance is not None else MinimalFakeBot()
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
+    )
+    directory = build_control_plane_directory(authority_capabilities)
+    services = (
+        build_bus_bot_services(ControlPlaneBus(config.data_dir), directory)
+        if authority_capabilities
+        else build_noop_bot_services()
+    )
     _TEST_RUNTIME = build_telegram_runtime(
         config,
         provider,
         boot_id=boot_id,
         bot_instance=test_bot,
+        services=services,
     )
+    dispatcher = ChannelDispatcher()
+    dispatcher.register(TelegramChannelBootstrap(config, provider, services))
+    if config.agent_mode == "registry" and config.agent_registries:
+        register_registry_channels(config, config.agent_registries, dispatcher)
+    _TEST_RUNTIME.channel_dispatcher = dispatcher
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 

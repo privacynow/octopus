@@ -10,9 +10,18 @@ from app.session_state import DelegatedTask, PendingDelegation
 @dataclass(frozen=True)
 class DelegationTaskDraft:
     routed_task_id: str
+    authority_ref: str = ""
     title: str = ""
     target_agent_id: str = ""
     instructions: str = ""
+
+
+@dataclass(frozen=True)
+class DelegationTargetPreview:
+    routed_task_id: str
+    status: str
+    authority_ref: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,4 +39,3 @@ class DelegationUpdateOutcome:
     ready_to_resume: bool = False
     resume_prompt: str = ""
     completion_message: str = ""
-

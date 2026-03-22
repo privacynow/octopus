@@ -108,7 +108,15 @@ def test_cmd_status_renders_bot_registry_and_provider_auth(tmp_path: Path) -> No
         'BOT_DISPLAY_NAME="Example Bot"\n'
         "BOT_TELEGRAM_USERNAME=example_bot\n"
         "BOT_PROVIDER=claude\n"
-        "BOT_AGENT_MODE=standalone\n"
+        "BOT_AGENT_MODE=registry\n"
+        "BOT_AGENT_REGISTRY_1_ID=local\n"
+        "BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n"
+        "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-enroll\n"
+        "BOT_AGENT_REGISTRY_1_SCOPE=full\n"
+        "BOT_AGENT_REGISTRY_2_ID=analytics\n"
+        "BOT_AGENT_REGISTRY_2_URL=https://analytics.example.com\n"
+        "BOT_AGENT_REGISTRY_2_ENROLL_TOKEN=analytics-enroll\n"
+        "BOT_AGENT_REGISTRY_2_SCOPE=channel\n"
     )
     registry_dir = tmp_path / ".deploy" / "registry"
     registry_dir.mkdir(parents=True, exist_ok=True)
@@ -126,13 +134,19 @@ cd "{tmp_path}"
 bot_is_running() {{ return 0; }}
 docker_status_for_slug() {{ printf 'Up 3 hours\\n'; }}
 registry_is_running() {{ return 0; }}
+print_bot_registry_connection_lines() {{
+  printf '      local    full    connected    http://registry:8787\\n'
+  printf '      analytics    channel    degraded    https://analytics.example.com\\n'
+}}
 cmd_status
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "Example Bot (@example_bot)" in result.stdout
     assert "claude" in result.stdout
-    assert "standalone" in result.stdout
+    assert "registry" in result.stdout
     assert "running" in result.stdout
+    assert "local    full    connected    http://registry:8787" in result.stdout
+    assert "analytics    channel    degraded    https://analytics.example.com" in result.stdout
     assert "http://localhost:9001/ui" in result.stdout
     assert "claude     authenticated" in result.stdout
 
@@ -159,3 +173,36 @@ printf '7\\n' | manage_bot_menu
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "Bot: Example Bot (@example_bot) — claude, standalone, running" in result.stdout
+
+
+def test_cmd_doctor_preserves_per_connection_health_lines(tmp_path: Path) -> None:
+    bot_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    (bot_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_AGENT_MODE=registry\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+run_bot_doctor() {{
+  cat <<'EOF'
+2026-03-19 10:00:00 [INFO] internal startup noise
+Registries:
+  prod        full           connected    http://localhost:8787/ui
+  analytics   channel        degraded     https://analytics.example.com
+EOF
+}}
+cmd_doctor example-bot 2>doctor.txt
+cat doctor.txt
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "Registries:" in result.stdout
+    assert "prod        full           connected" in result.stdout
+    assert "analytics   channel        degraded" in result.stdout
+    assert "internal startup noise" not in result.stdout

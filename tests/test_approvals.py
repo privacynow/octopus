@@ -25,6 +25,14 @@ def test_preflight_prompt_codex_provider():
     assert "codex" in prompt
 
 
+def test_preflight_prompt_does_not_reference_specific_channel():
+    prompt = build_preflight_prompt("test request", "claude")
+
+    assert "Telegram" not in prompt
+    assert "telegram" not in prompt
+    assert "bot that runs claude CLI" in prompt
+
+
 def test_denial_html_contains_tool_info():
     html = format_denials_html([{"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}])
     assert "<b>Bash</b>" in html

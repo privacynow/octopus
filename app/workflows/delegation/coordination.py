@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from typing import Any
 
 from app.agents.types import RoutedTaskResult
 from app.formatting import trim_text
 from app.session_state import DelegatedTask, PendingDelegation
+from app.time_utils import age_seconds, utc_now
 from app.workflows.delegation.contracts import (
     DelegationApprovalPreparation,
     DelegationTaskDraft,
@@ -28,6 +31,19 @@ from app.workflows.delegation.machine import (
     normalize_child_status,
 )
 
+_DELEGATION_TIMEOUT_SUMMARY = "delegation timed out — no result received"
+_DELEGATION_APPROVAL_EXPIRED_SUMMARY = "delegation approval expired — no requests were sent"
+
+
+@dataclass(frozen=True)
+class DelegationExpirationOutcome:
+    status: str
+    pending: PendingDelegation | None = None
+    expired: bool = False
+    expired_kind: str = ""
+    ready_to_resume: bool = False
+    completion_message: str = ""
+
 
 def build_delegation_plan(
     conversation_ref: str,
@@ -44,6 +60,7 @@ def build_delegation_plan(
             tasks=tuple(
                 DelegationTaskDraft(
                     routed_task_id=str(task["routed_task_id"]),
+                    authority_ref=str(task.get("authority_ref", "")),
                     title=str(task.get("title", "")),
                     target_agent_id=str(task.get("target_agent_id", "")),
                     instructions=str(task.get("instructions", "")),
@@ -74,14 +91,87 @@ def prepare_delegation_approval(
     )
 
 
+def expire_stale_delegations(
+    pending: PendingDelegation | None,
+    *,
+    timeout_seconds: float,
+) -> DelegationExpirationOutcome:
+    if pending is None:
+        return DelegationExpirationOutcome(status="no_delegation", pending=None)
+
+    updated_pending = pending
+    expired_kind = ""
+    now = utc_now()
+    delegation_age = age_seconds(pending.created_at, now=now)
+    completed_at = now.isoformat()
+    expired = False
+    for task in list(updated_pending.tasks):
+        current_status = normalize_child_status(task.status)
+        if current_status in CHILD_TERMINAL_STATUSES:
+            continue
+        if current_status == "proposed":
+            if delegation_age is None or delegation_age <= timeout_seconds:
+                continue
+            summary = _DELEGATION_APPROVAL_EXPIRED_SUMMARY
+            expired_kind = expired_kind or "approval_expired"
+        else:
+            task_age = age_seconds(task.submitted_at or pending.created_at, now=now)
+            if task_age is None or task_age <= timeout_seconds:
+                continue
+            summary = _DELEGATION_TIMEOUT_SUMMARY
+            expired_kind = "result_timeout"
+        decision = decide_delegation_action(
+            DelegationSnapshot(pending=updated_pending),
+            UpdateTaskStatusAction(
+                routed_task_id=task.routed_task_id,
+                authority_ref=task.authority_ref,
+                status="failed",
+                summary=summary,
+                full_text=summary,
+                completed_at=completed_at,
+            ),
+        )
+        updated_pending = (
+            decision.effects.set_pending
+            if decision.effects.set_pending is not None
+            else decision.pending
+            if decision.pending is not None
+            else updated_pending
+        )
+        expired = expired or decision.matched
+
+    if not expired:
+        return DelegationExpirationOutcome(status="not_expired", pending=pending)
+
+    ready_to_resume = delegation_ready_to_resume(updated_pending)
+    return DelegationExpirationOutcome(
+        status="expired",
+        pending=updated_pending,
+        expired=True,
+        expired_kind=expired_kind or "result_timeout",
+        ready_to_resume=ready_to_resume,
+        completion_message=(
+            build_delegation_completion_message(updated_pending)
+            if ready_to_resume
+            else ""
+        ),
+    )
+
+
 def mark_task_submitted(
     pending: PendingDelegation | None,
     *,
     routed_task_id: str,
+    authority_ref: str = "",
 ) -> DelegationUpdateOutcome:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=pending),
-        UpdateTaskStatusAction(routed_task_id=routed_task_id, status="submitted"),
+        UpdateTaskStatusAction(
+            routed_task_id=routed_task_id,
+            authority_ref=authority_ref,
+            status="submitted",
+            submitted_at=time.time(),
+        ),
     )
     return DelegationUpdateOutcome(
         status=decision.status,
@@ -95,12 +185,14 @@ def apply_routed_result(
     pending: PendingDelegation | None,
     *,
     routed_task_id: str,
+    authority_ref: str = "",
     result: RoutedTaskResult,
 ) -> DelegationUpdateOutcome:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=pending),
         UpdateTaskStatusAction(
             routed_task_id=routed_task_id,
+            authority_ref=authority_ref,
             status=result.status or "completed",
             summary=result.summary,
             full_text=result.full_text,

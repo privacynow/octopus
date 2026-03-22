@@ -3,8 +3,11 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.normalization import (
+    TelegramAttachmentTooLarge,
     normalize_callback,
     normalize_command,
     normalize_message,
@@ -31,7 +34,31 @@ from tests.support.handler_support import (
     make_config,
     setup_globals,
     fresh_data_dir,
+    last_reply,
 )
+
+
+class _FakeDownloadedFile:
+    async def download_to_drive(self, *, custom_path: str) -> None:
+        Path(custom_path).write_text("downloaded", encoding="utf-8")
+
+
+class _FakePhotoSize:
+    def __init__(self, *, file_size: int) -> None:
+        self.file_size = file_size
+
+    async def get_file(self):
+        return _FakeDownloadedFile()
+
+
+class _FakeDocument:
+    def __init__(self, *, file_name: str, mime_type: str, file_size: int) -> None:
+        self.file_name = file_name
+        self.mime_type = mime_type
+        self.file_size = file_size
+
+    async def get_file(self):
+        return _FakeDownloadedFile()
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +254,24 @@ async def test_normalize_message_empty():
         assert result is None
 
 
+async def test_normalize_message_rejects_oversized_document_before_download():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "uploads").mkdir()
+        chat = FakeChat(100)
+        user = FakeUser(50)
+        msg = FakeMessage(chat=chat, text="see attachment")
+        msg.document = _FakeDocument(
+            file_name="huge.pdf",
+            mime_type="application/pdf",
+            file_size=(21 * 1024 * 1024),
+        )
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        with pytest.raises(TelegramAttachmentTooLarge, match="too large"):
+            await normalize_message(upd, FakeContext(), data_dir)
+
+
 async def test_normalize_message_no_user():
     """normalize_message returns None when update has no user."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -273,6 +318,7 @@ def test_inbound_message_skip_approval_round_trips():
             source="registry",
             conversation_ref="registry:conv-1",
             routed_task_id="task-42",
+            authority_ref="registry:default",
             skip_approval=True,
         )
     )
@@ -283,6 +329,7 @@ def test_inbound_message_skip_approval_round_trips():
     assert restored.source == "registry"
     assert restored.conversation_ref == "registry:conv-1"
     assert restored.routed_task_id == "task-42"
+    assert restored.authority_ref == "registry:default"
     assert restored.skip_approval is True
 
 
@@ -292,6 +339,7 @@ def test_inbound_message_skip_approval_defaults_false():
             user=InboundUser(id=telegram_actor_key(8), username="telegram"),
             conversation_key=telegram_conversation_key(99),
             text="normal message",
+            source="telegram",
         )
     )
 
@@ -357,6 +405,7 @@ def test_command_default_args_are_tuple():
         user=InboundUser(id=telegram_actor_key(1)),
         conversation_key=telegram_conversation_key(1),
         command="start",
+        source="telegram",
     )
     assert isinstance(cmd.args, tuple)
     assert cmd.args == ()
@@ -368,6 +417,7 @@ def test_message_default_attachments_are_tuple():
         user=InboundUser(id=telegram_actor_key(1)),
         conversation_key=telegram_conversation_key(1),
         text="hi",
+        source="telegram",
     )
     assert isinstance(msg.attachments, tuple)
     assert msg.attachments == ()
@@ -576,3 +626,27 @@ async def test_handle_message_caption_reaches_provider():
         await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
         assert "describe this image" in prov.run_calls[0]["prompt"]
+
+
+async def test_handle_message_rejects_oversized_document_with_user_feedback():
+    import app.channels.telegram.ingress as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="please read this")
+        msg.document = _FakeDocument(
+            file_name="huge.pdf",
+            mime_type="application/pdf",
+            file_size=(21 * 1024 * 1024),
+        )
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(upd, FakeContext())
+
+        assert len(prov.run_calls) == 0
+        assert "too large" in last_reply(msg).lower()

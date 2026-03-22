@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 import time
 
 from telegram.constants import ChatAction, ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError, TimedOut
 
-from app import user_messages as _msg
-from app.agents.bridge import publish_timeline_event
-from app.config import BotConfig
+from app.agents.types import RoutedTaskUpdate
 from app.formatting import trim_text
+from app import user_messages as _msg
+from app.config import BotConfig
 from app.channels.telegram.state import TelegramRuntime
 
 
 log = logging.getLogger(__name__)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class TelegramProgress:
@@ -44,6 +47,9 @@ class TelegramProgress:
             if "message is not modified" not in str(exc).lower():
                 log.debug("progress update failed: %s", exc)
                 return
+        except (TimedOut, NetworkError) as exc:
+            log.debug("progress update skipped (network): %s", exc)
+            return
         self.last_text = html_text
         self.last_update = now
         if cs and cs.is_set():
@@ -52,7 +58,7 @@ class TelegramProgress:
             try:
                 await self._timeline_callback(html_text, force=force)
             except Exception:
-                log.warning("Registry timeline callback failed", exc_info=True)
+                log.warning("Control-plane progress callback failed", exc_info=True)
 
 
 async def progress_timeline_callback(
@@ -64,13 +70,44 @@ async def progress_timeline_callback(
     force: bool = False,
 ) -> None:
     del force
-    await publish_timeline_event(
-        runtime.config,
+    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
         conversation_ref=conversation_ref,
         kind="progress",
         title="Progress",
         body=html_text,
         metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
+    )
+
+
+def _progress_summary(html_text: str, *, limit: int = 200) -> str:
+    clean = html.unescape(_HTML_TAG_RE.sub(" ", html_text or ""))
+    lines = [" ".join(line.split()) for line in clean.splitlines()]
+    lines = [line for line in lines if line]
+    body = lines[-1] if lines else " ".join(clean.split())
+    return trim_text(body, limit)
+
+
+async def routed_task_progress_callback(
+    runtime: TelegramRuntime,
+    routed_task_id: str,
+    authority_ref: str,
+    html_text: str,
+    *,
+    force: bool = False,
+) -> None:
+    del force
+    summary = _progress_summary(html_text)
+    if not summary:
+        return
+    await runtime.services.control_plane.task_routing.update_routed_task_status(
+        update=RoutedTaskUpdate(
+            routed_task_id=routed_task_id,
+            # Terminal routed-task state is owned by report_routed_task_result().
+            # Progress callbacks only publish in-flight summaries.
+            status="running",
+            summary=summary,
+        ),
+        authority_ref=authority_ref,
     )
 
 

@@ -550,6 +550,30 @@ def build_system_prompt(role: str, skill_names: list[str]) -> str:
     return "\n".join(parts)
 
 
+def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
+    """Compose a sanitized preflight prompt without raw skill instructions."""
+    parts: list[str] = []
+
+    if role:
+        stripped = role.strip()
+        lower = stripped.lower()
+        is_sentence = any(lower.startswith(p) for p in ("you are", "you're", "act as", "as a"))
+        if "\n" in stripped or is_sentence:
+            parts.append(stripped + "\n")
+        else:
+            parts.append(f"You are a {stripped}.\n")
+
+    catalog = load_catalog()
+    labels: list[str] = []
+    for name in skill_names:
+        meta = catalog.get(name)
+        labels.append(meta.display_name if meta else name)
+    if labels:
+        parts.append(f"Active runtime skills: {', '.join(labels)}.\n")
+
+    return "\n".join(parts) if parts else ""
+
+
 PROMPT_SIZE_WARNING_THRESHOLD = 8000
 
 
@@ -649,7 +673,7 @@ def build_preflight_context(
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return PreflightContext(
         extra_dirs=extra_dirs,
-        system_prompt=build_system_prompt(role, active_skills),
+        system_prompt=build_preflight_system_prompt(role, active_skills),
         capability_summary=cap_summary,
         working_dir=working_dir,
         file_policy=file_policy,

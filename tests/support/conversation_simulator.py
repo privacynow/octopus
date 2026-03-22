@@ -11,6 +11,7 @@ from typing import Any
 import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.agents.bridge import build_registry_message_delivery
+from app.channels.registry.refs import parse_registry_ref
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -75,11 +76,16 @@ class ConversationSimulator:
         skip_approval: bool = False,
     ) -> dict[str, Any]:
         """Admit a registry-channel message through the same durable worker boundary."""
+        parsed_registry_ref = parse_registry_ref(conversation_ref)
+        if parsed_registry_ref is None:
+            raise ValueError(f"Registry simulator requires a qualified registry ref, got {conversation_ref!r}")
+        registry_id, _kind, _external_id = parsed_registry_ref
         chat_id, user_id, update_id, payload = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,
             actor_ref=actor_ref,
             delivery_id=f"sim-registry:{uuid.uuid4().hex}",
+            registry_id=registry_id,
             skip_approval=skip_approval,
         )
         status, item_id = work_queue.record_and_admit_message(

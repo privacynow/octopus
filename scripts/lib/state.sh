@@ -30,7 +30,32 @@ bot_telegram_username() {
 }
 
 bot_registry_url() {
-  read_bot_env_value BOT_AGENT_REGISTRY_URL "$(bot_env_file "$1")"
+  local registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    printf '%s\n' "$registry_url"
+    return 0
+  done < <(list_registry_connection_records "$(bot_env_file "$1")")
+}
+
+bot_registry_scope() {
+  local registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    printf '%s\n' "$registry_scope"
+    return 0
+  done < <(list_registry_connection_records "$(bot_env_file "$1")")
+}
+
+bot_registry_connection_count() {
+  local slug="$1" count=0 registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ -n "$registry_id" ] || continue
+    count=$((count + 1))
+  done < <(list_registry_connection_records "$(bot_env_file "$slug")")
+  printf '%s\n' "$count"
+}
+
+bot_registry_connection_records() {
+  list_registry_connection_records "$(bot_env_file "$1")"
 }
 
 bot_is_standalone() {

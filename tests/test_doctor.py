@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 
 from app import runtime_backend, work_queue
-from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.agents.state import save_registry_connection_state
+from app.agents.types import RegistryConnectionState
 from app.runtime_health import (
     WorkerHeartbeat,
     collect_runtime_health_report,
@@ -12,7 +13,7 @@ from app.runtime_health import (
 )
 from app.storage import ensure_data_dirs
 from app.storage import default_session, save_session
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
@@ -33,14 +34,14 @@ async def test_doctor_warns_when_registry_degraded(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
         working_dir=tmp_path,
     )
     provider = FakeProvider()
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             connectivity_state="degraded",
             last_error="registry_timeout",
             last_error_detail="Registry poll timed out.",
@@ -50,7 +51,7 @@ async def test_doctor_warns_when_registry_degraded(tmp_path: Path):
     report = await _collect_health(config, provider)
 
     warnings = _diagnostic_messages(report, "warning")
-    assert any("Registry connectivity is degraded" in warning for warning in warnings)
+    assert any("connectivity is degraded" in warning for warning in warnings)
     assert any("Registry poll timed out." in warning for warning in warnings)
 
 
@@ -58,28 +59,27 @@ async def test_doctor_warns_when_registry_not_enrolled(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
 
     report = await _collect_health(config, provider)
 
-    assert any("Registry enrollment has not completed" in warning for warning in _diagnostic_messages(report, "warning"))
+    assert any("enrollment has not completed" in warning for warning in _diagnostic_messages(report, "warning"))
 
 
 async def test_doctor_clean_when_registry_connected_and_enrolled(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
         working_dir=tmp_path,
     )
     provider = FakeProvider()
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             agent_id="abc",
             agent_token="secret",
             connectivity_state="connected",
@@ -99,14 +99,14 @@ async def test_doctor_warns_stale_last_contact(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
     stale_contact = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             agent_id="abc",
             agent_token="secret",
             connectivity_state="connected",
@@ -123,14 +123,14 @@ async def test_doctor_warns_when_registry_connected_without_agent_id(tmp_path: P
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
         working_dir=tmp_path,
     )
     provider = FakeProvider()
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             agent_id="",
             agent_token="secret",
             connectivity_state="connected",
@@ -140,20 +140,20 @@ async def test_doctor_warns_when_registry_connected_without_agent_id(tmp_path: P
 
     report = await _collect_health(config, provider)
 
-    assert any("registry state may be corrupt" in warning for warning in _diagnostic_messages(report, "warning"))
+    assert any("state may be corrupt" in warning for warning in _diagnostic_messages(report, "warning"))
 
 
 async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             agent_id="abc",
             agent_token="secret",
             connectivity_state="connected",
@@ -194,8 +194,7 @@ async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: P
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry:8787",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
     session = default_session(provider.name, provider.new_provider_state(), "off")
@@ -232,9 +231,10 @@ async def test_doctor_standalone_mode_no_registry_warnings_if_mode_is_standalone
         agent_mode="standalone",
     )
     provider = FakeProvider()
-    save_agent_runtime_state(
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(
+        RegistryConnectionState(
+            registry_id="default",
             connectivity_state="degraded",
             last_error="registry_timeout",
             last_error_detail="Registry poll timed out.",

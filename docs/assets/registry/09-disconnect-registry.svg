@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="610" viewBox="0 0 1200 610" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
   <title id="title">Disconnect a bot from registry mode</title>
-  <desc id="desc">Terminal panel showing a registry-connected bot being switched back to standalone mode while preserving data.</desc>
+  <desc id="desc">Terminal panel showing a single-connection registry bot being returned to standalone mode while preserving bot data.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -20,27 +20,32 @@
     </filter>
   </defs>
   <g transform="translate(28 24)">
-    <rect class="panel" x="0" y="0" width="1144" height="553" rx="10"/>
+    <rect class="panel" x="0" y="0" width="1144" height="662" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
     <text class="label" x="102" y="34">disconnect a bot from registry mode</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-disconnect-registry">
       <text class="line" xml:space="preserve">
         <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
-        <tspan x="34" dy="29">What would you like to do?</tspan>
-        <tspan x="34" dy="29">  1. Add a bot</tspan>
-        <tspan x="34" dy="29">  2. Manage bots</tspan>
-        <tspan x="34" dy="29">  3. Connect bot to registry</tspan>
-        <tspan x="34" dy="29">  4. Advanced</tspan>
-        <tspan x="34" dy="29">Choose an option: 2</tspan>
-        <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">Bot: Example Bot (@example_bot) — claude, registry, running</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. Switch to remote registry</tspan>
-        <tspan x="34" dy="29">  2. Disconnect from registry</tspan>
-        <tspan x="34" dy="29">  3. Back</tspan>
-        <tspan x="34" dy="29">Choose an option: 2</tspan>
-        <tspan x="34" dy="29">Disconnect example-bot from registry? Bot data is preserved. [y/N] y</tspan>
+        <tspan x="34" dy="29">  1. View logs</tspan>
+        <tspan x="34" dy="29">  2. Restart</tspan>
+        <tspan x="34" dy="29">  3. Stop</tspan>
+        <tspan x="34" dy="29">  4. Health check</tspan>
+        <tspan x="34" dy="29">  5. Edit settings</tspan>
+        <tspan x="34" dy="29">  6. Connect to registry</tspan>
+        <tspan x="34" dy="29">  7. Back</tspan>
+        <tspan x="34" dy="29">Choose an option: 6</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Bot: Example Bot (@example_bot)</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">  1. Add registry connection</tspan>
+        <tspan x="34" dy="29">  2. Switch to remote registry</tspan>
+        <tspan x="34" dy="29">  3. Disconnect from registry</tspan>
+        <tspan x="34" dy="29">  4. Back</tspan>
+        <tspan x="34" dy="29">Choose an option: 3</tspan>
+        <tspan x="34" dy="29">Disconnect registry connection 'local' from example-bot? Bot data is preserved. [y/N] y</tspan>
         <tspan x="34" dy="29">Bot example-bot is now running standalone.</tspan>
       </text>
     </g>

@@ -589,7 +589,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
       const csrfToken = document.querySelector('meta[name="registry-csrf-token"]')?.content || "";
       const EMPTY_STATES = {{
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./octopus</code>",
-        conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
+        conversations: "No conversations yet. Send a message to your bot to start.",
         tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
         runtimeSkills: "No runtime skills matched the current filter.",
         capabilities: "No capabilities declared yet. Connect bots with advertised capabilities and they will appear here.",
@@ -646,7 +646,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
       function formatTime(value) {{
         if (!value) return "";
         const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return value;
+        if (Number.isNaN(date.getTime())) return "(invalid date)";
         return date.toLocaleString();
       }}
 
@@ -691,6 +691,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           submitted: "badge-pending",
           failed: "badge-failed",
           partialfailed: "badge-failed",
+          timedout: "badge-failed",
           cancelled: "badge-failed",
           running: "badge-running",
           open: "badge-open",
@@ -698,8 +699,50 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           completed: "badge-completed",
           healthy: "badge-connected",
           unhealthy: "badge-failed",
+          started: "badge-running",
+          progress: "badge-running",
+          channelinput: "badge-open",
+          channelaction: "badge-pending",
+          control: "badge-cancelling",
+          usage: "badge-standalone",
+          delegationproposed: "badge-pending",
+          delegationready: "badge-pending",
+          delegatedresult: "badge-completed",
+          botmessage: "badge-open",
+          recoverynotice: "badge-pending",
+          routedtask: "badge-pending",
+          routedresult: "badge-completed",
+          result: "badge-completed",
+          approval: "badge-pending",
         }};
         return map[s] || "";
+      }}
+
+      function diagnosticClass(level) {{
+        const normalized = String(level || "info").toLowerCase();
+        const map = {{
+          info: "diag-info",
+          warning: "diag-warning",
+          error: "diag-error",
+        }};
+        return map[normalized] || map.info;
+      }}
+
+      function statusLabel(status) {{
+        if (!status) return "Open";
+        const value = String(status);
+        const labels = {{
+          partialfailed: "Delivery failed",
+          timed_out: "Timed out",
+        }};
+        return labels[value] || value.replace(/_/g, " ").replace(/\\b\\w/g, c => c.toUpperCase());
+      }}
+
+      function renderSearchSnippet(snippet) {{
+        const escaped = escapeHtml(snippet || "");
+        return escaped
+          .replace(/&lt;b&gt;/g, "<b>")
+          .replace(/&lt;\\/b&gt;/g, "</b>");
       }}
 
       function ensureEditorHost(textarea) {{
@@ -844,7 +887,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
 
       function stateBadge(item) {{
         const state = item?.connectivity_state || item?.status || "unknown";
-        return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(state)}}</span>`;
+        return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(statusLabel(state))}}</span>`;
       }}
 
       function renderRuntimeHealthSummary(summary) {{
@@ -852,7 +895,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         const oldestClaim = formatAgeSeconds(summary.oldest_claim_age_seconds);
         return `
           <div class="meta meta-row">
-            <span class="badge ${{getBadgeClass(summary.status || "healthy")}}">${{escapeHtml(summary.status || "healthy")}}</span>
+            <span class="badge ${{getBadgeClass(summary.status || "healthy")}}">${{escapeHtml(statusLabel(summary.status || "healthy"))}}</span>
             <span>${{escapeHtml(String(summary.healthy_worker_count || 0))}} healthy</span>
             <span>${{escapeHtml(String(summary.stale_worker_count || 0))}} stale</span>
             <span>${{escapeHtml(String(summary.fresh_queued_count || 0))}} queued</span>
@@ -874,7 +917,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           return '<div class="meta">No mirrored diagnostics.</div>';
         }}
         return diagnostics.map(item => `
-          <div class="meta diag-${{escapeHtml(item.level || "info")}}">
+          <div class="meta ${{diagnosticClass(item.level)}}">
             <strong>${{escapeHtml((item.level || "info").toUpperCase())}}:</strong>
             ${{escapeHtml(item.message || "")}}
           </div>
@@ -961,12 +1004,12 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
             <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(item.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(statusLabel(item.status || "open"))}}</span>
               <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
             </div>
             ${{
               item.search_snippet
-                ? `<div class="meta">${{escapeHtml(item.search_snippet).replace(/&lt;b&gt;/g, "<b>").replace(/&lt;\\/b&gt;/g, "</b>")}}</div>`
+                ? `<div class="meta">${{renderSearchSnippet(item.search_snippet)}}</div>`
                 : ""
             }}
           </button>
@@ -980,7 +1023,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         var now = Date.now();
         var cutoffs = {{ today: 86400000, '7d': 7 * 86400000, '30d': 30 * 86400000 }};
         var filtered = conversations.filter(function(c) {{
-          var normalizedStatus = (c.status || "") === "completed" ? "done" : (c.status || "");
+          var normalizedStatus = (c.status || "") === "completed"
+            ? "done"
+            : ((c.status || "") === "partialfailed" ? "failed" : (c.status || ""));
           if (status && normalizedStatus !== status) return false;
           if (dateRange && cutoffs[dateRange]) {{
             var t = new Date(c.updated_at).getTime();
@@ -1104,7 +1149,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           <button type="button" class="item item-button" data-task-id="${{escapeHtml(item.routed_task_id)}}">
             <strong>${{escapeHtml(item.title)}}</strong>
             <div class="meta">${{escapeHtml(item.origin_display_name || item.origin_agent_id)}} → ${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
-            <div class="meta meta-row"><span class="badge ${{getBadgeClass(item.status || "queued")}}">${{escapeHtml(item.status || "queued")}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
+            <div class="meta meta-row"><span class="badge ${{getBadgeClass(item.status || "queued")}}">${{escapeHtml(statusLabel(item.status || "queued"))}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
           </button>
         `, "tasks");
         document.querySelectorAll("[data-task-id]").forEach(node => {{
@@ -1739,7 +1784,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
           <div class="detail-card">
             <strong>${{escapeHtml(task.title || task.routed_task_id)}}</strong>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(task.status || "queued")}}">${{escapeHtml(task.status || "queued")}}</span>
+              <span class="badge ${{getBadgeClass(task.status || "queued")}}">${{escapeHtml(statusLabel(task.status || "queued"))}}</span>
               <span>${{escapeHtml(task.origin_display_name || task.origin_agent_id)}} → ${{escapeHtml(task.target_display_name || task.target_agent_id)}}</span>
             </div>
           </div>
@@ -1861,7 +1906,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
             <strong>${{escapeHtml(conversation.title || conversation.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(conversation.target_display_name || conversation.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(conversation.status || "open")}}">${{escapeHtml(conversation.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(conversation.status || "open")}}">${{escapeHtml(statusLabel(conversation.status || "open"))}}</span>
               <span>${{escapeHtml(String(conversation.timeline_event_count ?? events.length))}} event(s)</span>
             </div>
             <div class="meta">Created ${{escapeHtml(formatTime(conversation.created_at))}}</div>

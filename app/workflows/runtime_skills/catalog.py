@@ -14,7 +14,7 @@ from app.skill_types import SkillRequirement
 
 
 class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
-    """Canonical catalog read operations shared by Telegram and registry."""
+    """Canonical catalog read operations shared across channel entrypoints."""
 
     def _catalog(self):
         return get_skill_catalog_service()

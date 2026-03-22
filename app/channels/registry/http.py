@@ -13,9 +13,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app.channels.registry.auth import (
+    clear_auth_attempt_limit,
     clear_ui_session,
     configure_session_middleware,
     current_ui_csrf_token,
+    enforce_auth_attempt_limit,
     load_settings,
     mark_ui_session_authenticated,
     require_agent_token,
@@ -58,7 +60,12 @@ from app.channels.registry.ingress import (
     update_catalog_skill,
 )
 from app.registry_service.backend import get_registry_store
-from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
+from app.registry_service.store_base import (
+    AbstractRegistryStore,
+    CapabilityDisabledError,
+    RegistryScopeError,
+    validated_routed_task_request,
+)
 from app.session_state import session_to_dict
 
 _REGISTRY_UI_SECURITY_HEADERS = {
@@ -146,11 +153,19 @@ async def _registry_lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Telegram Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
+app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
 
 
 def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
+    if isinstance(exc, RegistryScopeError):
+        return HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "registry_scope_not_permitted",
+                "message": str(exc),
+            },
+        )
     detail = str(exc).strip().lower()
     if detail == "unknown agent token":
         return HTTPException(status_code=401, detail="Invalid or expired agent token.")
@@ -158,18 +173,26 @@ def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
 
 
 @app.get("/healthz")
-def healthz(store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
-    return {"ok": True, "bots": len(store.list_agents())}
+def healthz() -> dict[str, Any]:
+    return {"ok": True}
 
 
 @app.post("/v1/agents/enroll")
-def enroll(payload: dict[str, Any], store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
+def enroll(
+    request: Request,
+    payload: dict[str, Any],
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
     settings = load_settings()
+    enforce_auth_attempt_limit(request, "registry-enroll")
     enroll_tok = payload.get("enrollment_token") or ""
     if not hmac.compare_digest(enroll_tok, settings.enroll_token):
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
-    agent_card = payload.get("agent_card") or {}
-    return store.enroll(agent_card)
+    clear_auth_attempt_limit(request, "registry-enroll")
+    try:
+        return store.enroll(payload.get("agent_card"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/register")
@@ -182,6 +205,8 @@ def register(
         return store.register(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/heartbeat")
@@ -194,6 +219,8 @@ def heartbeat(
         return store.heartbeat(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/timeline")
@@ -203,9 +230,11 @@ def publish_timeline(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        return store.publish_timeline(agent_token, payload.get("events", []))
+        return store.publish_timeline(agent_token, payload.get("events"))
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/conversations/bind")
@@ -218,6 +247,8 @@ def bind_conversation(
         return store.bind_conversation(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/discovery/search")
@@ -227,11 +258,15 @@ def search_agents(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        # Auth check only; search itself does not need the token contents.
-        store.heartbeat(agent_token, {"connectivity_state": "connected"})
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
-    return {"agents": store.search_agents(payload)}
+    try:
+        agents = store.search_agents(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store.heartbeat(agent_token, {"connectivity_state": "connected"})
+    return {"agents": agents}
 
 
 @app.post("/v1/agents/routed-tasks")
@@ -241,12 +276,16 @@ def create_routed_task(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
+        validated_request = validated_routed_task_request(payload)
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
-        return store.create_routed_task(payload)
+        return store.create_routed_task(validated_request)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except CapabilityDisabledError as exc:
         raise HTTPException(status_code=409, detail="capability_disabled") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/agents/poll")
@@ -273,11 +312,13 @@ def ack(
     try:
         return store.ack(
             agent_token,
-            delivery_ids=list(payload.get("delivery_ids", [])),
-            classification=payload.get("classification", "accepted"),
+            delivery_ids=payload.get("delivery_ids"),
+            classification=payload.get("classification"),
         )
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/status")
@@ -291,6 +332,8 @@ def routed_task_status(
         return store.update_routed_task_status(agent_token, routed_task_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/result")
@@ -304,6 +347,8 @@ def routed_task_result(
         return store.update_routed_task_result(agent_token, routed_task_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
 
@@ -672,10 +717,12 @@ async def ui_login(request: Request, password: str = Form(default="")):
     settings = load_settings()
     if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
+    enforce_auth_attempt_limit(request, "registry-ui-login")
     if not ui_password_matches(password, settings=settings):
         return _secure_html_response(
             ui.render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
         )
+    clear_auth_attempt_limit(request, "registry-ui-login")
     mark_ui_session_authenticated(request)
     return RedirectResponse("/ui", status_code=303)
 
@@ -903,7 +950,12 @@ def ui_add_conversation_message(
     _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return store.add_conversation_message(conversation_id, payload.get("text", ""))
+    try:
+        return store.add_conversation_message(conversation_id, payload.get("text", ""))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/v1/ui/conversations/{conversation_id}/actions")
@@ -913,11 +965,16 @@ def ui_add_conversation_action(
     _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return store.add_conversation_action(
-        conversation_id,
-        payload.get("action", ""),
-        payload.get("payload", {}),
-    )
+    try:
+        return store.add_conversation_action(
+            conversation_id,
+            payload.get("action", ""),
+            payload.get("payload", {}),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/v1/ui/tasks")

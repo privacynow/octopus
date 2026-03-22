@@ -13,6 +13,7 @@ def test_delegated_task_instructions_round_trips():
             tasks=[
                 DelegatedTask(
                     routed_task_id="task-1",
+                    authority_ref="registry:prod",
                     title="Implement feature",
                     target_agent_id="developer-1",
                     instructions="Add the endpoint and tests.",
@@ -20,10 +21,12 @@ def test_delegated_task_instructions_round_trips():
                 ),
                 DelegatedTask(
                     routed_task_id="task-2",
+                    authority_ref="registry:ops",
                     title="Review feature",
                     target_agent_id="reviewer-1",
                     instructions="Review for correctness and risk.",
                     status="submitted",
+                    submitted_at=123.45,
                 ),
             ],
         ),
@@ -37,6 +40,11 @@ def test_delegated_task_instructions_round_trips():
         "Add the endpoint and tests.",
         "Review for correctness and risk.",
     ]
+    assert [task.authority_ref for task in restored.pending_delegation.tasks] == [
+        "registry:prod",
+        "registry:ops",
+    ]
+    assert restored.pending_delegation.tasks[1].submitted_at == 123.45
 
 
 def test_pending_delegation_status_round_trips():
@@ -64,3 +72,26 @@ def test_pending_delegation_status_round_trips():
 
     assert restored.pending_delegation is not None
     assert restored.pending_delegation.status == "partial_failed"
+
+
+def test_session_from_dict_does_not_rewrite_registry_id_to_authority_ref() -> None:
+    restored = session_from_dict(
+        {
+            "provider": "claude",
+            "provider_state": {},
+            "approval_mode": "off",
+            "pending_delegation": {
+                "conversation_ref": "registry:conv-1",
+                "tasks": [
+                    {
+                        "routed_task_id": "task-1",
+                        "registry_id": "prod",
+                        "status": "submitted",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert restored.pending_delegation is not None
+    assert restored.pending_delegation.tasks[0].authority_ref == ""

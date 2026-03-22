@@ -45,8 +45,8 @@ prompt_with_default() {{ printf 'claude\\n'; }}
 ensure_provider_image_ready() {{ :; }}
 ensure_provider_auth_ready() {{ :; }}
 ensure_network() {{ :; }}
-run_bot_doctor_until_ready() {{ return 0; }}
-start_bot_until_running() {{ return 0; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
 printf '123456:real-token\\n\\n' | first_bot_flow quick
 """
     result = _run_bash(script, cwd=tmp_path)
@@ -69,6 +69,7 @@ printf '123456:real-token\\n\\n' | first_bot_flow quick
     mode = stat.S_IMODE(env_file.stat().st_mode)
     assert mode == 0o600
     assert "This token belongs to Example Bot (@example_bot)." in result.stdout
+    assert result.stdout.index("doctor:example-bot") < result.stdout.index("start:example-bot")
     assert "Bot is running!" in result.stdout
     assert "Bot name" not in result.stdout + result.stderr
 

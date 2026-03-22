@@ -246,11 +246,16 @@ async def test_doctor_standalone_mode_no_registry_warnings_if_mode_is_standalone
     assert not any("Registry" in warning for warning in _diagnostic_messages(report, "warning"))
 
 
-async def test_doctor_skips_provider_runtime_health_for_webhook_role(tmp_path: Path):
+async def test_doctor_skips_provider_health_probes_for_webhook_role(tmp_path: Path):
     class RuntimeFailProvider(FakeProvider):
         def __init__(self) -> None:
             super().__init__("claude")
+            self.auth_checks = 0
             self.runtime_checks = 0
+
+        async def check_auth_health(self):
+            self.auth_checks += 1
+            return ["provider auth unavailable"]
 
         async def check_runtime_health(self):
             self.runtime_checks += 1
@@ -267,7 +272,9 @@ async def test_doctor_skips_provider_runtime_health_for_webhook_role(tmp_path: P
 
     report = await _collect_health(config, provider)
 
+    assert provider.auth_checks == 0
     assert provider.runtime_checks == 0
+    assert not any("provider auth unavailable" in err for err in _diagnostic_messages(report, "error"))
     assert not any("provider runtime unavailable" in err for err in _diagnostic_messages(report, "error"))
 
 

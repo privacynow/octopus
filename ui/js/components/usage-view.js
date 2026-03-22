@@ -12,24 +12,30 @@ function renderUsageView(container) {
 
     API.getUsage().then(usage => {
         const el = document.getElementById('usage-content');
-        if (!usage || usage.length === 0) {
+        const rows = Array.isArray(usage)
+            ? usage
+            : (usage && usage.by_conversation) ? usage.by_conversation : [];
+        if (!rows || rows.length === 0) {
             el.innerHTML = '<div class="empty-state">No usage data yet</div>';
             return;
         }
         el.innerHTML = `
             <table class="data-table">
                 <thead><tr>
-                    <th>Date</th><th>Conversation</th><th>Tokens</th><th>Cost</th>
+                    <th>Conversation</th><th>Prompt tok</th><th>Completion tok</th><th>Cost</th>
                 </tr></thead>
                 <tbody>
-                    ${usage.map(u => `
+                    ${rows.map(u => {
+                        const pt = u.prompt_tokens || 0;
+                        const ct = u.completion_tokens || 0;
+                        return `
                         <tr>
-                            <td>${esc(u.date || u.day || '')}</td>
-                            <td>${esc(u.conversation_id || u.title || 'aggregate')}</td>
-                            <td>${(u.total_tokens || 0).toLocaleString()}</td>
+                            <td>${esc(u.conversation_id || u.title || '')}</td>
+                            <td>${pt.toLocaleString()}</td>
+                            <td>${ct.toLocaleString()}</td>
                             <td>$${(u.cost_usd || 0).toFixed(4)}</td>
                         </tr>
-                    `).join('')}
+                    `;}).join('')}
                 </tbody>
             </table>
         `;

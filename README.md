@@ -186,6 +186,16 @@ The most common operator commands:
 If more than one bot exists, Octopus asks which bot to use only when the choice
 is ambiguous.
 
+### Registry Subcommands
+
+```bash
+./octopus registry start     # start (or create) the local registry
+./octopus registry stop      # stop the local registry
+./octopus registry logs      # follow registry logs
+./octopus registry status    # show registry and bot connection status
+./octopus registry connect   # connect bot(s) to local registry
+```
+
 ## Shared Workspaces
 
 Multiple bots on the same machine can share a project directory so they
@@ -270,21 +280,18 @@ For a local registry, Octopus prints a browser URL like:
 http://localhost:8787/ui
 ```
 
-Log in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`.
+Log in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`. The UI uses
+session cookies and CSRF protection for state-changing requests.
 
-Typical operator uses:
+The UI is a vanilla HTML/JS/CSS single-page application with real-time updates
+via WebSocket. Components include:
 
-- inspect connected bots, connectivity, capacity, and runtime health
-- open bot, routed-task, and conversation detail surfaces from one shell
-- browse conversations, timelines, exports, and follow-up actions
-- follow routed-task and delegated-result state
-- manage runtime skills, provider guidance, and capability kill switches
-
-![Registry UI screenshot](registry-ui-screenshot.png)
-
-The registry guide includes the full dashboard plus focused bot detail,
-routed-task detail, conversation timeline, runtime-skills, capabilities, and
-provider-guidance screens regenerated from the current UI shell.
+- agent directory and agent detail
+- conversation list and detail with a chat-like timeline
+- routed-task board
+- capabilities manager
+- skills catalog
+- usage overview
 
 ## Storage and Runtime Notes
 
@@ -298,6 +305,10 @@ provider-guidance screens regenerated from the current UI shell.
   to Postgres with `REGISTRY_DATABASE_URL`
 - startup validates Postgres schema health before boot when
   `BOT_DATABASE_URL` is set
+- `BOT_REGISTRY_PUBLISH_LEVEL` controls what events bots publish to the
+  registry. Three levels: `minimal` (messages + errors), `standard` (+
+  approvals, delegation, provider summary), `full` (+ provider requests, tool
+  execution, file changes). Default: `standard`
 
 ## Security Notes
 
@@ -368,5 +379,3 @@ If the registry UI is not updating:
 - [docs/registry-guide.md](docs/registry-guide.md): step-by-step local and
   remote registry guide with current dashboard, detail, and management screens
   plus the CLI SVG flows
-- [status.md](status.md): rollout history and the latest recorded full-suite
-  verification status

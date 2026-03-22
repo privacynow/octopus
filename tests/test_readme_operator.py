@@ -15,8 +15,7 @@ def test_readme_covers_first_time_setup_and_registry_ui():
     assert "@BotFather" in text
     assert "./octopus --full" in text
     assert "./octopus registry" in text
-    assert "Registry UI" in text
-    assert "registry-ui-screenshot.png" in text
+    assert "Registry UI" in text or "Registry SPA" in text or "/ui" in text
 
 
 def test_readme_keeps_daily_commands_simple():

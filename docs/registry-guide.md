@@ -1,339 +1,228 @@
-# Registry Guide
+# Registry guide
 
-This guide covers the registry lifecycle exposed by `./octopus` and the
-Registry UI.
+This guide explains **why** you use the registry, **how** `./octopus` fits in, and **how to use the Registry web UI** screen by screen. Terminal flows use the existing SVG assets under `docs/assets/registry/`; **browser** sections use screenshots captured from the current UI (see [Regenerating UI screenshots](#regenerating-ui-screenshots)).
+
+## Contents
+
+1. [When to use registry mode](#when-to-use-registry-mode)
+2. [Concepts (read this once)](#concepts-read-this-once)
+3. [CLI: lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
+4. [Browser: sign in](#browser-sign-in)
+5. [Browser: every screen](#browser-every-screen)
+6. [What the UI does *not* do yet](#what-the-ui-does-not-do-yet)
+7. [Verification & troubleshooting](#verification--troubleshooting)
+8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
+
+---
+
+## When to use registry mode
 
 Use registry mode when you want:
 
-- a local or remote browser UI for connected bots
-- routed-task coordination and shared agent discovery
-- one registry shared by multiple bots in this deployment
-- one bot connected to multiple registries with different scopes
+- A **browser UI** to inspect enrolled bots, conversations, and coordination state.
+- **Routed-task** coordination and **agent discovery** (depending on registry scope).
+- **One registry** shared by several bots, or **one bot** connected to **multiple** registries with different scopes.
 
-Text-mode flows are shown as styled terminal panels. Browser screenshots below
-are regenerated from the current Registry UI shell with seeded current-code
-data so the documented surfaces match the runtime.
+---
 
-## Registry Modes
+## Concepts (read this once)
 
-Local registry:
+| Term | Meaning |
+|------|---------|
+| **Registry service** | HTTP API + optional Web UI (`/ui`). Bots call `/v1/…` with agent tokens; operators use the browser with `REGISTRY_UI_TOKEN`. |
+| **Registry scope** | What a *bot* may do on that connection: `full` (conversations + coordination), `channel` (conversation surfaces only), `coordination` (tasks/discovery/health, no conversation channel). |
+| **Operator** | A human using the **Registry UI** (password = `REGISTRY_UI_TOKEN`). |
+| **Agent token** | Issued at enroll time; bots use `Authorization: Bearer …` on `/v1/`. |
+| **Conversation** | Registry row keyed by `(target_agent_id, origin_channel, external_conversation_ref)`. Events live in the `events` table. |
+| **Routed task** | Delegation record from an **origin** bot to a **target** bot, tied to a **parent conversation**. |
 
-- started and managed from `./octopus registry`
-- browser UI at `http://localhost:<port>/ui`
-- bots connect inside Docker with `http://registry:8787`
+**URLs**
 
-Remote registry:
+- Operator browser (local): `http://localhost:<port>/ui` (port from `./octopus registry` or `.deploy/registry/.env`).
+- Bots inside Docker: `http://registry:8787` (same API, no `/ui` required).
 
-- uses your hosted `https://...` registry URL
-- no local browser URL is involved
-- requires a remote enrollment token
+---
 
-## Registry Scopes
+## CLI: lifecycle with `./octopus`
 
-Octopus prompts for a scope whenever you add or switch a registry connection.
+The following workflows are illustrated with **terminal diagrams** (SVG). They are unchanged in spirit from earlier docs; use them for **add / switch / disconnect** registry connections.
 
-- `full`
-  - conversation + coordination surfaces
-  - local UI/timelines plus routed tasks
-- `channel`
-  - conversation/UI/timeline surfaces only
-  - no routed-task intake on that connection
-- `coordination`
-  - routed tasks, agent discovery, and health only
-  - no conversation-channel surface on that connection
+| Step | Topic | Asset |
+|------|--------|--------|
+| Check status | `./octopus registry` menu | [`01-local-registry-states.svg`](assets/registry/01-local-registry-states.svg) |
+| Start local registry | Option `1` | [`02-start-local-registry.svg`](assets/registry/02-start-local-registry.svg) |
+| Connect existing bot | Manage bots | [`04-connect-local.svg`](assets/registry/04-connect-local.svg) |
+| New bot in registry mode | First-run prompts | [`05-add-bot-local.svg`](assets/registry/05-add-bot-local.svg) |
+| Remote registry | HTTPS + enrollment token | [`06-connect-remote.svg`](assets/registry/06-connect-remote.svg) |
+| Multiple connections | Add/remove | [`10-manage-registry-connections.svg`](assets/registry/10-manage-registry-connections.svg) |
+| Switch local ↔ remote | Requires exactly one connection | [`07-switch-local-remote.svg`](assets/registry/07-switch-local-remote.svg), [`08-switch-remote-local.svg`](assets/registry/08-switch-remote-local.svg) |
+| Disconnect | Back to standalone or trim connections | [`09-disconnect-registry.svg`](assets/registry/09-disconnect-registry.svg) |
+| Logs / stop | Maintenance menu | [`11-registry-maintenance.svg`](assets/registry/11-registry-maintenance.svg) |
 
-## Workflow 1: Check Local Registry Status
+After startup, note:
 
-Run:
+- **Browser URL** printed by Octopus.
+- **`REGISTRY_UI_TOKEN`** in `.deploy/registry/.env` (this is the UI password).
+- **Bot URL** `http://registry:8787` for containers.
 
-```bash
-./octopus registry
-```
+---
 
-If the local registry has not been started yet, already exists but is stopped,
-or is already running, the menu looks like this:
+## Browser: sign in
 
-![Local registry states](assets/registry/01-local-registry-states.svg)
+1. Open the printed URL (often `http://localhost:8787/ui` or similar).
+2. Sign in with **`REGISTRY_UI_TOKEN`** from `.deploy/registry/.env` — there is no separate username.
 
-## Workflow 2: Start The Local Registry
+![Login](assets/registry/ui/00-login-annotated.png)
 
-From the menu above, choose `1. Start local registry`.
+---
 
-Typical output:
+## Browser: every screen
 
-![Start local registry](assets/registry/02-start-local-registry.svg)
+The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conversations` load the same shell and are safe to **bookmark or refresh** (the server serves `index.html` for those paths when you are logged in).
 
-Important values after startup:
+### Sidebar (applies to all pages)
 
-- browser URL: `http://localhost:<port>/ui`
-- UI password: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
-- bot-to-registry URL inside Docker: `http://registry:8787`
+| Item | Route | Purpose |
+|------|-------|---------|
+| **Agents** | `/ui` | All enrolled agents; entry point to agent detail. |
+| **Conversations** | `/ui/conversations` | All conversations (search after 3+ characters). |
+| **Tasks** | `/ui/tasks` | Routed tasks table; click a row to jump to the **parent conversation**. |
+| **Capabilities** | `/ui/capabilities` | Global enable/disable for coordination capabilities (operator). |
+| **Skills** | `/ui/skills` | Runtime skill catalog cards (from registry store). |
+| **Usage** | `/ui/usage` | Token/cost aggregates when usage metadata exists. |
+| **Logout** | `/ui/logout` | Ends operator session. |
 
-## Workflow 3: Sign In To The Local Registry UI
+### 1. Agents (home)
 
-Open the printed browser URL and sign in with `REGISTRY_UI_TOKEN` from
-`.deploy/registry/.env`.
+![Agents](assets/registry/ui/01-agents-annotated.png)
 
-For the default local setup, that is usually `http://localhost:8787/ui`.
+- Each **card** is one enrolled agent; **connectivity** badge reflects last heartbeat path.
+- **Click** a card → **Agent detail**.
 
-![Registry login page](assets/registry/03-registry-login.png)
+### 2. Agent detail
 
-## Workflow 4: Connect An Existing Standalone Bot To The Local Registry
+![Agent detail](assets/registry/ui/02-agent-detail-annotated.png)
 
-Run:
+- Shows **identity**, **registry scope**, **capabilities/tags**, **heartbeat**, and optional **worker** rows when reported.
+- **“Conversations →”** scopes the conversation list to **this agent** (same data as the global list, filtered).
 
-```bash
-./octopus
-```
+### 3. Agent conversations
 
-If you already have bots, choose `Manage bots` or `Connect bot to registry`.
+![Agent conversations](assets/registry/ui/03-agent-conversations-annotated.png)
 
-Representative flow for an existing standalone bot:
+- Lists conversations involving this agent. **Click** a row → **Conversation detail**.
 
-![Connect existing bot to local registry](assets/registry/04-connect-local.svg)
+### 4. All conversations
 
-After the reconnect/restart path lands, `./octopus status` shows one registry
-connection row per bot with:
+![Conversations](assets/registry/ui/04-conversations-annotated.png)
 
-- `registry_id`
-- `scope`
-- current connection state
-- URL
+- **Search bar**: type **three or more** characters to filter (debounced).
+- Click a **row** → **Conversation detail**.
 
-## Workflow 5: Add A New Bot Directly Into Registry Mode
+### 5. Conversation detail (timeline)
 
-If you add another bot with `./octopus`, Octopus asks whether the new bot
-should connect to a registry.
+![Conversation detail](assets/registry/ui/05-conversation-detail-annotated.png)
 
-Representative flow:
+- **Header**: title, target display name, `origin_channel` (e.g. `registry-ui`, `telegram`), status badge.
+- **Timeline**:
+  - `message.user` / `message.bot` render as **chat bubbles**.
+  - Other event kinds render as **collapsible cards** (kind label + metadata JSON).
+- **Live updates**: the page subscribes to WebSocket topics when the server exposes `/v1/ws` (see [limitations](#what-the-ui-does-not-do-yet)).
 
-![Add new bot directly into local registry mode](assets/registry/05-add-bot-local.svg)
+### 6. Tasks (routed tasks)
 
-If no local registry exists yet, the prompt changes to:
+![Tasks](assets/registry/ui/06-tasks-annotated.png)
 
-- `Press Enter to start a local registry, or type 'remote' to use a remote registry:`
+- Shows **title, origin, target, status, last update**.
+- **Clicking a row** navigates to the **parent conversation** (delegation context).
 
-## Workflow 6: Connect A Bot To A Remote Registry
+### 7. Capabilities
 
-Octopus supports remote registries per bot. The URL must start with
-`https://`.
+![Capabilities](assets/registry/ui/07-capabilities-annotated.png)
 
-Representative flow:
+- Operator-only **global toggles** for coordination features.
+- Mutations use **POST** with **CSRF** when using cookie sessions (`/v1/auth/csrf`).
 
-![Connect a bot to a remote registry](assets/registry/06-connect-remote.svg)
+### 8. Skills
 
-For remote registries:
+![Skills](assets/registry/ui/08-skills-annotated.png)
 
-- Octopus never prints a local `localhost` UI URL
-- the bot keeps its own remote registry URL, enrollment token, and scope in
-  its env file
-- local registry state is unaffected unless you explicitly switch away from it
+- High-level **catalog** view (installed/custom skills as returned by `/v1/catalog/skills`).
 
-## Workflow 7: Add Or Remove Extra Registry Connections
+### 9. Usage
 
-Registry-backed bots can carry more than one registry connection.
+![Usage](assets/registry/ui/09-usage-annotated.png)
 
-Representative multi-connection management flow:
+- Aggregated **prompt/completion tokens and cost** by conversation when the store has usage rows.
 
-![Manage multiple registry connections](assets/registry/10-manage-registry-connections.svg)
+---
 
-Use this path when you want to:
+## What the UI does *not* do yet
 
-- add a second remote registry without losing the first connection
-- remove one connection while keeping the bot in registry mode
-- separate `channel` and `coordination` authorities intentionally
+Be explicit so expectations match the code:
 
-## Workflow 8: Switch A Single-Connection Bot From Local Registry To Remote Registry
+| Area | Notes |
+|------|--------|
+| **Send message / approval / export from the timeline** | The REST API exposes `POST …/messages`, `POST …/actions`, `GET …/export`, but the **current** `conversation-detail` view is **read-only** (timeline + metadata). Use API clients or future UI work for compose/export. |
+| **WebSocket “live” badge** | Real-time updates need a WebSocket-capable ASGI stack (e.g. `uvicorn[standard]` with `websockets`/`wsproto`). Without it, `/v1/ws` may not upgrade; the UI still loads history via `GET …/events`. |
+| **Provider guidance editor** | Not a top-level nav item; advanced flows go through `/v1/provider-guidance/...` and related ingress (operator tooling may expand later). |
 
-Switch flows are only available when exactly one registry connection is
-configured for the bot.
+---
 
-Representative flow:
+## Verification & troubleshooting
 
-![Switch a bot from local registry to remote registry](assets/registry/07-switch-local-remote.svg)
-
-If no other bots still use the local registry, Octopus may offer to stop it.
-
-## Workflow 9: Switch A Single-Connection Bot From Remote Registry To Local Registry
-
-Representative flow:
-
-![Switch a bot from remote registry to local registry](assets/registry/08-switch-remote-local.svg)
-
-If the local registry is not running yet, Octopus starts it automatically.
-
-## Workflow 10: Disconnect A Bot From Registry Mode
-
-Disconnecting a bot preserves bot data and removes registry connections.
-
-Representative single-connection disconnect flow:
-
-![Disconnect a bot from registry mode](assets/registry/09-disconnect-registry.svg)
-
-If the bot has only one registry connection, it returns to standalone mode. If
-the bot has multiple connections, removing one connection leaves the bot in
-registry mode with the remaining entries intact.
-
-## Workflow 11: Use The Registry Dashboard
-
-Once bots are connected, the Registry UI becomes the main browser surface for
-registry-backed workflows.
-
-![Full registry dashboard](assets/registry/00-full-dashboard.png)
-
-![Registry dashboard](assets/registry/05-registry-dashboard.png)
-
-Typical uses from the UI:
-
-- inspect connected bots, capacity, and health details
-- open bot detail, routed-task detail, and conversation detail from one shell
-- filter conversations and open full conversation detail
-- send follow-up messages, export transcripts, or cancel conversations
-- watch routed-task state and delegated-result progress
-- manage runtime skills, provider guidance, and capability kill switches
-
-## Workflow 12: Inspect An Agent
-
-Click any agent row in the dashboard to see its detail view.
-
-![Agent detail](assets/registry/10-agent-detail.png)
-
-The agent detail shows:
-
-- display name, slug, role, and provider
-- connectivity state and version
-- registry scope and channel capabilities
-- runtime health (when available)
-
-## Workflow 13: Inspect A Routed Task
-
-Click any routed task row in the dashboard to see its detail view.
-
-![Routed task detail](assets/registry/12-routed-task-detail.png)
-
-The routed-task detail shows:
-
-- origin and target bot pairing
-- current routed-task status and summary
-- the parent conversation for the delegated work
-- the latest update time for operator triage
-
-## Workflow 14: View Conversation Detail And Timeline
-
-Click any conversation row to see the full conversation detail with
-timeline events.
-
-![Conversation detail with timeline](assets/registry/13-conversation-detail.png)
-
-From the conversation detail, you can:
-
-- inspect the active runtime skills for that conversation
-- read the full timeline (started, progress, completed, failed events)
-- approve or cancel delegation proposals when the latest event requires a decision
-- send a follow-up message
-- export the conversation transcript
-- cancel the conversation
-
-## Workflow 15: Manage Runtime Skills
-
-The dashboard includes a runtime-skills management surface for catalog search,
-detail inspection, prompt preview, and custom-skill lifecycle work.
-
-![Runtime skills](assets/registry/runtime-skills-tab.png)
-
-Typical runtime-skills tasks:
-
-- inspect built-in versus custom skill sources
-- preview provider-specific prompt impact before activation
-- update or uninstall custom runtime skills
-- activate skills from conversation detail after verifying prompt budget
-
-## Workflow 16: Manage Capabilities And Provider Guidance
-
-The dashboard includes management surfaces for:
-
-- **Capabilities** — global kill switches for routed-task, discovery,
-  and other coordination features
-
-![Capabilities management](assets/registry/capabilities-tab.png)
-
-- **Provider guidance** — per-provider instruction drafts with a
-  lifecycle (draft → submitted → approved → published)
-
-![Provider guidance](assets/registry/guidance-tab.png)
-
-## Workflow 17: Follow Logs Or Stop The Local Registry
-
-
-When the local registry is already running, `./octopus registry` gives you two
-maintenance actions.
-
-Representative flow:
-
-![Registry maintenance actions](assets/registry/11-registry-maintenance.svg)
-
-If you choose `1. Follow local registry logs`, Octopus streams the registry
-service logs until you stop it with `Ctrl+C`.
-
-## Verification Checklist
-
-After any registry change, verify with:
+After any registry change:
 
 ```bash
 ./octopus status
 ./octopus doctor
 ```
 
-You want to see:
+Expect: bots in **registry** mode when connected, one connection line per registry with expected `registry_id`, `scope`, state, URL; local registry **running** when using local mode.
 
-- the bot listed in `registry` mode when it should be connected
-- one connection line per configured registry, with the expected `registry_id`,
-  `scope`, state, and URL
-- the local registry listed as `running` when using local mode
-- the doctor flow succeed without token or enrollment errors
+| Symptom | Things to check |
+|---------|------------------|
+| UI does not load | Registry container up; port in `.deploy/registry/.env`; try `./octopus registry` → start. |
+| “No agents” | Bot not enrolled or heartbeat path broken — `./octopus doctor`, reconnect bot. |
+| Remote connect fails | URL must be `https://…`; enrollment token correct; scope appropriate. |
+| Switch unavailable | **Switch** flows need **exactly one** registry connection — remove extras first. |
 
-## Quick Troubleshooting
-
-`./octopus registry` says `stopped`
-
-- start it from `./octopus registry`
-
-Remote registry connect fails immediately
-
-- confirm the URL starts with `https://`
-- confirm the enrollment token is correct
-- re-run the flow and check the scope you selected
-
-Switch to local/remote is unavailable
-
-- switch flows require exactly one configured registry connection
-- remove extra registry connections first, or use the add/remove flow instead
-
-The browser UI does not load
-
-- confirm the port in `.deploy/registry/.env`
-- confirm `./octopus status` shows the local registry as `running`
-- restart it from `./octopus registry`
-
-The bot does not show up in the UI
-
-- run `./octopus status`
-- run `./octopus doctor`
-- inspect the per-connection state lines for `starting` or `degraded`
-- reconnect the bot through the registry flow if needed
-
-The bot should be local but still shows remote behavior
-
-- open the bot management flow again
-- choose `Switch to local registry`
-- re-run `./octopus status` and `./octopus doctor`
-
-Everything is broken and you want to start over
+**Nuclear reset** (local dev only):
 
 ```bash
 ./octopus clean
 ```
 
-This stops all bots and the registry, removes all Docker volumes and networks,
-and deletes `.deploy/`. The next `./octopus` run starts the first-bot flow as
-if the repo were freshly cloned.
+Stops services, removes Docker volumes/networks and `.deploy/`.
+
+---
+
+## Regenerating UI screenshots
+
+Screenshots and annotated copies live under `docs/assets/registry/ui/`.
+
+From the repo root (requires Node + project `.venv` with app dependencies):
+
+```bash
+cd docs/registry-ui-screenshots
+npm install
+npx playwright install chromium   # once per machine
+npm run capture                   # starts uvicorn on 127.0.0.1:19987, seeds SQLite, saves PNGs
+./.venv/bin/python annotate.py
+```
+
+The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwaway SQLite file under `docs/registry-ui-screenshots/.capture-registry.sqlite3`.
+
+---
+
+## Quick reference: registry scopes
+
+| Scope | Conversation UI / timelines | Routed tasks & discovery |
+|-------|------------------------------|---------------------------|
+| `full` | Yes | Yes |
+| `channel` | Yes | No |
+| `coordination` | No | Yes |
+
+---
+
+*Screenshots in this revision were generated with Playwright (Chromium) against the in-repo Registry UI; yellow callouts are added automatically for teaching clarity.*

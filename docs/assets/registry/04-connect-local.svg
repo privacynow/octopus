@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="950" viewBox="0 0 1200 950" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
   <title id="title">Connect existing bot to local registry</title>
-  <desc id="desc">Two terminal panels showing an existing standalone bot being connected to the local registry and the resulting status output.</desc>
+  <desc id="desc">Two terminal panels showing an existing standalone bot being connected to the local registry, followed by octopus status output with a per-connection row.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -20,7 +20,7 @@
     </filter>
   </defs>
   <g transform="translate(28 24)">
-    <rect class="panel" x="0" y="0" width="1144" height="495" rx="10"/>
+    <rect class="panel" x="0" y="0" width="1144" height="525" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
     <text class="label" x="102" y="34">connect existing bot to local registry</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
@@ -38,6 +38,7 @@
         <tspan x="34" dy="29">  1. Example Bot (@example_bot)</tspan>
         <tspan x="34" dy="29">Bot slug or number: 1</tspan>
         <tspan x="34" dy="29">Press Enter to use the local registry, or type 'remote' to use a remote registry:</tspan>
+        <tspan x="34" dy="29">Registry scope (full, channel, coordination) [full]:</tspan>
         <tspan x="34" dy="29">Bot example-bot is now connected to the local registry.</tspan>
         <tspan x="34" dy="29">Registry UI: http://localhost:8787/ui</tspan>
       </text>
@@ -45,15 +46,16 @@
     <use href="#copy-connect-local" class="glow-copy"/>
     <use href="#copy-connect-local"/>
 
-    <rect class="panel" x="0" y="517" width="1144" height="379" rx="10"/>
-    <circle class="dot" cx="26" cy="545" r="6.5"/><circle class="dot" cx="48" cy="545" r="6.5"/><circle class="dot" cx="70" cy="545" r="6.5"/>
-    <text class="label" x="102" y="551">verify with octopus status</text>
-    <line class="rule" x1="0" y1="575" x2="1144" y2="575"/>
+    <rect class="panel" x="0" y="547" width="1144" height="381" rx="10"/>
+    <circle class="dot" cx="26" cy="575" r="6.5"/><circle class="dot" cx="48" cy="575" r="6.5"/><circle class="dot" cx="70" cy="575" r="6.5"/>
+    <text class="label" x="102" y="581">verify with octopus status</text>
+    <line class="rule" x1="0" y1="605" x2="1144" y2="605"/>
     <g id="copy-connect-local-status">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="611">$ ./octopus status</tspan>
+        <tspan class="prompt" x="34" y="641">$ ./octopus status</tspan>
         <tspan x="34" dy="29">Bots:</tspan>
-        <tspan x="34" dy="29">  Example Bot (@example_bot)    claude   registry     running</tspan>
+        <tspan x="34" dy="29">  Example Bot (@example_bot)    claude   registry   running   (Up 14 seconds)</tspan>
+        <tspan x="34" dy="29">      local    full    connected    http://registry:8787</tspan>
         <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">Registry:</tspan>
         <tspan x="34" dy="29">  local      running    http://localhost:8787/ui</tspan>

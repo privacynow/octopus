@@ -1574,6 +1574,368 @@ first_bot_flow() {
   fi
 }
 
+# -- workspace commands --------------------------------------------------------
+
+workspace_create() {
+  local name="${1:-}" host_path="${2:-}"
+  if [ -z "$name" ] || [ -z "$host_path" ]; then
+    octopus_error "Usage: ./octopus workspace create <name> <host-path>"
+    return 1
+  fi
+  # Validate name: slug-safe, ≤32 chars
+  if ! printf '%s' "$name" | grep -qE '^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$'; then
+    if ! printf '%s' "$name" | grep -qE '^[a-z0-9]$'; then
+      octopus_error "Workspace name must be a lowercase slug (a-z, 0-9, hyphens), 1-32 chars."
+      return 1
+    fi
+  fi
+  if has_workspace "$name"; then
+    octopus_error "Workspace '$name' already exists."
+    return 1
+  fi
+  # Validate host path
+  case "$host_path" in
+    /*) ;;
+    *) octopus_error "Host path must be absolute (starts with /)."; return 1 ;;
+  esac
+  if [ ! -d "$host_path" ]; then
+    octopus_error "Host path '$host_path' does not exist or is not a directory."
+    return 1
+  fi
+  local ws_dir=".deploy/workspaces/$name"
+  mkdir -p "$ws_dir"
+  {
+    printf 'WORKSPACE_ROOT=%s\n' "$host_path"
+    printf 'WORKSPACE_MOUNT=/workspace/%s\n' "$name"
+    printf 'WORKSPACE_MODE=rw\n'
+  } > "$ws_dir/workspace.conf"
+  : > "$ws_dir/members.txt"
+  printf 'Workspace "%s" created.\n' "$name"
+  printf '  Host path:      %s\n' "$host_path"
+  printf '  Container path: /workspace/%s\n' "$name"
+  printf '  Mode:           rw\n'
+  printf '\nAdd bots with: ./octopus workspace add-bot %s <bot-slug>\n' "$name"
+}
+
+workspace_remove() {
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    octopus_error "Usage: ./octopus workspace remove <name>"
+    return 1
+  fi
+  if ! has_workspace "$name"; then
+    octopus_error "Workspace '$name' does not exist."
+    return 1
+  fi
+  local members slug
+  members="$(workspace_members "$name")"
+  rm -rf ".deploy/workspaces/$name"
+  # Regenerate workspace.env for all former members
+  for slug in $members; do
+    regenerate_bot_workspace_env "$slug"
+  done
+  printf 'Workspace "%s" removed.\n' "$name"
+  if [ -n "$members" ]; then
+    printf 'Regenerated workspace config for: %s\n' "$(echo $members | tr '\n' ' ')"
+    printf 'Restart affected bots for changes to take effect.\n'
+  fi
+}
+
+workspace_add_bot() {
+  local ws_name="${1:-}" bot_slug="${2:-}"
+  if [ -z "$ws_name" ] || [ -z "$bot_slug" ]; then
+    octopus_error "Usage: ./octopus workspace add-bot <workspace> <bot-slug>"
+    return 1
+  fi
+  if ! has_workspace "$ws_name"; then
+    octopus_error "Workspace '$ws_name' does not exist."
+    return 1
+  fi
+  if [ ! -f "$(bot_env_file "$bot_slug")" ]; then
+    octopus_error "Bot '$bot_slug' is not configured."
+    return 1
+  fi
+  local members_file
+  members_file="$(workspace_members_file "$ws_name")"
+  if grep -qx "$bot_slug" "$members_file" 2>/dev/null; then
+    printf 'Bot "%s" is already a member of workspace "%s".\n' "$bot_slug" "$ws_name"
+    return 0
+  fi
+  printf '%s\n' "$bot_slug" >> "$members_file"
+  regenerate_bot_workspace_env "$bot_slug"
+  printf 'Added "%s" to workspace "%s".\n' "$bot_slug" "$ws_name"
+  printf 'Restart the bot for changes to take effect: ./octopus stop %s && ./octopus start %s\n' "$bot_slug" "$bot_slug"
+}
+
+workspace_remove_bot() {
+  local ws_name="${1:-}" bot_slug="${2:-}"
+  if [ -z "$ws_name" ] || [ -z "$bot_slug" ]; then
+    octopus_error "Usage: ./octopus workspace remove-bot <workspace> <bot-slug>"
+    return 1
+  fi
+  if ! has_workspace "$ws_name"; then
+    octopus_error "Workspace '$ws_name' does not exist."
+    return 1
+  fi
+  local members_file
+  members_file="$(workspace_members_file "$ws_name")"
+  if ! grep -qx "$bot_slug" "$members_file" 2>/dev/null; then
+    printf 'Bot "%s" is not a member of workspace "%s".\n' "$bot_slug" "$ws_name"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  grep -vx "$bot_slug" "$members_file" > "$tmp" || true
+  mv "$tmp" "$members_file"
+  regenerate_bot_workspace_env "$bot_slug"
+  printf 'Removed "%s" from workspace "%s".\n' "$bot_slug" "$ws_name"
+  printf 'Restart the bot for changes to take effect.\n'
+}
+
+workspace_status() {
+  local filter="${1:-}"
+  if [ "$(count_workspaces)" -eq 0 ]; then
+    printf 'No workspaces configured. Create one with: ./octopus workspace create <name> <host-path>\n'
+    return 0
+  fi
+  printf 'Workspaces:\n'
+  local ws_slug root mount mode
+  for ws_slug in $(list_workspace_slugs); do
+    [ -n "$filter" ] && [ "$filter" != "$ws_slug" ] && continue
+    root="$(workspace_root "$ws_slug")"
+    mount="$(workspace_mount "$ws_slug")"
+    mode="$(workspace_mode "$ws_slug")"
+    local policy="edit"
+    [ "$mode" = "ro" ] && policy="inspect"
+    printf '  %-20s %s    %s\n' "$ws_slug" "$root" "$mode"
+    printf '    Members:\n'
+    local slug running_label
+    for slug in $(workspace_members "$ws_slug"); do
+      if bot_is_running "$slug" 2>/dev/null; then
+        running_label="running"
+      else
+        running_label="stopped"
+      fi
+      printf '      %-20s %s\n' "$slug" "$running_label"
+    done
+    if [ -z "$(workspace_members "$ws_slug")" ]; then
+      printf '      (none)\n'
+    fi
+    printf '    Projects (generated):\n'
+    printf '      %s:%s|%s\n' "$ws_slug" "$mount" "$policy"
+    printf '\n'
+  done
+}
+
+# -- workspace.env + compose override generation ------------------------------
+
+regenerate_bot_workspace_env() {
+  local bot_slug="$1"
+  local bot_env_path ws_env_path compose_override_path
+  bot_env_path="$(bot_env_file "$bot_slug")"
+  ws_env_path=".deploy/bots/$bot_slug/workspace.env"
+  compose_override_path=".deploy/bots/$bot_slug/docker-compose.workspace.yml"
+
+  local memberships
+  memberships="$(bot_workspace_memberships "$bot_slug")"
+  if [ -z "$memberships" ]; then
+    rm -f "$ws_env_path" "$compose_override_path"
+    return 0
+  fi
+
+  # Read existing values from bot .env
+  local existing_projects existing_tags
+  existing_projects="$(read_bot_env_value BOT_PROJECTS "$bot_env_path")"
+  existing_tags="$(read_bot_env_value BOT_AGENT_TAGS "$bot_env_path")"
+
+  # Build workspace project entries and tags
+  local ws_slug root mount mode policy project_entry
+  local ws_projects="" ws_tags="" volume_lines=""
+  for ws_slug in $memberships; do
+    root="$(workspace_root "$ws_slug")"
+    mount="$(workspace_mount "$ws_slug")"
+    mode="$(workspace_mode "$ws_slug")"
+    policy="edit"
+    [ "$mode" = "ro" ] && policy="inspect"
+    project_entry="${ws_slug}:${mount}|${policy}"
+    if [ -n "$ws_projects" ]; then
+      ws_projects="${ws_projects},${project_entry}"
+    else
+      ws_projects="${project_entry}"
+    fi
+    local tag="workspace:${ws_slug}"
+    if [ -n "$ws_tags" ]; then
+      ws_tags="${ws_tags},${tag}"
+    else
+      ws_tags="${tag}"
+    fi
+    volume_lines="${volume_lines}      - ${root}:${mount}:${mode}\n"
+  done
+
+  # Merge existing projects with workspace projects (workspace wins on name collision)
+  local merged_projects="$ws_projects"
+  if [ -n "$existing_projects" ]; then
+    local entry name ws_names
+    # Collect workspace project names for collision detection
+    ws_names=",$(printf '%s' "$ws_projects" | sed 's/:[^,]*//g; s/,/,/g'),"
+    IFS=',' read -ra entries <<< "$existing_projects"
+    for entry in "${entries[@]}"; do
+      entry="$(printf '%s' "$entry" | sed 's/^ *//; s/ *$//')"
+      [ -z "$entry" ] && continue
+      name="${entry%%:*}"
+      # Skip if workspace has a project with the same name (workspace wins)
+      if printf '%s' "$ws_names" | grep -q ",$name,"; then
+        continue
+      fi
+      merged_projects="${merged_projects},${entry}"
+    done
+  fi
+
+  # Merge existing tags with workspace tags (deduplicate)
+  local merged_tags="$ws_tags"
+  if [ -n "$existing_tags" ]; then
+    local tag
+    IFS=',' read -ra tag_entries <<< "$existing_tags"
+    for tag in "${tag_entries[@]}"; do
+      tag="$(printf '%s' "$tag" | sed 's/^ *//; s/ *$//')"
+      [ -z "$tag" ] && continue
+      if ! printf '%s' ",$merged_tags," | grep -q ",$tag,"; then
+        merged_tags="${merged_tags},${tag}"
+      fi
+    done
+  fi
+
+  # Write workspace.env
+  {
+    printf '# Machine-generated by ./octopus workspace — do not edit.\n'
+    printf '# Regenerated on every workspace mutation.\n'
+    printf 'BOT_PROJECTS=%s\n' "$merged_projects"
+    printf 'BOT_AGENT_TAGS=%s\n' "$merged_tags"
+  } > "$ws_env_path"
+  chmod 600 "$ws_env_path"
+
+  # Write compose override with env_file + volumes for all services.
+  # Paths are relative to compose project directory (--project-directory .).
+  {
+    printf 'services:\n'
+    local svc
+    for svc in bot bot-provider bot-webhook bot-worker; do
+      printf '  %s:\n' "$svc"
+      printf '    env_file:\n'
+      printf '      - %s\n' "$ws_env_path"
+      printf '    volumes:\n'
+      printf "$volume_lines"
+    done
+  } > "$compose_override_path"
+}
+
+# -- workspace doctor/verify --------------------------------------------------
+
+workspace_verify() {
+  local filter="${1:-}" rc=0
+  if [ "$(count_workspaces)" -eq 0 ]; then
+    printf 'No workspaces configured.\n'
+    return 0
+  fi
+  local ws_slug root mode
+  for ws_slug in $(list_workspace_slugs); do
+    [ -n "$filter" ] && [ "$filter" != "$ws_slug" ] && continue
+    root="$(workspace_root "$ws_slug")"
+    mode="$(workspace_mode "$ws_slug")"
+    printf 'Workspace: %s\n' "$ws_slug"
+    # Check host path
+    if [ ! -d "$root" ]; then
+      printf '  FAIL: Host path does not exist: %s\n' "$root"
+      rc=1
+    elif [ ! -r "$root" ]; then
+      printf '  FAIL: Host path is not readable: %s\n' "$root"
+      rc=1
+    elif [ "$mode" = "rw" ] && [ ! -w "$root" ]; then
+      printf '  FAIL: Host path is not writable (mode=rw): %s\n' "$root"
+      rc=1
+    else
+      printf '  OK:   Host path: %s (%s)\n' "$root" "$mode"
+    fi
+    # Warn about common secret patterns at top level
+    local secret_pattern found_secrets=""
+    for secret_pattern in .env credentials.json .aws .ssh; do
+      if [ -e "$root/$secret_pattern" ]; then
+        found_secrets="${found_secrets} ${secret_pattern}"
+      fi
+    done
+    for secret_pattern in "$root"/*.pem "$root"/*.key; do
+      [ -e "$secret_pattern" ] && found_secrets="${found_secrets} $(basename "$secret_pattern")"
+    done
+    if [ -n "$found_secrets" ]; then
+      printf '  WARN: Potential secrets in workspace root:%s\n' "$found_secrets"
+      printf '        Workspace mounts give all member bots full access to the tree.\n'
+    fi
+    # Check member bots exist
+    local slug
+    for slug in $(workspace_members "$ws_slug"); do
+      if [ ! -f "$(bot_env_file "$slug")" ]; then
+        printf '  FAIL: Member bot "%s" is not configured.\n' "$slug"
+        rc=1
+      else
+        printf '  OK:   Member bot: %s\n' "$slug"
+      fi
+    done
+    # Check workspace.env is current for each member
+    for slug in $(workspace_members "$ws_slug"); do
+      local ws_env=".deploy/bots/$slug/workspace.env"
+      if [ ! -f "$ws_env" ]; then
+        printf '  FAIL: workspace.env missing for bot "%s".\n' "$slug"
+        rc=1
+      fi
+    done
+    # Validate generated BOT_PROJECTS syntax
+    local mount policy projects_line
+    mount="$(workspace_mount "$ws_slug")"
+    policy="edit"
+    [ "$mode" = "ro" ] && policy="inspect"
+    projects_line="${ws_slug}:${mount}|${policy}"
+    if ! validate_bot_projects_syntax "$projects_line"; then
+      printf '  FAIL: Generated BOT_PROJECTS entry is invalid: %s\n' "$projects_line"
+      rc=1
+    fi
+    printf '\n'
+  done
+  return "$rc"
+}
+
+validate_bot_projects_syntax() {
+  local projects_value="$1"
+  printf '%s' "$projects_value" | python3 -c "
+import sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+for entry in raw.split(','):
+    entry = entry.strip()
+    if not entry or ':' not in entry:
+        print(f'Invalid entry: {entry!r}', file=sys.stderr)
+        sys.exit(1)
+    name, rest = entry.split(':', 1)
+    if not name.strip() or not rest.strip():
+        print(f'Empty name or path: {entry!r}', file=sys.stderr)
+        sys.exit(1)
+sys.exit(0)
+"
+}
+
+cmd_workspace() {
+  case "${1:-}" in
+    create)     shift; workspace_create "$@" ;;
+    remove)     shift; workspace_remove "$@" ;;
+    add-bot)    shift; workspace_add_bot "$@" ;;
+    remove-bot) shift; workspace_remove_bot "$@" ;;
+    status)     shift; workspace_status "$@" ;;
+    verify)     shift; workspace_verify "$@" ;;
+    "")         workspace_status ;;
+    *)          octopus_error "Unknown workspace command: $1"; return 1 ;;
+  esac
+}
+
 cmd_help() {
   cat <<'HELP'
 Usage: ./octopus [command]
@@ -1588,6 +1950,13 @@ Commands:
   doctor [--live-provider] [slug]
                  Run a health check (safe by default; live provider probe optional)
   registry       Manage the local registry
+  workspace      Manage shared workspaces
+    workspace create <name> <host-path>
+    workspace remove <name>
+    workspace add-bot <workspace> <bot-slug>
+    workspace remove-bot <workspace> <bot-slug>
+    workspace status [workspace]
+    workspace verify [workspace]
   clean          Stop and remove all bots, registry, volumes, and config
   help           Show this help
 
@@ -1647,7 +2016,7 @@ cmd_clean() {
     docker network rm "$network" 2>/dev/null || true
   done
 
-  # Remove deployment state
+  # Remove deployment state (includes workspaces)
   if [ -d .deploy ]; then
     echo "Removing .deploy/"
     rm -rf .deploy
@@ -1698,7 +2067,8 @@ main() {
     stop)     shift; cmd_stop "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     doctor)   shift; cmd_doctor "$@" ;;
-    registry) shift; cmd_registry "$@" ;;
+    registry)  shift; cmd_registry "$@" ;;
+    workspace) shift; cmd_workspace "$@" ;;
     "")
       if [ "$(count_bots)" -eq 0 ]; then
         first_bot_flow quick

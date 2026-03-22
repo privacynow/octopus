@@ -325,6 +325,7 @@ configure_bot_for_registry() {
   env_file="$(bot_env_file "$slug")"
   upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
   write_registry_connection_records "$env_file" "${registry_id}|${registry_url}|${enroll_token}|${registry_scope}"
+  clear_local_registry_state_caches
 }
 
 add_bot_registry_connection() {
@@ -351,6 +352,7 @@ add_bot_registry_connection() {
   records+=("${registry_id}|${registry_url}|${enroll_token}|${registry_scope}")
   upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
   write_registry_connection_records "$env_file" "${records[@]}"
+  clear_local_registry_state_caches
 }
 
 remove_bot_registry_connection() {
@@ -367,6 +369,7 @@ remove_bot_registry_connection() {
   fi
   upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
   write_registry_connection_records "$env_file" "${kept_records[@]}"
+  clear_local_registry_state_caches
 }
 
 configure_bot_for_standalone() {
@@ -374,6 +377,7 @@ configure_bot_for_standalone() {
   env_file="$(bot_env_file "$slug")"
   upsert_env_file_value BOT_AGENT_MODE "standalone" "$env_file"
   clear_registry_connection_values "$env_file"
+  clear_local_registry_state_caches
 }
 
 bot_local_registry_connection_row() {
@@ -407,31 +411,56 @@ bot_local_registry_scope() {
 }
 
 bot_local_registry_connection_state() {
-  local slug="$1" registry_id=""
+  local slug="$1" registry_id="" cached=""
+  cached="$(registry_state_cache_lookup LOCAL_REGISTRY_CONNECTION_STATE_CACHE "$slug" || true)"
+  if [ -n "$cached" ]; then
+    printf '%s\n' "$cached"
+    return 0
+  fi
   registry_id="$(bot_local_registry_connection_id "$slug" || true)"
   if [ -z "$registry_id" ]; then
+    registry_state_cache_store LOCAL_REGISTRY_CONNECTION_STATE_CACHE "$slug" "none"
     printf 'none\n'
     return 0
   fi
   if bot_registry_has_identity "$slug" "$registry_id"; then
+    registry_state_cache_store LOCAL_REGISTRY_CONNECTION_STATE_CACHE "$slug" "enrolled"
     printf 'enrolled\n'
   else
+    registry_state_cache_store LOCAL_REGISTRY_CONNECTION_STATE_CACHE "$slug" "configured"
     printf 'configured\n'
   fi
 }
 
 bot_local_registry_runtime_state() {
-  local slug="$1" registry_id="" state_rows="" state_id="" connectivity="" last_error=""
+  local slug="$1" registry_id="" state_rows="" state_id="" connectivity="" last_error="" cached="" connection_state=""
+  cached="$(registry_state_cache_lookup LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" || true)"
+  if [ -n "$cached" ]; then
+    printf '%s\n' "$cached"
+    return 0
+  fi
+  connection_state="$(bot_local_registry_connection_state "$slug")"
+  case "$connection_state" in
+    none)
+      registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "none"
+      printf 'none\n'
+      return 0
+      ;;
+    configured)
+      registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "enrollment failed"
+      printf 'enrollment failed\n'
+      return 0
+      ;;
+  esac
+
   registry_id="$(bot_local_registry_connection_id "$slug" || true)"
   if [ -z "$registry_id" ]; then
+    registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "none"
     printf 'none\n'
     return 0
   fi
-  if ! bot_registry_has_identity "$slug" "$registry_id"; then
-    printf 'enrollment failed\n'
-    return 0
-  fi
   if ! bot_is_running "$slug"; then
+    registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "stopped"
     printf 'stopped\n'
     return 0
   fi
@@ -439,11 +468,13 @@ bot_local_registry_runtime_state() {
   while IFS='|' read -r state_id connectivity last_error; do
     [ -n "$state_id" ] || continue
     if [ "$state_id" = "$registry_id" ]; then
+      registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "${connectivity:-connected}"
       printf '%s\n' "${connectivity:-connected}"
       return 0
     fi
   done <<< "$state_rows"
-  printf 'connected\n'
+  registry_state_cache_store LOCAL_REGISTRY_RUNTIME_STATE_CACHE "$slug" "starting"
+  printf 'starting\n'
 }
 
 clear_bot_registry_state() {
@@ -473,6 +504,7 @@ restart_bot_after_config_change() {
   local slug="$1"
   shift || true
   clear_bot_registry_state "$slug" "$@"
+  clear_local_registry_state_caches
   bot_compose "$slug" stop bot >/dev/null 2>&1 || true
   start_bot_until_running "$slug"
 }
@@ -636,6 +668,7 @@ prompt_registry_target() {
           octopus_error "Could not start the local registry. Run ./octopus registry and try again."
           return 1
         }
+        announce_local_registry_creation
         enroll_token="$(read_local_registry_enroll_token)"
         if [ -z "$enroll_token" ]; then
           octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
@@ -695,6 +728,83 @@ print_registry_connection_success() {
   fi
 }
 
+LOCAL_REGISTRY_CREATION_ANNOUNCED=0
+LOCAL_REGISTRY_CONNECTION_STATE_CACHE=""
+LOCAL_REGISTRY_RUNTIME_STATE_CACHE=""
+LOCAL_REGISTRY_STATE_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/octopus-registry-state.XXXXXX" 2>/dev/null || true)"
+if [ -z "$LOCAL_REGISTRY_STATE_CACHE_DIR" ]; then
+  LOCAL_REGISTRY_STATE_CACHE_DIR="${TMPDIR:-/tmp}/octopus-registry-state.$$.$RANDOM"
+  mkdir -p "$LOCAL_REGISTRY_STATE_CACHE_DIR" 2>/dev/null || true
+fi
+
+registry_state_cache_file() {
+  local cache_kind="$1"
+  printf '%s/%s.cache\n' "$LOCAL_REGISTRY_STATE_CACHE_DIR" "$cache_kind"
+}
+
+registry_state_cache_lookup() {
+  local var_name="$1" key="$2" cache_file="" line=""
+  case "$var_name" in
+    LOCAL_REGISTRY_CONNECTION_STATE_CACHE)
+      cache_file="$(registry_state_cache_file connection)"
+      ;;
+    LOCAL_REGISTRY_RUNTIME_STATE_CACHE)
+      cache_file="$(registry_state_cache_file runtime)"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [ -f "$cache_file" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      "$key|"*)
+        printf '%s\n' "${line#"$key|"}"
+        return 0
+        ;;
+    esac
+  done < "$cache_file"
+  return 1
+}
+
+registry_state_cache_store() {
+  local var_name="$1" key="$2" value="$3" cache_file=""
+  if registry_state_cache_lookup "$var_name" "$key" >/dev/null 2>&1; then
+    return 0
+  fi
+  case "$var_name" in
+    LOCAL_REGISTRY_CONNECTION_STATE_CACHE)
+      cache_file="$(registry_state_cache_file connection)"
+      ;;
+    LOCAL_REGISTRY_RUNTIME_STATE_CACHE)
+      cache_file="$(registry_state_cache_file runtime)"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  touch "$cache_file" 2>/dev/null || true
+  printf '%s|%s\n' "$key" "$value" >> "$cache_file"
+}
+
+clear_local_registry_state_caches() {
+  LOCAL_REGISTRY_CONNECTION_STATE_CACHE=""
+  LOCAL_REGISTRY_RUNTIME_STATE_CACHE=""
+  rm -f "$(registry_state_cache_file connection)" "$(registry_state_cache_file runtime)" 2>/dev/null || true
+}
+
+announce_local_registry_creation() {
+  if [ "${REGISTRY_WAS_CREATED:-0}" != "1" ]; then
+    return 0
+  fi
+  if [ "${LOCAL_REGISTRY_CREATION_ANNOUNCED:-0}" = "1" ]; then
+    return 0
+  fi
+  print_registry_start_output 1
+  LOCAL_REGISTRY_CREATION_ANNOUNCED=1
+}
+
 ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS=""
 ENSURE_LOCAL_REGISTRY_CONNECTION_ID=""
 ENSURE_LOCAL_REGISTRY_CONNECTION_SCOPE=""
@@ -713,6 +823,7 @@ ensure_local_registry_connection() {
     octopus_error "Could not start the local registry. Run ./octopus registry start and try again."
     return 1
   }
+  announce_local_registry_creation
 
   enroll_token="$(read_local_registry_enroll_token)"
   if [ -z "$enroll_token" ]; then
@@ -918,6 +1029,7 @@ switch_remote_bot_to_local_registry_flow() {
     octopus_error "Could not start the local registry. Run ./octopus registry and try again."
     return 1
   }
+  announce_local_registry_creation
   enroll_token="$(read_local_registry_enroll_token)"
   if [ -z "$enroll_token" ]; then
     octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
@@ -1004,6 +1116,7 @@ connect_bot_to_local_registry_once() {
         ;;
       *)
         printf 'Bot %s is now connected to the local registry.\n' "$slug"
+        printf 'Registry UI: %s\n' "$(registry_ui_url)"
         ;;
     esac
     return 0
@@ -1112,45 +1225,48 @@ prompt_local_registry_connect_after_start() {
   done
   printf '  a. %s\n' "$all_label"
   printf '  n. Skip\n'
-  read -r -p "Choose: " choice || return 0
-  case "$choice" in
-    a|A)
-      if selected_bots_need_local_scope "${eligible[@]}"; then
-        scope="$(prompt_registry_scope)" || return 1
-      fi
-      connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
-      return $?
-      ;;
-    n|N|"")
-      return 0
-      ;;
-    *[!0-9]*)
-      if [ -f "$(bot_env_file "$choice")" ]; then
-        slug="$choice"
-      else
-        octopus_error "No bot named '$choice' is configured."
-        return 1
-      fi
-      ;;
-    *)
-      if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
-        slug="${slugs[$((choice - 1))]}"
-      else
-        octopus_error "Choose one of the listed bots."
-        return 1
-      fi
-      ;;
-  esac
+  while true; do
+    read -r -p "Choose: " choice || return 0
+    case "$choice" in
+      a|A)
+        if selected_bots_need_local_scope "${eligible[@]}"; then
+          scope="$(prompt_registry_scope)" || return 1
+        fi
+        connect_bots_to_local_registry_batch "$scope" "${slugs[@]}"
+        return $?
+        ;;
+      n|N|"")
+        return 0
+        ;;
+      *[!0-9]*)
+        if [ -f "$(bot_env_file "$choice")" ]; then
+          slug="$choice"
+        else
+          octopus_error "No bot named '$choice' is configured."
+          continue
+        fi
+        ;;
+      *)
+        if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
+          slug="${slugs[$((choice - 1))]}"
+        else
+          octopus_error "Choose one of the listed bots."
+          continue
+        fi
+        ;;
+    esac
 
-  state="$(bot_local_registry_connection_state "$slug")"
-  if [ "$state" = "enrolled" ]; then
-    printf '%s is already enrolled on the local registry.\n' "$(bot_identity_label "$slug")"
-    return 0
-  fi
-  if [ "$state" = "none" ]; then
-    scope="$(prompt_registry_scope)" || return 1
-  fi
-  connect_bot_to_local_registry_once "$slug" "$scope"
+    state="$(bot_local_registry_connection_state "$slug")"
+    if [ "$state" = "enrolled" ]; then
+      printf '%s is already enrolled on the local registry.\n' "$(bot_identity_label "$slug")"
+      return 0
+    fi
+    if [ "$state" = "none" ]; then
+      scope="$(prompt_registry_scope)" || return 1
+    fi
+    connect_bot_to_local_registry_once "$slug" "$scope"
+    return $?
+  done
 }
 
 connect_bot_to_local_registry_menu() {
@@ -1220,7 +1336,7 @@ connect_bot_to_local_registry_menu() {
         if selected_bots_need_local_scope "${eligible[@]}"; then
           scope="$(prompt_registry_scope)" || return 1
         fi
-        connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
+        connect_bots_to_local_registry_batch "$scope" "${slugs[@]}"
         return $?
         ;;
       *[!0-9]*)
@@ -1334,7 +1450,11 @@ registry_start_cmd() {
     return 0
   fi
   ensure_local_registry || return 1
-  print_registry_start_output "${REGISTRY_WAS_CREATED:-0}"
+  if [ "${REGISTRY_WAS_CREATED:-0}" = "1" ]; then
+    announce_local_registry_creation
+  else
+    print_registry_start_output 0
+  fi
   if [ "${REGISTRY_WAS_CREATED:-0}" = "1" ] && stdin_is_tty && [ "$(count_bots)" -gt 0 ]; then
     printf '\n'
     prompt_local_registry_connect_after_start
@@ -1462,17 +1582,22 @@ registry_connect_cmd() {
   fi
 
   if [ "$connect_all" -eq 1 ]; then
-    local eligible=() state=""
+    if [ "$(count_bots)" -eq 0 ]; then
+      octopus_error "No bots configured. Run ./octopus to get started."
+      return 1
+    fi
+    local targets=() state="" eligible_count=0
     while IFS= read -r arg; do
       [ -n "$arg" ] || continue
+      targets+=("$arg")
       state="$(bot_local_registry_connection_state "$arg")"
-      [ "$state" = "enrolled" ] || eligible+=("$arg")
+      [ "$state" = "enrolled" ] || eligible_count=$((eligible_count + 1))
     done < <(list_bot_slugs)
-    if [ "${#eligible[@]}" -eq 0 ]; then
+    if [ "$eligible_count" -eq 0 ]; then
       printf 'All bots are already enrolled on the local registry.\n'
       return 0
     fi
-    connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
+    connect_bots_to_local_registry_batch "$scope" "${targets[@]}"
     return $?
   fi
 

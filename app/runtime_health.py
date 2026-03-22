@@ -335,6 +335,22 @@ class DoctorTextFormatter(RuntimeHealthFormatter):
 class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
     """Single owner of runtime-health collection and evaluation rules."""
 
+    def __init__(self) -> None:
+        self._cached_auth_errors: list[str] | None = None
+
+    async def _check_auth_health_cached(self, provider: Provider) -> list[str]:
+        """Check auth once at startup, cache for process lifetime.
+
+        Auth status doesn't change during normal operation. If auth breaks
+        mid-session, the next real provider call will surface the error.
+        Re-probing auth on a timer wastes subprocess calls and risks
+        throttling by the provider's auth infrastructure at scale.
+        """
+        if self._cached_auth_errors is not None:
+            return self._cached_auth_errors
+        self._cached_auth_errors = await provider.check_auth_health()
+        return self._cached_auth_errors
+
     async def collect(
         self,
         config: BotConfig,
@@ -374,7 +390,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             )
 
         if not any(item.level == "error" for item in diagnostics) and config.process_role != ProcessRole.WEBHOOK.value:
-            auth_errors = await provider.check_auth_health()
+            auth_errors = await self._check_auth_health_cached(provider)
             diagnostics.extend(
                 _diag("error", "provider.auth_unavailable", message)
                 for message in auth_errors

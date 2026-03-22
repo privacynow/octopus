@@ -82,6 +82,8 @@ def test_entrypoint_only_chowns_data_and_symlinks_live_auth_paths() -> None:
     text = (REPO / "scripts" / "docker" / "docker-entrypoint.sh").read_text()
     assert "chown -R 1000:1000 /home/bot/data" in text
     assert "chown -R 1000:1000 /home/bot 2>/dev/null || true" not in text
+    assert "rm -rf /home/bot/.claude" in text
+    assert "rm -f /home/bot/.claude.json" in text
     assert "/home/bot/.provider-auth/.claude" in text
     assert "/home/bot/.provider-auth/.claude.json" in text
     assert "/home/bot/.provider-auth/.codex" in text
@@ -175,3 +177,35 @@ def test_container_provider_login_accepts_claude_auth_file(tmp_path: Path) -> No
 
     assert result.returncode == 0
     assert "✓ Claude authentication complete. Returning to setup..." in result.stdout
+
+
+def test_ensure_provider_auth_ready_reports_persistence_failure(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+provider_has_auth_files() {{
+  if [ "${{PROVIDER_AUTH_CHECKS:-0}}" -eq 0 ]; then
+    PROVIDER_AUTH_CHECKS=1
+    export PROVIDER_AUTH_CHECKS
+    return 1
+  fi
+  return 1
+}}
+provider_compose() {{ return 0; }}
+if ensure_provider_auth_ready claude; then
+  exit 1
+fi
+"""
+    result = subprocess.run(
+        ["bash", "-lc", script],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "Provider authentication is required. Starting the login flow now." in result.stderr
+    assert "did not persist to .deploy/provider-auth/claude" in result.stderr

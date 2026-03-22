@@ -354,6 +354,19 @@ cat .deploy/bots/example-bot/workspace.env
     assert "workspace:proj2" in result.stdout
 
 
+def test_regenerate_preserves_percent_in_host_path(tmp_path: Path) -> None:
+    host_dir = tmp_path / "proj%s"
+    host_dir.mkdir()
+    _setup_bot_env(tmp_path)
+    script = _source_octopus(tmp_path) + f"""
+workspace_create myproject "{host_dir}"
+workspace_add_bot myproject example-bot
+cat .deploy/bots/example-bot/docker-compose.workspace.yml
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert f"{host_dir}:/workspace/myproject:rw" in result.stdout
+
+
 def test_regenerate_removes_files_when_no_workspaces(tmp_path: Path) -> None:
     host_dir = tmp_path / "project"
     host_dir.mkdir()
@@ -439,6 +452,25 @@ workspace_verify myproject
     result = _run_bash(script, cwd=tmp_path)
     assert "WARN:" in result.stdout
     assert ".env" in result.stdout
+
+
+def test_workspace_verify_fails_on_stale_workspace_env_without_rewriting(tmp_path: Path) -> None:
+    host_dir = tmp_path / "project"
+    host_dir.mkdir()
+    _setup_bot_env(tmp_path)
+    script = _source_octopus(tmp_path) + f"""
+workspace_create myproject "{host_dir}"
+workspace_add_bot myproject example-bot
+printf '# stale\\nBOT_PROJECTS=bad:/wrong|edit\\nBOT_AGENT_TAGS=wrong\\n' > .deploy/bots/example-bot/workspace.env
+if workspace_verify myproject; then
+  exit 1
+fi
+cat .deploy/bots/example-bot/workspace.env
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert 'FAIL: workspace.env for bot "example-bot" is stale.' in result.stdout
+    assert "BOT_PROJECTS=bad:/wrong|edit" in result.stdout
+    assert "BOT_AGENT_TAGS=wrong" in result.stdout
 
 
 # -- BOT_PROJECTS round-trip through _parse_projects --

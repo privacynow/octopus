@@ -18,6 +18,7 @@ from app.agents.delegation import (
 from app.agents.types import TimelineEvent
 from app.session_state import PendingDelegation, SessionState
 from app.workflows.delegation.coordination import build_delegation_plan
+from app.channels.telegram.session_io import load as load_session
 from app.workflows.execution.contracts import RequestExecutionOutcome
 
 
@@ -41,6 +42,23 @@ class DelegationCallbackChannel:
 
     async def send_text(self, text: str, **kwargs: Any) -> DelegationCallbackHandle:
         await self._query.edit_message_text(text, **kwargs)
+        return DelegationCallbackHandle()
+
+
+class _AutoSubmitEgress:
+    """Egress adapter for autonomous delegation auto-submit.
+
+    Sends status text inline via the message object, stripping reply_markup
+    since there are no buttons in autonomous mode.
+    """
+
+    def __init__(self, message) -> None:
+        self._message = message
+
+    async def send_text(self, text: str, **kwargs: Any) -> DelegationCallbackHandle:
+        kwargs.pop("reply_markup", None)
+        send = getattr(self._message, "send_text", None) or getattr(self._message, "reply_text")
+        await send(text, **kwargs)
         return DelegationCallbackHandle()
 
 
@@ -99,6 +117,37 @@ async def propose_delegation_plan(
     session.pending_delegation = delegation
     save_session(runtime, chat_id, session)
     await publish_delegation_proposed_event(runtime, message, delegation)
+
+    # Autonomous mode: auto-submit delegation without buttons.
+    if runtime.config.autonomous and session.approval_mode != "on":
+        from app.agents.delegation import build_delegation_runtime
+        conversation_ref_resolved = telegram_conversation_ref(runtime.config, chat_id)
+        delegation_rt = build_delegation_runtime(
+            config=runtime.config,
+            provider_name=runtime.provider.name,
+            provider_state_factory=runtime.provider.new_provider_state,
+            task_routing=runtime.services.control_plane.task_routing,
+            agent_directory=runtime.services.control_plane.agent_directory,
+        )
+        try:
+            await handle_channel_delegation_approve(
+                chat_id,
+                conversation_ref_resolved,
+                _AutoSubmitEgress(message),
+                runtime=delegation_rt,
+                retry_markup=None,
+            )
+        except Exception:
+            # Ensure pending_delegation is not stuck in proposed state
+            session_after = load_session(runtime, chat_id)
+            if (
+                session_after.pending_delegation
+                and session_after.pending_delegation.status == "proposed"
+            ):
+                session_after.pending_delegation.status = "cancelled"
+                save_session(runtime, chat_id, session_after)
+            raise
+        return RequestExecutionOutcome(status="delegation_submitted")
 
     send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
     rendered = telegram_presenters.delegation_plan_message(

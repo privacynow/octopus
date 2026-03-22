@@ -998,24 +998,53 @@ prompt_provider_choice() {
   done
 }
 
-prompt_setup_mode_hatch() {
+prompt_setup_mode() {
   local choice=""
   while true; do
-    read -r -p "Press Enter for quick setup, or type 'full' for advanced options: " choice || return 1
+    printf 'Setup mode:\n' >&2
+    printf '  1. Autonomous — full agent, no approval gates, private\n' >&2
+    printf '  2. Safe — human reviews plans before execution (default)\n' >&2
+    printf '  3. Advanced — configure everything manually\n' >&2
+    read -r -p "Choose a mode [2]: " choice || return 1
     case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
-      "")
-        printf 'quick\n'
+      1|autonomous)
+        printf 'autonomous\n'
         return 0
         ;;
-      full)
-        printf 'full\n'
+      ""|2|safe)
+        printf 'safe\n'
+        return 0
+        ;;
+      3|advanced)
+        printf 'advanced\n'
         return 0
         ;;
       *)
-        octopus_error "Press Enter for quick setup, or type 'full' for advanced options."
+        octopus_error "Choose 1 (autonomous), 2 (safe), or 3 (advanced)."
         ;;
     esac
   done
+}
+
+prompt_autonomous_allowed_user() {
+  local value=""
+  while true; do
+    read -r -p "Your Telegram user ID (required for autonomous mode): " value || return 1
+    case "$value" in
+      ''|*[!0-9]*)
+        octopus_error "Enter a numeric Telegram user ID. Send /start to @userinfobot to find yours."
+        ;;
+      *)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+}
+
+# Keep old name as alias for backward compatibility with --full flag
+prompt_setup_mode_hatch() {
+  prompt_setup_mode
 }
 
 ensure_provider_image_ready() {
@@ -1071,6 +1100,7 @@ reset_bot_setup_overrides() {
   BOT_SETUP_TIMEOUT_SECONDS="3600"
   BOT_SETUP_WORKING_DIR="/home/bot"
   BOT_SETUP_COMPLETION_WEBHOOK_URL=""
+  BOT_SETUP_AUTONOMOUS_WORKSPACE=""
   NEW_BOT_SETUP_MODE=""
   REGISTRY_TARGET_KIND="standalone"
   REGISTRY_TARGET_URL=""
@@ -1210,12 +1240,25 @@ prepare_new_bot_setup() {
   NEW_BOT_SETUP_MODE="$mode"
 
   if [ "$mode" = "quick" ]; then
-    NEW_BOT_SETUP_MODE="$(prompt_setup_mode_hatch)" || return 1
+    NEW_BOT_SETUP_MODE="$(prompt_setup_mode)" || return 1
   fi
 
-  if [ "$NEW_BOT_SETUP_MODE" = "full" ]; then
-    prompt_full_bot_setup_options || return 1
-  fi
+  case "$NEW_BOT_SETUP_MODE" in
+    autonomous)
+      BOT_SETUP_ALLOWED_USERS="$(prompt_autonomous_allowed_user)" || return 1
+      if [ -z "${BOT_SETUP_AUTONOMOUS_WORKSPACE:-}" ]; then
+        local ws_path=""
+        read -r -p "Workspace directory (blank to skip): " ws_path || true
+        BOT_SETUP_AUTONOMOUS_WORKSPACE="${ws_path:-}"
+      fi
+      ;;
+    advanced|full)
+      prompt_full_bot_setup_options || return 1
+      ;;
+    safe|*)
+      # Safe mode: no extra prompts (mirrors current quick behavior)
+      ;;
+  esac
 }
 
 write_first_bot_env() {
@@ -1258,12 +1301,34 @@ write_first_bot_env() {
       write_env_assignment_line BOT_SKILLS "$skills"
       write_env_assignment_line BOT_AGENT_CAPABILITIES "$skills"
     fi
-    if [ -n "$allowed_users" ]; then
-      write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
-      write_env_assignment_line BOT_ALLOW_OPEN "0"
-    else
-      write_env_assignment_line BOT_ALLOW_OPEN "1"
-    fi
+    # Mode-specific env vars
+    case "${NEW_BOT_SETUP_MODE:-safe}" in
+      autonomous)
+        write_env_assignment_line BOT_AUTONOMOUS "1"
+        write_env_assignment_line BOT_APPROVAL_MODE "off"
+        write_env_assignment_line BOT_ALLOW_OPEN "0"
+        write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
+        ;;
+      safe)
+        write_env_assignment_line BOT_AUTONOMOUS "0"
+        write_env_assignment_line BOT_APPROVAL_MODE "on"
+        if [ -n "$allowed_users" ]; then
+          write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
+          write_env_assignment_line BOT_ALLOW_OPEN "0"
+        else
+          write_env_assignment_line BOT_ALLOW_OPEN "1"
+        fi
+        ;;
+      *)
+        # Advanced/full: use whatever the operator configured
+        if [ -n "$allowed_users" ]; then
+          write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
+          write_env_assignment_line BOT_ALLOW_OPEN "0"
+        else
+          write_env_assignment_line BOT_ALLOW_OPEN "1"
+        fi
+        ;;
+    esac
     write_env_assignment_line BOT_TIMEOUT_SECONDS "$timeout_seconds"
     write_env_assignment_line BOT_WORKING_DIR "$working_dir"
     write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
@@ -1548,6 +1613,7 @@ add_bot_flow() {
     prompt_new_bot_registry_target || return 1
   fi
   write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER" || return 1
+  maybe_join_autonomous_workspace "$NEW_BOT_SLUG"
   ensure_provider_image_ready "$NEW_BOT_PROVIDER" || return 1
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER" || return 1
   ensure_network || return 1
@@ -1566,6 +1632,30 @@ add_bot_flow() {
   fi
 }
 
+maybe_join_autonomous_workspace() {
+  local slug="$1"
+  local ws_path="${BOT_SETUP_AUTONOMOUS_WORKSPACE:-}"
+  [ -n "$ws_path" ] || return 0
+  if [ ! -d "$ws_path" ]; then
+    octopus_error "Workspace directory does not exist: $ws_path"
+    octopus_error "Bot will start without a shared workspace. Create one later with: ./octopus workspace create <name> <path>"
+    return 0
+  fi
+  local ws_name
+  ws_name="$(basename "$ws_path" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | head -c 32)"
+  [ -n "$ws_name" ] || ws_name="workspace"
+  if ! has_workspace "$ws_name"; then
+    if ! workspace_create "$ws_name" "$ws_path"; then
+      octopus_error "Failed to create workspace '$ws_name'. Bot will start without a shared workspace."
+      return 0
+    fi
+  fi
+  if ! workspace_add_bot "$ws_name" "$slug"; then
+    octopus_error "Failed to add bot to workspace '$ws_name'. Add it manually: ./octopus workspace add-bot $ws_name $slug"
+    return 0
+  fi
+}
+
 first_bot_flow() {
   local mode="${1:-quick}"
   local registry_id=""
@@ -1574,6 +1664,7 @@ first_bot_flow() {
   # or auth step fails, the next ./octopus run finds this bot and
   # resumes from the build step instead of re-asking for everything.
   write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER" || return 1
+  maybe_join_autonomous_workspace "$NEW_BOT_SLUG"
   ensure_provider_image_ready "$NEW_BOT_PROVIDER" || return 1
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER" || return 1
   ensure_network || return 1

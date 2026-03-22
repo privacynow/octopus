@@ -57,7 +57,8 @@ provider policy. Workspace membership never widens credential scope.
     <bot-slug>/
       .env                    # operator-owned, unchanged
       workspace.env           # machine-generated, workspace project + tag additions
-      docker-compose.workspace.yml   # machine-generated compose override: volumes + env_file
+      docker-compose.workspace.yml          # local mode: bot + bot-provider only
+      docker-compose.workspace-shared.yml   # shared mode: all 4 services
 ```
 
 ### workspace.conf format
@@ -100,7 +101,30 @@ When a bot belongs to multiple workspaces, mount path uniqueness is guaranteed
 by the `/workspace/<slug>` convention — each workspace slug is unique, so
 mount paths cannot collide.
 
-### docker-compose.workspace.yml format (generated per bot)
+### Compose overrides (generated per bot, two files)
+
+**`docker-compose.workspace.yml`** — local mode (used by `bot_compose`):
+
+```yaml
+services:
+  bot:
+    env_file:
+      - .deploy/bots/my-bot/workspace.env
+    volumes:
+      - /Users/tinker/projects/shared-repo:/workspace/shared-repo:rw
+  bot-provider:
+    env_file:
+      - .deploy/bots/my-bot/workspace.env
+    volumes:
+      - /Users/tinker/projects/shared-repo:/workspace/shared-repo:rw
+```
+
+Only `bot` and `bot-provider` — these are defined in `docker-compose.yml`.
+Including `bot-webhook` or `bot-worker` here would create image-less services
+and break the compose project in local mode.
+
+**`docker-compose.workspace-shared.yml`** — shared mode (used by
+`bot_shared_compose`):
 
 ```yaml
 services:
@@ -126,10 +150,8 @@ services:
       - /Users/tinker/projects/shared-repo:/workspace/shared-repo:rw
 ```
 
-All four services get the same `env_file` + `volumes` blocks. `bot-webhook`
-and `bot-worker` are defined in `docker-compose.shared.yml` (shared runtime
-mode only); the workspace override applies on top when both are in the `-f`
-chain.
+All four services. `bot-webhook` and `bot-worker` are defined in
+`docker-compose.shared.yml` (merged before this override in the `-f` chain).
 
 Paths in the override are relative to the compose project directory (set via
 `--project-directory .` in `bot_compose()` / `bot_shared_compose()`).

@@ -19,8 +19,10 @@ auto-submit.
    validation (mutual exclusion with open access), dispatch (skip preflight),
    execution (skip\_permissions on RunContext), delegation (auto-submit plans).
 
-3. **Autonomous requires `BOT_ALLOWED_USERS`.** `BOT_ALLOW_OPEN=0` is enforced.
-   Autonomous without an allowlist is a config error rejected at startup.
+3. **Autonomous requires non-empty `BOT_ALLOWED_USERS` and `BOT_ALLOW_OPEN=0`.**
+   `BOT_ADMIN_USERS` alone does not satisfy this — admin is a skill-management
+   concept, not bot access. Autonomous without an explicit allowlist is a config
+   error rejected at startup.
 
 4. **Autonomous writes both `BOT_AUTONOMOUS=1` and `BOT_APPROVAL_MODE=off`** for
    transparency. At runtime, `BOT_AUTONOMOUS` is authoritative for skipping
@@ -74,7 +76,9 @@ After existing approval parsing (~line 453):
 
 ```python
 autonomous = get_bool("BOT_AUTONOMOUS")
-approval_explicit = "BOT_APPROVAL_MODE" in file_vars or "BOT_APPROVAL_MODE" in os.environ
+# In Docker, the bot .env is loaded into os.environ by compose. Check whether
+# the key is present at all — if so, the operator explicitly set it.
+approval_explicit = "BOT_APPROVAL_MODE" in os.environ
 if autonomous and not approval_explicit:
     approval = "off"
 ```
@@ -86,7 +90,8 @@ Add `autonomous=autonomous` to the BotConfig constructor call.
 After existing `codex_full_auto` / `codex_dangerous` mutual exclusion (~line 731):
 
 - `BOT_AUTONOMOUS=1` + `BOT_ALLOW_OPEN=1` → error
-- `BOT_AUTONOMOUS=1` without `BOT_ALLOWED_USERS` or `BOT_ADMIN_USERS` → error
+- `BOT_AUTONOMOUS=1` without non-empty `BOT_ALLOWED_USERS` → error
+  (`BOT_ADMIN_USERS` alone does not satisfy this)
 
 ### `load_config_provider_health()`
 
@@ -96,7 +101,8 @@ Add `autonomous=False` to the minimal BotConfig constructor.
 
 - `BOT_AUTONOMOUS=1` parses to `autonomous=True`
 - `BOT_AUTONOMOUS=1` + `BOT_ALLOW_OPEN=1` = validation error
-- `BOT_AUTONOMOUS=1` without allowed/admin users = validation error
+- `BOT_AUTONOMOUS=1` without `BOT_ALLOWED_USERS` = validation error
+- `BOT_AUTONOMOUS=1` with only `BOT_ADMIN_USERS` (no `BOT_ALLOWED_USERS`) = validation error
 - `BOT_AUTONOMOUS=1` + `BOT_ALLOWED_USERS` set = passes
 - `BOT_AUTONOMOUS=1` without explicit `BOT_APPROVAL_MODE` defaults approval to `"off"`
 - `BOT_AUTONOMOUS=1` with explicit `BOT_APPROVAL_MODE=on` keeps `"on"`
@@ -106,7 +112,7 @@ Add `autonomous=False` to the minimal BotConfig constructor.
 
 ## Phase 2: Dispatch — Skip Preflight
 
-### How it works (no code change needed)
+### How it works (likely no code change, but must verify)
 
 `dispatch_message_request` at `requests.py` ~352 checks:
 
@@ -122,11 +128,26 @@ When user types `/approval on`, `session.approval_mode_explicit` becomes True
 and `session.approval_mode` becomes `"on"`. This correctly re-enables preflight
 for that chat only.
 
-**No code change needed in `dispatch_message_request`.** The config default
-propagates through session initialization.
+**Must verify:** The claim depends on fresh sessions inheriting
+`config.approval_mode`. Trace the exact path: new chat → session not in
+storage → `load_runtime_session` creates a default → what `approval_mode` does
+the fresh `SessionState` get? The dataclass default at `session_state.py:200`
+is `approval_mode=d.get("approval_mode", "off")` — but that's deserialization
+from dict, not fresh creation. The fresh-creation path must be traced and
+tested explicitly. If `SessionState()` defaults `approval_mode` to something
+other than `config.approval_mode`, a small change is needed to pass the config
+default at creation time.
 
-### Test strategy
+**Code change:** Likely none in `dispatch_message_request` itself, but
+potentially a small change in session creation to pass `config.approval_mode`
+as the default for new sessions. This must be determined during implementation.
 
+### Test strategy (required, not optional)
+
+- **First-message / new-session test:** Brand new chat on an autonomous bot
+  (no session in storage) → first message → `request_approval` is never called,
+  execution proceeds directly. This proves the config default propagates
+  through session creation.
 - When `config.autonomous=True` and resolved `approval_mode="off"`,
   `request_approval` is never called
 - `/approval on` in autonomous bot still triggers preflight
@@ -193,34 +214,63 @@ The check `session.approval_mode != "on"` correctly handles both cases:
 ### Changes to `propose_delegation_plan`
 
 After building the delegation plan and saving session state, add an autonomous
-branch:
+branch. **The condition must match execution (Phase 3):**
 
 ```python
-if runtime.config.autonomous and not session.approval_mode_explicit:
+if cfg.autonomous and session.approval_mode != "on":
     # Auto-submit: call the approval handler directly without buttons
-    await handle_delegation_approve(...)
+    await _auto_submit_delegation(...)
     return RequestExecutionOutcome(status="delegation_submitted")
 ```
 
-Reuse the existing `handle_delegation_approve` in `app/agents/delegation.py`
-(~line 130) which handles authority resolution, task routing submission, partial
-failure, and session save.
+**Not `not session.approval_mode_explicit`.** If a user runs `/approval off`
+explicitly, `approval_mode_explicit=True` but `approval_mode="off"`. The old
+condition would skip auto-submit even though approval is off. Using
+`session.approval_mode != "on"` is consistent with the execution grant in
+Phase 3 and handles all edge cases the same way.
 
-Need a thin egress adapter that sends text inline (no buttons) for status
-messages during submission.
+### Delegation wiring (this is real work, not a one-liner)
 
-### Partial failure handling
+`handle_delegation_approve` in `app/agents/delegation.py` (~line 130) expects:
+- A real channel egress that can `send_text` for status messages
+- A valid `conversation_ref` for the chat
+- Correct `chat_id` for session state reload after mutation
+- The session must have `pending_delegation` in `proposed` state
 
-The existing `handle_delegation_approve` already handles partial failures:
-some tasks submitted, some authority resolution fails. In autonomous mode,
-failures are reported inline in the conversation. The bot continues rather than
-pausing for human intervention.
+The auto-submit path must:
+1. Build an egress adapter that sends text to the conversation without
+   reply\_markup (no buttons). This is a real adapter, not a stub — it must
+   use the actual Telegram send path (or registry egress for registry-sourced
+   conversations) so messages are delivered.
+2. Call `handle_delegation_approve` with the adapter, passing the correct
+   `conversation_ref` and `chat_id`.
+3. Reload session after `handle_delegation_approve` returns to check final
+   delegation status.
+4. If `pending_delegation.status == "submitted"`: return success.
+5. If submission failed mid-flight: `pending_delegation` must not be stuck in
+   `proposed` state. `handle_delegation_approve` should transition it to
+   `cancelled` or `partial_failed` on error — verify this is the case.
+
+### Failure mode: stuck `pending_delegation`
+
+If `handle_delegation_approve` raises or fails partway through, the session
+may have `pending_delegation` stuck in `proposed`. The auto-submit path must
+catch errors and transition the delegation to a terminal state, or the next
+message in this chat will see a stale `pending_delegation` and behave
+incorrectly.
+
+Exit gate: no stuck `pending_delegation` after auto-submit failure.
 
 ### Test strategy
 
-- `config.autonomous=True` → `handle_delegation_approve` called directly,
-  no buttons rendered
-- Partial failure in autonomous auto-submit: message sent to chat
+- `cfg.autonomous=True` and `session.approval_mode != "on"` →
+  `handle_delegation_approve` called directly, no buttons rendered
+- `cfg.autonomous=True` and `session.approval_mode == "on"` (explicit) →
+  buttons rendered as normal
+- Partial failure in autonomous auto-submit: message sent to chat, delegation
+  transitions to terminal state
+- Auto-submit error: `pending_delegation` not stuck in `proposed`
+- No double messages (auto-submit sends status once, not twice)
 - Non-autonomous: existing button flow unchanged (regression)
 
 ---
@@ -270,14 +320,30 @@ After bot env is written and bot is running, if workspace path was provided:
 - Create workspace if it doesn't exist
 - Add bot to workspace
 
+**Cross-plan dependency:** Autonomous bots that join a workspace use the
+compose override from `PLAN-shared-workspaces.md`. The local override
+(`docker-compose.workspace.yml`) must contain only `bot` + `bot-provider` —
+not `bot-webhook` / `bot-worker` which would break `bot_compose`. This is
+already fixed in the workspace implementation (split local vs shared overrides).
+Add a test: autonomous setup → workspace join → `bot_compose` → valid compose.
+
+### Safe mode note
+
+Safe mode writes `BOT_ALLOW_OPEN=1` without `BOT_ALLOWED_USERS`, matching
+current `write_first_bot_env` behavior when the allowlist is empty (quick setup
+posture). This is the same operator intent as the old quick mode, but with
+explicit `BOT_AUTONOMOUS=0` and `BOT_APPROVAL_MODE=on` in the `.env`.
+
 ### Test strategy
 
 - `prompt_setup_mode` returns `autonomous`, `safe`, or `advanced`
 - Autonomous writes `BOT_AUTONOMOUS=1`, `BOT_APPROVAL_MODE=off`,
   `BOT_ALLOW_OPEN=0`, `BOT_ALLOWED_USERS`
-- Safe writes `BOT_AUTONOMOUS=0`, `BOT_APPROVAL_MODE=on`
+- Safe writes `BOT_AUTONOMOUS=0`, `BOT_APPROVAL_MODE=on`, `BOT_ALLOW_OPEN=1`
 - Advanced unchanged
 - Workspace integration: autonomous + workspace path creates/joins workspace
+- Workspace compose: autonomous bot with workspace → `bot_compose` produces
+  valid compose config (no image-less services)
 - Existing `--full` flag still works via advanced mode
 
 ---
@@ -320,21 +386,42 @@ After bot env is written and bot is running, if workspace path was provided:
 
 ## Exit Gates
 
+### Config + validation
 - [ ] `BOT_AUTONOMOUS=1` + `BOT_ALLOW_OPEN=1` rejected at startup
-- [ ] `BOT_AUTONOMOUS=1` without allowed users rejected at startup
+- [ ] `BOT_AUTONOMOUS=1` without `BOT_ALLOWED_USERS` rejected at startup
+- [ ] `BOT_AUTONOMOUS=1` with only `BOT_ADMIN_USERS` (no allowed users) rejected
 - [ ] `BOT_AUTONOMOUS=1` defaults `approval_mode` to `"off"` when not explicit
+- [ ] `CODEX_DANGEROUS=1` alongside `BOT_AUTONOMOUS=1` no error
+
+### Dispatch (preflight skip)
+- [ ] First message on brand-new chat (no session) on autonomous bot skips
+  preflight — proves config default propagates through session creation
 - [ ] Autonomous bot skips preflight for all incoming messages
+- [ ] `/approval on` in autonomous bot restores preflight for that chat
+
+### Execution (skip\_permissions)
 - [ ] Autonomous bot sets `skip_permissions=True` on RunContext
 - [ ] Claude gets `--dangerously-skip-permissions` in autonomous mode
 - [ ] Codex gets `--dangerously-bypass-approvals-and-sandbox` in autonomous mode
-- [ ] `/approval on` restores preflight + removes skip\_permissions grant
+- [ ] `/approval on` removes skip\_permissions grant for that chat
 - [ ] `file_policy=inspect` overrides autonomous (read-only stays read-only)
-- [ ] Delegation auto-submits without buttons in autonomous mode
-- [ ] Partial delegation failures reported inline
-- [ ] Setup flow offers autonomous / safe / advanced
-- [ ] Autonomous setup prompts for user ID and optional workspace
-- [ ] Safe writes `BOT_APPROVAL_MODE=on` explicitly
+
+### Delegation (auto-submit)
+- [ ] Delegation auto-submits without buttons when autonomous + approval != on
+- [ ] Delegation shows buttons when autonomous + `/approval on` explicit
+- [ ] Partial delegation failures reported inline, delegation reaches terminal state
+- [ ] No stuck `pending_delegation` in `proposed` state after auto-submit failure
+- [ ] No double messages during auto-submit
+
+### Setup flow
+- [ ] Setup offers autonomous / safe / advanced
+- [ ] Autonomous prompts for user ID and optional workspace
+- [ ] Autonomous writes `BOT_AUTONOMOUS=1`, `BOT_APPROVAL_MODE=off`,
+  `BOT_ALLOW_OPEN=0`, `BOT_ALLOWED_USERS`
+- [ ] Safe writes `BOT_AUTONOMOUS=0`, `BOT_APPROVAL_MODE=on`, `BOT_ALLOW_OPEN=1`
 - [ ] Advanced unchanged from current full mode
-- [ ] `CODEX_DANGEROUS=1` alongside `BOT_AUTONOMOUS=1` no error
+- [ ] Autonomous + workspace → `bot_compose` produces valid compose config
+
+### Regression
 - [ ] All existing tests pass
 - [ ] New tests cover all four runtime seams

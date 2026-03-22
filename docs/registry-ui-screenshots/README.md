@@ -21,7 +21,7 @@ npm run capture:manual   # fixtures → docs/assets/manual/
 ../../.venv/bin/python annotate.py   # both asset dirs (registry/ui + manual)
 ```
 
-`annotate.py` writes `*-annotated.png` using sibling `*.meta.json` files (rectangle + arrow coordinates measured in the browser during capture). Re-run **`npm run capture`** if you change layout; then **`annotate.py`** again.
+`annotate.py` writes `*-annotated.png` using sibling `*.meta.json` files (rectangle + arrow coordinates from capture). **Labels** are rendered in a **dark footer band** under the screenshot (numbered list), not as yellow boxes on top of the UI. Re-run **`npm run capture`** if you change layout; then **`annotate.py`** again.
 
 ## Notes
 

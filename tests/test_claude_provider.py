@@ -96,11 +96,30 @@ async def test_check_auth_health_requires_nonempty_auth_file(monkeypatch, tmp_pa
     auth_file = tmp_path / ".claude.json"
     auth_file.write_text('{"token":"secret"}', encoding="utf-8")
     monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: auth_file))
+    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: tmp_path / ".claude"))
 
     async def fake_run(*cmd: str, timeout: int):
         assert cmd == ("claude", "--version")
         assert timeout == 10
         return 0, "claude 2.1.79\n", ""
+
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_auth_health() == []
+
+
+async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_dir = tmp_path / ".claude"
+    auth_dir.mkdir()
+    (auth_dir / "session.json").write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: tmp_path / ".claude.json"))
+    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: auth_dir))
+
+    async def fake_run(*cmd: str, timeout: int):
+        assert cmd == ("claude", "--version")
+        assert timeout == 10
+        return 0, "claude 2.1.81\n", ""
 
     provider._run_health_command = fake_run  # type: ignore[method-assign]
 

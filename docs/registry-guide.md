@@ -10,8 +10,9 @@ Use registry mode when you want:
 - one registry shared by multiple bots in this deployment
 - one bot connected to multiple registries with different scopes
 
-Text-mode flows are shown as styled terminal panels. Browser screenshots are
-kept for the actual Registry UI stages where they add value.
+Text-mode flows are shown as styled terminal panels. Browser screenshots below
+are regenerated from the current Registry UI shell with seeded current-code
+data so the documented surfaces match the runtime.
 
 ## Registry Modes
 
@@ -178,11 +179,14 @@ registry mode with the remaining entries intact.
 Once bots are connected, the Registry UI becomes the main browser surface for
 registry-backed workflows.
 
+![Full registry dashboard](assets/registry/00-full-dashboard.png)
+
 ![Registry dashboard](assets/registry/05-registry-dashboard.png)
 
 Typical uses from the UI:
 
 - inspect connected bots, capacity, and health details
+- open bot detail, routed-task detail, and conversation detail from one shell
 - filter conversations and open full conversation detail
 - send follow-up messages, export transcripts, or cancel conversations
 - watch routed-task state and delegated-result progress
@@ -201,7 +205,20 @@ The agent detail shows:
 - registry scope and channel capabilities
 - runtime health (when available)
 
-## Workflow 13: View Conversation Detail And Timeline
+## Workflow 13: Inspect A Routed Task
+
+Click any routed task row in the dashboard to see its detail view.
+
+![Routed task detail](assets/registry/12-routed-task-detail.png)
+
+The routed-task detail shows:
+
+- origin and target bot pairing
+- current routed-task status and summary
+- the parent conversation for the delegated work
+- the latest update time for operator triage
+
+## Workflow 14: View Conversation Detail And Timeline
 
 Click any conversation row to see the full conversation detail with
 timeline events.
@@ -210,12 +227,28 @@ timeline events.
 
 From the conversation detail, you can:
 
+- inspect the active runtime skills for that conversation
 - read the full timeline (started, progress, completed, failed events)
+- approve or cancel delegation proposals when the latest event requires a decision
 - send a follow-up message
 - export the conversation transcript
 - cancel the conversation
 
-## Workflow 14: Manage Capabilities And Provider Guidance
+## Workflow 15: Manage Runtime Skills
+
+The dashboard includes a runtime-skills management surface for catalog search,
+detail inspection, prompt preview, and custom-skill lifecycle work.
+
+![Runtime skills](assets/registry/runtime-skills-tab.png)
+
+Typical runtime-skills tasks:
+
+- inspect built-in versus custom skill sources
+- preview provider-specific prompt impact before activation
+- update or uninstall custom runtime skills
+- activate skills from conversation detail after verifying prompt budget
+
+## Workflow 16: Manage Capabilities And Provider Guidance
 
 The dashboard includes management surfaces for:
 
@@ -229,7 +262,7 @@ The dashboard includes management surfaces for:
 
 ![Provider guidance](assets/registry/guidance-tab.png)
 
-## Workflow 15: Follow Logs Or Stop The Local Registry
+## Workflow 17: Follow Logs Or Stop The Local Registry
 
 
 When the local registry is already running, `./octopus registry` gives you two

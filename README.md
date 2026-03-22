@@ -157,11 +157,48 @@ The most common operator commands:
 ./octopus logs         # follow live logs
 ./octopus doctor       # run a health check
 ./octopus registry     # manage the local registry
+./octopus workspace    # manage shared workspaces
 ./octopus clean        # wipe everything and start fresh
 ```
 
 If more than one bot exists, Octopus asks which bot to use only when the choice
 is ambiguous.
+
+## Shared Workspaces
+
+Multiple bots on the same machine can share a project directory so they
+collaborate on the same codebase. A workspace is a host directory that gets
+bind-mounted into member bot containers.
+
+```bash
+# Create a workspace pointing at a host directory
+./octopus workspace create myapp /path/to/project
+
+# Add bots to the workspace
+./octopus workspace add-bot myapp my-claude-bot
+./octopus workspace add-bot myapp my-codex-bot
+
+# Check workspace status
+./octopus workspace status
+
+# Verify workspace health
+./octopus workspace verify
+```
+
+After adding a bot to a workspace, restart it (`./octopus stop <slug> &&
+./octopus start <slug>`) for the mount to take effect. Inside the container,
+the workspace is available at `/workspace/<name>`. Each member bot gets a
+`BOT_PROJECTS` entry so users can switch to the workspace with `/project
+myapp` in the chat.
+
+Bots in the same workspace can discover each other via `workspace:<name>` tags
+in registry agent search. Coordination uses registry delegation, not file
+locks. For git repos, each bot can work on branches and the operator or a
+coordinator bot merges results.
+
+A workspace mount gives every member bot full access to the tree. Do not mount
+directories containing secrets. Use the `/project` command or `BOT_PROJECTS`
+subpath entries for internal directory splitting.
 
 ## Build Troubleshooting
 

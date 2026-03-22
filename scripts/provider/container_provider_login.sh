@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run inside the bot container with bot-home volume mounted at /home/bot.
-# Performs provider-specific interactive login then verifies with --provider-health only (no DB/Telegram).
+# Performs provider-specific interactive login then verifies the local CLI
+# still works without doing a live provider runtime probe.
 set -euo pipefail
 
 provider="${BOT_PROVIDER:-claude}"
@@ -27,7 +28,7 @@ BANNER
       echo "✓ Codex authentication complete. Returning to setup..."
     else
       echo "✗ Authentication may have failed (exit code $exit_code). Re-run this step"
-      echo "  if the provider health check fails in the next step."
+      echo "  if the setup doctor reports missing provider auth."
     fi
     ;;
   claude)
@@ -50,7 +51,7 @@ BANNER
       echo "✓ Claude authentication complete. Returning to setup..."
     else
       echo "✗ Authentication may have failed (exit code $exit_code). Re-run this step"
-      echo "  if the provider health check fails in the next step."
+      echo "  if the setup doctor reports missing provider auth."
     fi
     ;;
   *)

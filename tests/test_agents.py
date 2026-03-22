@@ -517,8 +517,17 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
             return {"ok": True}
 
     class FakeHealthProvider:
-        async def collect(self, config, provider, *, caller_is_bot=False, session_context=None):
+        async def collect(
+            self,
+            config,
+            provider,
+            *,
+            caller_is_bot=False,
+            session_context=None,
+            include_provider_runtime_probe=False,
+        ):
             assert caller_is_bot is True
+            assert include_provider_runtime_probe is False
             return RuntimeHealthReport(
                 generated_at="2026-03-16T00:00:00+00:00",
                 summary=RuntimeHealthSummary(

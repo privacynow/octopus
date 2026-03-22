@@ -127,6 +127,7 @@ class RuntimeHealthProvider(Protocol):
         *,
         caller_is_bot: bool = False,
         session_context: SessionHealthContext | None = None,
+        include_provider_runtime_probe: bool = False,
     ) -> RuntimeHealthReport:
         ...
 
@@ -341,6 +342,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
         *,
         caller_is_bot: bool = False,
         session_context: SessionHealthContext | None = None,
+        include_provider_runtime_probe: bool = False,
     ) -> RuntimeHealthReport:
         diagnostics: list[RuntimeDiagnostic] = []
         snapshot: SharedRuntimeSnapshot | None = None
@@ -372,10 +374,16 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             )
 
         if not any(item.level == "error" for item in diagnostics) and config.process_role != ProcessRole.WEBHOOK.value:
+            auth_errors = await provider.check_auth_health()
             diagnostics.extend(
-                _diag("error", "provider.runtime_unavailable", message)
-                for message in await provider.check_runtime_health()
+                _diag("error", "provider.auth_unavailable", message)
+                for message in auth_errors
             )
+            if include_provider_runtime_probe and not auth_errors:
+                diagnostics.extend(
+                    _diag("error", "provider.runtime_unavailable", message)
+                    for message in await provider.check_runtime_health()
+                )
 
         if session_context is not None:
             from app.skill_catalog_service import get_skill_catalog_service
@@ -743,6 +751,7 @@ async def collect_runtime_health_report(
     caller_is_bot: bool = False,
     session_context: SessionHealthContext | None = None,
     runtime_health_provider: RuntimeHealthProvider | None = None,
+    include_provider_runtime_probe: bool = False,
 ) -> RuntimeHealthReport:
     provider_impl = runtime_health_provider or CanonicalRuntimeHealthProvider()
     return await provider_impl.collect(
@@ -750,6 +759,7 @@ async def collect_runtime_health_report(
         provider,
         caller_is_bot=caller_is_bot,
         session_context=session_context,
+        include_provider_runtime_probe=include_provider_runtime_probe,
     )
 
 

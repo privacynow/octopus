@@ -20,6 +20,11 @@ from app.session_state import ProjectBinding
 from tests.support.config_support import make_config, make_registry_connection
 
 
+@pytest.fixture(autouse=True)
+def _normalize_codex_sandbox_env(monkeypatch):
+    monkeypatch.setenv("CODEX_SANDBOX", "workspace-write")
+
+
 # -- load_dotenv_file --
 
 def test_load_dotenv_file():
@@ -379,6 +384,7 @@ def _runtime_ok_provider(name: str = "claude"):
     """Provider double that matches main()'s startup health contract."""
     provider = MagicMock()
     provider.name = name
+    provider.check_auth_health = AsyncMock(return_value=[])
     provider.check_runtime_health = AsyncMock(return_value=[])
     return provider
 
@@ -387,8 +393,8 @@ def _runtime_ok_provider(name: str = "claude"):
 def _patched_main_runtime(cfg, mock_app, provider=None):
     """Patch main() dependencies for mode-selection tests.
 
-    main() now always validates provider runtime auth before starting, so the
-    provider double must expose an awaitable check_runtime_health().
+    main() now validates provider auth before starting, so the provider double
+    must expose awaitable auth/runtime health checks.
     """
     provider = provider or _runtime_ok_provider()
 
@@ -463,6 +469,8 @@ def test_main_calls_run_polling_in_poll_mode():
     with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
+    runtime.provider.check_auth_health.assert_awaited_once()
+    runtime.provider.check_runtime_health.assert_not_awaited()
     runtime.dispatcher.build_all_ingresses.assert_called_once()
     runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
     call = runtime.telegram_bootstrap.call_args
@@ -539,6 +547,8 @@ def test_main_calls_run_webhook_in_webhook_mode():
     with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
+    runtime.provider.check_auth_health.assert_awaited_once()
+    runtime.provider.check_runtime_health.assert_not_awaited()
     runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
@@ -554,6 +564,8 @@ def test_main_allows_shared_runtime_in_webhook_mode():
         from app.main import main
 
         main()
+    runtime.provider.check_auth_health.assert_awaited_once()
+    runtime.provider.check_runtime_health.assert_not_awaited()
     runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
@@ -570,6 +582,8 @@ def test_main_worker_role_runs_worker_process_only():
         from app.main import main
 
         main()
+    runtime.provider.check_auth_health.assert_awaited_once()
+    runtime.provider.check_runtime_health.assert_not_awaited()
     runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
     runtime.processor_runner.register.assert_not_called()
 
@@ -764,8 +778,51 @@ def test_main_webhook_role_skips_provider_runtime_validation():
         from app.main import main
 
         main()
+    assert provider.check_auth_health.await_count == 0
     assert provider.check_runtime_health.await_count == 0
     runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+
+
+def test_main_doctor_defaults_to_startup_safe_provider_checks():
+    cfg = make_config()
+    provider = _runtime_ok_provider()
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app, provider=provider):
+        with patch("app.main.run_doctor", side_effect=SystemExit(0)) as run_doctor:
+            with patch("sys.argv", ["bot", "--doctor"]):
+                from app.main import main
+
+                with pytest.raises(SystemExit) as excinfo:
+                    main()
+
+    assert excinfo.value.code == 0
+
+    run_doctor.assert_called_once_with(
+        cfg,
+        provider,
+        include_provider_runtime_probe=False,
+    )
+
+
+def test_main_doctor_live_provider_opt_in_enables_runtime_probe():
+    cfg = make_config()
+    provider = _runtime_ok_provider()
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app, provider=provider):
+        with patch("app.main.run_doctor", side_effect=SystemExit(0)) as run_doctor:
+            with patch("sys.argv", ["bot", "--doctor", "--doctor-live-provider"]):
+                from app.main import main
+
+                with pytest.raises(SystemExit) as excinfo:
+                    main()
+
+    assert excinfo.value.code == 0
+
+    run_doctor.assert_called_once_with(
+        cfg,
+        provider,
+        include_provider_runtime_probe=True,
+    )
 
 
 def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():

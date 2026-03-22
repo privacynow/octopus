@@ -84,7 +84,18 @@ class Provider(Protocol):
         (e.g. binary exists in PATH). Must not do blocking I/O."""
         ...
 
+    async def check_auth_health(self) -> list[str]:
+        """Return startup-safe auth problems, empty if authenticated.
+
+        May use local subprocesses and on-disk auth artifacts, but must not
+        require a live model round-trip or other expensive provider inference.
+        """
+        ...
+
     async def check_runtime_health(self) -> list[str]:
-        """Return list of problems from runtime probes (version check, API ping).
-        Uses async subprocess — safe to await in the event loop."""
+        """Return list of problems from deep runtime probes.
+
+        This may include a real provider request. Uses async subprocess and is
+        safe to await in the event loop, but should not gate normal startup.
+        """
         ...

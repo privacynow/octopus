@@ -352,6 +352,9 @@ class FakeProvider:
     def check_health(self):
         return list(self._health_errors)
 
+    async def check_auth_health(self):
+        return []
+
     async def check_runtime_health(self):
         return []
 

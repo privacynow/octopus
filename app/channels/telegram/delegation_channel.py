@@ -15,7 +15,6 @@ from app.agents.delegation import (
     handle_delegation_cancel as handle_channel_delegation_cancel,
     preview_delegation_targets,
 )
-from app.agents.types import TimelineEvent
 from app.session_state import PendingDelegation, SessionState
 from app.workflows.delegation.coordination import build_delegation_plan
 from app.channels.telegram.session_io import load as load_session
@@ -67,31 +66,39 @@ async def publish_delegation_proposed_event(
     message,
     delegation: PendingDelegation,
 ) -> None:
-    body = "\n".join(
-        [
-            "Delegation plan:",
-            *[
-                f"{index}. {task.title or task.routed_task_id} -> {task.target_agent_id or 'unassigned'}"
-                for index, task in enumerate(delegation.tasks, start=1)
-            ],
-        ]
-    )
-    event = TimelineEvent(
-        event_id=f"delegation-proposed:{delegation.conversation_ref}:{int(delegation.created_at * 1000)}",
-        conversation_id=delegation.conversation_ref,
-        kind="delegation_proposed",
-        title="Delegation plan proposed",
-        body=body,
-        status=delegation.status,
-    )
-    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=delegation.conversation_ref,
-        kind=event.kind,
-        title=event.title,
-        body=event.body,
-        status=event.status,
-        event_id=event.event_id,
-    )
+    """Publish a delegation-proposed event via the new publish_events API.
+
+    This is a best-effort notification; failures are silently ignored since the
+    delegation flow does not depend on timeline persistence.
+    """
+    from app.config import should_publish_event
+    from app.workflows.execution.registry_publish import _publish_to_registry
+
+    config = runtime.config
+    if not should_publish_event(config, "delegation.proposed"):
+        return
+
+    chat_id = str(getattr(message, "chat_id", "") or getattr(getattr(message, "chat", None), "id", ""))
+
+    try:
+        projection = runtime.services.control_plane.conversation_projection
+        await _publish_to_registry(
+            projection,
+            config,
+            "delegation.proposed",
+            origin_channel="telegram",
+            external_conversation_ref=chat_id,
+            target_agent_id=config.instance,
+            title=delegation.title or "Delegation",
+            actor=config.instance,
+            content=delegation.title or "",
+            metadata={
+                "task_count": len(delegation.tasks),
+                "target_agents": [],
+            },
+        )
+    except Exception:
+        pass  # Best-effort; delegation flow doesn't depend on this
 
 
 async def propose_delegation_plan(

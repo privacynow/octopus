@@ -66,10 +66,6 @@ class ConversationEgress(ABC):
 class ChannelEgress(ConversationEgress):
     """Extended outbound contract for channels that support richer interaction."""
 
-    async def publish_timeline(self, event: Any) -> None:
-        del event
-        return None
-
     async def sync_binding(self, binding: Any) -> None:
         del binding
         return None

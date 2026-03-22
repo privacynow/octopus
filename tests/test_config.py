@@ -14,7 +14,7 @@ import pytest
 from telegram.error import InvalidToken, NetworkError
 
 from app.agents.types import RegistryConnectionConfig
-from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
+from app.config import PUBLISH_LEVEL_KINDS, _parse_projects, load_config, load_dotenv_file, parse_allowed_users, should_publish_event, validate_config
 from app.runtime.services import BotServices
 from app.session_state import ProjectBinding
 from tests.support.config_support import make_config, make_registry_connection
@@ -1414,3 +1414,47 @@ def test_validate_config_duplicate_project_names():
     ))
     errors = validate_config(cfg)
     assert any("Duplicate" in e and "'dup'" in e for e in errors)
+
+
+# -- should_publish_event / PUBLISH_LEVEL_KINDS --
+
+
+def test_should_publish_event_returns_true_for_included_kind():
+    cfg = make_config(registry_publish_level="standard")
+    assert should_publish_event(cfg, "message.user") is True
+    assert should_publish_event(cfg, "message.bot") is True
+
+
+def test_should_publish_event_returns_false_for_excluded_kind():
+    cfg = make_config(registry_publish_level="minimal")
+    assert should_publish_event(cfg, "approval.requested") is False
+    assert should_publish_event(cfg, "delegation.proposed") is False
+    assert should_publish_event(cfg, "provider.response") is False
+
+
+def test_should_publish_event_returns_false_for_unknown_level():
+    cfg = make_config(registry_publish_level="nonexistent")
+    assert should_publish_event(cfg, "message.user") is False
+
+
+def test_all_levels_include_message_user_and_message_bot():
+    for level in ("minimal", "standard", "full"):
+        kinds = PUBLISH_LEVEL_KINDS[level]
+        assert "message.user" in kinds, f"{level} missing message.user"
+        assert "message.bot" in kinds, f"{level} missing message.bot"
+
+
+def test_full_level_includes_provider_request_tool_execution_file_change():
+    kinds = PUBLISH_LEVEL_KINDS["full"]
+    assert "provider.request" in kinds
+    assert "tool.execution" in kinds
+    assert "file.change" in kinds
+
+
+def test_minimal_level_excludes_approval_delegation_provider_response():
+    kinds = PUBLISH_LEVEL_KINDS["minimal"]
+    assert "approval.requested" not in kinds
+    assert "approval.decided" not in kinds
+    assert "delegation.proposed" not in kinds
+    assert "delegation.submitted" not in kinds
+    assert "provider.response" not in kinds

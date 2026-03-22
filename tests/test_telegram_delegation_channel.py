@@ -129,7 +129,7 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
 
 
 @pytest.mark.asyncio
-async def test_publish_delegation_proposed_event_uses_conversation_projection_port(monkeypatch, tmp_path: Path):
+async def test_publish_delegation_proposed_event_is_noop(tmp_path: Path):
     runtime = build_telegram_runtime(
         make_config(tmp_path),
         FakeProvider("codex"),
@@ -147,26 +147,10 @@ async def test_publish_delegation_proposed_event_uses_conversation_projection_po
             },
         ],
     )
-    published: list[dict[str, object]] = []
 
-    async def _record(**kwargs):
-        published.append(kwargs)
-
-    async def _fail(*args, **kwargs):
-        raise AssertionError("message publish_timeline shortcut should not be used")
-
-    monkeypatch.setattr(
-        runtime.services.control_plane.conversation_projection,
-        "publish_external_timeline",
-        _record,
-    )
-
+    # publish_delegation_proposed_event is now a no-op (legacy timeline removal)
     await delegation_channel.publish_delegation_proposed_event(
         runtime,
-        SimpleNamespace(publish_timeline=_fail),
+        SimpleNamespace(),
         delegation,
     )
-
-    assert published
-    assert published[0]["conversation_ref"] == "telegram:bot-1:12345"
-    assert published[0]["kind"] == "delegation_proposed"

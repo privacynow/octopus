@@ -11,14 +11,9 @@ from app.workflows.execution.finalization import FinalizationContext, finalize_e
 
 
 @pytest.mark.asyncio
-async def test_finalization_records_usage_publishes_timeline_and_schedules_webhook() -> None:
+async def test_finalization_records_usage_and_schedules_webhook() -> None:
     usage_calls: list[dict[str, object]] = []
-    timeline_calls: list[dict[str, object]] = []
     webhook_calls: list[dict[str, object]] = []
-
-    async def fake_publish_timeline(config, **kwargs):
-        del config
-        timeline_calls.append(kwargs)
 
     async def fake_webhook(url, **kwargs):
         webhook_calls.append({"url": url, **kwargs})
@@ -48,19 +43,16 @@ async def test_finalization_records_usage_publishes_timeline_and_schedules_webho
             record_usage=lambda data_dir, **kwargs: usage_calls.append(
                 {"data_dir": data_dir, **kwargs}
             ),
-            publish_timeline_event=fake_publish_timeline,
             completion_webhook_sender=fake_webhook,
         ),
     )
     await asyncio.sleep(0)
 
     assert result.usage_status == "recorded"
-    assert result.timeline_status == "published"
+    assert result.timeline_status == "skipped"
     assert result.webhook_status == "scheduled"
     assert len(usage_calls) == 1
     assert usage_calls[0]["work_item_id"] == "item-1"
-    assert len(timeline_calls) == 1
-    assert timeline_calls[0]["kind"] == "usage"
     assert len(webhook_calls) == 1
     assert webhook_calls[0]["url"] == "https://hooks.example.com/completed"
     assert webhook_calls[0]["status"] == "completed"
@@ -235,12 +227,6 @@ async def test_finalization_skips_completion_webhook_for_routed_task() -> None:
 
 @pytest.mark.asyncio
 async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
-    timeline_calls: list[dict[str, object]] = []
-
-    async def fake_publish_timeline(config, **kwargs):
-        del config
-        timeline_calls.append(kwargs)
-
     def exploding_usage(*args, **kwargs):
         raise RuntimeError("usage store unavailable")
 
@@ -259,23 +245,15 @@ async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
             conversation_ref="registry:conv-4",
             chat_id=123,
             record_usage=exploding_usage,
-            publish_timeline_event=fake_publish_timeline,
         ),
     )
 
     assert result.usage_status == "record_failed_non_blocking"
-    assert result.timeline_status == "published"
-    assert len(timeline_calls) == 1
+    assert result.timeline_status == "skipped"
 
 
 @pytest.mark.asyncio
 async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
-    timeline_calls: list[dict[str, object]] = []
-
-    async def fake_publish_timeline(config, **kwargs):
-        del config
-        timeline_calls.append(kwargs)
-
     result = await finalize_execution(
         RequestExecutionOutcome(
             status="completed",
@@ -291,12 +269,10 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
             conversation_ref="registry:prod:task:task-4b",
             routed_task_id="task-4b",
             authority_ref=registry_authority_ref("prod"),
-            publish_timeline_event=fake_publish_timeline,
         ),
     )
 
-    assert result.timeline_status == "skipped_routed_task"
-    assert timeline_calls == []
+    assert result.timeline_status == "skipped"
 
 
 @pytest.mark.asyncio

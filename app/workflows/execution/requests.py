@@ -36,6 +36,7 @@ from app.workflows.execution.contracts import (
     ExecutionRuntime,
     RequestExecutionOutcome,
 )
+from app.workflows.execution.registry_publish import _publish_to_registry
 
 
 def _conversation_key(chat_id: int | str) -> str:
@@ -177,6 +178,20 @@ async def execute_request(
     if credential_env is None:
         return None
 
+    # Publish user message event to registry (non-blocking)
+    if runtime.conversation_projection is not None:
+        await _publish_to_registry(
+            runtime.conversation_projection,
+            cfg,
+            "message.user",
+            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
+            external_conversation_ref=str(chat_id),
+            target_agent_id=cfg.agent_slug,
+            title=f"Chat {chat_id}",
+            actor=str(request_user_id) if request_user_id else "",
+            content=prompt,
+        )
+
     upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
@@ -271,6 +286,19 @@ async def execute_request(
         if result.resume_failed:
             error_text += runtime.render_provider_error(_msg.progress_session_not_resumed())
         await progress.update(error_text, force=True)
+        # Publish error event to registry (non-blocking)
+        if runtime.conversation_projection is not None:
+            await _publish_to_registry(
+                runtime.conversation_projection,
+                cfg,
+                "error",
+                origin_channel="telegram" if isinstance(chat_id, int) else "registry",
+                external_conversation_ref=str(chat_id),
+                target_agent_id=cfg.agent_slug,
+                title=f"Chat {chat_id}",
+                content=error_text[:500],
+                metadata={"error_type": "provider_error", "message": error_text[:500]},
+            )
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
@@ -326,6 +354,19 @@ async def execute_request(
     else:
         await runtime.send_formatted_reply(message, cleaned_reply)
     await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    # Publish bot reply event to registry (non-blocking)
+    if runtime.conversation_projection is not None:
+        await _publish_to_registry(
+            runtime.conversation_projection,
+            cfg,
+            "message.bot",
+            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
+            external_conversation_ref=str(chat_id),
+            target_agent_id=cfg.agent_slug,
+            title=f"Chat {chat_id}",
+            actor=cfg.agent_display_name,
+            content=cleaned_reply[:2000] if cleaned_reply else "",
+        )
     return RequestExecutionOutcome(
         status="completed",
         reply_text=cleaned_reply,

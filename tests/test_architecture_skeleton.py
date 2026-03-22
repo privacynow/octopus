@@ -16,7 +16,7 @@ EXPECTED_MODULES = (
     "app.channels.registry.ingress",
     "app.channels.registry.http",
     "app.channels.registry.presenters",
-    "app.channels.registry.ui",
+    "app.channels.registry.ws",
     "app.ports",
     "app.runtime",
     "app.runtime.dispatch",

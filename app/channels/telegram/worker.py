@@ -214,28 +214,6 @@ def _build_channel_egress(
     return channel_egress, runtime_chat, chat_id, resolved_conversation_ref, source
 
 
-async def _publish_timeline_event_for_runtime(
-    runtime: TelegramRuntime,
-    *,
-    config,
-    **kwargs: Any,
-) -> None:
-    del config
-    conversation_ref = str(kwargs.get("conversation_ref", ""))
-    if not conversation_ref:
-        return
-    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=conversation_ref,
-        kind=str(kwargs.get("kind", "")),
-        title=str(kwargs.get("title", "")),
-        body=str(kwargs.get("body", "")),
-        status=str(kwargs.get("status", "")),
-        progress=kwargs.get("progress"),
-        metadata=kwargs.get("metadata"),
-        event_id=kwargs.get("event_id"),
-    )
-
-
 async def _execute_worker_action(
     runtime: TelegramRuntime,
     event: InboundAction,
@@ -482,11 +460,6 @@ async def worker_dispatch(
                 save_session=lambda target_chat, session: save_session(runtime, target_chat, session),
                 task_routing=runtime.services.control_plane.task_routing,
                 record_usage=work_queue.record_usage,
-                publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
-                    runtime,
-                    config=config,
-                    **kwargs,
-                ),
             ),
         )
         return

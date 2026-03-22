@@ -282,6 +282,8 @@ class BotConfig:
     db_pool_min_size: int
     db_pool_max_size: int
     db_connect_timeout_seconds: int
+    # Registry publish level — controls which event kinds are published to the registry UI
+    registry_publish_level: str  # BOT_REGISTRY_PUBLISH_LEVEL: "minimal" | "standard" | "full"
 
     @property
     def allowed_user_ids(self) -> frozenset[int]:
@@ -302,6 +304,32 @@ class BotConfig:
     @property
     def provider(self) -> str:
         return self.provider_name
+
+
+PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
+    "minimal": {"message.user", "message.bot", "task.status", "error"},
+    "standard": {
+        "message.user", "message.bot", "task.status", "error",
+        "approval.requested", "approval.decided",
+        "delegation.proposed", "delegation.submitted",
+        "provider.response",
+    },
+    "full": {
+        "message.user", "message.bot", "task.status", "error",
+        "approval.requested", "approval.decided",
+        "delegation.proposed", "delegation.submitted",
+        "provider.response", "provider.request",
+        "tool.execution", "file.change",
+    },
+}
+
+
+def should_publish_event(config: BotConfig, kind: str) -> bool:
+    """Return True if the configured publish level includes the given event kind."""
+    allowed = PUBLISH_LEVEL_KINDS.get(config.registry_publish_level)
+    if allowed is None:
+        return False
+    return kind in allowed
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:
@@ -397,6 +425,16 @@ def _parse_agent_registries(
             )
         )
     return tuple(registries)
+
+
+def _validated_publish_level(raw: str) -> str:
+    value = raw.strip().lower() or "standard"
+    if value not in PUBLISH_LEVEL_KINDS:
+        raise SystemExit(
+            f"CONFIG ERROR: BOT_REGISTRY_PUBLISH_LEVEL must be one of "
+            f"{', '.join(sorted(PUBLISH_LEVEL_KINDS))}, got '{value}'"
+        )
+    return value
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -579,6 +617,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
         db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
+        registry_publish_level=_validated_publish_level(get("BOT_REGISTRY_PUBLISH_LEVEL", "standard")),
     )
 
 
@@ -686,6 +725,7 @@ def load_config_provider_health() -> BotConfig:
         db_pool_min_size=1,
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
+        registry_publish_level="standard",
     )
 
 

@@ -18,6 +18,13 @@ from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
 
 
 def _timeline_payload(event) -> TimelineEventPayload:
+    if isinstance(event, dict):
+        from app.agents.types import utcnow_iso
+
+        normalized = dict(event)
+        if "created_at" not in normalized:
+            normalized["created_at"] = utcnow_iso()
+        return TimelineEventPayload.model_validate(normalized)
     return TimelineEventPayload(
         event_id=event.event_id,
         conversation_id=event.conversation_id,

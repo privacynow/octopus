@@ -14,7 +14,6 @@ from app.agents.types import (
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    TimelineEvent,
     to_wire,
 )
 
@@ -182,35 +181,6 @@ class AgentRegistryClient:
             json_data=payload,
         )
 
-    async def publish_timeline(self, events: list[TimelineEvent], *, checkpoint: str = "") -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/timeline",
-            json_data={
-                "events": [to_wire(event) for event in events],
-                "checkpoint": checkpoint,
-            },
-        )
-
-    async def sync_binding(
-        self,
-        *,
-        conversation_id: str,
-        title: str,
-        origin_channel: str,
-        external_id: str,
-    ) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/conversations/bind",
-            json_data={
-                "conversation_id": conversation_id,
-                "title": title,
-                "origin_channel": origin_channel,
-                "external_id": external_id,
-            },
-        )
-
     async def search(self, query: AgentDiscoveryQuery) -> list[dict[str, Any]]:
         result = await self._request(
             "POST",
@@ -269,6 +239,44 @@ class AgentRegistryClient:
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/result",
             json_data=to_wire(result),
+        )
+
+    async def create_conversation(
+        self,
+        *,
+        target_agent_id: str,
+        origin_channel: str,
+        external_conversation_ref: str,
+        title: str = "",
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/conversations",
+            json_data={
+                "target_agent_id": target_agent_id,
+                "origin_channel": origin_channel,
+                "external_conversation_ref": external_conversation_ref,
+                "title": title,
+            },
+        )
+
+    async def publish_events(
+        self,
+        conversation_id: str,
+        events: list[Any],
+    ) -> dict[str, Any]:
+        serialized = []
+        for e in events:
+            if hasattr(e, "model_dump"):
+                serialized.append(e.model_dump())
+            elif isinstance(e, dict):
+                serialized.append(e)
+            else:
+                serialized.append(dict(e))
+        return await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/events",
+            json_data={"events": serialized},
         )
 
     async def deregister(self) -> dict[str, Any]:

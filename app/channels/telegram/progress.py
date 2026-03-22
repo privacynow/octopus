@@ -70,13 +70,7 @@ async def progress_timeline_callback(
     force: bool = False,
 ) -> None:
     del force
-    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=conversation_ref,
-        kind="progress",
-        title="Progress",
-        body=html_text,
-        metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
-    )
+    del runtime, conversation_ref, routed_task_id, html_text
 
 
 def _progress_summary(html_text: str, *, limit: int = 200) -> str:

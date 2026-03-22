@@ -35,7 +35,6 @@ class FinalizationContext:
     save_session: Callable[[int | str, SessionState], None] | None = None
     task_routing: TaskRoutingPort | None = None
     record_usage: Callable[..., None] | None = None
-    publish_timeline_event: Callable[..., Awaitable[None]] | None = None
     completion_webhook_sender: Callable[..., Awaitable[None]] | None = None
 
 
@@ -189,33 +188,6 @@ async def finalize_execution(
                     context.item_id,
                     exc_info=True,
                 )
-        if context.routed_task_id:
-            timeline_status = "skipped_routed_task"
-        elif (
-            context.conversation_ref
-            and context.publish_timeline_event is not None
-            and (outcome.prompt_tokens > 0 or outcome.completion_tokens > 0)
-        ):
-            try:
-                # Timeline publication is also non-blocking. It is an audit
-                # side effect, not the completion owner for the work item.
-                await context.publish_timeline_event(
-                    context.config,
-                    conversation_ref=context.conversation_ref,
-                    kind="usage",
-                    title="Token usage",
-                    body="",
-                    metadata={
-                        "prompt_tokens": outcome.prompt_tokens,
-                        "completion_tokens": outcome.completion_tokens,
-                        "cost_usd": outcome.cost_usd,
-                        "provider": context.config.provider_name,
-                    },
-                )
-                timeline_status = "published"
-            except Exception:
-                timeline_status = "publish_failed_non_blocking"
-                log.warning("Failed to publish usage timeline event", exc_info=True)
 
     webhook_status = "skipped"
     if (

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -45,56 +46,97 @@ class CodexProvider:
             errors.append("'codex' binary not found in PATH")
         return errors
 
-    async def check_runtime_health(self) -> list[str]:
-        errors: list[str] = []
-        # Version check
+    @staticmethod
+    def _codex_auth_file() -> Path:
+        codex_home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+        return Path(codex_home) / "auth.json"
+
+    async def _run_health_command(
+        self,
+        *cmd: str,
+        timeout: int,
+    ) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "codex", "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                errors.append(f"'codex --version' failed (rc={proc.returncode}): {stderr.decode()[:200]}")
-            else:
-                log.info("codex version: %s", stdout.decode().strip())
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError):
             proc.kill()
             await proc.wait()
+            raise
+        return proc.returncode, stdout.decode(), stderr.decode()
+
+    async def check_auth_health(self) -> list[str]:
+        errors: list[str] = []
+        try:
+            returncode, stdout, stderr = await self._run_health_command(
+                "codex", "--version", timeout=10
+            )
+            if returncode != 0:
+                errors.append(f"'codex --version' failed (rc={returncode}): {stderr[:200]}")
+            else:
+                log.info("codex version: %s", stdout.strip())
+        except (asyncio.TimeoutError, TimeoutError):
             errors.append("'codex --version' timed out")
         except OSError as e:
             errors.append(f"'codex' binary not executable: {e}")
-        # API ping (mirrors real execution flags)
-        if not errors:
-            try:
-                ping_cmd = ["codex", "exec", "--json", "--ephemeral",
-                            "--sandbox", self.config.codex_sandbox]
-                if self.config.codex_skip_git_repo_check:
-                    ping_cmd.append("--skip-git-repo-check")
-                if self.config.model:
-                    ping_cmd.extend(["--model", self.config.model])
-                if self.config.codex_profile:
-                    ping_cmd.extend(["--profile", self.config.codex_profile])
-                ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
-                proc = await asyncio.create_subprocess_exec(
-                    *ping_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
+        if errors:
+            return errors
+
+        auth_file = self._codex_auth_file()
+        try:
+            returncode, stdout, stderr = await self._run_health_command(
+                "codex", "login", "status", timeout=10
+            )
+            combined = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part).strip()
+            if returncode != 0:
+                errors.append(
+                    f"'codex login status' failed (rc={returncode}): {combined[:200]}"
                 )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-                if proc.returncode != 0:
-                    errors.append(f"API ping failed (rc={proc.returncode}): {stderr.decode()[:200]}")
-                else:
-                    log.info("codex API ping ok")
-            except (asyncio.TimeoutError, TimeoutError):
-                proc.kill()
-                await proc.wait()
-                errors.append("API ping timed out (30s)")
-            except OSError as e:
-                errors.append(f"API ping error: {e}")
+            else:
+                if combined:
+                    log.info("codex login status: %s", trim_text(combined, 200))
+                if "logged in" not in combined.lower() and not auth_file.is_file():
+                    errors.append(
+                        "Codex login status did not confirm an authenticated session. "
+                        "Run 'codex login --device-auth'."
+                    )
+        except (asyncio.TimeoutError, TimeoutError):
+            errors.append("'codex login status' timed out")
+        except OSError as e:
+            errors.append(f"'codex login status' failed: {e}")
+
+        if not errors and not auth_file.is_file():
+            errors.append("Codex auth file not found. Run 'codex login --device-auth'.")
+        return errors
+
+    async def check_runtime_health(self) -> list[str]:
+        errors = await self.check_auth_health()
+        if errors:
+            return errors
+        try:
+            ping_cmd = ["codex", "exec", "--json", "--ephemeral",
+                        "--sandbox", self.config.codex_sandbox]
+            if self.config.codex_skip_git_repo_check:
+                ping_cmd.append("--skip-git-repo-check")
+            if self.config.model:
+                ping_cmd.extend(["--model", self.config.model])
+            if self.config.codex_profile:
+                ping_cmd.extend(["--profile", self.config.codex_profile])
+            ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
+            returncode, _, stderr = await self._run_health_command(*ping_cmd, timeout=30)
+            if returncode != 0:
+                errors.append(f"API ping failed (rc={returncode}): {stderr[:200]}")
+            else:
+                log.info("codex API ping ok")
+        except (asyncio.TimeoutError, TimeoutError):
+            errors.append("API ping timed out (30s)")
+        except OSError as e:
+            errors.append(f"API ping error: {e}")
         return errors
 
     # -- command building --------------------------------------------------

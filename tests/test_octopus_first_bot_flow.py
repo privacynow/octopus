@@ -45,8 +45,8 @@ prompt_with_default() {{ printf 'claude\\n'; }}
 ensure_provider_image_ready() {{ :; }}
 ensure_provider_auth_ready() {{ :; }}
 ensure_network() {{ :; }}
-run_bot_doctor_until_ready() {{ return 0; }}
-start_bot_until_running() {{ return 0; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
 printf '123456:real-token\\n\\n' | first_bot_flow quick
 """
     result = _run_bash(script, cwd=tmp_path)
@@ -69,8 +69,35 @@ printf '123456:real-token\\n\\n' | first_bot_flow quick
     mode = stat.S_IMODE(env_file.stat().st_mode)
     assert mode == 0o600
     assert "This token belongs to Example Bot (@example_bot)." in result.stdout
+    assert result.stdout.index("doctor:example-bot") < result.stdout.index("start:example-bot")
     assert "Bot is running!" in result.stdout
     assert "Bot name" not in result.stdout + result.stderr
+
+
+def test_first_bot_flow_stops_when_provider_auth_is_incomplete(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+print_channel_setup_help() {{ :; }}
+validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
+prompt_with_default() {{ printf 'claude\\n'; }}
+ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1"; }}
+ensure_provider_auth_ready() {{ printf 'auth:%s\\n' "$1"; return 1; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
+print_first_bot_success() {{ printf 'SUCCESS\\n'; }}
+if printf '123456:real-token\\n\\n' | first_bot_flow quick; then
+  exit 1
+fi
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "auth:claude" in result.stdout
+    assert "doctor:example-bot" not in result.stdout
+    assert "start:example-bot" not in result.stdout
+    assert "SUCCESS" not in result.stdout
 
 
 def test_prepare_new_bot_setup_quick_can_switch_to_full_mode(tmp_path: Path) -> None:
@@ -117,10 +144,11 @@ source "{REPO}/octopus"
 cd "{tmp_path}"
 print_channel_setup_help() {{ :; }}
 validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
+bot_is_running() {{ return 0; }}
 if printf '123456:real-token\\n' | first_bot_flow quick; then
   exit 1
 fi
     """
     result = _run_bash(script, cwd=tmp_path, check=False)
     assert result.returncode == 0
-    assert "already configured as 'existing-bot'" in result.stderr
+    assert "already running as 'existing-bot'" in result.stderr

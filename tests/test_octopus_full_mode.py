@@ -61,13 +61,14 @@ prepare_new_bot_setup() {{
 ensure_provider_image_ready() {{ :; }}
 ensure_provider_auth_ready() {{ :; }}
 ensure_network() {{ :; }}
-run_bot_doctor_until_ready() {{ return 0; }}
-start_bot_until_running() {{ return 0; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
 verify_registry_enrollment() {{ return 0; }}
 first_bot_flow full
 cat .deploy/bots/example-bot/.env
 """
     result = _run_bash(script, cwd=tmp_path)
+    assert result.stdout.index("doctor:example-bot") < result.stdout.index("start:example-bot")
     assert "BOT_ROLE=\"Product Bot\"" in result.stdout
     assert "BOT_AGENT_ROLE=\"Product Bot\"" in result.stdout
     assert "BOT_AGENT_TAGS=prod,helpdesk" in result.stdout

@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from pathlib import Path
 from typing import Any
 
 from app.config import BotConfig
@@ -38,49 +39,91 @@ class ClaudeProvider:
             errors.append("'claude' binary not found in PATH")
         return errors
 
-    async def check_runtime_health(self) -> list[str]:
-        errors: list[str] = []
-        # Version check
+    @staticmethod
+    def _auth_file() -> Path:
+        return Path.home() / ".claude.json"
+
+    @staticmethod
+    def _auth_dir() -> Path:
+        return Path.home() / ".claude"
+
+    @classmethod
+    def _has_auth_artifacts(cls) -> bool:
+        auth_file = cls._auth_file()
+        if auth_file.is_file() and auth_file.stat().st_size > 0:
+            return True
+
+        auth_dir = cls._auth_dir()
+        if not auth_dir.is_dir():
+            return False
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "claude", "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=self._clean_env(),
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                errors.append(f"'claude --version' failed (rc={proc.returncode}): {stderr.decode()[:200]}")
-            else:
-                log.info("claude version: %s", stdout.decode().strip())
+            for path in auth_dir.rglob("*"):
+                if path.is_file() and path.stat().st_size > 0:
+                    return True
+        except OSError:
+            return False
+        return False
+
+    async def _run_health_command(
+        self,
+        *cmd: str,
+        timeout: int,
+    ) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._clean_env(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError):
             proc.kill()
             await proc.wait()
+            raise
+        return proc.returncode, stdout.decode(), stderr.decode()
+
+    async def check_auth_health(self) -> list[str]:
+        errors: list[str] = []
+        try:
+            returncode, stdout, stderr = await self._run_health_command(
+                "claude", "--version", timeout=10
+            )
+            if returncode != 0:
+                errors.append(f"'claude --version' failed (rc={returncode}): {stderr[:200]}")
+            else:
+                log.info("claude version: %s", stdout.strip())
+        except (asyncio.TimeoutError, TimeoutError):
             errors.append("'claude --version' timed out")
         except OSError as e:
             errors.append(f"'claude' binary not executable: {e}")
-        # API ping
-        if not errors:
-            try:
-                model = self.config.model or "claude-sonnet-4-20250514"
-                proc = await asyncio.create_subprocess_exec(
-                    "claude", "-p", "--model", model, "--max-turns", "1",
-                    "--output-format", "text", "reply with ok",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=self._clean_env(),
-                )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-                if proc.returncode != 0:
-                    errors.append(f"API ping failed (rc={proc.returncode}): {stderr.decode()[:200]}")
-                else:
-                    log.info("claude API ping ok")
-            except (asyncio.TimeoutError, TimeoutError):
-                proc.kill()
-                await proc.wait()
-                errors.append("API ping timed out (15s)")
-            except OSError as e:
-                errors.append(f"API ping error: {e}")
+        if errors:
+            return errors
+
+        if not self._has_auth_artifacts():
+            errors.append("Claude auth not found. Run 'claude' and complete /login.")
+        return errors
+
+    async def check_runtime_health(self) -> list[str]:
+        errors = await self.check_auth_health()
+        if errors:
+            return errors
+        try:
+            model = self.config.model or "claude-sonnet-4-20250514"
+            returncode, _, stderr = await self._run_health_command(
+                "claude", "-p", "--model", model, "--max-turns", "1",
+                "--output-format", "text", "reply with ok",
+                timeout=15,
+            )
+            if returncode != 0:
+                errors.append(f"API ping failed (rc={returncode}): {stderr[:200]}")
+            else:
+                log.info("claude API ping ok")
+        except (asyncio.TimeoutError, TimeoutError):
+            errors.append("API ping timed out (15s)")
+        except OSError as e:
+            errors.append(f"API ping error: {e}")
         return errors
 
     # -- subprocess env ----------------------------------------------------

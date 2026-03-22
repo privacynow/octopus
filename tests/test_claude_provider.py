@@ -91,6 +91,56 @@ def test_clean_env():
     assert "BOT_TELEGRAM_TOKEN" not in env
 
 
+async def test_check_auth_health_requires_nonempty_auth_file(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_file = tmp_path / ".claude.json"
+    auth_file.write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: auth_file))
+    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: tmp_path / ".claude"))
+
+    async def fake_run(*cmd: str, timeout: int):
+        assert cmd == ("claude", "--version")
+        assert timeout == 10
+        return 0, "claude 2.1.79\n", ""
+
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_auth_health() == []
+
+
+async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_dir = tmp_path / ".claude"
+    auth_dir.mkdir()
+    (auth_dir / "session.json").write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: tmp_path / ".claude.json"))
+    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: auth_dir))
+
+    async def fake_run(*cmd: str, timeout: int):
+        assert cmd == ("claude", "--version")
+        assert timeout == 10
+        return 0, "claude 2.1.81\n", ""
+
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_auth_health() == []
+
+
+async def test_check_runtime_health_short_circuits_when_auth_fails():
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+
+    async def fake_auth():
+        return ["auth missing"]
+
+    async def fake_run(*cmd: str, timeout: int):
+        raise AssertionError(f"runtime probe should not run: {cmd} timeout={timeout}")
+
+    provider.check_auth_health = fake_auth  # type: ignore[method-assign]
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_runtime_health() == ["auth missing"]
+
+
 def test_effective_model_overrides_config_model():
     """effective_model from RunContext should override config.model in the command."""
     p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))

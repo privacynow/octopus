@@ -30,6 +30,17 @@ ensure_provider_auth_dir() {
   esac
 }
 
+claude_auth_artifacts_exist() {
+  local auth_root="${1:-.deploy/provider-auth/claude}"
+  if [ -f "$auth_root/.claude.json" ] && [ -s "$auth_root/.claude.json" ]; then
+    return 0
+  fi
+  if [ -d "$auth_root/.claude" ] && find "$auth_root/.claude" -mindepth 1 -type f -size +0c -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  return 1
+}
+
 provider_auth_hint() {
   local provider="$1"
   test -f ".deploy/provider-auth/$provider/.authed"
@@ -46,14 +57,17 @@ update_provider_auth_hint() {
 }
 
 provider_has_auth_files() {
-  # Fast local check: do auth files exist on disk?
+  # Fast local check: do provider-specific auth artifacts exist on disk?
+  # Must check for artifacts that are ONLY created by a successful login,
+  # not the empty bootstrap files/directories pre-created by ensure_provider_auth_dir().
   local provider="$1"
   case "$provider" in
     claude)
-      [ -d ".deploy/provider-auth/claude/.claude" ] && [ -f ".deploy/provider-auth/claude/.claude.json" ]
+      claude_auth_artifacts_exist ".deploy/provider-auth/claude"
       ;;
     codex)
-      [ -d ".deploy/provider-auth/codex/.codex" ] && [ -f ".deploy/provider-auth/codex/.codex/auth.json" ]
+      # auth.json is only created by codex login, never by bootstrap.
+      [ -f ".deploy/provider-auth/codex/.codex/auth.json" ]
       ;;
     *)
       return 1

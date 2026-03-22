@@ -118,10 +118,11 @@ source "{REPO}/octopus"
 cd "{tmp_path}"
 print_channel_setup_help() {{ :; }}
 validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
+bot_is_running() {{ return 0; }}
 if printf '123456:real-token\\n' | first_bot_flow quick; then
   exit 1
 fi
     """
     result = _run_bash(script, cwd=tmp_path, check=False)
     assert result.returncode == 0
-    assert "already configured as 'existing-bot'" in result.stderr
+    assert "already running as 'existing-bot'" in result.stderr

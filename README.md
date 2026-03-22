@@ -163,6 +163,24 @@ The most common operator commands:
 If more than one bot exists, Octopus asks which bot to use only when the choice
 is ambiguous.
 
+## Build Troubleshooting
+
+Bot images always start from `python:3.12-slim`, then install the selected
+provider CLI inside the image.
+
+- Claude builds default to Anthropic's documented npm package install path:
+  `npm install -g @anthropic-ai/claude-code`
+- If you need to pin or override that path, set
+  `CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@<version>` before running
+  `./octopus` or `./scripts/provider/build_bot_image.sh claude`
+- If you specifically want Anthropic's native installer instead, set
+  `CLAUDE_INSTALL_METHOD=native`; `CLAUDE_INSTALL_URL` remains available as an
+  override for that path
+- If Docker Desktop cannot pull `python:3.12-slim` from Docker Hub, retry
+  `docker pull python:3.12-slim` directly first; on Macs with flaky dual-stack
+  Docker networking, switching Docker Desktop to IPv4-only mode can stabilize
+  pulls
+
 ## Most Useful Commands
 
 | Command | What it does |

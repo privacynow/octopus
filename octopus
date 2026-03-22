@@ -1039,7 +1039,8 @@ ensure_provider_auth_ready() {
     return 0
   fi
 
-  octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
+  octopus_error "Provider authentication was detected inside the login container but did not persist to .deploy/provider-auth/$provider."
+  octopus_error "Finish login again. If this repeats, the provider is writing auth outside the shared mount."
   return 1
 }
 

@@ -59,19 +59,31 @@ BANNER
   claude)
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
-║  ACTION REQUIRED — INSIDE THE CLAUDE CLI                    ║
+║  ACTION REQUIRED — CLAUDE CLI LOGIN                         ║
 ║                                                              ║
-║  1. Run:  /login                                             ║
-║  2. Follow the browser link to authenticate.                 ║
-║  3. When done — TYPE:  /exit   (or press Ctrl-D)             ║
+║  The CLI will prompt for authentication automatically.       ║
+║  Follow the browser link to sign in.                         ║
 ║                                                              ║
-║  You MUST exit the CLI to return to setup.                   ║
+║  If already signed in, TYPE:  /exit   (or press Ctrl-D)      ║
+║  to return to setup.                                         ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
+    # Pre-create bind-mount targets so the copy-back after login has
+    # a destination even if ensure_provider_auth_dir wasn't called.
+    if [ -d /home/bot/.provider-auth ]; then
+      mkdir -p /home/bot/.provider-auth/.claude
+    fi
     set +e
     claude
     exit_code=$?
     set -e
+    # Claude CLI uses atomic writes (temp + rename) which replaces symlinks
+    # with regular files in the container layer. Copy auth back to the bind
+    # mount so credentials persist on the host after this container exits.
+    if [ -d /home/bot/.provider-auth ]; then
+      cp -a /home/bot/.claude.json /home/bot/.provider-auth/.claude.json 2>/dev/null || true
+      cp -a /home/bot/.claude/* /home/bot/.provider-auth/.claude/ 2>/dev/null || true
+    fi
     if provider_has_local_auth_files claude; then
       echo "✓ Claude authentication complete. Returning to setup..."
     else

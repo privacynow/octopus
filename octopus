@@ -269,8 +269,20 @@ registry_ui_url() {
   printf 'http://localhost:%s/ui\n' "${registry_port:-8787}"
 }
 
+local_registry_internal_url() {
+  printf 'http://registry:8787\n'
+}
+
 read_local_registry_enroll_token() {
   read_bot_env_value REGISTRY_ENROLL_TOKEN .deploy/registry/.env
+}
+
+read_local_registry_ui_token() {
+  read_bot_env_value REGISTRY_UI_TOKEN .deploy/registry/.env
+}
+
+stdin_is_tty() {
+  [ -t 0 ]
 }
 
 registry_connection_id_exists() {
@@ -362,6 +374,76 @@ configure_bot_for_standalone() {
   env_file="$(bot_env_file "$slug")"
   upsert_env_file_value BOT_AGENT_MODE "standalone" "$env_file"
   clear_registry_connection_values "$env_file"
+}
+
+bot_local_registry_connection_row() {
+  local slug="$1" registry_id="" registry_url="" enroll_token="" registry_scope=""
+  while IFS='|' read -r registry_id registry_url enroll_token registry_scope; do
+    [ "$registry_url" = "$(local_registry_internal_url)" ] || continue
+    printf '%s|%s|%s|%s\n' "$registry_id" "$registry_url" "$enroll_token" "$registry_scope"
+    return 0
+  done < <(bot_registry_connection_records "$slug")
+  return 1
+}
+
+bot_has_local_registry_connection() {
+  bot_local_registry_connection_row "$1" >/dev/null 2>&1
+}
+
+bot_local_registry_connection_id() {
+  local row="" registry_id="" registry_url="" enroll_token="" registry_scope=""
+  row="$(bot_local_registry_connection_row "$1" || true)"
+  [ -n "$row" ] || return 1
+  IFS='|' read -r registry_id registry_url enroll_token registry_scope <<< "$row"
+  printf '%s\n' "$registry_id"
+}
+
+bot_local_registry_scope() {
+  local row="" registry_id="" registry_url="" enroll_token="" registry_scope=""
+  row="$(bot_local_registry_connection_row "$1" || true)"
+  [ -n "$row" ] || return 1
+  IFS='|' read -r registry_id registry_url enroll_token registry_scope <<< "$row"
+  printf '%s\n' "$registry_scope"
+}
+
+bot_local_registry_connection_state() {
+  local slug="$1" registry_id=""
+  registry_id="$(bot_local_registry_connection_id "$slug" || true)"
+  if [ -z "$registry_id" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  if bot_registry_has_identity "$slug" "$registry_id"; then
+    printf 'enrolled\n'
+  else
+    printf 'configured\n'
+  fi
+}
+
+bot_local_registry_runtime_state() {
+  local slug="$1" registry_id="" state_rows="" state_id="" connectivity="" last_error=""
+  registry_id="$(bot_local_registry_connection_id "$slug" || true)"
+  if [ -z "$registry_id" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  if ! bot_registry_has_identity "$slug" "$registry_id"; then
+    printf 'enrollment failed\n'
+    return 0
+  fi
+  if ! bot_is_running "$slug"; then
+    printf 'stopped\n'
+    return 0
+  fi
+  state_rows="$(bot_registry_state_rows "$slug" || true)"
+  while IFS='|' read -r state_id connectivity last_error; do
+    [ -n "$state_id" ] || continue
+    if [ "$state_id" = "$registry_id" ]; then
+      printf '%s\n' "${connectivity:-connected}"
+      return 0
+    fi
+  done <<< "$state_rows"
+  printf 'connected\n'
 }
 
 clear_bot_registry_state() {
@@ -613,6 +695,72 @@ print_registry_connection_success() {
   fi
 }
 
+ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS=""
+ENSURE_LOCAL_REGISTRY_CONNECTION_ID=""
+ENSURE_LOCAL_REGISTRY_CONNECTION_SCOPE=""
+ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR=""
+
+ensure_local_registry_connection() {
+  local slug="${1:-}" desired_scope="${2:-full}" enroll_token="" registry_id="" registry_scope="" local_url=""
+  ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS=""
+  ENSURE_LOCAL_REGISTRY_CONNECTION_ID=""
+  ENSURE_LOCAL_REGISTRY_CONNECTION_SCOPE=""
+  ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR=""
+  local_url="$(local_registry_internal_url)"
+
+  ensure_local_registry || {
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="could not start the local registry"
+    octopus_error "Could not start the local registry. Run ./octopus registry start and try again."
+    return 1
+  }
+
+  enroll_token="$(read_local_registry_enroll_token)"
+  if [ -z "$enroll_token" ]; then
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="local registry setup is incomplete"
+    octopus_error "Local registry setup is incomplete. Run ./octopus registry start and try again."
+    return 1
+  fi
+
+  if bot_has_local_registry_connection "$slug"; then
+    registry_id="$(bot_local_registry_connection_id "$slug" || true)"
+    registry_scope="$(bot_local_registry_scope "$slug" || true)"
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ID="$registry_id"
+    ENSURE_LOCAL_REGISTRY_CONNECTION_SCOPE="${registry_scope:-$desired_scope}"
+    if bot_registry_has_identity "$slug" "$registry_id"; then
+      ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS="noop"
+      return 0
+    fi
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="enrollment failed"
+    restart_bot_after_config_change "$slug" "$registry_id" || {
+      ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="could not restart the bot"
+      return 1
+    }
+    verify_registry_enrollment "$slug" "$registry_id" || {
+      ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="enrollment failed"
+      return 1
+    }
+    ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS="retried"
+    return 0
+  fi
+
+  registry_id="$(derive_registry_connection_id "$slug" "local" "$local_url")"
+  ENSURE_LOCAL_REGISTRY_CONNECTION_ID="$registry_id"
+  ENSURE_LOCAL_REGISTRY_CONNECTION_SCOPE="$desired_scope"
+  add_bot_registry_connection "$slug" "$local_url" "$enroll_token" "$desired_scope" "$registry_id" || {
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="could not save the local registry connection"
+    return 1
+  }
+  restart_bot_after_config_change "$slug" "$registry_id" || {
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="could not restart the bot"
+    return 1
+  }
+  verify_registry_enrollment "$slug" "$registry_id" || {
+    ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR="enrollment failed"
+    return 1
+  }
+  ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS="added"
+}
+
 choose_registry_connection_id() {
   local slug="$1" prompt="${2:-Choose a registry connection}" choice=""
   local records=() registry_id="" registry_url="" enroll_token="" registry_scope=""
@@ -838,6 +986,275 @@ manage_bot_registry_flow() {
   done
 }
 
+selected_bots_need_local_scope() {
+  local slug=""
+  for slug in "$@"; do
+    [ "$(bot_local_registry_connection_state "$slug")" = "none" ] && return 0
+  done
+  return 1
+}
+
+connect_bot_to_local_registry_once() {
+  local slug="$1" desired_scope="${2:-full}" label=""
+  label="$(bot_identity_label "$slug")"
+  if ensure_local_registry_connection "$slug" "$desired_scope"; then
+    case "$ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS" in
+      noop)
+        printf '%s is already enrolled on the local registry.\n' "$label"
+        ;;
+      *)
+        printf 'Bot %s is now connected to the local registry.\n' "$slug"
+        ;;
+    esac
+    return 0
+  fi
+  return 1
+}
+
+connect_bots_to_local_registry_batch() {
+  local desired_scope="${1:-full}"
+  shift || true
+  local slug="" label="" success_count=0 skipped_count=0 failure_count=0 failure_reason=""
+  local failures=()
+  for slug in "$@"; do
+    [ -n "$slug" ] || continue
+    label="$(bot_identity_label "$slug")"
+    if ensure_local_registry_connection "$slug" "$desired_scope"; then
+      case "$ENSURE_LOCAL_REGISTRY_CONNECTION_STATUS" in
+        noop)
+          printf '%s — already enrolled on local registry, skipping\n' "$label"
+          skipped_count=$((skipped_count + 1))
+          ;;
+        *)
+          printf 'Connecting %s... done\n' "$label"
+          success_count=$((success_count + 1))
+          ;;
+      esac
+    else
+      failure_reason="${ENSURE_LOCAL_REGISTRY_CONNECTION_ERROR:-failed}"
+      printf 'Connecting %s... failed (%s)\n' "$label" "$failure_reason"
+      failures+=("${slug}: ${failure_reason} — retry with ./octopus registry connect ${slug}")
+      failure_count=$((failure_count + 1))
+    fi
+  done
+
+  printf '\n'
+  printf '%s connected' "$success_count"
+  if [ "$skipped_count" -gt 0 ]; then
+    printf ', %s skipped' "$skipped_count"
+  fi
+  if [ "$failure_count" -gt 0 ]; then
+    printf ', %s failed' "$failure_count"
+  fi
+  printf '.\n'
+  if [ "$failure_count" -gt 0 ]; then
+    printf 'Failures:\n'
+    printf '  %s\n' "${failures[@]}"
+    return 1
+  fi
+}
+
+prompt_local_registry_connect_after_start() {
+  local bot_count=0 slug="" choice="" label="" state="" scope="full" all_label="All eligible bots"
+  local slugs=()
+  local eligible=()
+  if ! stdin_is_tty; then
+    return 0
+  fi
+  bot_count="$(count_bots)"
+  [ "$bot_count" -gt 0 ] || return 0
+
+  while IFS= read -r slug; do
+    [ -n "$slug" ] || continue
+    slugs+=("$slug")
+    state="$(bot_local_registry_connection_state "$slug")"
+    [ "$state" = "enrolled" ] || eligible+=("$slug")
+  done < <(list_bot_slugs)
+
+  [ "${#eligible[@]}" -gt 0 ] || return 0
+
+  if [ "${#slugs[@]}" -eq 1 ]; then
+    slug="${slugs[0]}"
+    label="$(bot_identity_label "$slug")"
+    read -r -p "Connect ${label} to the registry? [Y/n] " choice || return 0
+    case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+      n|no)
+        return 0
+        ;;
+    esac
+    if selected_bots_need_local_scope "$slug"; then
+      scope="$(prompt_registry_scope)" || return 1
+    fi
+    connect_bot_to_local_registry_once "$slug" "$scope"
+    return $?
+  fi
+
+  if [ "${#eligible[@]}" -eq "${#slugs[@]}" ]; then
+    all_label="All bots"
+  fi
+  printf 'Connect bots to the new registry?\n'
+  local index=1
+  for slug in "${slugs[@]}"; do
+    label="$(bot_identity_label "$slug")"
+    state="$(bot_local_registry_connection_state "$slug")"
+    case "$state" in
+      enrolled)
+        printf '  %d. %s — enrolled on local registry\n' "$index" "$label"
+        ;;
+      configured)
+        printf '  %d. %s — local registry configured, enrollment pending\n' "$index" "$label"
+        ;;
+      *)
+        printf '  %d. %s\n' "$index" "$label"
+        ;;
+    esac
+    index=$((index + 1))
+  done
+  printf '  a. %s\n' "$all_label"
+  printf '  n. Skip\n'
+  read -r -p "Choose: " choice || return 0
+  case "$choice" in
+    a|A)
+      if selected_bots_need_local_scope "${eligible[@]}"; then
+        scope="$(prompt_registry_scope)" || return 1
+      fi
+      connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
+      return $?
+      ;;
+    n|N|"")
+      return 0
+      ;;
+    *[!0-9]*)
+      if [ -f "$(bot_env_file "$choice")" ]; then
+        slug="$choice"
+      else
+        octopus_error "No bot named '$choice' is configured."
+        return 1
+      fi
+      ;;
+    *)
+      if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
+        slug="${slugs[$((choice - 1))]}"
+      else
+        octopus_error "Choose one of the listed bots."
+        return 1
+      fi
+      ;;
+  esac
+
+  state="$(bot_local_registry_connection_state "$slug")"
+  if [ "$state" = "enrolled" ]; then
+    printf '%s is already enrolled on the local registry.\n' "$(bot_identity_label "$slug")"
+    return 0
+  fi
+  if [ "$state" = "none" ]; then
+    scope="$(prompt_registry_scope)" || return 1
+  fi
+  connect_bot_to_local_registry_once "$slug" "$scope"
+}
+
+connect_bot_to_local_registry_menu() {
+  local slug="" choice="" state="" label="" scope="full"
+  local slugs=()
+  local eligible=()
+  while IFS= read -r slug; do
+    [ -n "$slug" ] || continue
+    slugs+=("$slug")
+    state="$(bot_local_registry_connection_state "$slug")"
+    [ "$state" = "enrolled" ] || eligible+=("$slug")
+  done < <(list_bot_slugs)
+
+  case "${#slugs[@]}" in
+    0)
+      octopus_error "No bots configured. Run ./octopus to get started."
+      return 1
+      ;;
+    1)
+      slug="${slugs[0]}"
+      state="$(bot_local_registry_connection_state "$slug")"
+      if [ "$state" = "enrolled" ]; then
+        printf '%s is already enrolled on the local registry.\n' "$(bot_identity_label "$slug")"
+        return 0
+      fi
+      if [ "$state" = "none" ]; then
+        scope="$(prompt_registry_scope)" || return 1
+      fi
+      connect_bot_to_local_registry_once "$slug" "$scope"
+      return $?
+      ;;
+  esac
+
+  printf 'Select a bot:\n'
+  local index=1
+  for slug in "${slugs[@]}"; do
+    label="$(bot_identity_label "$slug")"
+    state="$(bot_local_registry_connection_state "$slug")"
+    case "$state" in
+      enrolled)
+        printf '  %d. %s — enrolled on local registry\n' "$index" "$label"
+        ;;
+      configured)
+        printf '  %d. %s — local registry configured, enrollment pending\n' "$index" "$label"
+        ;;
+      *)
+        printf '  %d. %s\n' "$index" "$label"
+        ;;
+    esac
+    index=$((index + 1))
+  done
+  if [ "${#eligible[@]}" -gt 0 ]; then
+    printf '  a. All eligible bots\n'
+  fi
+
+  while true; do
+    read -r -p "Bot slug or number: " choice || return 1
+    case "$choice" in
+      '' )
+        octopus_error "Choose a bot to continue."
+        ;;
+      a|A)
+        if [ "${#eligible[@]}" -eq 0 ]; then
+          octopus_error "All bots are already enrolled on the local registry."
+          continue
+        fi
+        if selected_bots_need_local_scope "${eligible[@]}"; then
+          scope="$(prompt_registry_scope)" || return 1
+        fi
+        connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
+        return $?
+        ;;
+      *[!0-9]*)
+        if [ -f "$(bot_env_file "$choice")" ]; then
+          slug="$choice"
+        else
+          octopus_error "No bot named '$choice' is configured."
+          continue
+        fi
+        ;;
+      *)
+        if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
+          slug="${slugs[$((choice - 1))]}"
+        else
+          octopus_error "Choose one of the listed bots."
+          continue
+        fi
+        ;;
+    esac
+
+    state="$(bot_local_registry_connection_state "$slug")"
+    if [ "$state" = "enrolled" ]; then
+      printf '%s is already enrolled on the local registry.\n' "$(bot_identity_label "$slug")"
+      return 0
+    fi
+    scope="full"
+    if [ "$state" = "none" ]; then
+      scope="$(prompt_registry_scope)" || return 1
+    fi
+    connect_bot_to_local_registry_once "$slug" "$scope"
+    return $?
+  done
+}
+
 manage_bot_menu() {
   local slug choice="" provider="" mode="" running="" label=""
   slug="$(resolve_bot_slug "${1:-}")" || return 1
@@ -891,14 +1308,187 @@ main_menu() {
   case "$choice" in
     1) add_bot_flow quick ;;
     2) manage_bot_menu ;;
-    3) manage_bot_registry_flow ;;
+    3) connect_bot_to_local_registry_menu ;;
     4) cmd_workspace ;;
     5) advanced_menu ;;
     *) octopus_error "Choose one of the listed options."; return 1 ;;
   esac
 }
 
-cmd_registry() {
+print_registry_start_output() {
+  local show_token="${1:-0}" ui_token=""
+  printf 'Registry started: %s\n\n' "$(registry_ui_url)"
+  if [ "$show_token" = "1" ] && stdin_is_tty; then
+    ui_token="$(read_local_registry_ui_token)"
+    if [ -n "$ui_token" ]; then
+      printf '  UI password (shown once): %s\n' "$ui_token"
+      printf '  Stored in: .deploy/registry/.env (REGISTRY_UI_TOKEN)\n'
+      return 0
+    fi
+  fi
+  printf '  UI password: see .deploy/registry/.env (REGISTRY_UI_TOKEN)\n'
+}
+
+registry_start_cmd() {
+  if registry_is_running; then
+    return 0
+  fi
+  ensure_local_registry || return 1
+  print_registry_start_output "${REGISTRY_WAS_CREATED:-0}"
+  if [ "${REGISTRY_WAS_CREATED:-0}" = "1" ] && stdin_is_tty && [ "$(count_bots)" -gt 0 ]; then
+    printf '\n'
+    prompt_local_registry_connect_after_start
+  fi
+}
+
+registry_stop_cmd() {
+  if ! has_local_registry; then
+    return 0
+  fi
+  registry_compose down --remove-orphans >/dev/null
+  printf 'Local registry stopped.\n'
+}
+
+registry_logs_cmd() {
+  if ! has_local_registry; then
+    octopus_error "Local registry is not configured."
+    return 1
+  fi
+  registry_compose logs -f service
+}
+
+registry_status_cmd() {
+  local registry_port="" slug="" label="" scope="" state="" printed=0
+  printf 'Registry:\n'
+  if has_local_registry; then
+    registry_port="$(read_bot_env_value REGISTRY_PORT .deploy/registry/.env)"
+    if registry_is_running; then
+      printf '  local      running    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    else
+      printf '  local      stopped    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    fi
+  else
+    printf '  local      not configured\n'
+  fi
+
+  printf '\nConnected bots:\n'
+  printed=0
+  for slug in $(list_bot_slugs); do
+    if [ "$(bot_local_registry_connection_state "$slug")" != "enrolled" ]; then
+      continue
+    fi
+    label="$(bot_identity_label "$slug")"
+    scope="$(bot_local_registry_scope "$slug" || true)"
+    state="$(bot_local_registry_runtime_state "$slug")"
+    printf '  %s    scope: %s    state: %s\n' "$label" "${scope:-full}" "$state"
+    printed=1
+  done
+  if [ "$printed" -eq 0 ]; then
+    printf '  (none)\n'
+  fi
+
+  printf '\nConfigured but not enrolled:\n'
+  printed=0
+  for slug in $(list_bot_slugs); do
+    if [ "$(bot_local_registry_connection_state "$slug")" != "configured" ]; then
+      continue
+    fi
+    label="$(bot_identity_label "$slug")"
+    scope="$(bot_local_registry_scope "$slug" || true)"
+    printf '  %s    scope: %s    state: enrollment failed\n' "$label" "${scope:-full}"
+    printf '    retry: ./octopus registry connect %s\n' "$slug"
+    printed=1
+  done
+  if [ "$printed" -eq 0 ]; then
+    printf '  (none)\n'
+  fi
+
+  printf '\nNo local connection:\n'
+  printed=0
+  for slug in $(list_bot_slugs); do
+    if [ "$(bot_local_registry_connection_state "$slug")" != "none" ]; then
+      continue
+    fi
+    printf '  %s\n' "$(bot_identity_label "$slug")"
+    printed=1
+  done
+  if [ "$printed" -eq 0 ]; then
+    printf '  (none)\n'
+  fi
+}
+
+registry_connect_cmd() {
+  local scope="full" connect_all=0 slug="" arg=""
+  while [ "$#" -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      --all)
+        connect_all=1
+        ;;
+      --scope)
+        shift || true
+        [ "$#" -gt 0 ] || {
+          octopus_error "registry connect requires a scope after --scope."
+          return 1
+        }
+        scope="$1"
+        ;;
+      --*)
+        octopus_error "Unknown registry connect option: $arg"
+        return 1
+        ;;
+      *)
+        if [ -n "$slug" ]; then
+          octopus_error "Specify one bot slug or use --all."
+          return 1
+        fi
+        slug="$arg"
+        ;;
+    esac
+    shift || true
+  done
+
+  case "$scope" in
+    full|channel|coordination) ;;
+    *)
+      octopus_error "Choose 'full', 'channel', or 'coordination'."
+      return 1
+      ;;
+  esac
+
+  if [ "$connect_all" -eq 1 ] && [ -n "$slug" ]; then
+    octopus_error "Use either a bot slug or --all."
+    return 1
+  fi
+
+  if [ "$connect_all" -eq 1 ]; then
+    local eligible=() state=""
+    while IFS= read -r arg; do
+      [ -n "$arg" ] || continue
+      state="$(bot_local_registry_connection_state "$arg")"
+      [ "$state" = "enrolled" ] || eligible+=("$arg")
+    done < <(list_bot_slugs)
+    if [ "${#eligible[@]}" -eq 0 ]; then
+      printf 'All bots are already enrolled on the local registry.\n'
+      return 0
+    fi
+    connect_bots_to_local_registry_batch "$scope" "${eligible[@]}"
+    return $?
+  fi
+
+  if [ -z "$slug" ]; then
+    if [ "$(count_bots)" -eq 1 ]; then
+      slug="$(list_bot_slugs | head -1)"
+    else
+      octopus_error "Specify a bot slug or use --all."
+      return 1
+    fi
+  fi
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  connect_bot_to_local_registry_once "$slug" "$scope"
+}
+
+registry_interactive_menu() {
   local choice="" url=""
   printf 'Registry:\n'
   if has_local_registry; then
@@ -907,36 +1497,74 @@ cmd_registry() {
       printf '  local      running    %s\n\n' "$url"
       printf '  1. Follow local registry logs\n'
       printf '  2. Stop local registry\n'
-      printf '  3. Back\n'
+      printf '  3. Show registry status\n'
+      printf '  4. Back\n'
       read -r -p "Choose an option: " choice || return 1
       case "$choice" in
-        1) registry_compose logs -f service ;;
-        2) registry_compose down --remove-orphans >/dev/null; printf 'Local registry stopped.\n' ;;
-        3) return 0 ;;
+        1) registry_logs_cmd ;;
+        2) registry_stop_cmd ;;
+        3) registry_status_cmd ;;
+        4) return 0 ;;
         *) octopus_error "Choose one of the listed options."; return 1 ;;
       esac
     else
       printf '  local      stopped    %s\n\n' "$url"
       printf '  1. Start local registry\n'
-      printf '  2. Back\n'
+      printf '  2. Show registry status\n'
+      printf '  3. Back\n'
       read -r -p "Choose an option: " choice || return 1
       case "$choice" in
-        1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
-        2) return 0 ;;
+        1) registry_start_cmd ;;
+        2) registry_status_cmd ;;
+        3) return 0 ;;
         *) octopus_error "Choose one of the listed options."; return 1 ;;
       esac
     fi
   else
     printf '  local      not configured\n\n'
     printf '  1. Start local registry\n'
-    printf '  2. Back\n'
+    printf '  2. Show registry status\n'
+    printf '  3. Back\n'
     read -r -p "Choose an option: " choice || return 1
     case "$choice" in
-      1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
-      2) return 0 ;;
+      1) registry_start_cmd ;;
+      2) registry_status_cmd ;;
+      3) return 0 ;;
       *) octopus_error "Choose one of the listed options."; return 1 ;;
     esac
   fi
+}
+
+cmd_registry() {
+  case "${1:-}" in
+    start)
+      shift
+      registry_start_cmd "$@"
+      ;;
+    stop)
+      shift
+      registry_stop_cmd "$@"
+      ;;
+    logs)
+      shift
+      registry_logs_cmd "$@"
+      ;;
+    status)
+      shift
+      registry_status_cmd "$@"
+      ;;
+    connect)
+      shift
+      registry_connect_cmd "$@"
+      ;;
+    "")
+      registry_interactive_menu
+      ;;
+    *)
+      octopus_error "Unknown registry command: $1"
+      return 1
+      ;;
+  esac
 }
 
 prompt_first_bot_identity() {
@@ -2119,7 +2747,13 @@ Commands:
   logs [slug]    Follow a bot's live logs
   doctor [--live-provider] [slug]
                  Run a health check (safe by default; live provider probe optional)
-  registry       Manage the local registry
+  registry                         Manage the local registry
+    registry start                 Start (or create) the local registry
+    registry stop                  Stop the local registry
+    registry logs                  Follow registry logs
+    registry status                Show registry and bot connection status
+    registry connect [slug|--all]  Connect bot(s) to local registry
+    UI password is stored in .deploy/registry/.env (REGISTRY_UI_TOKEN)
   workspace      Manage shared workspaces
     workspace create <name> <host-path>
     workspace remove <name>

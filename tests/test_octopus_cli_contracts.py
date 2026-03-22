@@ -85,6 +85,20 @@ printf '2\\n' | resolve_bot_slug
     assert result.stdout.splitlines()[-1] == "bravo"
 
 
+def test_cmd_help_lists_registry_subcommands(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cmd_help
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "registry start" in result.stdout
+    assert "registry connect [slug|--all]" in result.stdout
+    assert "REGISTRY_UI_TOKEN" in result.stdout
+
+
 def test_bot_compose_uses_slug_project_env_and_network(tmp_path: Path) -> None:
     env_dir = tmp_path / ".deploy" / "bots" / "sample-bot"
     env_dir.mkdir(parents=True, exist_ok=True)

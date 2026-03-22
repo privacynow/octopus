@@ -207,6 +207,18 @@ Typical operator uses:
 - startup validates Postgres schema health before boot when
   `BOT_DATABASE_URL` is set
 
+## Security Notes
+
+- `BOT_CREDENTIAL_KEY` encrypts stored skill credentials. New installs from
+  `./octopus` generate this automatically. For existing deployments, set it in
+  the bot env file before rotating the Telegram bot token — otherwise encrypted
+  credentials become inaccessible.
+- Completion webhook URLs are validated against private/metadata IP ranges at
+  runtime. Remote webhook URLs must use HTTPS.
+- The registry enrollment endpoint and UI login are rate-limited per client host.
+- `REGISTRY_SESSION_SECRET` should be set explicitly for multi-instance registry
+  deployments. Single-instance setups use a stable derived fallback.
+
 If you use Postgres instead of the default SQLite runtime:
 
 1. Run `./scripts/db/dev_up_postgres.sh`.

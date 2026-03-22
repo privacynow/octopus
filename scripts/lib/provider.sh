@@ -46,14 +46,19 @@ update_provider_auth_hint() {
 }
 
 provider_has_auth_files() {
-  # Fast local check: do auth files exist on disk?
+  # Fast local check: do provider-specific auth artifacts exist on disk?
+  # Must check for files that are ONLY created by a successful login,
+  # not files pre-created by ensure_provider_auth_dir().
   local provider="$1"
   case "$provider" in
     claude)
-      [ -d ".deploy/provider-auth/claude/.claude" ] && [ -f ".deploy/provider-auth/claude/.claude.json" ]
+      # .claude.json is pre-created empty by ensure_provider_auth_dir.
+      # After a real login, Claude writes credentials into it (non-empty).
+      [ -f ".deploy/provider-auth/claude/.claude.json" ] && [ -s ".deploy/provider-auth/claude/.claude.json" ]
       ;;
     codex)
-      [ -d ".deploy/provider-auth/codex/.codex" ] && [ -f ".deploy/provider-auth/codex/.codex/auth.json" ]
+      # auth.json is only created by codex login, never by bootstrap.
+      [ -f ".deploy/provider-auth/codex/.codex/auth.json" ]
       ;;
     *)
       return 1

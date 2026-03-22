@@ -80,14 +80,13 @@ cd ~/octopus
 ./octopus
 ```
 
-Octopus will:
+The quick-path setup asks for your token and provider, then starts the bot:
 
-- validate the Telegram token before starting Docker
-- detect the bot identity from the token
-- walk provider setup for `claude` or `codex`
-- create `.deploy/bots/<slug>/.env`
-- optionally connect the bot to a local or remote registry
-- start the bot
+![First bot setup](docs/assets/quickstart/01-first-bot-setup.svg)
+
+When the bot starts successfully:
+
+![Bot is running](docs/assets/quickstart/02-bot-running.svg)
 
 If you want the full guided setup flow on first run:
 
@@ -102,6 +101,14 @@ Open Telegram, find the bot by username, and send a normal message.
 Example:
 
 > Review this diff and suggest a safer refactor.
+
+### 5. Check status
+
+```bash
+./octopus status
+```
+
+![Octopus status](docs/assets/quickstart/03-octopus-status.svg)
 
 ## Operating Shapes
 
@@ -141,13 +148,16 @@ Registry mode can point at:
 
 ## Day-To-Day Commands
 
+![Octopus help](docs/assets/quickstart/04-octopus-help.svg)
+
+The most common operator commands:
+
 ```bash
-./octopus status
-./octopus start
-./octopus stop
-./octopus logs
-./octopus doctor
-./octopus registry
+./octopus status       # show bots, registry, and provider auth
+./octopus logs         # follow live logs
+./octopus doctor       # run a health check
+./octopus registry     # manage the local registry
+./octopus clean        # wipe everything and start fresh
 ```
 
 If more than one bot exists, Octopus asks which bot to use only when the choice

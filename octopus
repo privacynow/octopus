@@ -1531,7 +1531,106 @@ first_bot_flow() {
   fi
 }
 
+cmd_help() {
+  cat <<'HELP'
+Usage: ./octopus [command]
+
+Commands:
+  (no command)   Guided setup (first bot) or main menu (existing bots)
+  --full         First-bot or add-bot with advanced options
+  status         Show all bots, registry, and provider auth status
+  start [slug]   Start a bot (auto-selects when only one exists)
+  stop [slug]    Stop a bot
+  logs [slug]    Follow a bot's live logs
+  doctor [slug]  Run a health check
+  registry       Manage the local registry
+  clean          Stop and remove all bots, registry, volumes, and config
+  help           Show this help
+
+After ./octopus clean, the next ./octopus run starts fresh as if
+the repo were just cloned.
+HELP
+}
+
+cmd_clean() {
+  echo ""
+  echo "This will stop and remove ALL Octopus bots, the local registry,"
+  echo "all Docker volumes, networks, and the .deploy/ directory."
+  echo ""
+  echo "Provider auth (Claude/Codex login) will also be removed."
+  echo "You will need to log in again after the next ./octopus run."
+  echo ""
+  printf "Type 'yes' to confirm: "
+  read -r answer
+  if [ "$answer" != "yes" ]; then
+    echo "Cancelled."
+    return 0
+  fi
+  echo ""
+
+  # Stop and remove bot containers
+  local slug
+  for slug in $(list_bot_slugs); do
+    echo "Stopping bot: $slug"
+    bot_compose "$slug" down --remove-orphans 2>/dev/null || true
+  done
+
+  # Stop and remove registry
+  if has_local_registry; then
+    echo "Stopping registry"
+    registry_compose down --remove-orphans 2>/dev/null || true
+  fi
+
+  # Remove any remaining octopus- containers that compose missed
+  local container
+  for container in $(docker ps -a --filter "name=octopus-" --format "{{.Names}}" 2>/dev/null); do
+    echo "Removing container: $container"
+    docker stop "$container" 2>/dev/null || true
+    docker rm "$container" 2>/dev/null || true
+  done
+
+  # Remove octopus- volumes
+  local volume
+  for volume in $(docker volume ls --filter "name=octopus" --format "{{.Name}}" 2>/dev/null); do
+    echo "Removing volume: $volume"
+    docker volume rm "$volume" 2>/dev/null || true
+  done
+
+  # Remove octopus- networks
+  local network
+  for network in $(docker network ls --filter "name=octopus" --format "{{.Name}}" 2>/dev/null); do
+    echo "Removing network: $network"
+    docker network rm "$network" 2>/dev/null || true
+  done
+
+  # Remove deployment state
+  if [ -d .deploy ]; then
+    echo "Removing .deploy/"
+    rm -rf .deploy
+  fi
+
+  # Remove build marker and legacy env files
+  rm -f .bot-image-build-rev
+  # shellcheck disable=SC2086
+  local legacy_prefix=".env"
+  rm -f ${legacy_prefix}.bot ${legacy_prefix}.bot.* ${legacy_prefix}.registry ${legacy_prefix}.registry.*
+
+  echo ""
+  echo "Clean complete. Run ./octopus to start fresh."
+}
+
 main() {
+  case "${1:-}" in
+    help|--help|-h)
+      cmd_help
+      return 0
+      ;;
+    clean)
+      cmd_clean
+      return 0
+      ;;
+  esac
+
   ensure_deploy_dirs
 
   case "${1:-}" in
@@ -1558,6 +1657,8 @@ main() {
       ;;
     *)
       octopus_error "Unknown command: $1"
+      echo ""
+      cmd_help
       return 1
       ;;
   esac

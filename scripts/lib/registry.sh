@@ -10,7 +10,10 @@ pick_available_port() {
   echo "$port"
 }
 
+REGISTRY_WAS_CREATED=0
+
 ensure_local_registry() {
+  REGISTRY_WAS_CREATED=0
   if registry_is_running; then
     return 0
   fi
@@ -20,6 +23,7 @@ ensure_local_registry() {
   fi
 
   local port enroll_token ui_token
+  REGISTRY_WAS_CREATED=1
   port="$(pick_available_port 8787)"
   enroll_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
   ui_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"

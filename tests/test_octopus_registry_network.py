@@ -55,6 +55,7 @@ grep -q '^REGISTRY_ALLOW_HTTP=1$' .deploy/registry/.env
 grep -q '^REGISTRY_PORT=' .deploy/registry/.env
 grep -q '^REGISTRY_ENROLL_TOKEN=' .deploy/registry/.env
 grep -q '^REGISTRY_UI_TOKEN=' .deploy/registry/.env
+test "$REGISTRY_WAS_CREATED" = "1"
 test "$(cat registry-call.txt)" = 'up -d --remove-orphans service'
 """
     _run_bash(script, cwd=tmp_path)
@@ -85,6 +86,7 @@ registry_is_running() {{ return 1; }}
 has_local_registry() {{ return 0; }}
 registry_compose() {{ printf '%s\\n' "$*" > registry-call.txt; }}
 ensure_local_registry
+test "$REGISTRY_WAS_CREATED" = "0"
 test "$(cat registry-call.txt)" = 'up -d --remove-orphans service'
 """
     _run_bash(script, cwd=tmp_path)

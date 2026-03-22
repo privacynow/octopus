@@ -344,6 +344,7 @@ points:
 - conversation actions and settings
 - delegation lifecycle and routed-result continuation
 - pending approval / retry / recovery machines
+- delegation staleness expiration (machine-owned, measured from submission time)
 
 ## Durable Stores And Backends
 
@@ -409,6 +410,34 @@ Used by the browser shell for:
 The UI is a server-rendered HTML shell with browser-side JavaScript. Login uses
 session cookies, and state-changing UI requests carry CSRF headers instead of
 embedding the master UI token in page JavaScript.
+
+## Security Boundaries
+
+Hardened in the current codebase:
+
+- **Webhook SSRF protection**: completion webhook URLs are validated at runtime
+  against private, link-local, loopback, multicast, reserved, and cloud-metadata
+  IP ranges. Hostnames are resolved and all resolved addresses are checked.
+  Remote webhook and bot-webhook URLs must use HTTPS.
+- **Auth rate limiting**: the registry enrollment and UI login endpoints are
+  throttled per client host with `429 Retry-After` responses on saturation.
+- **Approval callback binding**: approval and retry buttons carry a
+  request-specific token derived from the current pending state. Stale buttons
+  from a previous request fail safely with a user-visible message instead of
+  approving the wrong request.
+- **Credential key management**: `BOT_CREDENTIAL_KEY` is generated for new
+  installs. The Telegram-token fallback logs at ERROR level with explicit
+  rotation guidance.
+- **Provider config validation**: Codex sandbox values and config overrides are
+  validated against explicit allowlists. Override keys that could weaken security
+  behavior are rejected.
+- **Credential scoping**: runtime credential loads are filtered to the active
+  skill set. Full actor credential maps are restricted to explicit credential
+  management surfaces.
+- **Preflight minimization**: preflight context sent to the approval LLM
+  includes skill names and capability summaries but not raw instruction bodies.
+- **Attachment size limits**: Telegram file downloads are validated against a
+  size limit before the download starts.
 
 ## Registry UI Rendering
 

@@ -1499,10 +1499,10 @@ add_bot_flow() {
   if [ "${NEW_BOT_SETUP_MODE:-$mode}" = "quick" ]; then
     prompt_new_bot_registry_target || return 1
   fi
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   ensure_provider_image_ready "$NEW_BOT_PROVIDER"
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
-  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
@@ -1522,10 +1522,13 @@ first_bot_flow() {
   local mode="${1:-quick}"
   local registry_id=""
   prepare_new_bot_setup "$mode" || return 1
+  # Write env FIRST so the user's input is saved. If the image build
+  # or auth step fails, the next ./octopus run finds this bot and
+  # resumes from the build step instead of re-asking for everything.
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   ensure_provider_image_ready "$NEW_BOT_PROVIDER"
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
-  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
@@ -1668,6 +1671,27 @@ main() {
     "")
       if [ "$(count_bots)" -eq 0 ]; then
         first_bot_flow quick
+      elif [ "$(count_bots)" -eq 1 ]; then
+        local only_slug
+        only_slug="$(list_bot_slugs | head -1)"
+        if ! bot_is_running "$only_slug" 2>/dev/null; then
+          # Bot exists but isn't running — resume setup/start instead
+          # of showing the menu. This handles the case where a previous
+          # run saved the env but the image build or auth step failed.
+          local provider
+          provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$only_slug")")"
+          printf 'Resuming setup for %s...\n' "$only_slug"
+          ensure_provider_image_ready "${provider:-claude}"
+          ensure_provider_auth_ready "${provider:-claude}"
+          ensure_network
+          run_bot_doctor_until_ready "$only_slug"
+          start_bot_until_running "$only_slug"
+          local username
+          username="$(read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$only_slug")")"
+          print_first_bot_success "${username:-$only_slug}"
+        else
+          main_menu
+        fi
       else
         main_menu
       fi

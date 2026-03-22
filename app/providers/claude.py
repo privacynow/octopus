@@ -43,6 +43,28 @@ class ClaudeProvider:
     def _auth_file() -> Path:
         return Path.home() / ".claude.json"
 
+    @staticmethod
+    def _auth_dir() -> Path:
+        return Path.home() / ".claude"
+
+    @classmethod
+    def _has_auth_artifacts(cls) -> bool:
+        auth_file = cls._auth_file()
+        if auth_file.is_file() and auth_file.stat().st_size > 0:
+            return True
+
+        auth_dir = cls._auth_dir()
+        if not auth_dir.is_dir():
+            return False
+
+        try:
+            for path in auth_dir.rglob("*"):
+                if path.is_file() and path.stat().st_size > 0:
+                    return True
+        except OSError:
+            return False
+        return False
+
     async def _run_health_command(
         self,
         *cmd: str,
@@ -79,8 +101,7 @@ class ClaudeProvider:
         if errors:
             return errors
 
-        auth_file = self._auth_file()
-        if not auth_file.is_file() or auth_file.stat().st_size == 0:
+        if not self._has_auth_artifacts():
             errors.append("Claude auth not found. Run 'claude' and complete /login.")
         return errors
 

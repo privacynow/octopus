@@ -65,6 +65,19 @@ update_provider_auth_hint claude false
     assert not (tmp_path / ".deploy" / "provider-auth" / "claude" / ".authed").exists()
 
 
+def test_provider_has_auth_files_accepts_nonempty_claude_auth_dir(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+source "{REPO}/scripts/lib/provider.sh"
+cd "{tmp_path}"
+ensure_provider_auth_dir claude
+mkdir -p .deploy/provider-auth/claude/.claude
+printf '{{"token":"secret"}}' > .deploy/provider-auth/claude/.claude/session.json
+provider_has_auth_files claude
+"""
+    _run_bash(script, cwd=tmp_path)
+
+
 def test_entrypoint_only_chowns_data_and_symlinks_live_auth_paths() -> None:
     text = (REPO / "scripts" / "docker" / "docker-entrypoint.sh").read_text()
     assert "chown -R 1000:1000 /home/bot/data" in text
@@ -97,3 +110,68 @@ def test_provider_probe_comment_records_live_paths() -> None:
     assert ".claude.json" in text
     assert ".codex" in text
     assert "integration probe" in text.lower()
+
+
+def test_container_provider_login_requires_claude_auth_artifacts(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log_path = tmp_path / "claude.log"
+    (fake_bin / "claude").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf 'claude:%s\\n' \"$*\" >> {str(log_path)!r}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    os.chmod(fake_bin / "claude", 0o755)
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts" / "provider" / "container_provider_login.sh")],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "BOT_PROVIDER": "claude",
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "Claude authentication is still incomplete." in result.stderr
+    assert "✓ Claude authentication complete." not in result.stdout
+
+
+def test_container_provider_login_accepts_claude_auth_file(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    auth_file = home_dir / ".claude.json"
+    (fake_bin / "claude").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf '{{\"token\":\"secret\"}}' > {str(auth_file)!r}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    os.chmod(fake_bin / "claude", 0o755)
+
+    result = subprocess.run(
+        ["bash", str(REPO / "scripts" / "provider" / "container_provider_login.sh")],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "BOT_PROVIDER": "claude",
+            "HOME": str(home_dir),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+
+    assert result.returncode == 0
+    assert "✓ Claude authentication complete. Returning to setup..." in result.stdout

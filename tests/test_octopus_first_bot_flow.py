@@ -74,6 +74,32 @@ printf '123456:real-token\\n\\n' | first_bot_flow quick
     assert "Bot name" not in result.stdout + result.stderr
 
 
+def test_first_bot_flow_stops_when_provider_auth_is_incomplete(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+print_channel_setup_help() {{ :; }}
+validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
+prompt_with_default() {{ printf 'claude\\n'; }}
+ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1"; }}
+ensure_provider_auth_ready() {{ printf 'auth:%s\\n' "$1"; return 1; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
+print_first_bot_success() {{ printf 'SUCCESS\\n'; }}
+if printf '123456:real-token\\n\\n' | first_bot_flow quick; then
+  exit 1
+fi
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "auth:claude" in result.stdout
+    assert "doctor:example-bot" not in result.stdout
+    assert "start:example-bot" not in result.stdout
+    assert "SUCCESS" not in result.stdout
+
+
 def test_prepare_new_bot_setup_quick_can_switch_to_full_mode(tmp_path: Path) -> None:
     script = f"""
 set -euo pipefail

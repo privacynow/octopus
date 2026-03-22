@@ -5,6 +5,29 @@
 set -euo pipefail
 
 provider="${BOT_PROVIDER:-claude}"
+
+provider_has_local_auth_files() {
+  local provider="$1" home_dir="${HOME:-/home/bot}"
+  case "$provider" in
+    claude)
+      if [ -f "$home_dir/.claude.json" ] && [ -s "$home_dir/.claude.json" ]; then
+        return 0
+      fi
+      if [ -d "$home_dir/.claude" ] && find "$home_dir/.claude" -mindepth 1 -type f -size +0c -print -quit 2>/dev/null | grep -q .; then
+        return 0
+      fi
+      return 1
+      ;;
+    codex)
+      local codex_home="${CODEX_HOME:-$home_dir/.codex}"
+      [ -f "$codex_home/auth.json" ]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 case "$provider" in
   codex)
     cat <<'BANNER'
@@ -24,11 +47,13 @@ BANNER
     codex login --device-auth
     exit_code=$?
     set -e
-    if [ "$exit_code" -eq 0 ]; then
+    if provider_has_local_auth_files codex; then
       echo "✓ Codex authentication complete. Returning to setup..."
     else
-      echo "✗ Authentication may have failed (exit code $exit_code). Re-run this step"
-      echo "  if the setup doctor reports missing provider auth."
+      echo "✗ Codex authentication is still incomplete." >&2
+      echo "  Complete device auth, wait for the CLI to finish, then run ./octopus again." >&2
+      echo "  codex login exit code: $exit_code" >&2
+      exit 1
     fi
     ;;
   claude)
@@ -47,11 +72,13 @@ BANNER
     claude
     exit_code=$?
     set -e
-    if [ "$exit_code" -eq 0 ]; then
+    if provider_has_local_auth_files claude; then
       echo "✓ Claude authentication complete. Returning to setup..."
     else
-      echo "✗ Authentication may have failed (exit code $exit_code). Re-run this step"
-      echo "  if the setup doctor reports missing provider auth."
+      echo "✗ Claude authentication is still incomplete." >&2
+      echo "  Inside Claude, run /login, complete browser auth, then /exit to return to setup." >&2
+      echo "  claude exit code: $exit_code" >&2
+      exit 1
     fi
     ;;
   *)

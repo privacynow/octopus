@@ -94,7 +94,72 @@ network_exists() {
 }
 
 ensure_deploy_dirs() {
-  mkdir -p .deploy/bots .deploy/registry .deploy/provider-auth
+  mkdir -p .deploy/bots .deploy/registry .deploy/provider-auth .deploy/workspaces
+}
+
+# -- workspace state queries --------------------------------------------------
+
+list_workspace_slugs() {
+  local entry
+  for entry in .deploy/workspaces/*/; do
+    [ -d "$entry" ] || continue
+    basename "$entry"
+  done
+}
+
+count_workspaces() {
+  list_workspace_slugs | wc -l | tr -d ' '
+}
+
+has_workspace() {
+  test -f ".deploy/workspaces/$1/workspace.conf"
+}
+
+workspace_conf_file() {
+  echo ".deploy/workspaces/$1/workspace.conf"
+}
+
+workspace_members_file() {
+  echo ".deploy/workspaces/$1/members.txt"
+}
+
+read_workspace_conf_value() {
+  local key="$1" file="$2"
+  grep "^${key}=" "$file" 2>/dev/null | head -1 | sed "s/^${key}=//"
+}
+
+workspace_root() {
+  read_workspace_conf_value WORKSPACE_ROOT "$(workspace_conf_file "$1")"
+}
+
+workspace_mount() {
+  read_workspace_conf_value WORKSPACE_MOUNT "$(workspace_conf_file "$1")"
+}
+
+workspace_mode() {
+  local mode
+  mode="$(read_workspace_conf_value WORKSPACE_MODE "$(workspace_conf_file "$1")")"
+  printf '%s\n' "${mode:-rw}"
+}
+
+workspace_members() {
+  local file
+  file="$(workspace_members_file "$1")"
+  [ -f "$file" ] || return 0
+  grep -v '^\s*$\|^\s*#' "$file" 2>/dev/null || true
+}
+
+bot_workspace_memberships() {
+  local bot_slug="$1" ws_slug=""
+  for ws_slug in $(list_workspace_slugs); do
+    if grep -qx "$bot_slug" "$(workspace_members_file "$ws_slug")" 2>/dev/null; then
+      printf '%s\n' "$ws_slug"
+    fi
+  done
+}
+
+bot_has_workspace() {
+  [ -n "$(bot_workspace_memberships "$1")" ]
 }
 
 find_bot_slug_by_telegram_id() {

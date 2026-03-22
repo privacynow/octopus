@@ -71,6 +71,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         data_dir=data_dir,
         timeout_seconds=300,
         approval_mode="on",
+        autonomous=False,
         role="",
         role_from_file=False,
         default_skills=(),

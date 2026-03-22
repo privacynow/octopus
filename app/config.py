@@ -219,6 +219,7 @@ class BotConfig:
     data_dir: Path
     timeout_seconds: int
     approval_mode: str
+    autonomous: bool
     role: str
     role_from_file: bool  # True if role came from <instance>.role.md
     default_skills: tuple[str, ...]
@@ -454,6 +455,10 @@ def load_config(instance: str | None = None) -> BotConfig:
     if approval not in {"on", "off"}:
         approval = "on"
 
+    autonomous = get_bool("BOT_AUTONOMOUS")
+    if autonomous and "BOT_APPROVAL_MODE" not in os.environ:
+        approval = "off"
+
     role_str = get("BOT_ROLE")
     role_from_file = False
     # Check for role.md override
@@ -517,6 +522,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
         timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
         approval_mode=approval,
+        autonomous=autonomous,
         role=role_str,
         role_from_file=role_from_file,
         default_skills=default_skills,
@@ -629,6 +635,7 @@ def load_config_provider_health() -> BotConfig:
         data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
         timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
         approval_mode="on",
+        autonomous=False,
         role="",
         role_from_file=False,
         default_skills=(),
@@ -727,6 +734,18 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append(
             'BOT_ROLE contains " or \\. Use <instance>.role.md for complex roles.'
         )
+
+    if config.autonomous:
+        if config.allow_open:
+            errors.append(
+                "BOT_AUTONOMOUS=1 and BOT_ALLOW_OPEN=1 cannot both be set. "
+                "Autonomous mode requires a private bot with explicit BOT_ALLOWED_USERS."
+            )
+        if not config.allowed_actor_keys and not config.allowed_usernames:
+            errors.append(
+                "BOT_AUTONOMOUS=1 requires BOT_ALLOWED_USERS to be set. "
+                "Autonomous mode must have at least one authorized user."
+            )
 
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")

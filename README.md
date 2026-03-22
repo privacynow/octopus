@@ -80,7 +80,14 @@ cd ~/octopus
 ./octopus
 ```
 
-The quick-path setup asks for your token and provider, then starts the bot:
+Setup offers three modes:
+
+- **Autonomous** — full agent, no approval gates, full provider permissions,
+  private (allowed users only). Optionally joins a shared workspace.
+- **Safe** (default) — human reviews plans before execution, public access ok,
+  provider runs in sandboxed mode.
+- **Advanced** — configure everything manually (role, tags, skills, allowed
+  users, working dir, timeout, webhook, registry).
 
 ![First bot setup](docs/assets/quickstart/01-first-bot-setup.svg)
 
@@ -88,11 +95,26 @@ When the bot starts successfully:
 
 ![Bot is running](docs/assets/quickstart/02-bot-running.svg)
 
-If you want the full guided setup flow on first run:
+For the full advanced setup on first run:
 
 ```bash
 ./octopus --full
 ```
+
+### Autonomous Mode
+
+Autonomous bots run with `BOT_AUTONOMOUS=1`. This is a single policy flag that:
+
+- Defaults `BOT_APPROVAL_MODE=off` (no preflight plan review)
+- Grants `skip_permissions` to the provider CLI (Claude gets
+  `--dangerously-skip-permissions`, Codex gets
+  `--dangerously-bypass-approvals-and-sandbox`)
+- Auto-submits delegation plans without waiting for human approval
+- Requires `BOT_ALLOWED_USERS` and `BOT_ALLOW_OPEN=0`
+
+The container is the security boundary. `file_policy=inspect` (read-only
+workspaces) still overrides autonomous permissions. Per-chat `/approval on`
+restores human review for that conversation.
 
 ### 4. Message the bot
 
@@ -157,11 +179,48 @@ The most common operator commands:
 ./octopus logs         # follow live logs
 ./octopus doctor       # run a health check
 ./octopus registry     # manage the local registry
+./octopus workspace    # manage shared workspaces
 ./octopus clean        # wipe everything and start fresh
 ```
 
 If more than one bot exists, Octopus asks which bot to use only when the choice
 is ambiguous.
+
+## Shared Workspaces
+
+Multiple bots on the same machine can share a project directory so they
+collaborate on the same codebase. A workspace is a host directory that gets
+bind-mounted into member bot containers.
+
+```bash
+# Create a workspace pointing at a host directory
+./octopus workspace create myapp /path/to/project
+
+# Add bots to the workspace
+./octopus workspace add-bot myapp my-claude-bot
+./octopus workspace add-bot myapp my-codex-bot
+
+# Check workspace status
+./octopus workspace status
+
+# Verify workspace health
+./octopus workspace verify
+```
+
+After adding a bot to a workspace, restart it (`./octopus stop <slug> &&
+./octopus start <slug>`) for the mount to take effect. Inside the container,
+the workspace is available at `/workspace/<name>`. Each member bot gets a
+`BOT_PROJECTS` entry so users can switch to the workspace with `/project
+myapp` in the chat.
+
+Bots in the same workspace can discover each other via `workspace:<name>` tags
+in registry agent search. Coordination uses registry delegation, not file
+locks. For git repos, each bot can work on branches and the operator or a
+coordinator bot merges results.
+
+A workspace mount gives every member bot full access to the tree. Do not mount
+directories containing secrets. Use the `/project` command or `BOT_PROJECTS`
+subpath entries for internal directory splitting.
 
 ## Build Troubleshooting
 

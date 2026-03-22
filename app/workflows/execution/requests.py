@@ -199,7 +199,8 @@ async def execute_request(
         file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
     )
-    context.skip_permissions = skip_permissions
+    autonomous_grant = cfg.autonomous and session.approval_mode != "on"
+    context.skip_permissions = skip_permissions or autonomous_grant
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     context.system_prompt = guidance.apply_compact_mode(context.system_prompt, compact)

@@ -100,7 +100,7 @@ fi
     assert "SUCCESS" not in result.stdout
 
 
-def test_prepare_new_bot_setup_quick_can_switch_to_full_mode(tmp_path: Path) -> None:
+def test_prepare_new_bot_setup_quick_can_switch_to_advanced_mode(tmp_path: Path) -> None:
     script = f"""
 set -euo pipefail
 cd "{tmp_path}"
@@ -118,11 +118,11 @@ prompt_full_bot_setup_options() {{
   BOT_SETUP_ROLE='Advanced Bot'
   REGISTRY_TARGET_KIND='standalone'
 }}
-prepare_new_bot_setup quick <<< $'full\\n'
+prepare_new_bot_setup quick <<< $'3\\n'
 printf 'mode=%s\\nrole=%s\\n' "$NEW_BOT_SETUP_MODE" "$BOT_SETUP_ROLE"
 """
     result = _run_bash(script, cwd=tmp_path)
-    assert "mode=full" in result.stdout
+    assert "mode=advanced" in result.stdout
     assert "role=Advanced Bot" in result.stdout
 
 

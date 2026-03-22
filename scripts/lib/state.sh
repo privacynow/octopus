@@ -100,7 +100,11 @@ ensure_deploy_dirs() {
 # -- workspace state queries --------------------------------------------------
 
 list_workspace_slugs() {
-  ls .deploy/workspaces/ 2>/dev/null || true
+  local entry
+  for entry in .deploy/workspaces/*/; do
+    [ -d "$entry" ] || continue
+    basename "$entry"
+  done
 }
 
 count_workspaces() {

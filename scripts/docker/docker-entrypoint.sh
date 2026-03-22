@@ -11,6 +11,7 @@ if [ -d /home/bot/.provider-auth ]; then
     codex)
       # Use CODEX_HOME env var instead of symlink — the codex CLI
       # conflicts with symlinked ~/.codex (EEXIST on directory ops).
+      mkdir -p /home/bot/.provider-auth/.codex
       export CODEX_HOME="/home/bot/.provider-auth/.codex"
       ;;
   esac

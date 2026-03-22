@@ -262,6 +262,39 @@ main
     assert result.stdout.index("doctor:example-bot") < result.stdout.index("start:example-bot")
 
 
+def test_main_resume_stops_when_provider_auth_fails(tmp_path: Path) -> None:
+    bot_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    (bot_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_TELEGRAM_USERNAME=example_bot\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_is_running() {{ return 1; }}
+ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1"; }}
+ensure_provider_auth_ready() {{ printf 'auth:%s\\n' "$1"; return 1; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
+print_first_bot_success() {{ printf 'SUCCESS\\n'; }}
+if main; then
+  exit 1
+fi
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "Resuming setup for example-bot..." in result.stdout
+    assert "auth:claude" in result.stdout
+    assert "doctor:example-bot" not in result.stdout
+    assert "start:example-bot" not in result.stdout
+    assert "SUCCESS" not in result.stdout
+
+
 def test_add_bot_duplicate_token_resumes_incomplete_setup(tmp_path: Path) -> None:
     """When a user enters a token that matches an existing bot whose setup
     never completed (not running), resume setup instead of erroring."""
@@ -301,3 +334,45 @@ prepare_new_bot_setup quick
     result = _run_bash(script, cwd=tmp_path)
     assert "Resuming incomplete setup for example-bot..." in result.stdout
     assert result.stdout.index("doctor:example-bot") < result.stdout.index("start:example-bot")
+
+
+def test_prepare_new_bot_setup_resume_stops_when_provider_auth_fails(tmp_path: Path) -> None:
+    bot_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    (bot_dir / ".env").write_text(
+        "BOT_SLUG=example-bot\n"
+        "BOT_PROVIDER=claude\n"
+        "BOT_TELEGRAM_ID=123456789\n"
+        "BOT_TELEGRAM_USERNAME=example_bot\n"
+    )
+
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+bot_is_running() {{ return 1; }}
+ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1"; }}
+ensure_provider_auth_ready() {{ printf 'auth:%s\\n' "$1"; return 1; }}
+run_bot_doctor_until_ready() {{ printf 'doctor:%s\\n' "$1"; }}
+start_bot_until_running() {{ printf 'start:%s\\n' "$1"; }}
+print_first_bot_success() {{ printf 'SUCCESS\\n'; }}
+
+FIRST_BOT_TELEGRAM_ID=123456789
+FIRST_BOT_TELEGRAM_USERNAME=example_bot
+FIRST_BOT_DISPLAY_NAME="Example Bot"
+FIRST_BOT_TOKEN="123456789:AAFake"
+prompt_first_bot_identity() {{ return 0; }}
+prompt_provider_choice() {{ printf 'claude'; }}
+
+if prepare_new_bot_setup quick; then
+  exit 1
+fi
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "Resuming incomplete setup for example-bot..." in result.stdout
+    assert "auth:claude" in result.stdout
+    assert "doctor:example-bot" not in result.stdout
+    assert "start:example-bot" not in result.stdout
+    assert "SUCCESS" not in result.stdout

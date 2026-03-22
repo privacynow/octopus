@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Draw highlights on registry UI screenshots using Playwright-generated *.meta.json when present."""
+"""Draw highlights on screenshots using Playwright-generated *.meta.json.
+
+Outlines stay on the UI; callout text is placed in a bottom margin strip so labels
+do not cover the captured content.
+"""
 from __future__ import annotations
 
 import json
+import math
 import sys
+import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -31,41 +37,16 @@ def _draw_arrow(
     x2: float,
     y2: float,
     *,
-    color: str = "#e53935",
-    width: int = 4,
+    color: str = "#c62828",
+    width: int = 2,
 ) -> None:
-    import math
-
     draw.line([(x1, y1), (x2, y2)], fill=color, width=width)
     ang = math.atan2(y2 - y1, x2 - x1)
-    ah = 14
+    ah = 10
     for da in (0.45, -0.45):
         ax = x2 - ah * math.cos(ang + da)
         ay = y2 - ah * math.sin(ang + da)
         draw.line([(x2, y2), (ax, ay)], fill=color, width=width)
-
-
-def _label(
-    draw: ImageDraw.ImageDraw,
-    xy: tuple[float, float],
-    text: str,
-    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
-    *,
-    fg: str = "#111",
-    bg: str = "#fff9c4",
-) -> None:
-    x, y = xy
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    pad = 8
-    draw.rounded_rectangle(
-        [x - pad, y - pad, x + tw + pad, y + th + pad],
-        radius=6,
-        fill=bg,
-        outline="#f57f17",
-        width=2,
-    )
-    draw.text((x, y), text, fill=fg, font=font)
 
 
 def annotate_with_meta(
@@ -74,21 +55,63 @@ def annotate_with_meta(
     meta: dict,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     font_sm: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> Image.Image:
+    """Return image with outlines; legend in bottom margin when labels exist."""
+    rects = meta.get("rects", [])
+    arrows = meta.get("arrows", [])
+    labeled = [r for r in rects if r.get("label")]
+
+    ow, oh = im.size
+    # ~100 chars per line at 13px for typical screenshot width
+    max_chars = max(48, min(110, (ow - 24) // 7))
+
+    footer_h = 0
+    if labeled:
+        total_lines = 0
+        for r in labeled:
+            label = r.get("label", "")
+            wrapped = textwrap.wrap(label, width=max_chars) or [label]
+            total_lines += len(wrapped)
+        footer_h = 14 + total_lines * 18 + 18
+
+    if footer_h <= 0:
+        _draw_annotations_on_image(draw, im.size[0], im.size[1], rects, arrows)
+        return im
+
+    out = Image.new("RGBA", (ow, oh + footer_h), (38, 50, 56, 255))
+    out.paste(im, (0, 0))
+    draw2 = ImageDraw.Draw(out, "RGBA")
+    _draw_annotations_on_image(draw2, ow, oh, rects, arrows)
+
+    y = oh + 10
+    pad_x = 14
+    for idx, r in enumerate(labeled, start=1):
+        label = r.get("label", "")
+        parts = textwrap.wrap(label, width=max_chars) or [label]
+        for li, part in enumerate(parts):
+            prefix = f"{idx}. " if li == 0 else "   "
+            draw2.text((pad_x, y), prefix + part, fill=(236, 239, 241, 255), font=font_sm)
+            bbox = draw2.textbbox((0, 0), prefix + part, font=font_sm)
+            y += (bbox[3] - bbox[1]) + 4
+    return out
+
+
+def _draw_annotations_on_image(
+    draw: ImageDraw.ImageDraw,
+    ow: int,
+    oh: int,
+    rects: list,
+    arrows: list,
 ) -> None:
-    for rect in meta.get("rects", []):
+    """Draw outline rectangles and arrows (coordinates relative to screenshot height oh)."""
+    for rect in rects:
         x, y = rect["x"], rect["y"]
         w, h = rect["width"], rect["height"]
         color = rect.get("color", "#ff9800")
-        draw.rounded_rectangle([x, y, x + w, y + h], radius=10, outline=color, width=4)
-        label = rect.get("label")
-        if label:
-            # Place label above box, clamped to image
-            lx = max(4, min(x, im.size[0] - 280))
-            ly = max(4, y - 36)
-            _label(draw, (lx, ly), label, font_sm, bg="#fff9c4")
+        draw.rounded_rectangle([x, y, x + w, y + h], radius=8, outline=color, width=2)
 
-    for ar in meta.get("arrows", []):
-        _draw_arrow(draw, ar["x1"], ar["y1"], ar["x2"], ar["y2"], color="#e53935", width=4)
+    for ar in arrows:
+        _draw_arrow(draw, ar["x1"], ar["y1"], ar["x2"], ar["y2"], color="#b71c1c", width=2)
 
 
 def annotate_fallback(
@@ -100,13 +123,8 @@ def annotate_fallback(
     font_sm: ImageFont.FreeTypeFont | ImageFont.ImageFont,
 ) -> None:
     """Minimal fallback when .meta.json is missing."""
-    def px(xp: float, yp: float) -> tuple[float, float]:
-        return (xp * w, yp * h)
-
     if name == "00-login.png":
-        _label(draw, px(0.06, 0.08), "Operator login (password only)", font)
-    elif name == "01-agents.png":
-        _label(draw, px(0.06, 0.08), "See .meta.json + re-run capture for aligned overlays", font_sm)
+        draw.text((8, max(0, h - 28)), "Sign in (meta missing — re-run capture)", fill=(80, 80, 80), font=font_sm)
 
 
 def annotate(path: Path, out: Path) -> None:
@@ -117,9 +135,9 @@ def annotate(path: Path, out: Path) -> None:
     meta_path = path.with_suffix(".meta.json")
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        annotate_with_meta(im, draw, meta, font, font_sm)
+        im = annotate_with_meta(im, draw, meta, font, font_sm)
     else:
-        annotate_fallback(draw, path.name, im.size[0], im.size[1], font, font_sm)
+        annotate_fallback(ImageDraw.Draw(im, "RGBA"), path.name, im.size[0], im.size[1], font, font_sm)
 
     im.convert("RGB").save(out, quality=92)
 

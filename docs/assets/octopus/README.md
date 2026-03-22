@@ -1,6 +1,6 @@
 # Octopus CLI storyboards (SVG)
 
-Terminal-style diagrams for **non-registry** Octopus flows. They match the current [`../../../octopus`](../../../octopus) menus and [`cmd_help`](../../../octopus) text.
+Terminal-style diagrams for **non-registry** Octopus flows. They use the same panel, **CRT glow** (`feGaussianBlur` + green phosphor matrix + duplicate `use` layers), and **IBM Plex Mono** styling as [`../registry/04-connect-local.svg`](../registry/04-connect-local.svg). Blur strength matches the registry set (`stdDeviation` 0.85, glow layer opacity ~0.52).
 
 | File | Flow |
 |------|------|

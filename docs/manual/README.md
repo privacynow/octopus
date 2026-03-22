@@ -1,6 +1,6 @@
 # Octopus user manual
 
-End-to-end documentation for **operators** (deployment, `./octopus`, Registry) and **product users** (Telegram chat, commands, approvals). Every numbered scenario below is illustrated with **annotated screenshots** (yellow outlines, red arrows, callout labels) generated from the capture pipeline in [`docs/registry-ui-screenshots/`](../registry-ui-screenshots/).
+End-to-end documentation for **operators** (deployment, `./octopus`, Registry) and **product users** (Telegram chat, commands, approvals). Raster figures use **thin outlines** on the UI and **numbered captions in a bottom margin** (from [`annotate.py`](../registry-ui-screenshots/annotate.py)) so labels do not cover content. **SVG** storyboards use the same terminal CRT styling as [`docs/assets/registry/`](../assets/registry/).
 
 ## How to read this manual
 

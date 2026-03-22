@@ -2,44 +2,14 @@
 
 [← Manual home](README.md) · [Prev: Registry UI](03-operator-registry.md) · [Next: Integration →](05-integration-api.md)
 
-Chat UX is implemented in [`app/channels/telegram/`](../../app/channels/telegram/). Screenshots below are **illustrative mocks** (not a live Telegram client) with the same structure as real chats.
+Chat handling lives under [`app/channels/telegram/`](../../app/channels/telegram/). **`/help`** and **`/start`** list commands; **plain text** (not starting with `/`) is the main conversation with the agent. **`/settings`** uses inline buttons (`setting_*` callbacks). **`/skills`** lists and activates skills; **`/approval`**, **`/approve`**, **`/reject`**, **`/cancel`** apply when approval gates are on.
 
-## Help and normal messages
-
-`/help` lists commands; **plain text** (not starting with `/`) is sent to the agent as the main conversation.
+The capture below is an **illustrative mock** (not a live Telegram client): **`/help`** output plus a normal user message. Outlines reference the bottom legend strip so bubbles stay readable.
 
 ![Help and user message](../assets/manual/tg-01-start-help-annotated.png)
 
-## Settings
+**Callbacks** (inline buttons): `retry_*`, `approval_*`, `delegation_*`, `recovery_*`, `setting_*`, `skill_add_*`, `skill_update_*`, `clear_cred_*`, expand/collapse — indexed in [flows-catalog.md §4](../flows-catalog.md#4-product-telegram-chat-end-user--admin).
 
-`/settings` shows chat-specific options; inline buttons use callback prefixes like `setting_*`.
+**`runtime_mode`** (standalone vs shared) changes which commands are registered directly — see [`bootstrap.py`](../../app/channels/telegram/bootstrap.py).
 
-![Settings panel](../assets/manual/tg-02-settings-annotated.png)
-
-## Skills
-
-`/skills` lists active skills and catalog entries; `/skills add`, `/skills setup` configure credentials when prompted.
-
-![Skills](../assets/manual/tg-03-skills-annotated.png)
-
-## Approvals (safe mode)
-
-When approval gates are on, the bot may present a **plan** before executing. Operators use `/approval`, `/approve`, `/reject`, `/cancel` as documented in the in-chat help.
-
-![Approval flow](../assets/manual/tg-04-approval-annotated.png)
-
-## Runtime modes (standalone vs shared worker)
-
-Command registration differs between **`runtime_mode`** values — some commands are only registered on the **standalone** PTB process; **shared** mode routes several commands through the worker dispatcher.
-
-![Runtime modes](../assets/manual/tg-05-runtime-modes-annotated.png)
-
-**Source of truth:** [`bootstrap.py`](../../app/channels/telegram/bootstrap.py).
-
-## Commands (quick reference)
-
-Always refer to `/help` on your deployment. Root [README.md](../../README.md) lists a practical subset for end users.
-
----
-
-**Callbacks** (inline buttons): `retry_*`, `approval_*`, `delegation_*`, `recovery_*`, `setting_*`, `skill_add_*`, `skill_update_*`, `clear_cred_*`, expand/collapse — see [flows-catalog.md §4](../flows-catalog.md#4-product-telegram-chat-end-user--admin).
+Practical command subset for end users: root [README.md](../../README.md).

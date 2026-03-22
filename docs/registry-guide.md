@@ -84,7 +84,7 @@ After startup, note:
 
 The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conversations` load the same shell and are safe to **bookmark or refresh** (the server serves `index.html` for those paths when you are logged in).
 
-**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which **seeds synthetic data** so lists are not empty: several enrolled bots with distinct display names, **two conversations per bot** (mixed `origin_channel`), **multi-kind timelines** (messages, provider response, approval, task status, error), **three routed tasks** (one status-updated to `running`), **heartbeat + worker rows** for the first agent, **usage rows** inserted as `kind=usage` events via `seed_usage_sqlite.py` (not exposed through the public event POST schema), and **callouts** drawn from **DOM-measured rectangles** saved as `*.meta.json` next to each PNG (not fixed percentages), then rendered by `annotate.py`.
+**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which **seeds synthetic data** so lists are not empty: several enrolled bots with distinct display names, **two conversations per bot** (mixed `origin_channel`), **multi-kind timelines** (messages, provider response, approval, task status, error), **three routed tasks** (one status-updated to `running`), **heartbeat + worker rows** for the first agent, **usage rows** inserted as `kind=usage` events via `seed_usage_sqlite.py` (not exposed through the public event POST schema), and **highlight rectangles** from **DOM-measured coordinates** saved as `*.meta.json` next to each PNG (not fixed percentages), then rendered by `annotate.py` into **outlines plus a bottom legend strip** (no labels over the UI).
 
 ### Sidebar (applies to all pages)
 
@@ -249,4 +249,4 @@ The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwa
 
 ---
 
-*Screenshots in this revision were generated with Playwright (Chromium) against the in-repo Registry UI; yellow callouts are added automatically for teaching clarity.*
+*Screenshots in this revision were generated with Playwright (Chromium) against the in-repo Registry UI; `annotate.py` adds outlines and a legend strip under the image.*

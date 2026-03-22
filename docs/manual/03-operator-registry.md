@@ -2,72 +2,20 @@
 
 [← Manual home](README.md) · [Prev: Octopus](02-operator-octopus.md) · [Next: Telegram →](04-product-telegram.md)
 
-These screens are **live captures** of the Registry SPA with synthetic seed data. Regenerate with `npm run capture` in [`docs/registry-ui-screenshots/`](../registry-ui-screenshots/) (see [Manual home](README.md#regenerating-screenshots)).
+Sign in at **`/ui/login`** with **`REGISTRY_UI_TOKEN`** from `.deploy/registry/.env` (password only). After POST, the SPA loads the shell with the **sidebar** (Agents, Conversations, Tasks, Capabilities, Skills, Usage, Logout) on every view.
 
-## Sign in
+![Login form](../assets/registry/ui/00-login-annotated.png)
 
-Password = `REGISTRY_UI_TOKEN` (no separate username).
+**Agents** lists enrolled bots (cards → detail). **Conversations** can be scoped from an agent or listed globally; type **three or more** characters in search to filter. Opening a row shows the **timeline** (chat bubbles for user/bot messages, cards for other event kinds). **Tasks** lists routed work (row → parent conversation). **Capabilities** / **Skills** / **Usage** are covered in the same shell.
 
-![Login](../assets/registry/ui/00-login-annotated.png)
+![Agents home after sign-in](../assets/registry/ui/01-agents-annotated.png)
 
-## Agents (home)
+Example **conversation detail** (read-only timeline):
 
-![Agents list](../assets/registry/ui/01-agents-annotated.png)
+![Conversation timeline](../assets/registry/ui/05-conversation-detail-annotated.png)
 
-## Agent detail
+**Deep links:** **`/ui/agents/{agent_id}`** and **`/ui/conversations/{conversation_id}`** match list navigation.
 
-![Agent detail](../assets/registry/ui/02-agent-detail-annotated.png)
+**Limits:** no compose/export from the timeline in the current UI — use the HTTP API. Details: [registry-guide § limits](../registry-guide.md#what-the-ui-does-not-do-yet).
 
-## Conversations for one agent
-
-![Agent conversations](../assets/registry/ui/03-agent-conversations-annotated.png)
-
-## All conversations
-
-![All conversations](../assets/registry/ui/04-conversations-annotated.png)
-
-### Search filter (3+ characters)
-
-![Filtered conversations](../assets/registry/ui/04b-conversations-filtered-annotated.png)
-
-## Conversation timeline (read-only)
-
-![Conversation detail](../assets/registry/ui/05-conversation-detail-annotated.png)
-
-## Routed tasks
-
-Click a row to open the **parent conversation**.
-
-![Tasks](../assets/registry/ui/06-tasks-annotated.png)
-
-## Capabilities
-
-![Capabilities](../assets/registry/ui/07-capabilities-annotated.png)
-
-## Skills catalog
-
-![Skills](../assets/registry/ui/08-skills-annotated.png)
-
-## Usage
-
-![Usage](../assets/registry/ui/09-usage-annotated.png)
-
-## Deep links
-
-**Agent:** `/ui/agents/{agent_id}`
-
-![Agent deep link](../assets/registry/ui/10-agent-detail-deep-link-annotated.png)
-
-**Conversation:** `/ui/conversations/{conversation_id}`
-
-![Conversation deep link](../assets/registry/ui/11-conversation-deep-link-annotated.png)
-
-## Logout
-
-Use **Logout** in the sidebar footer (ends the operator session). The footer appears on **every** view; it is visible here on the agents home:
-
-![Sidebar with Logout](../assets/registry/ui/01-agents-annotated.png)
-
-## Limits
-
-The timeline is **read-only** in the current UI; posting messages or export uses the **HTTP API**. See [registry-guide.md § limits](../registry-guide.md#what-the-ui-does-not-do-yet).
+**Full route-by-route captures** (search filter, tasks, capabilities, skills, usage, deep links): [registry-guide.md](../registry-guide.md).

@@ -94,54 +94,13 @@ class TelegramChannelEgress(ChannelEgress):
         return None
 
     async def bind(self, *, title: str, config: Any) -> None:
-        del config
-        if not self.conversation_ref:
-            return
-        await self._services.control_plane.conversation_projection.bind_external_conversation(
-            conversation_ref=self.conversation_ref,
-            title=title,
-            origin_channel="telegram",
-            external_id=str(self.chat_id),
-        )
+        del config, title
 
     async def on_message_received(self, text: str) -> None:
-        if not self._mirror_input_event or not self.conversation_ref:
-            return
-        await self._services.control_plane.conversation_projection.publish_external_timeline(
-            conversation_ref=self.conversation_ref,
-            kind="channel_input",
-            title="Telegram message",
-            body=text,
-        )
+        del text
 
     async def on_outcome(self, outcome: Any) -> None:
-        if not self.conversation_ref or outcome is None:
-            return
-        body = getattr(outcome, "reply_text", "") or getattr(outcome, "error_text", "")
-        if not body:
-            return
-        status = getattr(outcome, "status", "")
-        await self._services.control_plane.conversation_projection.publish_external_timeline(
-            conversation_ref=self.conversation_ref,
-            kind="result" if status.startswith("completed") else "error",
-            title="Bot result" if status.startswith("completed") else "Bot error",
-            body=body,
-        )
-
-    async def publish_timeline(self, event: Any) -> None:
-        if not self.conversation_ref:
-            return
-        body = getattr(event, "body", "") or getattr(event, "text", "") or ""
-        await self._services.control_plane.conversation_projection.publish_external_timeline(
-            conversation_ref=self.conversation_ref,
-            kind=getattr(event, "kind", "timeline"),
-            title=getattr(event, "title", "Update"),
-            body=body,
-            status=getattr(event, "status", ""),
-            progress=getattr(event, "progress", None),
-            metadata=getattr(event, "metadata", None),
-            event_id=getattr(event, "event_id", None),
-        )
+        del outcome
 
     async def send_recovery_notice(
         self,

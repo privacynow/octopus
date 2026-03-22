@@ -6,7 +6,16 @@ import json
 import hashlib
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+from app.content_models import (
+    LifecycleApprovalRecord,
+    ProviderGuidanceRevisionRecord,
+    ProviderGuidanceTrackRecord,
+    RuntimeSkillSummary,
+    RuntimeSkillTrackRecord,
+    SkillRevisionRecord,
+)
 
 from app.runtime_health import report_from_dict, report_to_dict
 
@@ -54,21 +63,6 @@ def ensure_json(value: Any) -> str:
     if is_dataclass(value):
         value = asdict(value)
     return json.dumps(value)
-
-
-def validated_bind_conversation_payload(payload: dict[str, Any]) -> dict[str, str]:
-    """Return the required conversation-bind fields or raise on invalid input."""
-    conversation_id = str(payload.get("conversation_id", "") or "")
-    origin_channel = str(payload.get("origin_channel", "") or "")
-    if not conversation_id.strip():
-        raise ValueError("bind_conversation requires non-empty conversation_id")
-    if not origin_channel.strip():
-        raise ValueError("bind_conversation requires non-empty origin_channel")
-    return {
-        "conversation_id": conversation_id,
-        "title": str(payload.get("title", "") or ""),
-        "origin_channel": origin_channel,
-    }
 
 
 def _require_mapping(value: Any, field_name: str) -> dict[str, Any]:
@@ -370,17 +364,18 @@ def decode_json_field(value: Any, default: Any) -> Any:
 
 
 def conversation_status_for_event(kind: str, current_status: str = "") -> str:
-    """Map a timeline event kind to the conversation status it implies."""
-    if kind in {"started", "progress"}:
+    """Map an event kind to the conversation status it implies.
+
+    Uses SDK kind names (message.user, message.bot, task.status, error, etc.).
+    """
+    if kind in {"message.user", "message.bot"}:
         if current_status == "cancelling":
             return "cancelling"
         return "running"
-    if kind == "completed":
-        return "completed"
-    if kind == "failed":
+    if kind == "task.status":
+        return "running"
+    if kind == "error":
         return "failed"
-    if kind == "control":
-        return "cancelling"
     return current_status or "open"
 
 
@@ -470,14 +465,11 @@ class AbstractRegistryStore(Protocol):
     def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Update heartbeat state for a known agent and return the refreshed runtime view."""
 
-    def publish_timeline(self, agent_token: str, events: list[dict[str, Any]]) -> dict[str, Any]:
-        """Persist timeline events owned by the authenticated agent and update conversation state."""
-
-    def bind_conversation(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Bind or refresh a conversation record for the authenticated agent."""
-
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         """Return agents matching the requested discovery constraints."""
+
+    def resolve_agent_for_token(self, agent_token: str) -> dict[str, Any] | None:
+        """Return the agent row for this token, or None if unknown. Used for auth context resolution."""
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
         """Validate that the authenticated agent token has one of the required scopes."""
@@ -516,26 +508,20 @@ class AbstractRegistryStore(Protocol):
     def list_capabilities(self) -> list[dict[str, Any]]:
         """Return the declared capability universe merged with override state."""
 
-    def list_agents(self) -> list[dict[str, Any]]:
+    def list_agents(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         """Return all registered agents in UI-ready form."""
-
-    def ui_bootstrap(self) -> dict[str, Any]:
-        """Return the aggregated UI bootstrap payload."""
 
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
         """Return mirrored runtime-health detail for a registered agent."""
 
-    def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
-        """Create a new registry-originated conversation and queue the first channel_input."""
+    def create_conversation(self, *, target_agent_id: str, title: str, origin_channel: str = "registry", external_conversation_ref: str = "") -> dict[str, Any]:
+        """Create a new registry-originated conversation."""
 
-    def list_conversations(self) -> list[dict[str, Any]]:
+    def list_conversations(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         """Return the registry conversation index."""
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Return one conversation including any linked routed tasks."""
-
-    def get_conversation_timeline(self, conversation_id: str) -> list[dict[str, Any]]:
-        """Return timeline events for a conversation in chronological order."""
 
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         """Return conversation search hits with highlighted snippets."""
@@ -553,3 +539,165 @@ class AbstractRegistryStore(Protocol):
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form."""
+
+    def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """Persist events for a conversation. Idempotent on event_id (ON CONFLICT DO NOTHING)."""
+
+    def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+        """Return paginated events for a conversation, optionally filtered by kind."""
+
+    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+        """Return paginated message events (message.user, message.bot) for a conversation."""
+
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+        """Return paginated conversations for a specific agent."""
+
+    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+        """Return agent status joining agents + workers + event-derived counts."""
+
+    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
+        """Return usage summary, filterable by agent/conversation/date range."""
+
+    def export_conversation(self, conversation_id: str) -> str:
+        """Export conversation as markdown from events."""
+
+    def purge_old_events(self, older_than_days: int = 30) -> int:
+        """Delete events older than the given number of days. Return count deleted."""
+
+    # ------------------------------------------------------------------
+    # Skill / guidance persistence (registry-owned content store)
+    # ------------------------------------------------------------------
+
+    def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
+        """Upsert one skill track and set its active revision."""
+
+    def delete_skill_track(self, slug: str, *, source_kind: str, source_uri: str = "", owner_actor: str = "") -> bool:
+        """Delete one exact skill track. Returns True when a row was removed."""
+
+    def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        """Return effective runtime skill summaries after precedence resolution."""
+
+    def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        """Return the effective runtime skill track for a slug."""
+
+    def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
+        """Return all tracks for a slug, ordered by precedence."""
+
+    def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        """Return runtime-eligible skill summaries after precedence resolution."""
+
+    def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        """Return the runtime-eligible track for a slug using published revisions only."""
+
+    def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
+        """Upsert one skill track and set its active revision without publishing it."""
+
+    def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
+        """Return lifecycle revisions for the mutable custom skill track, newest first."""
+
+    def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
+        """Return approval records for the mutable custom skill track, newest first."""
+
+    def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
+        """Return the newest approval action for one skill revision, or an empty string."""
+
+    def append_skill_approval(
+        self, slug: str, revision_id: str, *, action: str, actor: str, note: str = "",
+    ) -> LifecycleApprovalRecord:
+        """Append one approval-history event for the mutable custom skill track."""
+
+    def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
+        """Update lifecycle status for one revision on the mutable custom skill track."""
+
+    def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
+        """Point the mutable custom skill track at one published revision for runtime use."""
+
+    def clear_published_skill_revision(self, slug: str) -> None:
+        """Remove the runtime published pointer for the mutable custom skill track."""
+
+    def apply_skill_lifecycle_transition(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        """Atomically apply one validated lifecycle transition for a mutable custom skill."""
+
+    def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
+        """Upsert one provider-guidance track and set its active revision."""
+
+    def get_provider_guidance(
+        self, provider: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        """Return one provider-guidance track for the requested scope."""
+
+    def resolve_provider_guidance(
+        self, provider: str, *, instance_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        """Resolve the runtime published guidance, instance override first then system default."""
+
+    def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
+        """Upsert one provider-guidance track and set its active revision without publishing it."""
+
+    def list_provider_guidance_revisions(
+        self, provider: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> list[ProviderGuidanceRevisionRecord]:
+        """Return lifecycle revisions for one provider-guidance track, newest first."""
+
+    def list_provider_guidance_approvals(
+        self, provider: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> list[LifecycleApprovalRecord]:
+        """Return approval records for one provider-guidance track, newest first."""
+
+    def get_latest_provider_guidance_approval_action(
+        self, provider: str, revision_id: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> str:
+        """Return the newest approval action for one provider-guidance revision, or an empty string."""
+
+    def append_provider_guidance_approval(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        action: str,
+        actor: str,
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord:
+        """Append one approval-history event for one provider-guidance track."""
+
+    def set_provider_guidance_revision_status(
+        self, provider: str, revision_id: str, status: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> None:
+        """Update lifecycle status for one provider-guidance revision."""
+
+    def set_published_provider_guidance_revision(
+        self, provider: str, revision_id: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> None:
+        """Point one provider-guidance track at a published revision for runtime use."""
+
+    def clear_published_provider_guidance_revision(
+        self, provider: str, *, scope_kind: str = "system", scope_key: str = "",
+    ) -> None:
+        """Remove the runtime published pointer for one provider-guidance track."""
+
+    def apply_provider_guidance_lifecycle_transition(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        """Atomically apply one validated lifecycle transition for one provider-guidance track."""

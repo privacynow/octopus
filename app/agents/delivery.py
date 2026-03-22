@@ -124,30 +124,6 @@ def _registry_semantic_action(
     )
 
 
-async def _publish_timeline(
-    *,
-    services: BotServices,
-    conversation_ref: str,
-    kind: str,
-    title: str,
-    body: str = "",
-    status: str = "",
-    progress: int | None = None,
-    metadata: dict[str, object] | None = None,
-    event_id: str | None = None,
-) -> None:
-    await services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=conversation_ref,
-        kind=kind,
-        title=title,
-        body=body,
-        status=status,
-        progress=progress,
-        metadata=metadata,
-        event_id=event_id,
-    )
-
-
 async def handle_registry_delivery(
     config: BotConfig,
     delivery: dict[str, object],
@@ -255,16 +231,6 @@ async def handle_registry_delivery(
                 registry_authority_ref(registry_id),
             )
             return "accepted"
-        await _publish_timeline(
-            services=runtime.services,
-            conversation_ref=parent_conversation_id,
-            kind="delegated_result",
-            title="Delegated result received",
-            body=routed_result.full_text or routed_result.summary,
-            status=routed_result.status,
-            metadata={"routed_task_id": routed_task_id},
-            event_id=f"delegated-result:{routed_task_id}",
-        )
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
         continuation_text = applied.resume_prompt
@@ -305,25 +271,6 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
-            await _publish_timeline(
-                services=runtime.services,
-                conversation_ref=parent_conversation_id,
-                kind="delegation_ready",
-                title="All delegated results received",
-                body=continuation_text,
-                metadata={"routed_task_id": routed_task_id},
-                event_id=f"delegation-ready:{parent_conversation_id}",
-            )
-        elif admit_status == "duplicate":
-            await _publish_timeline(
-                services=runtime.services,
-                conversation_ref=parent_conversation_id,
-                kind="delegation_ready",
-                title="All delegated results received",
-                body=continuation_text,
-                metadata={"routed_task_id": routed_task_id},
-                event_id=f"delegation-ready:{parent_conversation_id}",
-            )
         return "accepted"
 
     return "rejected"

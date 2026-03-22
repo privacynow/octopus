@@ -114,6 +114,15 @@ def configure_session_middleware(app) -> None:
     )
 
 
+@dataclass(frozen=True)
+class AuthContext:
+    """Resolved auth identity for resource endpoints."""
+    is_agent: bool = False
+    is_operator: bool = False
+    agent_id: str | None = None      # set when is_agent=True; used for scoped reads
+    agent_token: str | None = None    # raw token, for passing to store methods that need it
+
+
 def require_agent_token(
     authorization: str | None = Header(default=None),
 ) -> str:
@@ -190,3 +199,74 @@ def mark_ui_session_authenticated(request: Request) -> None:
 
 def clear_ui_session(request: Request) -> None:
     request.session.clear()
+
+
+# ---------------------------------------------------------------------------
+# Unified auth for resource endpoints (Phase 8 of registry UI rebuild)
+# ---------------------------------------------------------------------------
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    """Extract bearer token from Authorization header, or None."""
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ").strip() or None
+    return None
+
+
+def _validate_csrf_for_session_mutation(request: Request, x_csrf_token: str | None) -> None:
+    """Enforce CSRF on session-cookie mutating requests. Shared by both auth deps."""
+    if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
+        return
+    expected = current_ui_csrf_token(request)
+    provided = (x_csrf_token or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="Invalid or missing CSRF token")
+
+
+def require_authenticated(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_csrf_token: str | None = Header(default=None),
+) -> AuthContext:
+    """Accept either Bearer agent token or operator session cookie.
+
+    For session-cookie callers on mutation requests (POST/PUT/DELETE),
+    validates X-CSRF-Token. Bearer token requests skip CSRF.
+    """
+    # Try agent token first
+    token = _extract_bearer_token(authorization)
+    if token:
+        from app.registry_service.backend import get_registry_store
+        store = get_registry_store()
+        agent_row = store.resolve_agent_for_token(token)
+        if agent_row is None:
+            raise HTTPException(status_code=401, detail="Unknown agent token")
+        return AuthContext(
+            is_agent=True,
+            agent_id=agent_row["agent_id"],
+            agent_token=token,
+        )
+    # Fall back to session cookie
+    if ui_session_is_valid(request):
+        _validate_csrf_for_session_mutation(request, x_csrf_token)
+        current_ui_csrf_token(request)
+        return AuthContext(is_operator=True)
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def require_operator_session(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_csrf_token: str | None = Header(default=None),
+) -> AuthContext:
+    """Operator session only. Rejects agent tokens.
+
+    Validates CSRF on mutating methods (shared with require_authenticated).
+    """
+    # Reject agent tokens explicitly
+    if _extract_bearer_token(authorization):
+        raise HTTPException(status_code=403, detail="This endpoint requires an operator session, not an agent token")
+    if not ui_session_is_valid(request):
+        raise HTTPException(status_code=401, detail="Operator session required")
+    _validate_csrf_for_session_mutation(request, x_csrf_token)
+    current_ui_csrf_token(request)
+    return AuthContext(is_operator=True)

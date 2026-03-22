@@ -5,8 +5,6 @@ from pydantic import ValidationError
 
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.requests import (
-    BindConversationRequest,
-    PublishTimelineRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
     SearchAgentsRequest,
@@ -21,7 +19,7 @@ def test_control_command_requires_non_empty_authority_ref() -> None:
         ControlCommand(
             command_id="cmd-1",
             capability="conversation_projection",
-            operation="bind_conversation",
+            operation="create_conversation",
             payload_json="{}",
             authority_ref="",
         )
@@ -55,19 +53,6 @@ def test_control_reply_rejects_failed_reply_with_result_payload() -> None:
 
 
 def test_control_plane_request_models_validate_domain_payloads() -> None:
-    bind = BindConversationRequest(
-        conversation_ref="telegram:bot:1",
-        title="Ops",
-        origin_channel="telegram",
-        external_id="123",
-    )
-    timeline = PublishTimelineRequest(
-        conversation_ref="telegram:bot:1",
-        kind="progress",
-        title="Running",
-        metadata={"step": "one"},
-        event_id="evt-1",
-    )
     task = SubmitRoutedTaskPayload(
         routed_task_id="task-1",
         parent_conversation_id="parent-1",
@@ -115,8 +100,6 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
     )
     resolve = ResolveTargetAuthorityRequest(target_agent_id="agent-2")
 
-    assert bind.external_id == "123"
-    assert timeline.metadata == {"step": "one"}
     assert task.context == {"ticket": 42}
     assert task.constraints == {"readonly": True}
     assert update.timeline_events[0].event_id == "evt-1"

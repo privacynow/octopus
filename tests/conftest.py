@@ -17,6 +17,12 @@ import pytest
 _POSTGRES_RUN_ID_FILE_ENV = "TELEGRAM_BOT_TEST_RUN_ID_FILE"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _allow_destructive_registry_migration():
+    """Tests run non-interactively; always allow destructive registry schema migrations."""
+    os.environ.setdefault("REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION", "1")
+
+
 def pytest_configure(config):
     """Write run-scoped id to a unique file and set env so workers read the same id (no shared global file)."""
     if not hasattr(config, "workerinput"):

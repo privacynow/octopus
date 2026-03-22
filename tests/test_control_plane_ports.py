@@ -29,21 +29,18 @@ async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> No
 
     assert isinstance(projection, ConversationProjectionPort)
 
-    await projection.bind_external_conversation(
-        conversation_ref="telegram:bot:1",
-        title="Chat",
+    conversation_id = await projection.create_conversation(
+        target_agent_id="agent-1",
         origin_channel="telegram",
-        external_id="123",
+        external_conversation_ref="telegram:bot:1",
+        title="Chat",
     )
-    await projection.publish_external_timeline(
-        conversation_ref="telegram:bot:1",
-        kind="progress",
-        title="Running",
-        body="Still working",
-        status="in_progress",
-        progress=50,
-        metadata={"step": "half"},
-        event_id="evt-1",
+    assert isinstance(conversation_id, str)
+    assert len(conversation_id) > 0
+
+    await projection.publish_events(
+        conversation_id=conversation_id,
+        events=[],
     )
 
 

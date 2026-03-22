@@ -19,7 +19,6 @@ from app.agents.types import (
     RoutedTaskUpdate,
     ChannelBinding,
     ChannelEvent,
-    TimelineEvent,
 )
 
 __all__ = [
@@ -37,7 +36,6 @@ __all__ = [
     "RoutedTaskUpdate",
     "ChannelBinding",
     "ChannelEvent",
-    "TimelineEvent",
     "bot_identity",
     "load_bot_identity_state",
     "load_registry_connection_state",

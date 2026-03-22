@@ -122,6 +122,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         db_pool_min_size=1,
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
+        registry_publish_level="standard",
     )
     defaults.update(overrides)
     if "projects" in defaults:

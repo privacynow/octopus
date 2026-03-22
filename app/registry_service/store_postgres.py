@@ -7,12 +7,22 @@ import secrets
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
+
+from app.content_models import (
+    LifecycleApprovalRecord,
+    ProviderGuidanceRevisionRecord,
+    ProviderGuidanceTrackRecord,
+    RuntimeSkillSummary,
+    RuntimeSkillTrackRecord,
+    SkillFileRecord,
+    SkillRevisionRecord,
+    skill_precedence,
+)
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from app.agents.types import TimelineEvent
 from app.capability_service import (
     query_capabilities,
     requested_routed_capabilities,
@@ -24,7 +34,6 @@ from app.registry_service.store_base import (
     PROTECTED_ROUTED_TASK_STATUSES,
     validated_ack_request,
     validated_agent_card_payload,
-    validated_bind_conversation_payload,
     validated_conversation_action,
     validated_conversation_message_text,
     validated_heartbeat_payload,
@@ -33,8 +42,6 @@ from app.registry_service.store_base import (
     validated_routed_task_result_payload,
     validated_routed_task_status_payload,
     validated_search_query,
-    validated_timeline_events,
-    conversation_status_for_event,
     decode_json_field,
     delivery_kinds_for_registry_scope,
     effective_connectivity_state,
@@ -104,6 +111,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 (hash_agent_token(token),),
             )
             return cur.fetchone()
+
+    def resolve_agent_for_token(self, agent_token: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = self._token_row(conn, agent_token)
+            return dict(row) if row else None
 
     def _ensure_unique_slug(self, conn, requested: str) -> str:
         slug = requested
@@ -218,112 +230,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for row in rows
         ]
 
-    def _upsert_timeline_event(
-        self,
-        conn,
-        *,
-        event_id: str,
-        conversation_id: str,
-        routed_task_id: str,
-        agent_id: str,
-        kind: str,
-        title: str,
-        body: str,
-        status: str,
-        progress: int | None,
-        metadata: dict[str, Any],
-        created_at: str,
-    ) -> None:
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {_SCHEMA}.timeline_events (
-                    event_id, conversation_id, routed_task_id, agent_id, kind, title,
-                    body, status, progress, metadata_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(event_id) DO UPDATE SET
-                    conversation_id = EXCLUDED.conversation_id,
-                    routed_task_id = EXCLUDED.routed_task_id,
-                    agent_id = EXCLUDED.agent_id,
-                    kind = EXCLUDED.kind,
-                    title = EXCLUDED.title,
-                    body = EXCLUDED.body,
-                    status = EXCLUDED.status,
-                    progress = EXCLUDED.progress,
-                    metadata_json = EXCLUDED.metadata_json,
-                    created_at = EXCLUDED.created_at
-                """,
-                (
-                    event_id,
-                    conversation_id,
-                    routed_task_id,
-                    agent_id,
-                    kind,
-                    title,
-                    body,
-                    status,
-                    progress,
-                    _jsonb(metadata),
-                    created_at,
-                ),
-            )
-
-    def _publish_ui_timeline_conn(
-        self,
-        conn,
-        *,
-        conversation_id: str,
-        title: str,
-        body: str,
-        kind: str,
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        event = TimelineEvent(
-            event_id=uuid.uuid4().hex,
-            conversation_id=conversation_id,
-            kind=kind,
-            title=title,
-            body=body,
-            status=status,
-            progress=progress,
-            metadata=metadata or {},
-        )
-        with _cur(conn) as cur:
-            cur.execute(
-                f"SELECT status FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                (conversation_id,),
-            )
-            conversation = cur.fetchone()
-        self._upsert_timeline_event(
-            conn,
-            event_id=event.event_id,
-            conversation_id=event.conversation_id,
-            routed_task_id="",
-            agent_id="",
-            kind=event.kind,
-            title=event.title,
-            body=event.body,
-            status=event.status,
-            progress=event.progress,
-            metadata=event.metadata,
-            created_at=event.created_at,
-        )
-        if conversation is not None:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.conversations
-                    SET updated_at = %s, status = %s
-                    WHERE conversation_id = %s
-                    """,
-                    (
-                        event.created_at,
-                        conversation_status_for_event(kind, conversation["status"]),
-                        conversation_id,
-                    ),
-                )
 
     def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -468,90 +374,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             assert row is not None
             return {"agent": self._row_to_agent(row), "server_time": now}
-
-    def publish_timeline(self, agent_token: str, events: list[dict[str, Any]]) -> dict[str, Any]:
-        validated_events = validated_timeline_events(events)
-        with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            require_registry_scope(row, {"channel", "full"})
-            for event in validated_events:
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        SELECT status, target_agent_id
-                        FROM {_SCHEMA}.conversations
-                        WHERE conversation_id = %s
-                        """,
-                        (event["conversation_id"],),
-                    )
-                    conversation = cur.fetchone()
-                if conversation is None:
-                    raise PermissionError(f"Unknown conversation: {event['conversation_id']}")
-                if conversation["target_agent_id"] != row["agent_id"]:
-                    raise PermissionError(
-                        f"Conversation does not belong to agent: {event['conversation_id']}"
-                    )
-                self._upsert_timeline_event(
-                    conn,
-                    event_id=event["event_id"],
-                    conversation_id=event["conversation_id"],
-                    routed_task_id=event.get("metadata", {}).get("routed_task_id", ""),
-                    agent_id=row["agent_id"],
-                    kind=event["kind"],
-                    title=event["title"],
-                    body=event.get("body", ""),
-                    status=event.get("status", ""),
-                    progress=event.get("progress"),
-                    metadata=event.get("metadata", {}),
-                    created_at=event["created_at"],
-                )
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE {_SCHEMA}.conversations
-                        SET updated_at = %s, status = %s
-                        WHERE conversation_id = %s
-                        """,
-                        (
-                            event["created_at"],
-                            conversation_status_for_event(event["kind"], conversation["status"]),
-                            event["conversation_id"],
-                        ),
-                    )
-        return {"accepted": len(events)}
-
-    def bind_conversation(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
-        now = utcnow_iso()
-        bind = validated_bind_conversation_payload(payload)
-        with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            require_registry_scope(row, {"channel", "full"})
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, 'open', %s, %s)
-                    ON CONFLICT(conversation_id) DO UPDATE SET
-                        target_agent_id = EXCLUDED.target_agent_id,
-                        title = EXCLUDED.title,
-                        origin_channel = EXCLUDED.origin_channel,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        bind["conversation_id"],
-                        row["agent_id"],
-                        bind["title"],
-                        bind["origin_channel"],
-                        now,
-                        now,
-                    ),
-                )
-        return self.get_conversation(bind["conversation_id"])
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         normalized = capability_name.strip().lower()
@@ -962,21 +784,42 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 updated = cur.rowcount
             if updated > 0:
                 for event in validated_payload["timeline_events"]:
-                    self._upsert_timeline_event(
-                        conn,
-                        event_id=event["event_id"],
-                        conversation_id=event["conversation_id"],
-                        routed_task_id=routed_task_id,
-                        agent_id=row["agent_id"],
-                        kind=event["kind"],
-                        title=event["title"],
-                        body=event.get("body", ""),
-                        status=event.get("status", ""),
-                        progress=event.get("progress"),
-                        metadata=event.get("metadata", {}),
-                        created_at=event["created_at"],
-                    )
-        return {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
+                    event_metadata = {"status": validated_payload["status"], "routed_task_id": routed_task_id}
+                    if event.get("title"):
+                        event_metadata["title"] = event["title"]
+                    if event.get("progress") is not None:
+                        event_metadata["progress"] = event["progress"]
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT(event_id) DO NOTHING
+                            """,
+                            (
+                                event["event_id"],
+                                event["conversation_id"],
+                                row["agent_id"],
+                                "task.status",
+                                "",
+                                event.get("body", ""),
+                                _jsonb(event_metadata),
+                                event["created_at"],
+                            ),
+                        )
+            # Return enough context for WebSocket broadcast
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT parent_conversation_id, origin_agent_id, target_agent_id FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                    (routed_task_id,),
+                )
+                task_row = cur.fetchone()
+            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
+            if task_row:
+                result["parent_conversation_id"] = task_row["parent_conversation_id"]
+                result["origin_agent_id"] = task_row["origin_agent_id"]
+                result["target_agent_id"] = task_row["target_agent_id"]
+        return result
 
     def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -1041,19 +884,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
         return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 
-    def list_agents(self) -> list[dict[str, Any]]:
+    def list_agents(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
-                cur.execute(f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name)")
+                if for_agent_id is not None:
+                    cur.execute(
+                        f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s ORDER BY lower(display_name)",
+                        (for_agent_id,),
+                    )
+                else:
+                    cur.execute(f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name)")
                 rows = cur.fetchall()
         return [self._row_to_agent(row) for row in rows]
-
-    def ui_bootstrap(self) -> dict[str, Any]:
-        return {
-            "bots": self.list_agents(),
-            "conversations": self.list_conversations(),
-            "tasks": self.list_tasks(),
-        }
 
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -1070,7 +912,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 self._runtime_worker_rows(conn, agent_id),
             )
 
-    def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
+    def create_conversation(
+        self,
+        *,
+        target_agent_id: str,
+        title: str,
+        origin_channel: str = "registry",
+        external_conversation_ref: str = "",
+    ) -> dict[str, Any]:
         now = utcnow_iso()
         conversation_id = uuid.uuid4().hex
         with self._connect() as conn, _write_tx(conn):
@@ -1078,49 +927,40 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
-                    ) VALUES (%s, %s, %s, 'registry', 'open', %s, %s)
+                        conversation_id, target_agent_id, title, origin_channel,
+                        external_conversation_ref, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, 'open', %s, %s)
+                    ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        updated_at = EXCLUDED.updated_at
+                    RETURNING conversation_id
                     """,
-                    (conversation_id, target_agent_id, title, now, now),
+                    (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
                 )
-            self._create_delivery(
-                conn,
-                target_agent_id=target_agent_id,
-                kind="channel_input",
-                payload={
-                    "conversation_id": conversation_id,
-                    "title": title,
-                    "text": message_text,
-                    "channel": "registry",
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="Conversation started",
-                body=message_text,
-                kind="channel_input",
-            )
-        return self.get_conversation(conversation_id)
+                actual_id = cur.fetchone()["conversation_id"]
+        return self.get_conversation(actual_id)
 
-    def list_conversations(self) -> list[dict[str, Any]]:
+    def list_conversations(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
-                cur.execute(
-                    f"""
+                sql = f"""
                     SELECT
                         c.*,
                         a.display_name AS target_name,
-                        COUNT(t.event_id) AS timeline_event_count
+                        COUNT(e.event_id) AS event_count
                     FROM {_SCHEMA}.conversations c
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
+                    LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
+                """
+                params: list[Any] = []
+                if for_agent_id is not None:
+                    sql += " WHERE c.target_agent_id = %s"
+                    params.append(for_agent_id)
+                sql += """
                     GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     ORDER BY c.updated_at DESC
-                    """
-                )
+                """
+                cur.execute(sql, params)
                 rows = cur.fetchall()
         return [
             {
@@ -1131,7 +971,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-                "timeline_event_count": int(row["timeline_event_count"] or 0),
+                "timeline_event_count": int(row["event_count"] or 0),
             }
             for row in rows
         ]
@@ -1144,10 +984,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     SELECT
                         c.*,
                         a.display_name AS target_name,
-                        COUNT(t.event_id) AS timeline_event_count
+                        COUNT(e.event_id) AS event_count
                     FROM {_SCHEMA}.conversations c
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
+                    LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
                     WHERE c.conversation_id = %s
                     GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     """,
@@ -1192,38 +1032,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "timeline_event_count": int(row["timeline_event_count"] or 0),
+            "timeline_event_count": int(row["event_count"] or 0),
             "linked_routed_tasks": tasks,
         }
-
-    def get_conversation_timeline(self, conversation_id: str) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {_SCHEMA}.timeline_events
-                    WHERE conversation_id = %s
-                    ORDER BY seq ASC
-                    """,
-                    (conversation_id,),
-                )
-                rows = cur.fetchall()
-        return [
-            {
-                "event_id": row["event_id"],
-                "conversation_id": row["conversation_id"],
-                "routed_task_id": row["routed_task_id"],
-                "agent_id": row["agent_id"],
-                "kind": row["kind"],
-                "title": row["title"],
-                "body": row["body"],
-                "status": row["status"],
-                "progress": row["progress"],
-                "metadata": decode_json_field(row["metadata_json"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
 
     def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1231,7 +1042,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     SELECT conversation_id, metadata_json, created_at
-                    FROM {_SCHEMA}.timeline_events
+                    FROM {_SCHEMA}.events
                     WHERE kind = 'usage' AND created_at >= %s
                     ORDER BY created_at
                     """,
@@ -1253,20 +1064,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     WITH matched AS (
-                        SELECT te.conversation_id,
-                               te.seq,
+                        SELECT ev.conversation_id,
+                               ev.seq,
                                ts_headline(
                                    'english',
-                                   te.body,
+                                   ev.content,
                                    plainto_tsquery('english', %s),
                                    'MaxWords=32,MinWords=15,HighlightAll=true,StartSel=<b>,StopSel=</b>'
                                ) AS snippet,
                                ROW_NUMBER() OVER (
-                                   PARTITION BY te.conversation_id
-                                   ORDER BY te.seq DESC
+                                   PARTITION BY ev.conversation_id
+                                   ORDER BY ev.seq DESC
                                ) AS row_rank
-                        FROM {_SCHEMA}.timeline_events te
-                        WHERE te.body_tsv @@ plainto_tsquery('english', %s)
+                        FROM {_SCHEMA}.events ev
+                        WHERE to_tsvector('english', ev.content) @@ plainto_tsquery('english', %s)
                     )
                     SELECT conversation_id, snippet
                     FROM matched
@@ -1304,13 +1115,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="User message",
-                body=validated_text,
-                kind="channel_input",
-            )
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(event_id) DO NOTHING""",
+                    (uuid.uuid4().hex, conversation_id, "", "message.user", "operator", validated_text, _jsonb({}), now),
+                )
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                    (now, conversation_id),
+                )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def add_conversation_action(
@@ -1342,13 +1158,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 delivery_id=uuid.uuid4().hex,
             )
             is_cancel = validated_action == "cancel_conversation"
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="Cancel requested" if is_cancel else f"Action: {validated_action}",
-                body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
-                kind="control" if is_cancel else "channel_action",
-            )
+            if is_cancel:
+                event_kind = "task.status"
+                event_metadata = {"status": "cancelling"}
+                event_content = ""
+            else:
+                event_kind = "approval.decided"
+                event_metadata = {"action": validated_action, "decided_by": "operator"}
+                event_content = json.dumps(action_payload) if action_payload else ""
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(event_id) DO NOTHING""",
+                    (uuid.uuid4().hex, conversation_id, "", event_kind, "operator", event_content, _jsonb(event_metadata), now),
+                )
+            if is_cancel:
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s, status = %s WHERE conversation_id = %s",
+                        (now, "cancelling", conversation_id),
+                    )
+            else:
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                        (now, conversation_id),
+                    )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def list_tasks(self) -> list[dict[str, Any]]:
@@ -1380,3 +1216,1106 @@ class RegistryPostgresStore(AbstractRegistryStore):
             }
             for row in rows
         ]
+
+    def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        with self._connect() as conn, _write_tx(conn):
+            row = self._token_row(conn, agent_token)
+            if row is None:
+                raise PermissionError("Unknown agent token")
+            agent_id = row["agent_id"]
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT target_agent_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    (conversation_id,),
+                )
+                conversation = cur.fetchone()
+            if conversation is None:
+                raise PermissionError(f"Unknown conversation: {conversation_id}")
+            if conversation["target_agent_id"] != agent_id:
+                raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
+            inserted = 0
+            skipped = 0
+            for event in events:
+                serialized = json.dumps(event)
+                if len(serialized) >= 256 * 1024:
+                    raise ValueError("Event exceeds 256KB size limit")
+                event_id = str(event.get("event_id", "") or "")
+                if not event_id.strip():
+                    raise ValueError("event_id is required")
+                kind = str(event.get("kind", "") or "")
+                if not kind.strip():
+                    raise ValueError("kind is required")
+                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT(event_id) DO NOTHING
+                        """,
+                        (
+                            event_id,
+                            conversation_id,
+                            agent_id,
+                            kind,
+                            str(event.get("actor", "") or ""),
+                            str(event.get("content", "") or ""),
+                            _jsonb(event.get("metadata", {})),
+                            created_at,
+                        ),
+                    )
+                    if cur.rowcount > 0:
+                        inserted += 1
+                    else:
+                        skipped += 1
+        return {"inserted": inserted, "skipped": skipped}
+
+    def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                if kind:
+                    cur.execute(
+                        f"""
+                        SELECT * FROM {_SCHEMA}.events
+                        WHERE conversation_id = %s AND kind = %s AND seq > %s
+                        ORDER BY seq ASC
+                        LIMIT %s
+                        """,
+                        (conversation_id, kind, cursor, limit),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT * FROM {_SCHEMA}.events
+                        WHERE conversation_id = %s AND seq > %s
+                        ORDER BY seq ASC
+                        LIMIT %s
+                        """,
+                        (conversation_id, cursor, limit),
+                    )
+                rows = cur.fetchall()
+        events_list = [
+            {
+                "seq": row["seq"],
+                "event_id": row["event_id"],
+                "conversation_id": row["conversation_id"],
+                "agent_id": row["agent_id"],
+                "kind": row["kind"],
+                "actor": row["actor"],
+                "content": row["content"],
+                "metadata": decode_json_field(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+        next_cursor = events_list[-1]["seq"] if events_list else 0
+        return {"events": events_list, "next_cursor": next_cursor}
+
+    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT * FROM {_SCHEMA}.events
+                    WHERE conversation_id = %s AND kind IN ('message.user', 'message.bot') AND seq > %s
+                    ORDER BY seq ASC
+                    LIMIT %s
+                    """,
+                    (conversation_id, cursor, limit),
+                )
+                rows = cur.fetchall()
+        events_list = [
+            {
+                "seq": row["seq"],
+                "event_id": row["event_id"],
+                "conversation_id": row["conversation_id"],
+                "agent_id": row["agent_id"],
+                "kind": row["kind"],
+                "actor": row["actor"],
+                "content": row["content"],
+                "metadata": decode_json_field(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+        next_cursor = events_list[-1]["seq"] if events_list else 0
+        return {"events": events_list, "next_cursor": next_cursor}
+
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+        effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT c.*, a.display_name AS target_name
+                    FROM {_SCHEMA}.conversations c
+                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
+                    WHERE c.target_agent_id = %s
+                    ORDER BY c.updated_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (effective_agent_id, limit, cursor),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "conversation_id": row["conversation_id"],
+                "target_agent_id": row["target_agent_id"],
+                "target_display_name": row["target_name"] or "",
+                "title": row["title"],
+                "origin_channel": row["origin_channel"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (agent_id,),
+                )
+                row = cur.fetchone()
+            if row is None:
+                return None
+            agent = self._row_to_agent(row)
+            workers = self._runtime_worker_rows(conn, agent_id)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS cnt FROM {_SCHEMA}.conversations
+                    WHERE target_agent_id = %s AND status IN ('open', 'running')
+                    """,
+                    (agent_id,),
+                )
+                active_count_row = cur.fetchone()
+                active_conversations = int(active_count_row["cnt"]) if active_count_row else 0
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS cnt FROM {_SCHEMA}.events
+                    WHERE agent_id = %s AND kind = 'error'
+                      AND created_at::timestamptz >= (now() - interval '1 hour')
+                    """,
+                    (agent_id,),
+                )
+                error_count_row = cur.fetchone()
+                recent_errors = int(error_count_row["cnt"]) if error_count_row else 0
+        agent["workers"] = workers
+        agent["active_conversations"] = active_conversations
+        agent["recent_errors"] = recent_errors
+        return agent
+
+    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind = 'usage'"
+            params: list[Any] = []
+            if agent_id:
+                sql += " AND agent_id = %s"
+                params.append(agent_id)
+            if conversation_id:
+                sql += " AND conversation_id = %s"
+                params.append(conversation_id)
+            if since:
+                sql += " AND created_at >= %s"
+                params.append(since)
+            if until:
+                sql += " AND created_at <= %s"
+                params.append(until)
+            sql += " ORDER BY created_at"
+            with _cur(conn) as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        return [
+            {
+                "event_id": row["event_id"],
+                "conversation_id": row["conversation_id"],
+                "agent_id": row["agent_id"],
+                "metadata": decode_json_field(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def export_conversation(self, conversation_id: str) -> str:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT * FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    (conversation_id,),
+                )
+                conv = cur.fetchone()
+            if conv is None:
+                raise KeyError(conversation_id)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT * FROM {_SCHEMA}.events WHERE conversation_id = %s ORDER BY seq ASC",
+                    (conversation_id,),
+                )
+                rows = cur.fetchall()
+        lines = [f"# Conversation: {conv['title'] or conversation_id}", ""]
+        for row in rows:
+            actor = row["actor"] or row["agent_id"] or "system"
+            lines.append(f"## [{row['created_at']}] {actor} ({row['kind']})")
+            lines.append("")
+            if row["content"]:
+                lines.append(row["content"])
+                lines.append("")
+        return "\n".join(lines)
+
+    def purge_old_events(self, older_than_days: int = 30) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"DELETE FROM {_SCHEMA}.events WHERE created_at < %s",
+                    (cutoff,),
+                )
+                count = cur.rowcount
+        return count
+
+    # ------------------------------------------------------------------
+    # Skill / guidance persistence (registry-owned content store)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_json(raw: Any, default: Any) -> Any:
+        if raw is None:
+            return default
+        if isinstance(raw, (list, dict)):
+            return raw
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default
+
+    @staticmethod
+    def _stable_json(value: Any) -> str:
+        return json.dumps(value, sort_keys=True)
+
+    def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
+        return record.revision.revision_id or f"{record.slug}|{record.revision.digest}"
+
+    def _guidance_revision_id(self, record: ProviderGuidanceTrackRecord) -> str:
+        key = f"{record.provider}|{record.scope_kind}|{record.scope_key}"
+        return record.revision.revision_id or f"{key}|{record.revision.digest}"
+
+    def _upsert_registry_skill(
+        self,
+        record: RuntimeSkillTrackRecord,
+        *,
+        status: str,
+        publish: bool,
+    ) -> None:
+        now = utcnow_iso()
+        revision_id = self._skill_revision_id(record)
+        files_json = self._stable_json(
+            [
+                {
+                    "relative_path": f.relative_path,
+                    "content_text": f.content_text,
+                    "content_type": f.content_type,
+                    "executable": f.executable,
+                }
+                for f in record.revision.files
+            ]
+        )
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT published_revision_id FROM {_SCHEMA}.runtime_skills WHERE slug = %s",
+                    (record.slug,),
+                )
+                existing = cur.fetchone()
+                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.runtime_skills (
+                        slug, display_name, description, source_kind, source_uri, owner_actor,
+                        visibility, is_mutable, archived, instruction_body, requirements_json,
+                        provider_config_json, files_json, active_revision_id, published_revision_id,
+                        created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(slug) DO UPDATE SET
+                        display_name = EXCLUDED.display_name,
+                        description = EXCLUDED.description,
+                        source_kind = EXCLUDED.source_kind,
+                        source_uri = EXCLUDED.source_uri,
+                        owner_actor = EXCLUDED.owner_actor,
+                        visibility = EXCLUDED.visibility,
+                        is_mutable = EXCLUDED.is_mutable,
+                        archived = EXCLUDED.archived,
+                        instruction_body = EXCLUDED.instruction_body,
+                        requirements_json = EXCLUDED.requirements_json,
+                        provider_config_json = EXCLUDED.provider_config_json,
+                        files_json = EXCLUDED.files_json,
+                        active_revision_id = EXCLUDED.active_revision_id,
+                        published_revision_id = EXCLUDED.published_revision_id,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        record.slug,
+                        record.display_name,
+                        record.description,
+                        record.source_kind,
+                        record.source_uri,
+                        record.owner_actor,
+                        record.visibility,
+                        record.is_mutable,
+                        record.archived,
+                        record.revision.instruction_body,
+                        self._stable_json(record.revision.requirements),
+                        self._stable_json(record.revision.provider_config),
+                        files_json,
+                        revision_id,
+                        published_revision_id,
+                        now,
+                        now,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.skill_revisions (
+                        revision_id, slug, instruction_body, requirements_json,
+                        provider_config_json, files_json, version_label, changelog,
+                        status, created_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(revision_id) DO UPDATE SET
+                        instruction_body = EXCLUDED.instruction_body,
+                        requirements_json = EXCLUDED.requirements_json,
+                        provider_config_json = EXCLUDED.provider_config_json,
+                        files_json = EXCLUDED.files_json,
+                        version_label = EXCLUDED.version_label,
+                        changelog = EXCLUDED.changelog,
+                        status = EXCLUDED.status,
+                        created_by = EXCLUDED.created_by,
+                        created_at = EXCLUDED.created_at
+                    """,
+                    (
+                        revision_id,
+                        record.slug,
+                        record.revision.instruction_body,
+                        self._stable_json(record.revision.requirements),
+                        self._stable_json(record.revision.provider_config),
+                        files_json,
+                        record.revision.version_label,
+                        record.revision.changelog,
+                        status,
+                        record.revision.created_by,
+                        record.revision.created_at or now,
+                    ),
+                )
+
+    def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
+        self._upsert_registry_skill(record, status="published", publish=True)
+
+    def delete_skill_track(
+        self,
+        slug: str,
+        *,
+        source_kind: str,
+        source_uri: str = "",
+        owner_actor: str = "",
+    ) -> bool:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(f"DELETE FROM {_SCHEMA}.skill_revisions WHERE slug = %s", (slug,))
+                cur.execute(f"DELETE FROM {_SCHEMA}.skill_approvals WHERE slug = %s", (slug,))
+                cur.execute(f"DELETE FROM {_SCHEMA}.runtime_skills WHERE slug = %s", (slug,))
+                return cur.rowcount > 0
+
+    def _skill_row_to_track(self, row: dict[str, Any]) -> RuntimeSkillTrackRecord:
+        files_data = self._parse_json(row.get("files_json", "[]"), [])
+        files = tuple(
+            SkillFileRecord(
+                relative_path=f.get("relative_path", ""),
+                content_text=f.get("content_text", ""),
+                content_type=f.get("content_type", "text/plain"),
+                executable=bool(f.get("executable", False)),
+            )
+            for f in files_data
+            if isinstance(f, dict)
+        )
+        revision = SkillRevisionRecord(
+            instruction_body=row.get("instruction_body", ""),
+            requirements=self._parse_json(row.get("requirements_json", "[]"), []),
+            provider_config=self._parse_json(row.get("provider_config_json", "{}"), {}),
+            files=files,
+            version_label=row.get("version_label", ""),
+            changelog=row.get("changelog", ""),
+            created_by=row.get("created_by", ""),
+            created_at=row.get("created_at", ""),
+            revision_id=row.get("revision_id", row.get("active_revision_id", "")),
+            status=row.get("status", "published"),
+        )
+        return RuntimeSkillTrackRecord(
+            slug=row["slug"],
+            display_name=row.get("display_name", ""),
+            description=row.get("description", ""),
+            source_kind=row.get("source_kind", "custom"),
+            revision=revision,
+            source_uri=row.get("source_uri", ""),
+            owner_actor=row.get("owner_actor", ""),
+            visibility=row.get("visibility", "private"),
+            is_mutable=bool(row.get("is_mutable", True)),
+            archived=bool(row.get("archived", False)),
+            active_revision_id=row.get("active_revision_id", ""),
+            published_revision_id=row.get("published_revision_id", ""),
+        )
+
+    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[dict[str, Any]]:
+        revision_ref = (
+            "CASE WHEN s.published_revision_id != '' THEN s.published_revision_id ELSE s.active_revision_id END"
+            if runtime_only else "s.active_revision_id"
+        )
+        extra_where = "AND s.published_revision_id != ''" if runtime_only else ""
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        s.slug, s.display_name, s.description, s.source_kind,
+                        s.source_uri, s.owner_actor, s.visibility, s.is_mutable,
+                        s.archived, s.active_revision_id, s.published_revision_id,
+                        rev.revision_id, rev.instruction_body, rev.requirements_json,
+                        rev.provider_config_json, rev.files_json, rev.version_label,
+                        rev.changelog, rev.status, rev.created_by, rev.created_at
+                    FROM {_SCHEMA}.runtime_skills s
+                    JOIN {_SCHEMA}.skill_revisions rev ON rev.revision_id = {revision_ref}
+                    WHERE s.slug = %s
+                    {extra_where}
+                    """,
+                    (slug,),
+                )
+                return cur.fetchall()
+
+    def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
+        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=False)]
+        return sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
+
+    def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        tracks = self.list_skill_tracks(slug)
+        return tracks[0] if tracks else None
+
+    def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=True)]
+        records = sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
+        return records[0] if records else None
+
+    def _skill_summaries(self, *, runtime_only: bool) -> list[RuntimeSkillSummary]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(f"SELECT slug FROM {_SCHEMA}.runtime_skills ORDER BY lower(slug)")
+                slugs = cur.fetchall()
+        resolver = self.resolve_runtime_skill if runtime_only else self.resolve_skill
+        summaries: list[RuntimeSkillSummary] = []
+        for row in slugs:
+            record = resolver(row["slug"])
+            if record is None:
+                continue
+            summaries.append(
+                RuntimeSkillSummary(
+                    slug=record.slug,
+                    display_name=record.display_name,
+                    description=record.description,
+                    source_kind=record.source_kind,
+                    source_uri=record.source_uri,
+                    visibility=record.visibility,
+                    is_mutable=record.is_mutable,
+                    digest=record.revision.digest,
+                    status=record.revision.status,
+                    runtime_available=bool(record.published_revision_id) or not record.is_mutable,
+                    has_unpublished_changes=bool(record.published_revision_id)
+                    and record.published_revision_id != record.active_revision_id,
+                )
+            )
+        return summaries
+
+    def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        return self._skill_summaries(runtime_only=False)
+
+    def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        return self._skill_summaries(runtime_only=True)
+
+    def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
+        self._upsert_registry_skill(record, status="draft", publish=False)
+
+    def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT revision_id, instruction_body, requirements_json, provider_config_json,
+                           files_json, version_label, changelog, status, created_by, created_at
+                    FROM {_SCHEMA}.skill_revisions
+                    WHERE slug = %s
+                    ORDER BY created_at DESC, revision_id DESC
+                    """,
+                    (slug,),
+                )
+                rows = cur.fetchall()
+        return [
+            SkillRevisionRecord(
+                instruction_body=row["instruction_body"],
+                requirements=self._parse_json(row["requirements_json"], []),
+                provider_config=self._parse_json(row["provider_config_json"], {}),
+                files=tuple(
+                    SkillFileRecord(
+                        relative_path=f.get("relative_path", ""),
+                        content_text=f.get("content_text", ""),
+                        content_type=f.get("content_type", "text/plain"),
+                        executable=bool(f.get("executable", False)),
+                    )
+                    for f in self._parse_json(row["files_json"], [])
+                    if isinstance(f, dict)
+                ),
+                version_label=row["version_label"],
+                changelog=row["changelog"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
+
+    def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT record_id, revision_id, action, actor, note, created_at
+                    FROM {_SCHEMA}.skill_approvals
+                    WHERE slug = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    """,
+                    (slug,),
+                )
+                rows = cur.fetchall()
+        return [
+            LifecycleApprovalRecord(
+                record_id=row["record_id"],
+                revision_id=row["revision_id"],
+                action=row["action"],
+                actor=row["actor"],
+                note=row["note"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT action
+                    FROM {_SCHEMA}.skill_approvals
+                    WHERE slug = %s AND revision_id = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    LIMIT 1
+                    """,
+                    (slug, revision_id),
+                )
+                row = cur.fetchone()
+        return str(row["action"]) if row is not None else ""
+
+    def append_skill_approval(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        action: str,
+        actor: str,
+        note: str = "",
+    ) -> LifecycleApprovalRecord:
+        now = utcnow_iso()
+        record_id = f"{slug}|{revision_id}|{action}|{now}"
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.skill_approvals (
+                        record_id, slug, revision_id, action, actor, note, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (record_id, slug, revision_id, action, actor, note, now),
+                )
+        return LifecycleApprovalRecord(
+            record_id=record_id,
+            revision_id=revision_id,
+            action=action,
+            actor=actor,
+            note=note,
+            created_at=now,
+        )
+
+    def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
+                    (status, slug, revision_id),
+                )
+
+    def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
+                    (revision_id, utcnow_iso(), slug),
+                )
+
+    def clear_published_skill_revision(self, slug: str) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
+                    (utcnow_iso(), slug),
+                )
+
+    def apply_skill_lifecycle_transition(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        record: LifecycleApprovalRecord | None = None
+        now = utcnow_iso()
+        record_id = (
+            f"{slug}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else ""
+        )
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                if set_status is not None:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
+                        (set_status, slug, revision_id),
+                    )
+                if published_pointer == "set_active":
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
+                        (revision_id, now, slug),
+                    )
+                elif published_pointer == "clear":
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
+                        (now, slug),
+                    )
+                if approval_action is not None:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {_SCHEMA}.skill_approvals (
+                            record_id, slug, revision_id, action, actor, note, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (record_id, slug, revision_id, approval_action, actor, note, now),
+                    )
+                    record = LifecycleApprovalRecord(
+                        record_id=record_id,
+                        revision_id=revision_id,
+                        action=approval_action,
+                        actor=actor,
+                        note=note,
+                        created_at=now,
+                    )
+        return record
+
+    # --- Provider guidance ---
+
+    def _upsert_registry_guidance(
+        self,
+        record: ProviderGuidanceTrackRecord,
+        *,
+        status: str,
+        publish: bool,
+    ) -> None:
+        now = utcnow_iso()
+        revision_id = self._guidance_revision_id(record)
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT published_revision_id FROM {_SCHEMA}.provider_guidance WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
+                    (record.provider, record.scope_kind, record.scope_key),
+                )
+                existing = cur.fetchone()
+                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.provider_guidance (
+                        provider, scope_kind, scope_key, content, format, is_mutable,
+                        active_revision_id, published_revision_id, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(provider, scope_kind, scope_key) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        format = EXCLUDED.format,
+                        is_mutable = EXCLUDED.is_mutable,
+                        active_revision_id = EXCLUDED.active_revision_id,
+                        published_revision_id = EXCLUDED.published_revision_id,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        record.provider,
+                        record.scope_kind,
+                        record.scope_key,
+                        record.revision.content,
+                        record.revision.format,
+                        record.is_mutable,
+                        revision_id,
+                        published_revision_id,
+                        now,
+                        now,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.guidance_revisions (
+                        revision_id, provider, scope_kind, scope_key, content, format,
+                        status, created_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(revision_id) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        format = EXCLUDED.format,
+                        status = EXCLUDED.status,
+                        created_by = EXCLUDED.created_by,
+                        created_at = EXCLUDED.created_at
+                    """,
+                    (
+                        revision_id,
+                        record.provider,
+                        record.scope_kind,
+                        record.scope_key,
+                        record.revision.content,
+                        record.revision.format,
+                        status,
+                        record.revision.created_by,
+                        record.revision.created_at or now,
+                    ),
+                )
+
+    def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
+        self._upsert_registry_guidance(record, status="published", publish=True)
+
+    def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
+        self._upsert_registry_guidance(record, status="draft", publish=False)
+
+    def get_provider_guidance(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
+                        g.active_revision_id, g.published_revision_id,
+                        rev.content, rev.format, rev.created_by, rev.created_at,
+                        rev.status, rev.revision_id
+                    FROM {_SCHEMA}.provider_guidance g
+                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.active_revision_id
+                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s
+                    """,
+                    (provider, scope_kind, scope_key),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return ProviderGuidanceTrackRecord(
+            provider=row["provider"],
+            scope_kind=row["scope_kind"],
+            scope_key=row["scope_key"],
+            is_mutable=bool(row["is_mutable"]),
+            active_revision_id=row["active_revision_id"],
+            published_revision_id=row["published_revision_id"],
+            revision=ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            ),
+        )
+
+    def _runtime_provider_guidance(
+        self,
+        provider: str,
+        *,
+        scope_kind: str,
+        scope_key: str,
+    ) -> ProviderGuidanceTrackRecord | None:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
+                        g.active_revision_id, g.published_revision_id,
+                        rev.content, rev.format, rev.created_by, rev.created_at,
+                        rev.status, rev.revision_id
+                    FROM {_SCHEMA}.provider_guidance g
+                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.published_revision_id
+                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s AND g.published_revision_id != ''
+                    """,
+                    (provider, scope_kind, scope_key),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return ProviderGuidanceTrackRecord(
+            provider=row["provider"],
+            scope_kind=row["scope_kind"],
+            scope_key=row["scope_key"],
+            is_mutable=bool(row["is_mutable"]),
+            active_revision_id=row["active_revision_id"],
+            published_revision_id=row["published_revision_id"],
+            revision=ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            ),
+        )
+
+    def resolve_provider_guidance(
+        self,
+        provider: str,
+        *,
+        instance_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        if instance_key:
+            match = self._runtime_provider_guidance(provider, scope_kind="instance", scope_key=instance_key)
+            if match is not None:
+                return match
+        return self._runtime_provider_guidance(provider, scope_kind="system", scope_key="")
+
+    def list_provider_guidance_revisions(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> list[ProviderGuidanceRevisionRecord]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT revision_id, content, format, created_by, created_at, status
+                    FROM {_SCHEMA}.guidance_revisions
+                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
+                    ORDER BY created_at DESC, revision_id DESC
+                    """,
+                    (provider, scope_kind, scope_key),
+                )
+                rows = cur.fetchall()
+        return [
+            ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
+
+    def list_provider_guidance_approvals(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> list[LifecycleApprovalRecord]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT record_id, revision_id, action, actor, note, created_at
+                    FROM {_SCHEMA}.guidance_approvals
+                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    """,
+                    (provider, scope_kind, scope_key),
+                )
+                rows = cur.fetchall()
+        return [
+            LifecycleApprovalRecord(
+                record_id=row["record_id"],
+                revision_id=row["revision_id"],
+                action=row["action"],
+                actor=row["actor"],
+                note=row["note"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def get_latest_provider_guidance_approval_action(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT action
+                    FROM {_SCHEMA}.guidance_approvals
+                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    LIMIT 1
+                    """,
+                    (provider, scope_kind, scope_key, revision_id),
+                )
+                row = cur.fetchone()
+        return str(row["action"]) if row is not None else ""
+
+    def append_provider_guidance_approval(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        action: str,
+        actor: str,
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord:
+        now = utcnow_iso()
+        record_id = f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{action}|{now}"
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.guidance_approvals (
+                        record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, now),
+                )
+        return LifecycleApprovalRecord(
+            record_id=record_id,
+            revision_id=revision_id,
+            action=action,
+            actor=actor,
+            note=note,
+            created_at=now,
+        )
+
+    def set_provider_guidance_revision_status(
+        self,
+        provider: str,
+        revision_id: str,
+        status: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
+                    (status, provider, scope_kind, scope_key, revision_id),
+                )
+
+    def set_published_provider_guidance_revision(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
+                    (revision_id, utcnow_iso(), provider, scope_kind, scope_key),
+                )
+
+    def clear_published_provider_guidance_revision(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
+                    (utcnow_iso(), provider, scope_kind, scope_key),
+                )
+
+    def apply_provider_guidance_lifecycle_transition(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        record: LifecycleApprovalRecord | None = None
+        now = utcnow_iso()
+        record_id = (
+            f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else ""
+        )
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                if set_status is not None:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
+                        (set_status, provider, scope_kind, scope_key, revision_id),
+                    )
+                if published_pointer == "set_active":
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
+                        (revision_id, now, provider, scope_kind, scope_key),
+                    )
+                elif published_pointer == "clear":
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
+                        (now, provider, scope_kind, scope_key),
+                    )
+                if approval_action is not None:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {_SCHEMA}.guidance_approvals (
+                            record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (record_id, provider, scope_kind, scope_key, revision_id, approval_action, actor, note, now),
+                    )
+                    record = LifecycleApprovalRecord(
+                        record_id=record_id,
+                        revision_id=revision_id,
+                        action=approval_action,
+                        actor=actor,
+                        note=note,
+                        created_at=now,
+                    )
+        return record

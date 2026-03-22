@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from app.ports.channel import ChannelDescriptor
+from app.ports.conversation_projection import ConversationProjectionPort
 from app.runtime.dispatch import RuntimeDispatchRuntime
 
 
@@ -50,3 +51,4 @@ class ExecutionRuntime:
     send_directed_artifacts: Callable[..., Awaitable[None]]
     send_compact_reply: Callable[..., Awaitable[None]]
     propose_delegation_plan: Callable[..., Awaitable[RequestExecutionOutcome]]
+    conversation_projection: ConversationProjectionPort | None = field(default=None)

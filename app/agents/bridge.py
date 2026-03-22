@@ -7,7 +7,6 @@ from typing import Any
 
 from app import work_queue
 from app.agents.registry_capabilities import registry_authority_ref
-from app.agents.types import TimelineEvent
 from app.channels.registry.refs import (
     binding_external_id_for_ref,
     qualify_registry_conversation_ref,
@@ -145,15 +144,6 @@ async def admit_registry_delivery(
                     "origin_channel": "registry",
                     "external_id": binding_external_id_for_ref(conversation_ref),
                 }
-            )
-            await channel_egress.publish_timeline(
-                TimelineEvent(
-                    event_id=event_id,
-                    conversation_id=conversation_ref,
-                    kind="channel_input",
-                    title="Registry message",
-                    body=str(payload.get("text", "") or ""),
-                )
             )
         return "accepted"
 

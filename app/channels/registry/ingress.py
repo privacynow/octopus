@@ -12,11 +12,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.content_store import init_content_store_for_config, reset_for_test as reset_content_store_for_test
-from app.credential_store import (
-    init_credential_store_for_config,
-    reset_for_test as reset_credential_store_for_test,
-)
 from app.channels.registry import presenters
 from app.identity import conversation_key_for_ref
 from app.registry_service.store_base import AbstractRegistryStore
@@ -64,8 +59,6 @@ def get_runtime_channel_context() -> RuntimeChannelContext:
     if _context is None:
         config = load_config_provider_health()
         runtime_backend.init(config)
-        init_content_store_for_config(config)
-        init_credential_store_for_config(config)
         if config.provider_name == "codex":
             provider_state_factory = CodexProvider(config).new_provider_state
         else:
@@ -482,5 +475,3 @@ def reset_for_test() -> None:
     global _context
     _context = None
     runtime_backend.reset_for_test()
-    reset_content_store_for_test()
-    reset_credential_store_for_test()

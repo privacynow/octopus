@@ -50,19 +50,6 @@ class ChannelEvent:
 
 
 @dataclass(frozen=True)
-class TimelineEvent:
-    event_id: str
-    conversation_id: str
-    kind: str
-    title: str
-    body: str = ""
-    status: str = ""
-    progress: int | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: str = field(default_factory=utcnow_iso)
-
-
-@dataclass(frozen=True)
 class AgentCard:
     agent_id: str = ""
     display_name: str = ""
@@ -149,7 +136,7 @@ class RoutedTaskUpdate:
     routed_task_id: str
     status: str
     summary: str = ""
-    timeline_events: tuple[TimelineEvent, ...] = ()
+    timeline_events: tuple[dict[str, Any], ...] = ()
     progress: int | None = None
     updated_at: str = field(default_factory=utcnow_iso)
 

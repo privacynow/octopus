@@ -146,7 +146,11 @@ def test_ui_capabilities_endpoints_toggle_override_and_affect_search(monkeypatch
     store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
     _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
 
-    listed = client.get("/v1/ui/capabilities", headers={"Authorization": "Bearer ui-secret"})
+    # Authenticate as operator
+    client.post("/ui/login", data={"password": "ui-secret"})
+    csrf = client.get("/v1/auth/csrf").json().get("csrf_token", "")
+
+    listed = client.get("/v1/capabilities")
     assert listed.status_code == 200
     assert listed.json() == [
         {
@@ -157,8 +161,8 @@ def test_ui_capabilities_endpoints_toggle_override_and_affect_search(monkeypatch
     ]
 
     disabled = client.post(
-        "/v1/ui/capabilities/web_search/disable",
-        headers={"Authorization": "Bearer ui-secret"},
+        "/v1/capabilities/web_search/disable",
+        headers={"X-CSRF-Token": csrf},
     )
     assert disabled.status_code == 200
     assert disabled.json() == {"capability_name": "web_search", "enabled": False}
@@ -172,8 +176,8 @@ def test_ui_capabilities_endpoints_toggle_override_and_affect_search(monkeypatch
     assert search.json() == {"agents": []}
 
     enabled = client.post(
-        "/v1/ui/capabilities/web_search/enable",
-        headers={"Authorization": "Bearer ui-secret"},
+        "/v1/capabilities/web_search/enable",
+        headers={"X-CSRF-Token": csrf},
     )
     assert enabled.status_code == 200
     assert enabled.json() == {"capability_name": "web_search", "enabled": True}

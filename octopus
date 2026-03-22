@@ -73,8 +73,8 @@ resolve_bot_slug() {
       ;;
   esac
 
-  printf 'Select a bot:\n'
-  print_bot_choices
+  printf 'Select a bot:\n' >&2
+  print_bot_choices >&2
   while true; do
     read -r -p "Bot slug or number: " choice || return 1
     case "$choice" in
@@ -232,9 +232,17 @@ cmd_logs() {
 }
 
 cmd_doctor() {
-  local slug output rc=0
+  local live_provider=0 slug output rc=0
+  if [ "${1:-}" = "--live-provider" ]; then
+    live_provider=1
+    shift
+  fi
   slug="$(resolve_bot_slug "${1:-}")" || return 1
-  output="$(run_bot_doctor "$slug")" || rc=$?
+  if [ "$live_provider" -eq 1 ]; then
+    output="$(run_bot_doctor "$slug" --doctor-live-provider)" || rc=$?
+  else
+    output="$(run_bot_doctor "$slug")" || rc=$?
+  fi
   print_doctor_output_for_operator "$output"
   return "$rc"
 }
@@ -1020,7 +1028,10 @@ ensure_provider_auth_ready() {
 
   # No auth files — need to run the login flow.
   octopus_error "Provider authentication is required. Starting the login flow now."
-  provider_compose "$provider" run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
+  if ! provider_compose "$provider" run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh; then
+    octopus_error "Provider login did not complete. Finish login, then run ./octopus again."
+    return 1
+  fi
 
   # After login, check auth files again (fast, no API ping).
   if provider_has_auth_files "$provider"; then
@@ -1028,7 +1039,8 @@ ensure_provider_auth_ready() {
     return 0
   fi
 
-  octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
+  octopus_error "Provider authentication was detected inside the login container but did not persist to .deploy/provider-auth/$provider."
+  octopus_error "Finish login again. If this repeats, the provider is writing auth outside the shared mount."
   return 1
 }
 
@@ -1144,8 +1156,25 @@ prepare_new_bot_setup() {
 
   existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
   if [ -n "$existing_slug" ]; then
-    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
-    return 1
+    if bot_is_running "$existing_slug"; then
+      octopus_error "This Telegram bot is already running as '$existing_slug'. Run ./octopus to manage the existing bot."
+      return 1
+    fi
+    # Bot env exists but setup never completed (image build / auth / doctor
+    # failed on a previous run). Resume setup for the existing slug instead
+    # of re-asking all prompts.
+    printf 'Resuming incomplete setup for %s...\n' "$existing_slug"
+    local provider
+    provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$existing_slug")")"
+    ensure_provider_image_ready "${provider:-claude}" || return 1
+    ensure_provider_auth_ready "${provider:-claude}" || return 1
+    ensure_network || return 1
+    run_bot_doctor_until_ready "$existing_slug" || return 1
+    start_bot_until_running "$existing_slug" || return 1
+    local existing_username
+    existing_username="$(read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$existing_slug")")"
+    print_first_bot_success "${existing_username:-$existing_slug}"
+    exit 0
   fi
 
   NEW_BOT_SLUG="$(normalize_slug "$username")"
@@ -1244,7 +1273,8 @@ prompt_rejected_telegram_token_repair() {
 
 run_bot_doctor() {
   local slug="$1"
-  bot_compose "$slug" run --rm bot python -m app.main --doctor 2>&1
+  shift || true
+  bot_compose "$slug" run --rm bot python -m app.main --doctor "$@" 2>&1
 }
 
 run_bot_doctor_until_ready() {
@@ -1499,16 +1529,16 @@ add_bot_flow() {
   if [ "${NEW_BOT_SETUP_MODE:-$mode}" = "quick" ]; then
     prompt_new_bot_registry_target || return 1
   fi
-  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
-  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
-  ensure_network
-  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER" || return 1
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER" || return 1
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER" || return 1
+  ensure_network || return 1
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
-  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
-  start_bot_until_running "$NEW_BOT_SLUG"
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG" || return 1
+  start_bot_until_running "$NEW_BOT_SLUG" || return 1
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
   fi
@@ -1522,16 +1552,19 @@ first_bot_flow() {
   local mode="${1:-quick}"
   local registry_id=""
   prepare_new_bot_setup "$mode" || return 1
-  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
-  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
-  ensure_network
-  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  # Write env FIRST so the user's input is saved. If the image build
+  # or auth step fails, the next ./octopus run finds this bot and
+  # resumes from the build step instead of re-asking for everything.
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER" || return 1
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER" || return 1
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER" || return 1
+  ensure_network || return 1
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     registry_id="$(derive_registry_connection_id "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL")"
     configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN" "${REGISTRY_TARGET_SCOPE:-full}" "$registry_id"
   fi
-  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
-  start_bot_until_running "$NEW_BOT_SLUG"
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG" || return 1
+  start_bot_until_running "$NEW_BOT_SLUG" || return 1
   if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
     verify_registry_enrollment "$NEW_BOT_SLUG" "$registry_id" || return 1
   fi
@@ -1552,7 +1585,8 @@ Commands:
   start [slug]   Start a bot (auto-selects when only one exists)
   stop [slug]    Stop a bot
   logs [slug]    Follow a bot's live logs
-  doctor [slug]  Run a health check
+  doctor [--live-provider] [slug]
+                 Run a health check (safe by default; live provider probe optional)
   registry       Manage the local registry
   clean          Stop and remove all bots, registry, volumes, and config
   help           Show this help
@@ -1668,6 +1702,27 @@ main() {
     "")
       if [ "$(count_bots)" -eq 0 ]; then
         first_bot_flow quick
+      elif [ "$(count_bots)" -eq 1 ]; then
+        local only_slug
+        only_slug="$(list_bot_slugs | head -1)"
+        if ! bot_is_running "$only_slug" 2>/dev/null; then
+          # Bot exists but isn't running — resume setup/start instead
+          # of showing the menu. This handles the case where a previous
+          # run saved the env but the image build or auth step failed.
+          local provider
+          provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$only_slug")")"
+          printf 'Resuming setup for %s...\n' "$only_slug"
+          ensure_provider_image_ready "${provider:-claude}" || return 1
+          ensure_provider_auth_ready "${provider:-claude}" || return 1
+          ensure_network || return 1
+          run_bot_doctor_until_ready "$only_slug" || return 1
+          start_bot_until_running "$only_slug" || return 1
+          local username
+          username="$(read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$only_slug")")"
+          print_first_bot_success "${username:-$only_slug}"
+        else
+          main_menu
+        fi
       else
         main_menu
       fi

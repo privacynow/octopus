@@ -59,10 +59,19 @@ def make_provider(config: BotConfig) -> Provider:
     return cls(config)
 
 
-async def _run_doctor(config: BotConfig, provider: Provider) -> None:
+async def _run_doctor(
+    config: BotConfig,
+    provider: Provider,
+    *,
+    include_provider_runtime_probe: bool = False,
+) -> None:
     from app.runtime_health import collect_runtime_health_report, format_runtime_health_for_doctor
 
-    report = await collect_runtime_health_report(config, provider)
+    report = await collect_runtime_health_report(
+        config,
+        provider,
+        include_provider_runtime_probe=include_provider_runtime_probe,
+    )
     extra_lines: list[str] = []
     if _runs_ingress(config):
         extra_lines = await collect_telegram_doctor_diagnostics(
@@ -84,13 +93,23 @@ async def _run_doctor(config: BotConfig, provider: Provider) -> None:
     raise SystemExit(0)
 
 
-def run_doctor(config: BotConfig, provider: Provider) -> None:
-    import asyncio
-    asyncio.run(_run_doctor(config, provider))
+def run_doctor(
+    config: BotConfig,
+    provider: Provider,
+    *,
+    include_provider_runtime_probe: bool = False,
+) -> None:
+    asyncio.run(
+        _run_doctor(
+            config,
+            provider,
+            include_provider_runtime_probe=include_provider_runtime_probe,
+        )
+    )
 
 
 async def _run_provider_health(provider: Provider) -> None:
-    """Run only provider binary + runtime auth checks. No DB, no Telegram."""
+    """Run provider binary, auth, and live runtime probes. No DB, no Telegram."""
     errors: list[str] = []
     errors.extend(provider.check_health())
     if not errors:
@@ -122,7 +141,7 @@ def _runs_registry_runtime(config: BotConfig) -> bool:
     return config.process_role == ProcessRole.ALL.value
 
 
-def _should_validate_provider_runtime(config: BotConfig) -> bool:
+def _should_validate_provider_auth(config: BotConfig) -> bool:
     return config.process_role != ProcessRole.WEBHOOK.value
 
 
@@ -183,9 +202,24 @@ async def run_dispatcher_process(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Octopus Agent Platform")
     parser.add_argument("instance", nargs="?", default=None, help="Instance name (default: from BOT_INSTANCE env)")
-    parser.add_argument("--doctor", action="store_true", help="Run full health checks (config, DB, provider, Telegram) and exit")
-    parser.add_argument("--provider-health", action="store_true", help="Run only provider auth/runtime checks and exit (no DB or Telegram)")
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Run full health checks (config, DB, provider auth, Telegram) and exit",
+    )
+    parser.add_argument(
+        "--doctor-live-provider",
+        action="store_true",
+        help="With --doctor, also run the live provider runtime probe",
+    )
+    parser.add_argument(
+        "--provider-health",
+        action="store_true",
+        help="Run provider auth and live runtime checks only (no DB or Telegram)",
+    )
     args = parser.parse_args()
+    if args.doctor_live_provider and not args.doctor:
+        parser.error("--doctor-live-provider requires --doctor")
 
     if args.provider_health:
         config = load_config_provider_health()
@@ -229,14 +263,18 @@ def main() -> None:
             sys.exit(1)
 
     if args.doctor:
-        run_doctor(config, provider)
+        run_doctor(
+            config,
+            provider,
+            include_provider_runtime_probe=args.doctor_live_provider,
+        )
 
-    if _should_validate_provider_runtime(config):
+    if _should_validate_provider_auth(config):
         # Validate provider auth before starting when this process may execute provider work.
-        runtime_errors = asyncio.run(provider.check_runtime_health())
-        if runtime_errors:
+        auth_errors = asyncio.run(provider.check_auth_health())
+        if auth_errors:
             print("Provider not authenticated or unavailable.", file=sys.stderr)
-            for e in runtime_errors:
+            for e in auth_errors:
                 print(f"  {e}", file=sys.stderr)
             print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
             sys.exit(1)

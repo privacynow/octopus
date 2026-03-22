@@ -73,7 +73,30 @@ async def test_runtime_health_provider_collects_shared_snapshot(tmp_path: Path):
         runtime_backend.reset_for_test()
 
 
-async def test_runtime_health_provider_checks_runtime_health_for_worker_role(tmp_path: Path):
+async def test_runtime_health_provider_checks_auth_health_for_worker_role(tmp_path: Path):
+    class AuthFailProvider(FakeProvider):
+        async def check_auth_health(self):
+            return ["provider auth unavailable"]
+
+    config = make_config(
+        data_dir=tmp_path,
+        working_dir=tmp_path,
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        allow_open=False,
+        allowed_actor_keys=frozenset({telegram_actor_key(42)}),
+        admin_users_explicit=True,
+    )
+
+    report = await collect_runtime_health_report(config, AuthFailProvider())
+
+    assert any(item.code == "provider.auth_unavailable" for item in report.diagnostics)
+    assert report.summary.status == "unhealthy"
+
+
+async def test_runtime_health_provider_live_probe_is_opt_in(tmp_path: Path):
     class RuntimeFailProvider(FakeProvider):
         async def check_runtime_health(self):
             return ["provider runtime unavailable"]
@@ -90,10 +113,15 @@ async def test_runtime_health_provider_checks_runtime_health_for_worker_role(tmp
         admin_users_explicit=True,
     )
 
-    report = await collect_runtime_health_report(config, RuntimeFailProvider())
+    default_report = await collect_runtime_health_report(config, RuntimeFailProvider())
+    live_report = await collect_runtime_health_report(
+        config,
+        RuntimeFailProvider(),
+        include_provider_runtime_probe=True,
+    )
 
-    assert any(item.code == "provider.runtime_unavailable" for item in report.diagnostics)
-    assert report.summary.status == "unhealthy"
+    assert not any(item.code == "provider.runtime_unavailable" for item in default_report.diagnostics)
+    assert any(item.code == "provider.runtime_unavailable" for item in live_report.diagnostics)
 
 
 def test_runtime_health_projector_round_trip_preserves_report():

@@ -581,7 +581,7 @@ def load_config_provider_health() -> BotConfig:
 
     Used by --provider-health. Does not require BOT_DATABASE_URL or Telegram
     config. Reads BOT_PROVIDER, BOT_MODEL, BOT_DATA_DIR, BOT_WORKING_DIR, and
-    provider-specific vars so check_health/check_runtime_health work correctly.
+    provider-specific vars so provider auth and runtime probes work correctly.
     """
     def get(key: str, default: str = "") -> str:
         return os.environ.get(key, default)

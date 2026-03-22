@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guided provider CLI login: interactive auth, then verify with --provider-health only.
+# Guided provider CLI login: interactive auth, then verify the local CLI only.
 # Uses a shared per-provider auth directory under .deploy/provider-auth/<provider>.
 set -euo pipefail
 

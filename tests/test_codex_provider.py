@@ -116,6 +116,46 @@ def test_command_building_ephemeral():
     assert "read-only" in cmd8
 
 
+async def test_check_auth_health_uses_login_status_and_auth_file(monkeypatch, tmp_path: Path):
+    provider = CodexProvider(make_config(provider_name="codex"))
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(CodexProvider, "_codex_auth_file", staticmethod(lambda: auth_file))
+
+    calls: list[tuple[tuple[str, ...], int]] = []
+
+    async def fake_run(*cmd: str, timeout: int):
+        calls.append((cmd, timeout))
+        if cmd == ("codex", "--version"):
+            return 0, "codex-cli 0.116.0\n", ""
+        if cmd == ("codex", "login", "status"):
+            return 0, "Logged in using ChatGPT\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_auth_health() == []
+    assert calls == [
+        (("codex", "--version"), 10),
+        (("codex", "login", "status"), 10),
+    ]
+
+
+async def test_check_runtime_health_short_circuits_when_auth_fails():
+    provider = CodexProvider(make_config(provider_name="codex"))
+
+    async def fake_auth():
+        return ["auth missing"]
+
+    async def fake_run(*cmd: str, timeout: int):
+        raise AssertionError(f"runtime probe should not run: {cmd} timeout={timeout}")
+
+    provider.check_auth_health = fake_auth  # type: ignore[method-assign]
+    provider._run_health_command = fake_run  # type: ignore[method-assign]
+
+    assert await provider.check_runtime_health() == ["auth missing"]
+
+
 # -- file_policy behaviour --
 
 async def test_file_policy_inspect_sets_sandbox_readonly():

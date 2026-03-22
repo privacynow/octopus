@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 448,
+      "y": 129.59375,
+      "width": 344,
+      "height": 111.375,
+      "label": "/help lists commands + deep links",
+      "color": "#2196f3"
+    },
+    {
+      "x": 490,
+      "y": 234.96875,
+      "width": 340,
+      "height": 51.59375,
+      "label": "Normal messages go to the agent",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

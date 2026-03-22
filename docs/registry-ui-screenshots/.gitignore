@@ -2,4 +2,6 @@ node_modules/
 test-results/
 playwright-report/
 .capture-registry.sqlite3
+.capture-registry.sqlite3-shm
+.capture-registry.sqlite3-wal
 .venv/

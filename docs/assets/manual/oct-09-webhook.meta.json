@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 43,
+      "y": 83,
+      "width": 214.296875,
+      "height": 28,
+      "label": "Public HTTPS webhook URL",
+      "color": "#2196f3"
+    },
+    {
+      "x": 43,
+      "y": 123.59375,
+      "width": 113.15625,
+      "height": 28,
+      "label": "Listen port inside container",
+      "color": "#ff9800"
+    }
+  ],
+  "arrows": []
+}

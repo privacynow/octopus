@@ -4,6 +4,9 @@
   "description": "Capture Registry UI screenshots for docs (Playwright + Chromium)",
   "scripts": {
     "capture": "playwright test capture-guide.spec.ts",
+    "capture:manual": "playwright test capture-manual.spec.ts --config=playwright.manual.cjs",
+    "capture:all": "npm run capture && npm run capture:manual",
+    "annotate": "../../.venv/bin/python annotate.py",
     "install-browsers": "playwright install chromium"
   },
   "devDependencies": {

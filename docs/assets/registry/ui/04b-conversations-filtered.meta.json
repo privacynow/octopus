@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 248,
+      "y": 114.5,
+      "width": 1084,
+      "height": 41,
+      "label": "Filtered list (search debounced)",
+      "color": "#ff9800"
+    },
+    {
+      "x": 246,
+      "y": 161.5,
+      "width": 1088,
+      "height": 3175,
+      "label": "Matches title / FTS snippet",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

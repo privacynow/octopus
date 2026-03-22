@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 246,
+      "y": 112.5,
+      "width": 1088,
+      "height": 89,
+      "label": "Loaded by URL /ui/conversations/{id}",
+      "color": "#4caf50"
+    },
+    {
+      "x": 246,
+      "y": 201.5,
+      "width": 1088,
+      "height": 539,
+      "label": "Same timeline as row navigation",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

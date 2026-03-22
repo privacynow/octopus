@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 244,
+      "y": 110.5,
+      "width": 1092,
+      "height": 439,
+      "label": "Declared by agents + optional overrides",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

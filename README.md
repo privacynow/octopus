@@ -284,7 +284,7 @@ Log in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`. The UI uses
 session cookies and CSRF protection for state-changing requests.
 
 The UI is a vanilla HTML/JS/CSS single-page application with real-time updates
-via WebSocket. Components include:
+via WebSocket when the ASGI stack supports it. Components include:
 
 - agent directory and agent detail
 - conversation list and detail with a chat-like timeline
@@ -292,6 +292,15 @@ via WebSocket. Components include:
 - capabilities manager
 - skills catalog
 - usage overview
+
+**Screenshots** (annotated for learning) live under `docs/assets/registry/ui/`
+— for example the agent list after sign-in:
+
+![Registry UI — agents (example)](docs/assets/registry/ui/01-agents-annotated.png)
+
+The full walkthrough with **every screen** (login, search filter, conversation
+timeline, tasks, capabilities, skills, usage, and bookmarkable agent URLs) is
+in **[docs/registry-guide.md](docs/registry-guide.md)**.
 
 ## Storage and Runtime Notes
 
@@ -374,8 +383,14 @@ If the registry UI is not updating:
 
 ## More Documentation
 
+- [docs/manual/README.md](docs/manual/README.md): **full user manual** (setup,
+  operator, Telegram product, API map, troubleshooting) with annotated
+  screenshots for every scenario
 - [ARCHITECTURE.md](ARCHITECTURE.md): current deployment, runtime,
   control-plane, registry, and store architecture
+- [docs/flows-catalog.md](docs/flows-catalog.md): **canonical index** of every
+  operator and product flow (Octopus, Registry UI/API, Telegram, optional DB
+  CLI), with pointers to code and existing tutorials
 - [docs/registry-guide.md](docs/registry-guide.md): step-by-step local and
   remote registry guide with current dashboard, detail, and management screens
   plus the CLI SVG flows

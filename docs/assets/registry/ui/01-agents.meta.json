@@ -1,0 +1,36 @@
+{
+  "rects": [
+    {
+      "x": 0,
+      "y": 0,
+      "width": 228,
+      "height": 868,
+      "label": "Primary navigation (7 areas)",
+      "color": "#ff9800"
+    },
+    {
+      "x": 246,
+      "y": 136.5,
+      "width": 1088,
+      "height": 89,
+      "label": "Agent row → detail",
+      "color": "#2196f3"
+    },
+    {
+      "x": 246,
+      "y": 225.5,
+      "width": 1088,
+      "height": 89,
+      "label": "Another enrolled bot",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": [
+    {
+      "x1": 790,
+      "y1": 54,
+      "x2": 790,
+      "y2": 142.5
+    }
+  ]
+}

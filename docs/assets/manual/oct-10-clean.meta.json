@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 41,
+      "y": 79,
+      "width": 736,
+      "height": 137.78125,
+      "label": "Destroys .deploy, volumes, provider auth",
+      "color": "#e53935"
+    }
+  ],
+  "arrows": []
+}

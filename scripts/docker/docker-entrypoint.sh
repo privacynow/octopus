@@ -9,7 +9,9 @@ if [ -d /home/bot/.provider-auth ]; then
       ln -sfn /home/bot/.provider-auth/.claude.json /home/bot/.claude.json
       ;;
     codex)
-      ln -sfn /home/bot/.provider-auth/.codex /home/bot/.codex
+      # Use CODEX_HOME env var instead of symlink — the codex CLI
+      # conflicts with symlinked ~/.codex (EEXIST on directory ops).
+      export CODEX_HOME="/home/bot/.provider-auth/.codex"
       ;;
   esac
 fi

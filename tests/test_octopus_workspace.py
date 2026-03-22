@@ -238,7 +238,8 @@ cat .deploy/bots/example-bot/workspace.env
     assert "BOT_AGENT_TAGS=workspace:myproject" in result.stdout
 
 
-def test_regenerate_creates_compose_override(tmp_path: Path) -> None:
+def test_regenerate_creates_compose_override_local(tmp_path: Path) -> None:
+    """Local override has only bot + bot-provider (no image-less services)."""
     host_dir = tmp_path / "project"
     host_dir.mkdir()
     _setup_bot_env(tmp_path)
@@ -251,11 +252,29 @@ cat .deploy/bots/example-bot/docker-compose.workspace.yml
     assert "env_file:" in result.stdout
     assert "workspace.env" in result.stdout
     assert f"{host_dir}:/workspace/myproject:rw" in result.stdout
-    # All four services present
-    assert "bot:" in result.stdout
-    assert "bot-provider:" in result.stdout
-    assert "bot-webhook:" in result.stdout
-    assert "bot-worker:" in result.stdout
+    assert "  bot:" in result.stdout
+    assert "  bot-provider:" in result.stdout
+    # bot-webhook and bot-worker must NOT be in the local override
+    assert "bot-webhook:" not in result.stdout
+    assert "bot-worker:" not in result.stdout
+
+
+def test_regenerate_creates_compose_override_shared(tmp_path: Path) -> None:
+    """Shared override includes all four services."""
+    host_dir = tmp_path / "project"
+    host_dir.mkdir()
+    _setup_bot_env(tmp_path)
+    script = _source_octopus(tmp_path) + f"""
+workspace_create myproject "{host_dir}"
+workspace_add_bot myproject example-bot
+cat .deploy/bots/example-bot/docker-compose.workspace-shared.yml
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "  bot:" in result.stdout
+    assert "  bot-provider:" in result.stdout
+    assert "  bot-webhook:" in result.stdout
+    assert "  bot-worker:" in result.stdout
+    assert f"{host_dir}:/workspace/myproject:rw" in result.stdout
 
 
 def test_regenerate_ro_workspace_uses_inspect(tmp_path: Path) -> None:
@@ -346,11 +365,13 @@ test -f .deploy/bots/example-bot/workspace.env && echo "ws_env_exists"
 workspace_remove_bot myproject example-bot
 test -f .deploy/bots/example-bot/workspace.env && echo "ws_env_still_exists" || echo "ws_env_removed"
 test -f .deploy/bots/example-bot/docker-compose.workspace.yml && echo "compose_still_exists" || echo "compose_removed"
+test -f .deploy/bots/example-bot/docker-compose.workspace-shared.yml && echo "shared_still_exists" || echo "shared_removed"
 """
     result = _run_bash(script, cwd=tmp_path)
     assert "ws_env_exists" in result.stdout
     assert "ws_env_removed" in result.stdout
     assert "compose_removed" in result.stdout
+    assert "shared_removed" in result.stdout
 
 
 # -- workspace remove regenerates for former members --

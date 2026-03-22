@@ -72,8 +72,10 @@ bot_shared_compose() {
   local provider_auth_dir=".deploy/provider-auth/${provider:-claude}"
   mkdir -p "$provider_auth_dir"
   chmod 700 "$provider_auth_dir" 2>/dev/null || true
-  # Workspace override is LAST: base → shared → workspace
-  local workspace_compose=".deploy/bots/$slug/docker-compose.workspace.yml"
+  # Workspace override is LAST: base → shared → workspace-shared.
+  # Uses the shared variant which includes bot-webhook + bot-worker
+  # (those services only exist once docker-compose.shared.yml is merged).
+  local workspace_compose=".deploy/bots/$slug/docker-compose.workspace-shared.yml"
   local workspace_flags=""
   if [ -f "$workspace_compose" ]; then
     workspace_flags="-f $workspace_compose"

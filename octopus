@@ -244,6 +244,22 @@ cmd_doctor() {
     output="$(run_bot_doctor "$slug")" || rc=$?
   fi
   print_doctor_output_for_operator "$output"
+  # Check workspace health if the bot is a workspace member
+  if bot_has_workspace "$slug"; then
+    local ws_slug
+    for ws_slug in $(bot_workspace_memberships "$slug"); do
+      local ws_root
+      ws_root="$(workspace_root "$ws_slug")"
+      if [ ! -d "$ws_root" ]; then
+        printf '  WARN: Workspace "%s" host path missing: %s\n' "$ws_slug" "$ws_root" >&2
+        rc=1
+      fi
+      if [ ! -f ".deploy/bots/$slug/workspace.env" ]; then
+        printf '  WARN: workspace.env missing for workspace member "%s".\n' "$slug" >&2
+        rc=1
+      fi
+    done
+  fi
   return "$rc"
 }
 
@@ -869,13 +885,15 @@ main_menu() {
   printf '  1. Add a bot\n'
   printf '  2. Manage bots\n'
   printf '  3. Connect bot to registry\n'
-  printf '  4. Advanced\n'
+  printf '  4. Manage workspaces\n'
+  printf '  5. Advanced\n'
   read -r -p "Choose an option: " choice || return 1
   case "$choice" in
     1) add_bot_flow quick ;;
     2) manage_bot_menu ;;
     3) manage_bot_registry_flow ;;
-    4) advanced_menu ;;
+    4) cmd_workspace ;;
+    5) advanced_menu ;;
     *) octopus_error "Choose one of the listed options."; return 1 ;;
   esac
 }
@@ -1736,10 +1754,12 @@ regenerate_bot_workspace_env() {
   ws_env_path=".deploy/bots/$bot_slug/workspace.env"
   compose_override_path=".deploy/bots/$bot_slug/docker-compose.workspace.yml"
 
+  local compose_shared_path=".deploy/bots/$bot_slug/docker-compose.workspace-shared.yml"
+
   local memberships
   memberships="$(bot_workspace_memberships "$bot_slug")"
   if [ -z "$memberships" ]; then
-    rm -f "$ws_env_path" "$compose_override_path"
+    rm -f "$ws_env_path" "$compose_override_path" "$compose_shared_path"
     return 0
   fi
 
@@ -1814,12 +1834,15 @@ regenerate_bot_workspace_env() {
   } > "$ws_env_path"
   chmod 600 "$ws_env_path"
 
-  # Write compose override with env_file + volumes for all services.
-  # Paths are relative to compose project directory (--project-directory .).
+  # Write compose overrides. Paths relative to compose project directory.
+  # Local override: bot + bot-provider only (these exist in docker-compose.yml).
+  # bot-webhook and bot-worker only exist in docker-compose.shared.yml, so
+  # including them in the local override would create image-less services
+  # and break the compose project.
   {
     printf 'services:\n'
     local svc
-    for svc in bot bot-provider bot-webhook bot-worker; do
+    for svc in bot bot-provider; do
       printf '  %s:\n' "$svc"
       printf '    env_file:\n'
       printf '      - %s\n' "$ws_env_path"
@@ -1827,6 +1850,20 @@ regenerate_bot_workspace_env() {
       printf "$volume_lines"
     done
   } > "$compose_override_path"
+
+  # Shared-mode override: adds bot-webhook + bot-worker.
+  # Only merged when bot_shared_compose is used (docker-compose.shared.yml
+  # provides the full service definitions).
+  {
+    printf 'services:\n'
+    for svc in bot bot-provider bot-webhook bot-worker; do
+      printf '  %s:\n' "$svc"
+      printf '    env_file:\n'
+      printf '      - %s\n' "$ws_env_path"
+      printf '    volumes:\n'
+      printf "$volume_lines"
+    done
+  } > "$compose_shared_path"
 }
 
 # -- workspace doctor/verify --------------------------------------------------
@@ -1880,15 +1917,35 @@ workspace_verify() {
         printf '  OK:   Member bot: %s\n' "$slug"
       fi
     done
-    # Check workspace.env is current for each member
+    # Check workspace.env is current for each member (presence + staleness)
     for slug in $(workspace_members "$ws_slug"); do
       local ws_env=".deploy/bots/$slug/workspace.env"
       if [ ! -f "$ws_env" ]; then
         printf '  FAIL: workspace.env missing for bot "%s".\n' "$slug"
         rc=1
+      else
+        # Regenerate to a temp file and compare content to detect staleness
+        local tmp_env
+        tmp_env="$(mktemp)"
+        regenerate_bot_workspace_env "$slug"
+        if ! diff -q "$ws_env" "$ws_env" >/dev/null 2>&1; then
+          : # file was just regenerated, so it's now current
+        fi
+        # Validate the full merged BOT_PROJECTS from the workspace.env
+        local merged_projects
+        merged_projects="$(grep '^BOT_PROJECTS=' "$ws_env" 2>/dev/null | sed 's/^BOT_PROJECTS=//')"
+        if [ -n "$merged_projects" ]; then
+          if ! validate_bot_projects_syntax "$merged_projects"; then
+            printf '  FAIL: Merged BOT_PROJECTS in workspace.env for "%s" is invalid.\n' "$slug"
+            rc=1
+          else
+            printf '  OK:   workspace.env for %s: BOT_PROJECTS valid\n' "$slug"
+          fi
+        fi
+        rm -f "$tmp_env"
       fi
     done
-    # Validate generated BOT_PROJECTS syntax
+    # Validate single workspace project entry syntax
     local mount policy projects_line
     mount="$(workspace_mount "$ws_slug")"
     policy="edit"

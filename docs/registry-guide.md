@@ -188,7 +188,49 @@ Typical uses from the UI:
 - watch routed-task state and delegated-result progress
 - manage runtime skills, provider guidance, and capability kill switches
 
-## Workflow 12: Follow Logs Or Stop The Local Registry
+## Workflow 12: Inspect An Agent
+
+Click any agent row in the dashboard to see its detail view.
+
+![Agent detail](assets/registry/10-agent-detail.png)
+
+The agent detail shows:
+
+- display name, slug, role, and provider
+- connectivity state and version
+- registry scope and channel capabilities
+- runtime health (when available)
+
+## Workflow 13: View Conversation Detail And Timeline
+
+Click any conversation row to see the full conversation detail with
+timeline events.
+
+![Conversation detail with timeline](assets/registry/13-conversation-detail.png)
+
+From the conversation detail, you can:
+
+- read the full timeline (started, progress, completed, failed events)
+- send a follow-up message
+- export the conversation transcript
+- cancel the conversation
+
+## Workflow 14: Manage Capabilities And Provider Guidance
+
+The dashboard includes management surfaces for:
+
+- **Capabilities** — global kill switches for routed-task, discovery,
+  and other coordination features
+
+![Capabilities management](assets/registry/capabilities-tab.png)
+
+- **Provider guidance** — per-provider instruction drafts with a
+  lifecycle (draft → submitted → approved → published)
+
+![Provider guidance](assets/registry/guidance-tab.png)
+
+## Workflow 15: Follow Logs Or Stop The Local Registry
+
 
 When the local registry is already running, `./octopus registry` gives you two
 maintenance actions.

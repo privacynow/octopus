@@ -314,7 +314,7 @@ Examples:
 ![Registry UI — conversation detail](docs/assets/registry/ui/05-conversation-detail-annotated.png)
 
 Full **screen-by-screen** tour (every asset, same naming): **[docs/registry-guide.md](docs/registry-guide.md)**.
-The **manual** chapter with the same image set: **[docs/manual/03-operator-registry.md](docs/manual/03-operator-registry.md)**.
+Operator **manual** (text-first, links here for visuals): **[docs/manual/03-operator-registry.md](docs/manual/03-operator-registry.md)**.
 CLI registry flows use **SVG** in `docs/assets/registry/`. Regenerate PNGs: registry guide § *Regenerating UI screenshots*.
 
 ## Storage and Runtime Notes

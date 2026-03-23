@@ -1,6 +1,6 @@
 # Registry UI screenshot capture
 
-Refreshes **annotated PNGs** under `docs/assets/registry/ui/` (used by [registry-guide.md](../registry-guide.md) and [manual § Registry web UI](../manual/03-operator-registry.md)). Optional **`capture:manual`** writes raw PNGs under `docs/assets/manual/` for fixture-based captures; the user manual uses **SVG** elsewhere, so that directory is maintainer-only if present.
+Refreshes **annotated PNGs** under `docs/assets/registry/ui/` (primary embed: [registry-guide.md](../registry-guide.md); the [manual § Registry UI](../manual/03-operator-registry.md) links there for screenshots). Optional **`capture:manual`** writes raw PNGs under `docs/assets/manual/` for fixture-based captures.
 
 ## Prerequisites
 

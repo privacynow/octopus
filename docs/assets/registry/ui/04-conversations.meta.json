@@ -3,16 +3,16 @@
     {
       "x": 248,
       "y": 114.5,
-      "width": 1084,
-      "height": 41,
+      "width": 963,
+      "height": 52,
       "label": "Type 3+ chars to search (FTS)",
       "color": "#ff9800"
     },
     {
       "x": 246,
-      "y": 161.5,
+      "y": 172.5,
       "width": 1088,
-      "height": 3175,
+      "height": 2225,
       "label": "All conversations across agents",
       "color": "#2196f3"
     }

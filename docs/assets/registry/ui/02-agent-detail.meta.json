@@ -10,26 +10,26 @@
     },
     {
       "x": 263,
-      "y": 179.5,
+      "y": 155.5,
       "width": 1054,
-      "height": 267.5,
+      "height": 214.5,
       "label": "Identity, scope, capabilities",
       "color": "#2196f3"
     },
     {
       "x": 265,
-      "y": 508,
+      "y": 496,
       "width": 1050,
-      "height": 116,
+      "height": 128,
       "label": "Worker processes (heartbeat)",
       "color": "#9c27b0"
     },
     {
       "x": 246,
-      "y": 643,
+      "y": 659,
       "width": 1088,
-      "height": 89,
-      "label": "Conversations → (scoped list)",
+      "height": 283,
+      "label": "Conversations (inline, paginated)",
       "color": "#4caf50"
     }
   ],

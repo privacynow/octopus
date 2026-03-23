@@ -1,4 +1,10 @@
-"""Regenerate registry UI screenshots from current UI code in one pass."""
+"""Optional static snapshot screenshots (mock HTML) under docs/assets/registry/.
+
+Operator documentation embeds the **live SPA** captures in **docs/assets/registry/ui/**
+(`00`–`11`, `04b`, `*-annotated.png`) from **docs/registry-ui-screenshots/** + annotate.py.
+This script generates separate numbered PNGs (e.g. 13-conversation-detail.png) from
+in-repo snapshot pages — do not confuse those paths with the registry-guide / manual image set.
+"""
 
 from __future__ import annotations
 

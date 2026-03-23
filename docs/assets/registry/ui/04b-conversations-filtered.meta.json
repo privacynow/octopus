@@ -3,16 +3,16 @@
     {
       "x": 248,
       "y": 114.5,
-      "width": 1084,
-      "height": 41,
+      "width": 963,
+      "height": 52,
       "label": "Filtered list (search debounced)",
       "color": "#ff9800"
     },
     {
       "x": 246,
-      "y": 161.5,
+      "y": 172.5,
       "width": 1088,
-      "height": 3175,
+      "height": 129,
       "label": "Matches title / FTS snippet",
       "color": "#2196f3"
     }

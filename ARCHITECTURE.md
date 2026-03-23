@@ -421,8 +421,12 @@ checks instead of assuming happy-path callers.
 Resource-oriented endpoints replacing the old `/v1/ui/*` surface. Scoped auth:
 agent tokens see own data, operator sessions see everything.
 
-- `/v1/agents`, `/v1/conversations`, `/v1/tasks`, `/v1/capabilities`,
-  `/v1/usage`
+- `/v1/agents`, `/v1/conversations`, `/v1/tasks` — list endpoints support
+  **pagination** (`cursor`, `limit`, `has_more`, `next_cursor`); conversations
+  add **`q`** (search) and **`status`**; tasks add **`status`** and agent-scoped
+  filtering via auth
+- `/v1/capabilities`, `/v1/usage` — usage accepts **`since`** / **`until`**
+  (ISO) for ranges
 - Event publishing: `POST /v1/conversations/{id}/events` with SDK validation
 - Catalog: `/v1/catalog/skills/*`, `/v1/provider-guidance/*`
 
@@ -430,15 +434,21 @@ agent tokens see own data, operator sessions see everything.
 
 `/ui`
 
-Vanilla HTML/JS/CSS single-page application served as static files from `ui/`.
+Static files from `ui/`: **vanilla** HTML/CSS/JS (no framework, no build step).
 
-- Web Components with client-side routing (`history.pushState`)
-- No framework, no build step, no `node_modules`
-- Components: agent list, agent detail, conversation list/detail (chat-like
-  timeline), task board, capabilities, skills catalog, usage
-- Markdown rendering via vendored `marked.js` + DOMPurify sanitization
-- Real-time updates via WebSocket (`/v1/ws`, operator session cookie only)
-- Login uses session cookies; state-changing requests carry CSRF headers
+- **Router** (`ui/js/router.js`): `history.pushState`, per-route **cleanup**
+  (WebSocket unsubscribes, timers)
+- **API client** (`ui/js/api.js`): CSRF from `/v1/auth/csrf`, timeouts,
+  session-expired handling; list endpoints use **cursor / limit / has_more**
+  where implemented
+- **WebSocket** (`ui/js/ws.js`): `/v1/ws`, exponential backoff, ping, sidebar
+  status indicator
+- **Views** (`ui/js/components/*.js`): paginated agents, conversations, tasks,
+  agent-scoped conversations; conversation **compose**, cancel/export, timeline
+  filters, load-older pagination; capabilities toggles with confirm; skills
+  catalog; usage date ranges
+- **Markdown**: vendored `marked` + sanitizer; user content escaped via `esc()`
+- **Auth**: operator session cookie; mutating requests send `X-CSRF-Token`
 
 ## Security Boundaries
 
@@ -470,23 +480,20 @@ Hardened in the current codebase:
 
 ## Registry SPA Architecture
 
-The operator UI is a vanilla SPA under `ui/` with no build step.
+The operator UI is a **vanilla** SPA under `ui/` (see **Operator SPA** under
+HTTP Surfaces). Implementation notes:
 
-- Web Components define each view (agent list, agent detail, conversation
-  list/detail, task board, capabilities, skills catalog, usage)
-- a lightweight client-side router maps URL paths to components via
-  `history.pushState`
-- routed-task statuses such as degraded or timed-out are humanized before
-  display
-- badge classes are mapped from normalized event/status kinds
-- malformed timestamps fall back to `(invalid date)`
-- diagnostic levels are normalized to supported CSS classes
-- search snippets are HTML-escaped through one helper before `<b>` tags are
-  reintroduced
-- real-time updates arrive over a single WebSocket connection (`/v1/ws`)
-- browser screenshot regeneration for docs is an explicit script
-  (`scripts/generate_registry_docs_assets.py`), not part of the normal
-  automated suite
+- Each **view** is a plain function that renders into a container and may return
+  a **cleanup** for subscriptions
+- **Responsive** layout: mobile drawer sidebar, tablet collapsed icons, desktop
+  full sidebar; content max-width ~1200px
+- **List APIs** use offset-style **cursors** (`cursor` + `limit`); the UI keeps
+  a stack for “Previous”
+- **Registry UI screenshots** for docs: Playwright harness under
+  `docs/registry-ui-screenshots/`, then `annotate.py` — see
+  `docs/registry-guide.md` § *Regenerating UI screenshots*
+- `scripts/generate_registry_docs_assets.py` supports **static** asset checks;
+  it is not the Playwright capture pipeline
 
 ## Testing And Guardrails
 

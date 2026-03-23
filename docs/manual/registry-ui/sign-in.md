@@ -1,6 +1,6 @@
 # Registry UI: Sign in
 
-[← Registry UI hub](../03-operator-registry.md) · [Next: Agents list →](agents-list.md)
+[← Manual home](../README.md) · [Prev: Registry UI overview](../03-operator-registry.md) · [Next: Agents list →](agents-list.md)
 
 Open the registry **`/ui/login`** URL. Enter **`REGISTRY_UI_TOKEN`** from **`.deploy/registry/.env`** as the **password** only (no username). The server sets a **session cookie**; later mutating requests use **CSRF** from **`GET /v1/auth/csrf`**.
 

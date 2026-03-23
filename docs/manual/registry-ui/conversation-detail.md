@@ -1,6 +1,6 @@
 # Registry UI: Conversation detail
 
-[← Conversation search](conversations-search.md) · [Registry UI hub](../03-operator-registry.md) · [Next: Routed tasks →](tasks.md)
+[← Manual home](../README.md) · [Prev: Conversation search](conversations-search.md) · [Next: Routed tasks →](tasks.md)
 
 **Route:** `/ui/conversations/{conversation_id}` — also reached from lists or task rows.
 

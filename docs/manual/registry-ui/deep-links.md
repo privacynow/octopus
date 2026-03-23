@@ -1,6 +1,6 @@
 # Registry UI: Deep links
 
-[← Usage](usage.md) · [Registry UI hub](../03-operator-registry.md) · [Next: Telegram →](../04-product-telegram.md)
+[← Manual home](../README.md) · [Prev: Usage](usage.md) · [Next: Telegram →](../04-product-telegram.md)
 
 These URLs load the **same** views as in-app navigation; use them from logs, API responses, or bookmarks.
 

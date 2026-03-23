@@ -1,6 +1,6 @@
 # Operator: Registry web UI
 
-[← Manual home](README.md) · [Prev: Octopus](02-operator-octopus.md) · [Next: Telegram →](04-product-telegram.md)
+[← Manual home](README.md) · [Prev: Octopus](02-operator-octopus.md) · [Next: Sign in →](registry-ui/sign-in.md)
 
 The Registry **operator SPA** (`ui/`) lets you inspect enrolled bots, conversations, routed tasks, and coordination state. Octopus prints a **`/ui`** URL when the registry runs; sign in with **`REGISTRY_UI_TOKEN`** from **`.deploy/registry/.env`**.
 

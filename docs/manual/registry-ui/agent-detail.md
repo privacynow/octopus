@@ -1,6 +1,6 @@
 # Registry UI: Agent detail
 
-[← Agents list](agents-list.md) · [Registry UI hub](../03-operator-registry.md) · [Next: Agent-scoped conversations →](agent-conversations.md)
+[← Manual home](../README.md) · [Prev: Agents list](agents-list.md) · [Next: Agent-scoped conversations →](agent-conversations.md)
 
 **Route:** `/ui/agents/{agent_id}` — opened from the list or a **deep link**.
 

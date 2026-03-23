@@ -26,5 +26,5 @@ npm run capture:manual   # fixtures → docs/assets/manual/
 ## Notes
 
 - `capture-guide.spec.ts` uses **structural selectors** against the real SPA (`#content .filter-bar + div` for list panes, `#usage-summary` / `#usage-table`, etc.). If you change layout order or drop those hooks, update the spec—**do not** add capture-only `id`s to production UI components.
-- Playwright starts the registry on `127.0.0.1:19987` with env vars set in `playwright.config.cjs`.
+- Playwright starts the registry on `127.0.0.1:19987` with env vars set in `playwright.config.cjs` (including `REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION=1` for local DB upgrades). If SQLite errors mention missing columns, delete **`.capture-registry.sqlite3`** in this directory and re-run **`npm run capture`**.
 - Tokens are `guide-capture-*` (must not be known-default tokens per `app/channels/registry/auth.py`).

@@ -898,16 +898,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
         return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 
-    def list_agents(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_agents(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
                 if for_agent_id is not None:
                     cur.execute(
-                        f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s ORDER BY lower(display_name)",
-                        (for_agent_id,),
+                        f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s ORDER BY lower(display_name) LIMIT %s OFFSET %s",
+                        (for_agent_id, fetch_limit, cursor),
                     )
                 else:
-                    cur.execute(f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name)")
+                    cur.execute(
+                        f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name) LIMIT %s OFFSET %s",
+                        (fetch_limit, cursor),
+                    )
                 rows = cur.fetchall()
         return [self._row_to_agent(row) for row in rows]
 
@@ -963,28 +967,72 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 actual_id = cur.fetchone()["conversation_id"]
         return self.get_conversation(actual_id)
 
-    def list_conversations(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                sql = f"""
-                    SELECT
-                        c.*,
-                        a.display_name AS target_name,
-                        COUNT(e.event_id) AS event_count
-                    FROM {_SCHEMA}.conversations c
-                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
-                """
-                params: list[Any] = []
-                if for_agent_id is not None:
-                    sql += " WHERE c.target_agent_id = %s"
-                    params.append(for_agent_id)
-                sql += """
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
-                    ORDER BY c.updated_at DESC
-                """
-                cur.execute(sql, params)
-                rows = cur.fetchall()
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
+        # When a search query is provided (>= 3 chars), use FTS-based search
+        if q and len(q) >= 3:
+            search_hits = self.search_conversations(q, limit=fetch_limit + cursor)
+            hit_ids = [h["conversation_id"] for h in search_hits]
+            if not hit_ids:
+                return []
+            with self._connect() as conn:
+                with _cur(conn) as cur:
+                    placeholders = ",".join(["%s"] * len(hit_ids))
+                    where_clauses = [f"c.conversation_id IN ({placeholders})"]
+                    params: list[Any] = list(hit_ids)
+                    if for_agent_id is not None:
+                        where_clauses.append("c.target_agent_id = %s")
+                        params.append(for_agent_id)
+                    if status:
+                        where_clauses.append("c.status = %s")
+                        params.append(status)
+                    where_sql = " WHERE " + " AND ".join(where_clauses)
+                    sql = f"""
+                        SELECT
+                            c.*,
+                            a.display_name AS target_name,
+                            COUNT(e.event_id) AS event_count
+                        FROM {_SCHEMA}.conversations c
+                        LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
+                        LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
+                        {where_sql}
+                        GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
+                        ORDER BY c.updated_at DESC
+                        LIMIT %s OFFSET %s
+                    """
+                    params.extend([fetch_limit, cursor])
+                    cur.execute(sql, params)
+                    rows = cur.fetchall()
+        else:
+            with self._connect() as conn:
+                with _cur(conn) as cur:
+                    sql = f"""
+                        SELECT
+                            c.*,
+                            a.display_name AS target_name,
+                            COUNT(e.event_id) AS event_count
+                        FROM {_SCHEMA}.conversations c
+                        LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
+                        LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
+                    """
+                    params_list: list[Any] = []
+                    where_clauses_list: list[str] = []
+                    if for_agent_id is not None:
+                        where_clauses_list.append("c.target_agent_id = %s")
+                        params_list.append(for_agent_id)
+                    if status:
+                        where_clauses_list.append("c.status = %s")
+                        params_list.append(status)
+                    if where_clauses_list:
+                        sql += " WHERE " + " AND ".join(where_clauses_list)
+                    sql += """
+                        GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
+                        ORDER BY c.updated_at DESC
+                        LIMIT %s OFFSET %s
+                    """
+                    params_list.extend([fetch_limit, cursor])
+                    cur.execute(sql, params_list)
+                    rows = cur.fetchall()
         return [
             {
                 "conversation_id": row["conversation_id"],
@@ -1063,18 +1111,29 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "linked_routed_tasks": tasks,
         }
 
-    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT conversation_id, metadata_json, created_at
-                    FROM {_SCHEMA}.events
-                    WHERE kind = 'usage' AND created_at >= %s
-                    ORDER BY created_at
-                    """,
-                    (since_iso,),
-                )
+                if until_iso:
+                    cur.execute(
+                        f"""
+                        SELECT conversation_id, metadata_json, created_at
+                        FROM {_SCHEMA}.events
+                        WHERE kind = 'usage' AND created_at >= %s AND created_at <= %s
+                        ORDER BY created_at
+                        """,
+                        (since_iso, until_iso),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT conversation_id, metadata_json, created_at
+                        FROM {_SCHEMA}.events
+                        WHERE kind = 'usage' AND created_at >= %s
+                        ORDER BY created_at
+                        """,
+                        (since_iso,),
+                    )
                 rows = cur.fetchall()
         return [
             {
@@ -1246,7 +1305,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 }
         return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
-    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
                 sql = f"""
@@ -1256,10 +1316,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
                 """
                 params: list[Any] = []
+                where_clauses: list[str] = []
                 if for_agent_id is not None:
-                    sql += " WHERE (t.origin_agent_id = %s OR t.target_agent_id = %s)"
+                    where_clauses.append("(t.origin_agent_id = %s OR t.target_agent_id = %s)")
                     params.extend([for_agent_id, for_agent_id])
-                sql += " ORDER BY t.updated_at DESC"
+                if status:
+                    where_clauses.append("t.status = %s")
+                    params.append(status)
+                if where_clauses:
+                    sql += " WHERE " + " AND ".join(where_clauses)
+                sql += " ORDER BY t.updated_at DESC LIMIT %s OFFSET %s"
+                params.extend([fetch_limit, cursor])
                 cur.execute(sql, params)
                 rows = cur.fetchall()
         return [
@@ -1298,6 +1365,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             inserted = 0
             skipped = 0
             inserted_ids: set[str] = set()
+            inserted_events: list[dict[str, Any]] = []
             for event in events:
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
@@ -1308,7 +1376,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 kind = str(event.get("kind", "") or "")
                 if not kind.strip():
                     raise ValueError("kind is required")
-                created_at = str(event.get("timestamp", "") or event.get("created_at", "") or "") or utcnow_iso()
+                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
                 with _cur(conn) as cur:
                     cur.execute(
                         f"""
@@ -1330,9 +1398,27 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     if cur.rowcount > 0:
                         inserted += 1
                         inserted_ids.add(event_id)
+                        cur.execute(
+                            f"SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM {_SCHEMA}.events WHERE event_id = %s",
+                            (event_id,),
+                        )
+                        ev_row = cur.fetchone()
+                        if ev_row:
+                            meta = ev_row["metadata_json"]
+                            inserted_events.append({
+                                "seq": ev_row["seq"],
+                                "event_id": ev_row["event_id"],
+                                "conversation_id": ev_row["conversation_id"],
+                                "agent_id": ev_row["agent_id"],
+                                "kind": ev_row["kind"],
+                                "actor": ev_row["actor"],
+                                "content": ev_row["content"],
+                                "metadata": meta if isinstance(meta, dict) else json.loads(meta) if meta else {},
+                                "created_at": str(ev_row["created_at"]),
+                            })
                     else:
                         skipped += 1
-        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids)}
+        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids), "inserted_events": inserted_events}
 
     def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1406,6 +1492,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         return {"events": events_list, "next_cursor": next_cursor}
 
     def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
             with _cur(conn) as cur:
@@ -1418,7 +1505,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     ORDER BY c.updated_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (effective_agent_id, limit, cursor),
+                    (effective_agent_id, fetch_limit, cursor),
                 )
                 rows = cur.fetchall()
         return [

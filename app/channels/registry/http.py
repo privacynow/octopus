@@ -400,12 +400,30 @@ def _scoped_agent_id(auth: AuthContext) -> str | None:
     return auth.agent_id if auth.is_agent else None
 
 
+def _paginated_response(key: str, items: list[Any], cursor: int, limit: int) -> dict[str, Any]:
+    """Wrap a list result with offset-based pagination metadata.
+
+    Stores fetch ``limit + 1`` rows; the extra row signals *has_more*.
+    """
+    has_more = len(items) > limit
+    if has_more:
+        items = items[:limit]
+    return {
+        key: items,
+        "next_cursor": cursor + limit if has_more else None,
+        "has_more": has_more,
+    }
+
+
 @app.get("/v1/agents")
 def resource_list_agents(
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return {"agents": store.list_agents(for_agent_id=_scoped_agent_id(auth))}
+    agents = store.list_agents(for_agent_id=_scoped_agent_id(auth), cursor=cursor, limit=limit)
+    return _paginated_response("agents", agents, cursor, limit)
 
 
 @app.get("/v1/agents/{agent_id}/status")
@@ -436,16 +454,27 @@ def resource_agent_conversations(
         cursor=cursor,
         limit=limit,
     )
-    return {"conversations": conversations}
+    return _paginated_response("conversations", conversations, cursor, limit)
 
 
 # IMPORTANT: register GET /v1/conversations BEFORE /v1/conversations/{id}
 @app.get("/v1/conversations")
 def resource_list_conversations(
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    q: str = Query(default=""),
+    status: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return {"conversations": store.list_conversations(for_agent_id=_scoped_agent_id(auth))}
+    conversations = store.list_conversations(
+        for_agent_id=_scoped_agent_id(auth),
+        cursor=cursor,
+        limit=limit,
+        q=q,
+        status=status,
+    )
+    return _paginated_response("conversations", conversations, cursor, limit)
 
 
 @app.get("/v1/conversations/{conversation_id}")
@@ -518,11 +547,9 @@ async def resource_publish_events(
         except (ValueError, Exception) as exc:
             raise HTTPException(status_code=422, detail=f"Event {i}: {exc}") from exc
     result = store.publish_events(agent_token, conversation_id, validated)
-    # Broadcast only newly inserted events (skip idempotent duplicates)
-    inserted_ids = set(result.get("inserted_ids", []))
-    for ev in validated:
-        if ev.get("event_id") in inserted_ids:
-            await _ws_manager.broadcast_event(conversation_id, agent_id, ev)
+    # Broadcast actual stored event rows (with seq, matching list_events shape)
+    for ev in result.get("inserted_events", []):
+        await _ws_manager.broadcast_event(conversation_id, agent_id, ev)
     return {"inserted": result["inserted"], "skipped": result["skipped"]}
 
 
@@ -631,10 +658,19 @@ def resource_export_conversation(
 
 @app.get("/v1/tasks")
 def resource_list_tasks(
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    status: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    return {"tasks": store.list_tasks(for_agent_id=_scoped_agent_id(auth))}
+    tasks = store.list_tasks(
+        for_agent_id=_scoped_agent_id(auth),
+        cursor=cursor,
+        limit=limit,
+        status=status,
+    )
+    return _paginated_response("tasks", tasks, cursor, limit)
 
 
 @app.get("/v1/capabilities")
@@ -674,13 +710,19 @@ def resource_disable_capability(
 
 @app.get("/v1/usage")
 def resource_usage(
+    since: str = Query(default=""),
+    until: str = Query(default=""),
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    since_iso = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0,
-    ).isoformat()
-    rows = store.get_usage_summary(since_iso)
+    if not since:
+        since_iso = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        ).isoformat()
+    else:
+        since_iso = since
+    until_iso = until or ""
+    rows = store.get_usage_summary(since_iso, until_iso=until_iso)
     daily_total = {
         "prompt_tokens": 0,
         "completion_tokens": 0,

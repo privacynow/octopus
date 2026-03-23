@@ -1,11 +1,38 @@
 /**
  * WebSocket client — real-time event push from registry.
- * v1: operator session cookie auth only (no token in URL).
+ * Exponential backoff, connection status tracking, client-side ping.
  */
 const WS = (() => {
     let socket = null;
     let reconnectTimer = null;
+    let pingTimer = null;
+    let attempt = 0;
+    let status = 'offline'; // 'connected' | 'reconnecting' | 'offline'
+    let onStatusChange = null;
     const listeners = new Map(); // topic -> Set<callback>
+    const BACKOFF_CAP = 30000;
+    const PING_INTERVAL = 30000;
+
+    function _setStatus(s) {
+        if (status === s) return;
+        status = s;
+        _updateStatusUI();
+        if (typeof onStatusChange === 'function') {
+            try { onStatusChange(s); } catch (e) { /* ignore */ }
+        }
+    }
+
+    function _updateStatusUI() {
+        const dot = document.querySelector('#ws-status .ws-dot');
+        const label = document.querySelector('#ws-status .ws-label');
+        if (dot) {
+            dot.className = 'ws-dot ' + status;
+        }
+        if (label) {
+            const labels = { connected: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
+            label.textContent = labels[status] || status;
+        }
+    }
 
     function connect() {
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -15,6 +42,9 @@ const WS = (() => {
         socket = new WebSocket(`${proto}//${window.location.host}/v1/ws`);
 
         socket.onopen = () => {
+            attempt = 0;
+            _setStatus('connected');
+            _startPing();
             // Resubscribe to all active topics
             const topics = Array.from(listeners.keys());
             if (topics.length > 0) {
@@ -25,6 +55,7 @@ const WS = (() => {
         socket.onmessage = (evt) => {
             try {
                 const msg = JSON.parse(evt.data);
+                if (msg.pong) return; // ignore pong replies
                 _dispatch(msg);
             } catch (e) {
                 console.warn('WS: failed to parse message', e);
@@ -32,6 +63,8 @@ const WS = (() => {
         };
 
         socket.onclose = () => {
+            _stopPing();
+            _setStatus('reconnecting');
             _scheduleReconnect();
         };
 
@@ -40,17 +73,34 @@ const WS = (() => {
         };
     }
 
+    function _startPing() {
+        _stopPing();
+        pingTimer = setInterval(() => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ ping: true }));
+            }
+        }, PING_INTERVAL);
+    }
+
+    function _stopPing() {
+        if (pingTimer) {
+            clearInterval(pingTimer);
+            pingTimer = null;
+        }
+    }
+
     function _scheduleReconnect() {
         if (reconnectTimer) return;
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s cap
+        const delay = Math.min(1000 * Math.pow(2, attempt), BACKOFF_CAP);
+        attempt++;
         reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             connect();
-        }, 3000);
+        }, delay);
     }
 
     function _dispatch(msg) {
-        // msg: {type: "event", data: {conversation_id, agent_id, ...}}
-        // or:  {type: "heartbeat", data: {agent_id, ...}}
         const data = msg.data || {};
         const topics = [];
         if (data.conversation_id) topics.push(`conversation:${data.conversation_id}`);
@@ -64,7 +114,7 @@ const WS = (() => {
                 }
             }
         }
-        // Also dispatch to wildcard listeners
+        // Wildcard listeners
         const wildcardCbs = listeners.get('*');
         if (wildcardCbs) {
             for (const cb of wildcardCbs) {
@@ -76,7 +126,6 @@ const WS = (() => {
     function subscribe(topic, callback) {
         if (!listeners.has(topic)) listeners.set(topic, new Set());
         listeners.get(topic).add(callback);
-        // Send subscription to server if connected
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ subscribe: [topic] }));
         }
@@ -97,6 +146,7 @@ const WS = (() => {
     }
 
     function disconnect() {
+        _stopPing();
         if (reconnectTimer) {
             clearTimeout(reconnectTimer);
             reconnectTimer = null;
@@ -105,7 +155,12 @@ const WS = (() => {
             socket.close();
             socket = null;
         }
+        _setStatus('offline');
     }
 
-    return { connect, disconnect, subscribe, unsubscribe };
+    function getStatus() { return status; }
+
+    function setOnStatusChange(cb) { onStatusChange = cb; }
+
+    return { connect, disconnect, subscribe, unsubscribe, getStatus, setOnStatusChange };
 })();

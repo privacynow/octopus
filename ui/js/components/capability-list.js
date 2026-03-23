@@ -104,5 +104,14 @@ function renderCapabilityList(container) {
 
     loadCapabilities();
 
-    return function cleanup() {};
+    // WS: reload on heartbeat (capabilities come from agent registrations)
+    let reloadDebounce = null;
+    const unsub = WS.subscribe('*', (msg) => {
+        if (msg.type === 'heartbeat') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadCapabilities, 3000);
+        }
+    });
+
+    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
 }

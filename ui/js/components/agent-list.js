@@ -156,7 +156,8 @@ function renderAgentList(container) {
         });
     }
 
-    // WS: subscribe to * for heartbeat updates
+    // WS: subscribe to * for heartbeat + event updates
+    let reloadDebounce = null;
     const unsub = WS.subscribe('*', (msg) => {
         if (msg.type === 'heartbeat' && msg.data) {
             const badge = document.getElementById('agent-badge-' + msg.data.agent_id);
@@ -164,6 +165,11 @@ function renderAgentList(container) {
                 badge.className = 'badge badge-' + msg.data.connectivity_state;
                 badge.textContent = msg.data.connectivity_state;
             }
+        }
+        // Reload agent list on any event (new conversations change counts)
+        if (msg.type === 'event') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadPage, 2000);
         }
     });
     cleanups.push(unsub);

@@ -258,7 +258,8 @@ function renderAgentDetail(container, params) {
         });
     }
 
-    // WS: subscribe to agent:{id}, update status badge in-place
+    // WS: subscribe to agent-specific + wildcard for full live updates
+    let reloadDebounce = null;
     const unsub = WS.subscribe('agent:' + agentId, (msg) => {
         if (msg.type === 'heartbeat' && msg.data) {
             const badge = document.getElementById('agent-status-badge');
@@ -269,6 +270,15 @@ function renderAgentDetail(container, params) {
         }
     });
     cleanups.push(unsub);
+
+    // Also reload conversations sub-list on any event for this agent
+    const unsubEvents = WS.subscribe('*', (msg) => {
+        if (msg.type === 'event' && msg.data && msg.data.agent_id === agentId) {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadConversations, 2000);
+        }
+    });
+    cleanups.push(unsubEvents);
 
     loadDetail();
 

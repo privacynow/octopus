@@ -1,4 +1,4 @@
-"""Every image embedded in docs/manual/*.md must exist on disk."""
+"""Every image embedded in docs/manual/**/*.md must exist on disk."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _refs_in_file(path: Path) -> list[str]:
 
 def test_manual_markdown_image_refs_exist() -> None:
     missing: list[str] = []
-    for md in sorted(MANUAL_DIR.glob("*.md")):
+    for md in sorted(MANUAL_DIR.rglob("*.md")):
         for raw in _refs_in_file(md):
             target = _resolve_with_base(md, raw)
             if target is None:
@@ -42,3 +42,6 @@ def test_manual_dir_has_chapters() -> None:
     assert "README.md" in names
     assert "01-setup.md" in names
     assert "03-operator-registry.md" in names
+    reg_ui = MANUAL_DIR / "registry-ui"
+    assert (reg_ui / "sign-in.md").is_file()
+    assert (reg_ui / "deep-links.md").is_file()

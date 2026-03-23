@@ -313,8 +313,8 @@ Examples:
 
 ![Registry UI — conversation detail](docs/assets/registry/ui/05-conversation-detail-annotated.png)
 
-Full **screen-by-screen** tour (every asset, same naming): **[docs/registry-guide.md](docs/registry-guide.md)**.
-Operator **manual** (text-first, links here for visuals): **[docs/manual/03-operator-registry.md](docs/manual/03-operator-registry.md)**.
+Full **screen-by-screen** tour in one doc: **[docs/registry-guide.md](docs/registry-guide.md)**.
+Operator **manual** (feature pages, each with a screenshot): **[docs/manual/03-operator-registry.md](docs/manual/03-operator-registry.md)** → **[docs/manual/registry-ui/](docs/manual/registry-ui/)**.
 CLI registry flows use **SVG** in `docs/assets/registry/`. Regenerate PNGs: registry guide § *Regenerating UI screenshots*.
 
 ## Storage and Runtime Notes

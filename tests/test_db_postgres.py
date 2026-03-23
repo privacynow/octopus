@@ -273,20 +273,16 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "created_at",
             "updated_at",
         },
-        "timeline_events": {
+        "events": {
             "seq",
             "event_id",
             "conversation_id",
-            "routed_task_id",
             "agent_id",
             "kind",
-            "title",
-            "body",
-            "status",
-            "progress",
+            "actor",
+            "content",
             "metadata_json",
             "created_at",
-            "body_tsv",
         },
         "skills_override": {"skill_name", "enabled", "set_by", "set_at"},
         "meta": {"key", "value"},
@@ -315,7 +311,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
     assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")
-    assert "jsonb" in defaults[("timeline_events", "metadata_json")]
+    assert "jsonb" in defaults[("events", "metadata_json")]
 
 
 def test_cli_doctor_exits_when_no_database_url(monkeypatch):

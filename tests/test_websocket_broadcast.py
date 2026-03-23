@@ -170,6 +170,10 @@ def test_add_message_broadcasts_message_user_event(
         assert _ws_recorder[0]["event_data"]["kind"] == "message.user"
         assert _ws_recorder[0]["event_data"]["content"] == "operator message"
         assert _ws_recorder[0]["conversation_id"] == conv_id
+        # Full stored event includes seq, event_id, created_at
+        assert "event_id" in _ws_recorder[0]["event_data"]
+        assert "seq" in _ws_recorder[0]["event_data"]
+        assert "created_at" in _ws_recorder[0]["event_data"]
 
 
 def test_add_action_broadcasts_approval_decided_event(
@@ -191,8 +195,11 @@ def test_add_action_broadcasts_approval_decided_event(
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
         assert _ws_recorder[0]["event_data"]["kind"] == "approval.decided"
-        assert _ws_recorder[0]["event_data"]["action"] == "approve"
         assert _ws_recorder[0]["conversation_id"] == conv_id
+        # Full stored event includes seq, event_id, created_at
+        assert "event_id" in _ws_recorder[0]["event_data"]
+        assert "seq" in _ws_recorder[0]["event_data"]
+        assert "created_at" in _ws_recorder[0]["event_data"]
 
 
 def test_routed_task_status_broadcasts_task_status_event(
@@ -221,12 +228,27 @@ def test_routed_task_status_broadcasts_task_status_event(
             json={
                 "status": "running",
                 "summary": "halfway",
-                "timeline_events": [],
+                "timeline_events": [
+                    {
+                        "event_id": "evt-ws-task-1",
+                        "conversation_id": "ws-parent-conv-1",
+                        "kind": "task.status",
+                        "title": "Running",
+                        "body": "halfway there",
+                        "status": "running",
+                        "progress": 50,
+                        "metadata": {},
+                        "created_at": "2026-03-22T00:00:00+00:00",
+                    }
+                ],
             },
         )
 
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
-        assert _ws_recorder[0]["event_data"]["kind"] == "task.status"
+        ev = _ws_recorder[0]["event_data"]
+        assert ev["kind"] == "task.status"
         assert _ws_recorder[0]["conversation_id"] == "ws-parent-conv-1"
-        assert _ws_recorder[0]["event_data"]["routed_task_id"] == "ws-task-1"
+        assert ev["event_id"] == "evt-ws-task-1"
+        assert ev["metadata"]["routed_task_id"] == "ws-task-1"
+        assert "created_at" in ev

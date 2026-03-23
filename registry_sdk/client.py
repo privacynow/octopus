@@ -76,7 +76,7 @@ class RegistryClient:
         await self._request(
             "POST",
             f"/v1/conversations/{conversation_id}/events",
-            json=[event.model_dump() for event in events],
+            json={"events": [event.model_dump() for event in events]},
         )
 
     async def enroll(self, enrollment_token: str, card: dict[str, Any]) -> dict[str, Any]:

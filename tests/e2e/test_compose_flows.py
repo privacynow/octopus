@@ -32,6 +32,7 @@ import time
 import uuid
 from pathlib import Path
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 import pytest
@@ -208,6 +209,7 @@ def _http_json(
     token: str = "",
     payload: dict[str, object] | None = None,
     timeout: int = 5,
+    opener: urllib_request.OpenerDirector | None = None,
 ) -> dict[str, object]:
     body = None
     headers: dict[str, str] = {}
@@ -217,7 +219,49 @@ def _http_json(
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib_request.Request(url, data=body, headers=headers, method=method)
-    with urllib_request.urlopen(req, timeout=timeout) as response:
+    _open = opener.open if opener else urllib_request.urlopen
+    with _open(req, timeout=timeout) as response:
+        data = response.read().decode("utf-8")
+    return json.loads(data or "{}")
+
+
+def _make_operator_session(base_url: str, ui_token: str) -> tuple[urllib_request.OpenerDirector, str]:
+    """Login as operator, return (cookie-based opener, csrf_token)."""
+    import http.cookiejar
+    cj = http.cookiejar.CookieJar()
+    opener = urllib_request.build_opener(urllib_request.HTTPCookieProcessor(cj))
+    login_data = urllib_parse.urlencode({"password": ui_token}).encode("utf-8")
+    req = urllib_request.Request(f"{base_url}/ui/login", data=login_data, method="POST")
+    try:
+        opener.open(req, timeout=5)
+    except urllib_error.HTTPError:
+        pass  # login redirects; follow cookies regardless
+    # Get CSRF token
+    csrf_req = urllib_request.Request(f"{base_url}/v1/auth/csrf", method="GET")
+    with opener.open(csrf_req, timeout=5) as resp:
+        csrf_data = json.loads(resp.read().decode("utf-8"))
+    return opener, csrf_data.get("csrf_token", "")
+
+
+def _operator_http_json(
+    method: str,
+    url: str,
+    *,
+    opener: urllib_request.OpenerDirector,
+    csrf_token: str = "",
+    payload: dict[str, object] | None = None,
+    timeout: int = 5,
+) -> dict[str, object]:
+    """Make an operator-session-authenticated request with CSRF."""
+    body = None
+    headers: dict[str, str] = {}
+    if csrf_token and method in ("POST", "PUT", "DELETE", "PATCH"):
+        headers["X-CSRF-Token"] = csrf_token
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib_request.Request(url, data=body, headers=headers, method=method)
+    with opener.open(req, timeout=timeout) as response:
         data = response.read().decode("utf-8")
     return json.loads(data or "{}")
 
@@ -797,15 +841,25 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
 
         conversation = _http_json(
             "POST",
-            f"{base_url}/v1/ui/conversations",
-            token=_E2E_REGISTRY_UI_TOKEN,
+            f"{base_url}/v1/conversations",
+            token=agent_token,
             payload={
                 "target_agent_id": agent_id,
                 "title": "Registry UI E2E",
-                "message_text": "Start this from the registry UI.",
+                "origin_channel": "registry",
+                "external_conversation_ref": "e2e-detail-ref",
             },
         )
         conversation_id = str(conversation["conversation_id"])
+
+        op_opener, op_csrf = _make_operator_session(base_url, _E2E_REGISTRY_UI_TOKEN)
+        _operator_http_json(
+            "POST",
+            f"{base_url}/v1/conversations/{conversation_id}/messages",
+            opener=op_opener,
+            csrf_token=op_csrf,
+            payload={"text": "Start this from the registry UI."},
+        )
 
         deliveries = await client.poll(cursor="0", limit=20, wait_seconds=0)
         assert deliveries["deliveries"], deliveries
@@ -820,21 +874,22 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         return conversation_id
 
     conversation_id = asyncio.run(_exercise_registry_flow())
+    op_opener, _op_csrf = _make_operator_session(base_url, _E2E_REGISTRY_UI_TOKEN)
     deadline = time.time() + 30
     while time.time() < deadline:
-        timeline = _http_json(
+        events_resp = _http_json(
             "GET",
-            f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-            token=_E2E_REGISTRY_UI_TOKEN,
+            f"{base_url}/v1/conversations/{conversation_id}/events",
+            opener=op_opener,
         )
-        if any(event.get("kind") == "started" for event in timeline.get("events", [])):
+        if any(event.get("kind") == "message.user" for event in events_resp.get("events", [])):
             return
         time.sleep(1)
 
     _fail_with_logs(
         ctx,
-        "registry-ui-timeline-timeout",
-        f"Registry UI conversation did not receive a started event for {conversation_id}.",
+        "registry-ui-events-timeout",
+        f"Registry UI conversation did not receive a message.user event for {conversation_id}.",
         "registry",
     )
 
@@ -978,15 +1033,25 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         conversation = _http_json(
             "POST",
-            f"{base_url}/v1/ui/conversations",
-            token=_E2E_REGISTRY_UI_TOKEN,
+            f"{base_url}/v1/conversations",
+            token=parent_token,
             payload={
                 "target_agent_id": parent_id,
                 "title": "Registry UI delegation flow",
-                "message_text": "Delegate this work and finish it.",
+                "origin_channel": "registry",
+                "external_conversation_ref": "e2e-delegation-ref",
             },
         )
         conversation_id = str(conversation["conversation_id"])
+
+        op_opener, op_csrf = _make_operator_session(base_url, _E2E_REGISTRY_UI_TOKEN)
+        _operator_http_json(
+            "POST",
+            f"{base_url}/v1/conversations/{conversation_id}/messages",
+            opener=op_opener,
+            csrf_token=op_csrf,
+            payload={"text": "Delegate this work and finish it."},
+        )
 
         initial_poll = await parent_client.poll(cursor="0", limit=20, wait_seconds=0)
         initial_delivery = initial_poll["deliveries"][0]
@@ -1001,21 +1066,22 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         approval_deadline = time.time() + 30
         while time.time() < approval_deadline:
-            timeline = _http_json(
+            events_resp = _http_json(
                 "GET",
-                f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-                token=_E2E_REGISTRY_UI_TOKEN,
+                f"{base_url}/v1/conversations/{conversation_id}/events",
+                opener=op_opener,
             )
-            if any(event.get("kind") == "delegation_proposed" for event in timeline.get("events", [])):
+            if any(event.get("kind") == "task.status" for event in events_resp.get("events", [])):
                 break
             time.sleep(1)
         else:
-            raise AssertionError("delegation_proposed event did not appear in the registry timeline")
+            raise AssertionError("task.status event did not appear in the conversation events")
 
-        _http_json(
+        _operator_http_json(
             "POST",
-            f"{base_url}/v1/ui/conversations/{conversation_id}/actions",
-            token=_E2E_REGISTRY_UI_TOKEN,
+            f"{base_url}/v1/conversations/{conversation_id}/actions",
+            opener=op_opener,
+            csrf_token=op_csrf,
             payload={"action": "approve_delegation"},
         )
 
@@ -1054,16 +1120,17 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         return conversation_id
 
     conversation_id = asyncio.run(_exercise_registry_flow())
+    op_opener, _op_csrf = _make_operator_session(base_url, _E2E_REGISTRY_UI_TOKEN)
     deadline = time.time() + 30
     while time.time() < deadline:
-        timeline = _http_json(
+        events_resp = _http_json(
             "GET",
-            f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-            token=_E2E_REGISTRY_UI_TOKEN,
+            f"{base_url}/v1/conversations/{conversation_id}/events",
+            opener=op_opener,
         )
-        bodies = [event.get("body", "") for event in timeline.get("events", [])]
-        if any("All delegated tasks completed." in body for body in bodies) and any(
-            "Final parent answer from delegation." in body for body in bodies
+        contents = [event.get("content", "") for event in events_resp.get("events", [])]
+        if any("All delegated tasks completed." in c for c in contents) and any(
+            "Final parent answer from delegation." in c for c in contents
         ):
             return
         time.sleep(1)

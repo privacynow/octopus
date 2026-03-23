@@ -129,6 +129,15 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_external
+    ON conversations(target_agent_id, origin_channel, external_conversation_ref);
+
+CREATE TABLE IF NOT EXISTS skills_override (
+    skill_name TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+    set_by TEXT NOT NULL DEFAULT 'ui',
+    set_at REAL NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS routed_tasks (
     routed_task_id TEXT PRIMARY KEY,
@@ -142,21 +151,6 @@ CREATE TABLE IF NOT EXISTS routed_tasks (
     result_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS timeline_events (
-    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL UNIQUE,
-    conversation_id TEXT NOT NULL,
-    routed_task_id TEXT NOT NULL DEFAULT '',
-    agent_id TEXT NOT NULL DEFAULT '',
-    kind TEXT NOT NULL,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT '',
-    progress INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -315,7 +309,29 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            conn.executescript(_BASE_SCHEMA_SQL)
+            # Detect whether this is an existing (possibly legacy) database by
+            # checking for user tables. If present, skip the fresh-install base
+            # schema and let migrations handle upgrades.
+            existing_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            if not existing_tables:
+                conn.executescript(_BASE_SCHEMA_SQL)
+                # Fresh install: set schema_version so migrations are skipped.
+                conn.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(_SCHEMA_VERSION),),
+                )
+                conn.commit()
+            else:
+                # Ensure meta table exists for legacy databases that predate it.
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                conn.commit()
             self._run_migrations(conn)
 
     def _current_schema_version(self, conn: sqlite3.Connection) -> int:
@@ -350,6 +366,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         )
 
     def _migrate_v2_timeline_fts(self, conn: sqlite3.Connection) -> None:
+        # Only create FTS infrastructure if timeline_events table exists.
+        # Fresh installs no longer provision timeline_events.
+        has_timeline = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_events'"
+        ).fetchone()
+        if not has_timeline:
+            return
         _execute_sql_script(
             conn,
             """
@@ -465,27 +488,31 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         conn.execute("DROP TRIGGER IF EXISTS tl_au")
         # Drop and recreate FTS virtual table (clean state since we truncate)
         conn.execute("DROP TABLE IF EXISTS timeline_fts")
-        # Truncate timeline_events (keep table for legacy code still referencing it)
-        conn.execute("DELETE FROM timeline_events")
-        # Recreate FTS and triggers for legacy timeline search
-        _execute_sql_script(
-            conn,
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
-            USING fts5(body, content=timeline_events, content_rowid=seq);
+        # Truncate timeline_events if it exists (keep table for legacy code)
+        has_timeline = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_events'"
+        ).fetchone()
+        if has_timeline:
+            conn.execute("DELETE FROM timeline_events")
+            # Recreate FTS and triggers for legacy timeline search
+            _execute_sql_script(
+                conn,
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
+                USING fts5(body, content=timeline_events, content_rowid=seq);
 
-            CREATE TRIGGER IF NOT EXISTS tl_ai AFTER INSERT ON timeline_events BEGIN
-              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-            END;
-            CREATE TRIGGER IF NOT EXISTS tl_ad AFTER DELETE ON timeline_events BEGIN
-              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-            END;
-            CREATE TRIGGER IF NOT EXISTS tl_au AFTER UPDATE ON timeline_events BEGIN
-              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-            END;
-            """,
-        )
+                CREATE TRIGGER IF NOT EXISTS tl_ai AFTER INSERT ON timeline_events BEGIN
+                  INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
+                END;
+                CREATE TRIGGER IF NOT EXISTS tl_ad AFTER DELETE ON timeline_events BEGIN
+                  INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
+                END;
+                CREATE TRIGGER IF NOT EXISTS tl_au AFTER UPDATE ON timeline_events BEGIN
+                  INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
+                  INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
+                END;
+                """,
+            )
         # Truncate conversations
         conn.execute("DELETE FROM conversations")
         # Add new columns to conversations
@@ -1333,6 +1360,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     *PROTECTED_ROUTED_TASK_STATUSES,
                 ),
             )
+            events_written = False
+            inserted_events: list[dict[str, Any]] = []
             if cursor.rowcount > 0:
                 for event in validated_payload["timeline_events"]:
                     event_metadata = {"status": validated_payload["status"], "routed_task_id": routed_task_id}
@@ -1340,7 +1369,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         event_metadata["title"] = event["title"]
                     if event.get("progress") is not None:
                         event_metadata["progress"] = event["progress"]
-                    conn.execute(
+                    ev_cursor = conn.execute(
                         """
                         INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1357,12 +1386,24 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                             event["created_at"],
                         ),
                     )
+                    if ev_cursor.rowcount > 0:
+                        events_written = True
+                        inserted_events.append({
+                            "event_id": event["event_id"],
+                            "conversation_id": event["conversation_id"],
+                            "agent_id": row["agent_id"],
+                            "kind": "task.status",
+                            "actor": "",
+                            "content": event.get("body", ""),
+                            "metadata": event_metadata,
+                            "created_at": event["created_at"],
+                        })
             # Return enough context for WebSocket broadcast
             task_row = conn.execute(
                 "SELECT parent_conversation_id, origin_agent_id, target_agent_id FROM routed_tasks WHERE routed_task_id = ?",
                 (routed_task_id,),
             ).fetchone()
-            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
+            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"], "events_written": events_written, "inserted_events": inserted_events}
             if task_row:
                 result["parent_conversation_id"] = task_row["parent_conversation_id"]
                 result["origin_agent_id"] = task_row["origin_agent_id"]
@@ -1452,6 +1493,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 self._runtime_worker_rows(conn, agent_id),
             )
 
+    def agent_exists(self, agent_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM agents WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
+            return row is not None
+
     def create_conversation(
         self,
         *,
@@ -1502,7 +1551,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 sql += " WHERE c.target_agent_id = ?"
                 params.append(for_agent_id)
             sql += """
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
                 ORDER BY c.updated_at DESC
             """
             rows = conn.execute(sql, params).fetchall()
@@ -1515,7 +1564,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-                "timeline_event_count": int(row["event_count"] or 0),
+                "origin_channel": row["origin_channel"],
+                "external_conversation_ref": row["external_conversation_ref"],
+                "event_count": int(row["event_count"] or 0),
             }
             for row in rows
         ]
@@ -1532,7 +1583,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 LEFT JOIN events e ON e.conversation_id = c.conversation_id
                 WHERE c.conversation_id = ?
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
                 """,
                 (conversation_id,),
             ).fetchone()
@@ -1573,7 +1624,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "timeline_event_count": int(row["event_count"] or 0),
+            "origin_channel": row["origin_channel"],
+            "external_conversation_ref": row["external_conversation_ref"],
+            "event_count": int(row["event_count"] or 0),
             "linked_routed_tasks": tasks,
         }
 
@@ -1650,17 +1703,34 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            event_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id) DO NOTHING""",
-                (uuid.uuid4().hex, conversation_id, "", "message.user", "operator", validated_text, "{}", now),
+                (event_id, conversation_id, "", "message.user", "operator", validated_text, "{}", now),
             )
             conn.execute(
                 "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                 (now, conversation_id),
             )
-        return {"conversation_id": conversation_id, "accepted": True}
+            inserted_event_row = conn.execute(
+                "SELECT * FROM events WHERE event_id = ?", (event_id,)
+            ).fetchone()
+            inserted_event = None
+            if inserted_event_row:
+                inserted_event = {
+                    "seq": inserted_event_row["seq"],
+                    "event_id": inserted_event_row["event_id"],
+                    "conversation_id": inserted_event_row["conversation_id"],
+                    "agent_id": inserted_event_row["agent_id"],
+                    "kind": inserted_event_row["kind"],
+                    "actor": inserted_event_row["actor"],
+                    "content": inserted_event_row["content"],
+                    "metadata": decode_json_field(inserted_event_row["metadata_json"], {}),
+                    "created_at": inserted_event_row["created_at"],
+                }
+        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
     def add_conversation_action(self, conversation_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         validated_action, action_payload = validated_conversation_action(action, payload)
@@ -1695,11 +1765,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 event_kind = "approval.decided"
                 event_metadata = {"action": validated_action, "decided_by": "operator"}
                 event_content = json.dumps(action_payload) if action_payload else ""
+            event_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id) DO NOTHING""",
-                (uuid.uuid4().hex, conversation_id, "", event_kind, "operator", event_content, ensure_json(event_metadata), now),
+                (event_id, conversation_id, "", event_kind, "operator", event_content, ensure_json(event_metadata), now),
             )
             update_fields = "updated_at = ?"
             update_params: list[Any] = [now]
@@ -1711,19 +1782,38 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 f"UPDATE conversations SET {update_fields} WHERE conversation_id = ?",
                 update_params,
             )
-        return {"conversation_id": conversation_id, "accepted": True}
+            inserted_event_row = conn.execute(
+                "SELECT * FROM events WHERE event_id = ?", (event_id,)
+            ).fetchone()
+            inserted_event = None
+            if inserted_event_row:
+                inserted_event = {
+                    "seq": inserted_event_row["seq"],
+                    "event_id": inserted_event_row["event_id"],
+                    "conversation_id": inserted_event_row["conversation_id"],
+                    "agent_id": inserted_event_row["agent_id"],
+                    "kind": inserted_event_row["kind"],
+                    "actor": inserted_event_row["actor"],
+                    "content": inserted_event_row["content"],
+                    "metadata": decode_json_field(inserted_event_row["metadata_json"], {}),
+                    "created_at": inserted_event_row["created_at"],
+                }
+        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
                 FROM routed_tasks t
                 LEFT JOIN agents origin ON origin.agent_id = t.origin_agent_id
                 LEFT JOIN agents target ON target.agent_id = t.target_agent_id
-                ORDER BY t.updated_at DESC
-                """
-            ).fetchall()
+            """
+            params: list[Any] = []
+            if for_agent_id is not None:
+                sql += " WHERE (t.origin_agent_id = ? OR t.target_agent_id = ?)"
+                params.extend([for_agent_id, for_agent_id])
+            sql += " ORDER BY t.updated_at DESC"
+            rows = conn.execute(sql, params).fetchall()
         return [
             {
                 "routed_task_id": row["routed_task_id"],
@@ -1757,6 +1847,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
             inserted = 0
             skipped = 0
+            inserted_ids: set[str] = set()
             for event in events:
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
@@ -1767,7 +1858,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 kind = str(event.get("kind", "") or "")
                 if not kind.strip():
                     raise ValueError("kind is required")
-                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
+                created_at = str(event.get("timestamp", "") or event.get("created_at", "") or "") or utcnow_iso()
                 cursor = conn.execute(
                     """
                     INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
@@ -1787,9 +1878,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 )
                 if cursor.rowcount > 0:
                     inserted += 1
+                    inserted_ids.add(event_id)
                 else:
                     skipped += 1
-        return {"inserted": inserted, "skipped": skipped}
+        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids)}
 
     def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         with self._connect() as conn:

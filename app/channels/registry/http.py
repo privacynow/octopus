@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
+from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -176,8 +177,10 @@ async def websocket_feed(ws: WebSocket) -> None:
         while True:
             data = await ws.receive_json()
             await _ws_manager.handle_subscription(client, data)
+    except WebSocketDisconnect:
+        pass  # Normal client disconnect
     except Exception:
-        pass
+        log.warning("WebSocket error for client", exc_info=True)
     finally:
         _ws_manager.disconnect(client)
 
@@ -344,17 +347,12 @@ async def routed_task_status(
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Broadcast task.status events via WebSocket
+    # Broadcast actual stored events via WebSocket (only when events were inserted)
     parent_conversation_id = result.get("parent_conversation_id", "")
     agent_id = result.get("target_agent_id", result.get("origin_agent_id", ""))
-    if parent_conversation_id:
-        await _ws_manager.broadcast_event(parent_conversation_id, agent_id, {
-            "kind": "task.status",
-            "conversation_id": parent_conversation_id,
-            "agent_id": agent_id,
-            "routed_task_id": routed_task_id,
-            "status": payload.get("status", ""),
-        })
+    if parent_conversation_id and result.get("events_written"):
+        for ev in result.get("inserted_events", []):
+            await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev)
     return result
 
 
@@ -478,7 +476,7 @@ def resource_create_conversation(
                 detail="Agent tokens can only create conversations targeting themselves.",
             )
     # Validate the agent exists
-    if not any(agent["agent_id"] == payload.target_agent_id for agent in store.list_agents()):
+    if not store.agent_exists(payload.target_agent_id):
         raise HTTPException(status_code=404, detail=f"Unknown agent: {payload.target_agent_id}")
     return store.create_conversation(
         target_agent_id=payload.target_agent_id,
@@ -520,10 +518,12 @@ async def resource_publish_events(
         except (ValueError, Exception) as exc:
             raise HTTPException(status_code=422, detail=f"Event {i}: {exc}") from exc
     result = store.publish_events(agent_token, conversation_id, validated)
-    # Broadcast each event to WebSocket subscribers
+    # Broadcast only newly inserted events (skip idempotent duplicates)
+    inserted_ids = set(result.get("inserted_ids", []))
     for ev in validated:
-        await _ws_manager.broadcast_event(conversation_id, agent_id, ev)
-    return result
+        if ev.get("event_id") in inserted_ids:
+            await _ws_manager.broadcast_event(conversation_id, agent_id, ev)
+    return {"inserted": result["inserted"], "skipped": result["skipped"]}
 
 
 @app.get("/v1/conversations/{conversation_id}/events")
@@ -573,13 +573,12 @@ async def resource_add_message(
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Broadcast operator message via WebSocket
+    # Broadcast operator message via WebSocket (full stored event)
     conv = store.get_conversation(conversation_id)
     agent_id = conv.get("target_agent_id", "")
-    await _ws_manager.broadcast_event(conversation_id, agent_id, {
-        "kind": "message.user", "actor": "operator", "content": text,
-        "conversation_id": conversation_id, "agent_id": agent_id,
-    })
+    event_data = result.get("event")
+    if event_data:
+        await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
     return result
 
 
@@ -601,14 +600,12 @@ async def resource_add_action(
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Broadcast action via WebSocket
+    # Broadcast action via WebSocket (full stored event)
     conv = store.get_conversation(conversation_id)
     agent_id = conv.get("target_agent_id", "")
-    kind = "task.status" if action == "cancel_conversation" else "approval.decided"
-    await _ws_manager.broadcast_event(conversation_id, agent_id, {
-        "kind": kind, "action": action,
-        "conversation_id": conversation_id, "agent_id": agent_id,
-    })
+    event_data = result.get("event")
+    if event_data:
+        await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
     return result
 
 
@@ -637,8 +634,7 @@ def resource_list_tasks(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    # TODO: scope tasks to agent when store supports for_agent_id on list_tasks
-    return {"tasks": store.list_tasks()}
+    return {"tasks": store.list_tasks(for_agent_id=_scoped_agent_id(auth))}
 
 
 @app.get("/v1/capabilities")

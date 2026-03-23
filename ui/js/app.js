@@ -10,25 +10,15 @@ function esc(str) {
     return div.innerHTML;
 }
 
-// Utility: render markdown-ish content (basic: code blocks, bold, links)
+// Utility: render markdown content safely
 function _renderContent(text) {
     if (!text) return '';
     if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
         return DOMPurify.sanitize(marked.parse(text));
     }
-    // Fallback: basic rendering when vendor libs are not loaded
-    let html = esc(text);
-    // Code blocks
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    // Line breaks
-    html = html.replace(/\n/g, '<br>');
-    return html;
+    // Safe fallback: plain escaped text with line breaks only.
+    // No regex markdown — that path is XSS-vulnerable without DOMPurify.
+    return esc(text).replace(/\n/g, '<br>');
 }
 
 // Utility: relative time

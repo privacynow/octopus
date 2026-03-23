@@ -782,6 +782,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     ),
                 )
                 updated = cur.rowcount
+            events_written = False
+            inserted_events: list[dict[str, Any]] = []
             if updated > 0:
                 for event in validated_payload["timeline_events"]:
                     event_metadata = {"status": validated_payload["status"], "routed_task_id": routed_task_id}
@@ -807,6 +809,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 event["created_at"],
                             ),
                         )
+                        if cur.rowcount > 0:
+                            events_written = True
+                            inserted_events.append({
+                                "event_id": event["event_id"],
+                                "conversation_id": event["conversation_id"],
+                                "agent_id": row["agent_id"],
+                                "kind": "task.status",
+                                "actor": "",
+                                "content": event.get("body", ""),
+                                "metadata": event_metadata,
+                                "created_at": event["created_at"],
+                            })
             # Return enough context for WebSocket broadcast
             with _cur(conn) as cur:
                 cur.execute(
@@ -814,7 +828,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (routed_task_id,),
                 )
                 task_row = cur.fetchone()
-            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
+            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"], "events_written": events_written, "inserted_events": inserted_events}
             if task_row:
                 result["parent_conversation_id"] = task_row["parent_conversation_id"]
                 result["origin_agent_id"] = task_row["origin_agent_id"]
@@ -912,6 +926,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 self._runtime_worker_rows(conn, agent_id),
             )
 
+    def agent_exists(self, agent_id: str) -> bool:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT 1 FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (agent_id,),
+                )
+                return cur.fetchone() is not None
+
     def create_conversation(
         self,
         *,
@@ -957,7 +980,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     sql += " WHERE c.target_agent_id = %s"
                     params.append(for_agent_id)
                 sql += """
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
                     ORDER BY c.updated_at DESC
                 """
                 cur.execute(sql, params)
@@ -971,7 +994,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
-                "timeline_event_count": int(row["event_count"] or 0),
+                "origin_channel": row["origin_channel"],
+                "external_conversation_ref": row["external_conversation_ref"],
+                "event_count": int(row["event_count"] or 0),
             }
             for row in rows
         ]
@@ -989,7 +1014,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                     LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
                     WHERE c.conversation_id = %s
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
                     """,
                     (conversation_id,),
                 )
@@ -1032,7 +1057,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "timeline_event_count": int(row["event_count"] or 0),
+            "origin_channel": row["origin_channel"],
+            "external_conversation_ref": row["external_conversation_ref"],
+            "event_count": int(row["event_count"] or 0),
             "linked_routed_tasks": tasks,
         }
 
@@ -1115,19 +1142,35 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            event_id = uuid.uuid4().hex
             with _cur(conn) as cur:
                 cur.execute(
                     f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(event_id) DO NOTHING""",
-                    (uuid.uuid4().hex, conversation_id, "", "message.user", "operator", validated_text, _jsonb({}), now),
+                    ON CONFLICT(event_id) DO NOTHING
+                    RETURNING seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at""",
+                    (event_id, conversation_id, "", "message.user", "operator", validated_text, _jsonb({}), now),
                 )
+                evt_row = cur.fetchone()
             with _cur(conn) as cur:
                 cur.execute(
                     f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                     (now, conversation_id),
                 )
-        return {"conversation_id": conversation_id, "accepted": True}
+            inserted_event = None
+            if evt_row:
+                inserted_event = {
+                    "seq": evt_row["seq"],
+                    "event_id": evt_row["event_id"],
+                    "conversation_id": evt_row["conversation_id"],
+                    "agent_id": evt_row["agent_id"],
+                    "kind": evt_row["kind"],
+                    "actor": evt_row["actor"],
+                    "content": evt_row["content"],
+                    "metadata": json.loads(evt_row["metadata_json"]) if isinstance(evt_row["metadata_json"], str) else evt_row["metadata_json"],
+                    "created_at": evt_row["created_at"],
+                }
+        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
     def add_conversation_action(
         self, conversation_id: str, action: str, payload: dict[str, Any] | None = None
@@ -1166,13 +1209,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 event_kind = "approval.decided"
                 event_metadata = {"action": validated_action, "decided_by": "operator"}
                 event_content = json.dumps(action_payload) if action_payload else ""
+            event_id = uuid.uuid4().hex
             with _cur(conn) as cur:
                 cur.execute(
                     f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(event_id) DO NOTHING""",
-                    (uuid.uuid4().hex, conversation_id, "", event_kind, "operator", event_content, _jsonb(event_metadata), now),
+                    ON CONFLICT(event_id) DO NOTHING
+                    RETURNING seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at""",
+                    (event_id, conversation_id, "", event_kind, "operator", event_content, _jsonb(event_metadata), now),
                 )
+                evt_row = cur.fetchone()
             if is_cancel:
                 with _cur(conn) as cur:
                     cur.execute(
@@ -1185,20 +1231,36 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                         (now, conversation_id),
                     )
-        return {"conversation_id": conversation_id, "accepted": True}
+            inserted_event = None
+            if evt_row:
+                inserted_event = {
+                    "seq": evt_row["seq"],
+                    "event_id": evt_row["event_id"],
+                    "conversation_id": evt_row["conversation_id"],
+                    "agent_id": evt_row["agent_id"],
+                    "kind": evt_row["kind"],
+                    "actor": evt_row["actor"],
+                    "content": evt_row["content"],
+                    "metadata": json.loads(evt_row["metadata_json"]) if isinstance(evt_row["metadata_json"], str) else evt_row["metadata_json"],
+                    "created_at": evt_row["created_at"],
+                }
+        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
-                cur.execute(
-                    f"""
+                sql = f"""
                     SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
                     FROM {_SCHEMA}.routed_tasks t
                     LEFT JOIN {_SCHEMA}.agents origin ON origin.agent_id = t.origin_agent_id
                     LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
-                    ORDER BY t.updated_at DESC
-                    """
-                )
+                """
+                params: list[Any] = []
+                if for_agent_id is not None:
+                    sql += " WHERE (t.origin_agent_id = %s OR t.target_agent_id = %s)"
+                    params.extend([for_agent_id, for_agent_id])
+                sql += " ORDER BY t.updated_at DESC"
+                cur.execute(sql, params)
                 rows = cur.fetchall()
         return [
             {
@@ -1235,6 +1297,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
             inserted = 0
             skipped = 0
+            inserted_ids: set[str] = set()
             for event in events:
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
@@ -1245,7 +1308,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 kind = str(event.get("kind", "") or "")
                 if not kind.strip():
                     raise ValueError("kind is required")
-                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
+                created_at = str(event.get("timestamp", "") or event.get("created_at", "") or "") or utcnow_iso()
                 with _cur(conn) as cur:
                     cur.execute(
                         f"""
@@ -1266,9 +1329,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                     if cur.rowcount > 0:
                         inserted += 1
+                        inserted_ids.add(event_id)
                     else:
                         skipped += 1
-        return {"inserted": inserted, "skipped": skipped}
+        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids)}
 
     def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         with self._connect() as conn:

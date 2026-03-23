@@ -1450,16 +1450,18 @@ def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_col
             "SELECT name FROM sqlite_master WHERE type='trigger'"
         ).fetchall()
     }
-    assert "tl_ai" in triggers
-    assert "tl_ad" in triggers
-    assert "tl_au" in triggers
+    # timeline_events was not in the legacy test schema, so timeline FTS
+    # triggers should NOT exist (v2/v7 migrations skip when table is absent).
+    assert "tl_ai" not in triggers
+    assert "tl_ad" not in triggers
+    assert "tl_au" not in triggers
     assert "ev_ai" in triggers
     assert "ev_ad" in triggers
     assert "ev_au" in triggers
     fts_row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_fts'"
     ).fetchone()
-    assert fts_row is not None
+    assert fts_row is None
     events_fts_row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='events_fts'"
     ).fetchone()

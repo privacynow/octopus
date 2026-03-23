@@ -1,6 +1,9 @@
 -- Registry UI rebuild: events table, conversation identity columns, content tables
 -- Corresponds to SQLite migrations v7 + v8
 
+-- Drop legacy timeline_events (replaced by events table)
+DROP TABLE IF EXISTS agent_registry.timeline_events;
+
 -- Truncate conversations (old rows incompatible with new schema)
 DELETE FROM agent_registry.conversations;
 

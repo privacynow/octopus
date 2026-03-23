@@ -514,6 +514,9 @@ class AbstractRegistryStore(Protocol):
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
         """Return mirrored runtime-health detail for a registered agent."""
 
+    def agent_exists(self, agent_id: str) -> bool:
+        """Return True when the agent_id is enrolled."""
+
     def create_conversation(self, *, target_agent_id: str, title: str, origin_channel: str = "registry", external_conversation_ref: str = "") -> dict[str, Any]:
         """Create a new registry-originated conversation."""
 
@@ -537,7 +540,7 @@ class AbstractRegistryStore(Protocol):
     ) -> dict[str, Any]:
         """Queue a channel_action for an existing conversation."""
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form."""
 
     def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:

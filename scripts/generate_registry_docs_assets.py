@@ -166,7 +166,7 @@ def _snapshot_data() -> dict:
             "status": "open",
             "created_at": _now(14, 1, 0),
             "updated_at": _now(14, 1, 40),
-            "timeline_event_count": 4,
+            "event_count": 4,
         }
     ]
 

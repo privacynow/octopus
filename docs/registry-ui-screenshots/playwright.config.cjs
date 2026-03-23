@@ -26,7 +26,6 @@ module.exports = defineConfig({
       `REGISTRY_ENROLL_TOKEN=${enroll}`,
       `REGISTRY_UI_TOKEN=${ui}`,
       "REGISTRY_ALLOW_HTTP=1",
-      "REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION=1",
       `PYTHONPATH=${repoRoot}`,
       `${py} -m uvicorn app.channels.registry.http:app --host 127.0.0.1 --port 19987`,
     ].join(" "),

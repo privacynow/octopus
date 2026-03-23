@@ -25,7 +25,7 @@ def registry_authority_capabilities(
     for registry in registries:
         capabilities: set[str] = set()
         if registry.registry_scope in {"channel", "full"}:
-            capabilities.update({"conversation_projection", "health_publication"})
+            capabilities.update({"conversation_projection", "health_publication", "mirror_retry"})
         if registry.registry_scope in {"coordination", "full"}:
             capabilities.update({"task_routing", "agent_directory", "health_publication"})
         mapping[registry_authority_ref(registry.registry_id)] = capabilities

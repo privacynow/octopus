@@ -260,6 +260,13 @@ class AgentRegistryClient:
             },
         )
 
+    async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Fetch conversation metadata by ID. Used for cache recovery on cold restart."""
+        return await self._request(
+            "GET",
+            f"/v1/conversations/{conversation_id}",
+        )
+
     async def publish_events(
         self,
         conversation_id: str,

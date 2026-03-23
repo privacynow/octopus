@@ -133,6 +133,9 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_external
     ON conversations(target_agent_id, origin_channel, external_conversation_ref);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_bot_key
+    ON agents(bot_key) WHERE bot_key != '';
+
 CREATE TABLE IF NOT EXISTS skills_override (
     skill_name TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
@@ -420,17 +423,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         bot_key = str(card.get("bot_key", "") or "").strip()
 
-        # If bot_key is provided, check for existing enrollment (idempotent re-enroll)
-        if bot_key:
-            with self._connect() as conn:
+        agent_id = uuid.uuid4().hex
+        agent_token = secrets.token_urlsafe(32)
+        agent_token_hash = hash_agent_token(agent_token)
+        with self._connect() as conn:
+            # Idempotent re-enrollment: if bot_key already exists, refresh token and return existing row
+            if bot_key:
                 existing = conn.execute(
                     "SELECT agent_id, slug FROM agents WHERE bot_key = ?",
                     (bot_key,),
                 ).fetchone()
                 if existing:
-                    # Re-enroll: issue a fresh token but preserve the agent_id and slug
-                    agent_token = secrets.token_urlsafe(32)
-                    agent_token_hash = hash_agent_token(agent_token)
                     conn.execute(
                         "UPDATE agents SET agent_token = ?, updated_at = ? WHERE bot_key = ?",
                         (agent_token_hash, now, bot_key),
@@ -442,10 +445,6 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "poll_cursor": "0",
                     }
 
-        agent_id = uuid.uuid4().hex
-        agent_token = secrets.token_urlsafe(32)
-        agent_token_hash = hash_agent_token(agent_token)
-        with self._connect() as conn:
             slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
             conn.execute(
                 """

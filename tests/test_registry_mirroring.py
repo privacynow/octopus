@@ -1,4 +1,4 @@
-"""Registry mirroring contract tests — Phase 9.
+"""Registry mirroring contract tests -- Phase 9.
 
 Tests cover:
 1. Store contracts (deterministic IDs, idempotent enrollment, empty-field rejection)
@@ -6,7 +6,7 @@ Tests cover:
 3. Execution runtime wiring (conversation_projection present)
 4. Delivery canonical identity (bot_key, origin_channel, external_conversation_ref, stable fields)
 5. Session collapse (registry conversation refs collapse, task refs do not)
-6. MirrorOutbox (enqueue, pending, mark_success, mark_failure, purge)
+6. Bus retry on failure (mirror_retry command submitted on create_conversation bus error)
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -152,7 +151,7 @@ class TestStoreContracts:
 
         # bot_key-based idempotent re-enroll returns the same agent_id
         # so agent_a and agent_b are actually the same agent row.
-        # The contract is: same bot_key → same deterministic conversation_id.
+        # The contract is: same bot_key -> same deterministic conversation_id.
         conv_a = store.create_conversation(
             target_agent_id=agent_a["agent_id"],
             origin_channel="telegram",
@@ -418,95 +417,109 @@ class TestSessionCollapse:
         key_a = conversation_key_for_ref(ref_a)
         key_b = conversation_key_for_ref(ref_b)
 
-        # Task refs are not collapsed — they stay as-is
+        # Task refs are not collapsed -- they stay as-is
         assert key_a != key_b
         assert key_a == ref_a
         assert key_b == ref_b
 
 
 # ===================================================================
-# 6. Outbox tests
+# 6. Bus retry on failure tests
 # ===================================================================
 
 
-class TestMirrorOutbox:
-    def test_outbox_enqueue_and_pending(self, tmp_path: Path) -> None:
-        from app.agents.mirror_outbox import MirrorOutbox
+class TestBusRetryOnFailure:
+    async def test_create_conversation_failure_submits_mirror_retry(self) -> None:
+        """When bus.request fails on create_conversation, a mirror_retry command is submitted."""
+        bus = _FakeBus()
+        directory = _directory_with("registry:alpha", "registry:beta")
 
-        outbox = MirrorOutbox(tmp_path)
-        outbox.enqueue(
-            "registry:alpha",
-            "create_conversation",
-            bot_key="bot-1",
+        # Alpha fails, beta succeeds
+        bus._request_replies["registry:alpha"] = ConnectionError("registry down")
+        bus._request_replies["registry:beta"] = _success_reply("cid-ok")
+
+        adapter = BusConversationProjection(bus, directory)
+        cid = await adapter.create_conversation(
+            target_agent_id="agent-1",
             origin_channel="telegram",
             external_conversation_ref="ref-1",
-            payload={"target_agent_id": "agent-1"},
+            title="Retry test",
         )
 
-        pending = outbox.pending()
-        assert len(pending) == 1
-        assert pending[0]["authority_ref"] == "registry:alpha"
-        assert pending[0]["operation"] == "create_conversation"
-        assert pending[0]["bot_key"] == "bot-1"
+        assert cid == "cid-ok"
 
-    def test_outbox_mark_success_removes(self, tmp_path: Path) -> None:
-        from app.agents.mirror_outbox import MirrorOutbox
+        # A mirror_retry command should have been submitted for the failed authority
+        retry_commands = [
+            cmd for cmd in bus.submitted
+            if cmd.capability == "mirror_retry"
+        ]
+        assert len(retry_commands) == 1
+        retry = retry_commands[0]
+        assert retry.authority_ref == "registry:alpha"
+        assert retry.operation == "create_conversation"
+        assert retry.max_retries == 10
+        payload = json.loads(retry.payload_json)
+        assert payload["target_agent_id"] == "agent-1"
+        assert payload["origin_channel"] == "telegram"
+        assert payload["external_conversation_ref"] == "ref-1"
+        assert payload["title"] == "Retry test"
+        assert retry.idempotency_key.startswith("mirror:create:")
 
-        outbox = MirrorOutbox(tmp_path)
-        outbox.enqueue("registry:alpha", "create_conversation")
+    async def test_publish_events_failure_submits_mirror_retry(self) -> None:
+        """When bus.submit fails on publish_events, a mirror_retry command is submitted."""
 
-        pending = outbox.pending()
-        assert len(pending) == 1
+        class _FailOnSecondSubmitBus(_FakeBus):
+            """Fails the first submit (conversation_projection publish) but allows mirror_retry."""
+            def __init__(self):
+                super().__init__()
+                self._submit_call_count = 0
 
-        outbox.mark_success(pending[0]["id"])
+            async def submit(self, command: ControlCommand) -> str:
+                self._submit_call_count += 1
+                # The first submit per authority is the conversation_projection publish_events.
+                # Fail it for alpha (first submit call), allow the mirror_retry (second submit).
+                if command.capability == "conversation_projection" and command.authority_ref == "registry:alpha":
+                    self.submitted.append(command)
+                    raise ConnectionError("bus write failed")
+                self.submitted.append(command)
+                return command.command_id
 
-        assert outbox.pending() == []
+        bus = _FailOnSecondSubmitBus()
+        directory = _directory_with("registry:alpha")
 
-    def test_outbox_mark_failure_increments_retry(self, tmp_path: Path) -> None:
-        from app.agents.mirror_outbox import MirrorOutbox
+        cid = "conv-publish-test"
+        bus._request_replies["registry:alpha"] = _success_reply(cid)
 
-        outbox = MirrorOutbox(tmp_path)
-        outbox.enqueue("registry:alpha", "publish_events")
-
-        pending = outbox.pending()
-        row_id = pending[0]["id"]
-        assert pending[0]["retry_count"] == 0
-
-        outbox.mark_failure(row_id, "connection refused")
-
-        # After failure, retry_count is incremented and next_attempt_at is in the future
-        import sqlite3
-
-        conn = sqlite3.connect(str(outbox._db_path))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT retry_count, next_attempt_at FROM mirror_outbox WHERE id = ?",
-            (row_id,),
-        ).fetchone()
-        conn.close()
-
-        assert row["retry_count"] == 1
-        assert row["next_attempt_at"] > time.time()
-
-    def test_outbox_purge_old(self, tmp_path: Path) -> None:
-        from app.agents.mirror_outbox import MirrorOutbox
-
-        outbox = MirrorOutbox(tmp_path)
-        outbox.enqueue("registry:alpha", "create_conversation")
-
-        # Manually backdate the inserted_at to be older than 7 days
-        import sqlite3
-
-        old_ts = time.time() - (86400 * 8)  # 8 days ago
-        conn = sqlite3.connect(str(outbox._db_path))
-        conn.execute(
-            "UPDATE mirror_outbox SET inserted_at = ?", (old_ts,)
+        adapter = BusConversationProjection(bus, directory)
+        # First create so cache is populated
+        await adapter.create_conversation(
+            target_agent_id="agent-1",
+            origin_channel="telegram",
+            external_conversation_ref="ref-1",
+            title="Publish retry",
         )
-        conn.commit()
-        conn.close()
 
-        assert outbox.backlog_count() == 1
+        class _FakeEvent:
+            def __init__(self, event_id):
+                self.event_id = event_id
+            def model_dump(self):
+                return {"event_id": self.event_id, "kind": "message.user", "content": "hi"}
 
-        outbox.purge_old()
+        await adapter.publish_events(
+            conversation_id=cid,
+            events=[_FakeEvent("evt-1")],
+        )
 
-        assert outbox.backlog_count() == 0
+        retry_commands = [
+            cmd for cmd in bus.submitted
+            if cmd.capability == "mirror_retry"
+        ]
+        assert len(retry_commands) == 1
+        retry = retry_commands[0]
+        assert retry.authority_ref == "registry:alpha"
+        assert retry.operation == "publish_events"
+        assert retry.max_retries == 10
+        payload = json.loads(retry.payload_json)
+        assert payload["conversation_id"] == cid
+        assert payload["events"][0]["event_id"] == "evt-1"
+        assert retry.idempotency_key.startswith("mirror:publish:")

@@ -1,6 +1,6 @@
 /**
- * Captures static “manual” fixtures (Octopus terminal mock, Telegram mock, API map)
- * into docs/assets/manual/*.png + *.meta.json for annotate.py.
+ * Optional: captures static HTML fixtures to docs/assets/manual/*.png + *.meta.json
+ * for annotate.py. The user manual uses SVGs; keep this for regression or extra raster assets.
  */
 import { test, expect } from "@playwright/test";
 import * as fs from "fs";

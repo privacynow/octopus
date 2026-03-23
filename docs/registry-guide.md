@@ -231,8 +231,8 @@ From the repo root (requires Node + project `.venv` with app dependencies):
 cd docs/registry-ui-screenshots
 npm install
 npx playwright install chromium   # once per machine
-npm run capture:all               # registry UI + manual fixtures → docs/assets/registry/ui + docs/assets/manual
-../../.venv/bin/python annotate.py  # writes *-annotated.png for both asset dirs (needs Pillow from requirements-dev.txt)
+npm run capture                     # registry UI → docs/assets/registry/ui/
+../../.venv/bin/python annotate.py  # writes *-annotated.png under docs/assets/registry/ui/ (and docs/assets/manual/ if you ran capture:manual)
 ```
 
 The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwaway SQLite file under `docs/registry-ui-screenshots/.capture-registry.sqlite3`. **`seed_usage_sqlite.py`** runs at the end of the seed phase to insert **`usage`** events (the HTTP event API only accepts SDK `kind` values; `usage` is stored for billing-style rollups). **Yellow outlines** use **document coordinates** from Playwright at capture time so they track the real sidebar and cards; re-run capture if the layout changes significantly.

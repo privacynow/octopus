@@ -383,9 +383,9 @@ If the registry UI is not updating:
 
 ## More Documentation
 
-- [docs/manual/README.md](docs/manual/README.md): **full user manual** (setup,
-  operator, Telegram product, API map, troubleshooting) with annotated
-  screenshots for every scenario
+- [docs/manual/README.md](docs/manual/README.md): **user manual** (linear setup →
+  operator → product → API → troubleshooting); **SVG** diagrams plus **Registry
+  UI** screenshots where the real browser UI matters
 - [ARCHITECTURE.md](ARCHITECTURE.md): current deployment, runtime,
   control-plane, registry, and store architecture
 - [docs/flows-catalog.md](docs/flows-catalog.md): **canonical index** of every

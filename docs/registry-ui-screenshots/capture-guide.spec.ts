@@ -9,6 +9,15 @@ import * as path from "path";
 
 const OUT = path.join(__dirname, "..", "assets", "registry", "ui");
 const BASE = "http://127.0.0.1:19987";
+
+/** DOM hooks for the vanilla SPA (no capture-only ids on list views). */
+const UI = {
+  /** All conversations + tasks: header, `.filter-bar`, list pane, pagination. */
+  filterListPane: "#content .filter-bar + div",
+  convoSearch: "#content .filter-bar input.search-input",
+  /** Skills: no filter-bar — search input sits directly under `.page-header`. */
+  skillListPane: "#content .page-header + input.search-input + div",
+};
 const ENROLL = "guide-capture-enroll-token-2026";
 const REPO = path.join(__dirname, "..", "..");
 const PY = path.join(REPO, ".venv", "bin", "python");
@@ -347,10 +356,10 @@ test("capture all registry UI surfaces", async ({ page }) => {
     { selector: ".page-header", label: "Display name & connectivity badge", color: "#ff9800", pad: 6 },
     { selector: "#agent-detail-content .card:first-of-type .data-table", label: "Identity, scope, capabilities", color: "#2196f3", pad: 6 },
     { selector: "#agent-detail-content .card:nth-of-type(2) .data-table", label: "Worker processes (heartbeat)", color: "#9c27b0", pad: 4 },
-    { selector: "#agent-detail-content .card:last-of-type", label: "Conversations → (scoped list)", color: "#4caf50", pad: 6 },
+    { selector: "#agent-convos-section", label: "Conversations (inline, paginated)", color: "#4caf50", pad: 6 },
   ]);
 
-  await page.locator("#agent-detail-content .card").filter({ hasText: /Conversations/ }).click();
+  await page.goto(`${BASE}/ui/agents/${firstAgentId}/conversations`);
   await page.waitForSelector("#agent-convos .card, #agent-convos .empty-state", { timeout: 20000 });
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "03-agent-conversations.png"), fullPage: true });
@@ -359,25 +368,27 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(BASE + "/ui/conversations");
-  await page.waitForSelector("#convo-list .card", { timeout: 20000 });
+  await page.waitForSelector(`${UI.filterListPane} .card.clickable, ${UI.filterListPane} .empty-state`, {
+    timeout: 20000,
+  });
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "04-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "04-conversations.png"), [
-    { selector: "#convo-search", label: "Type 3+ chars to search (FTS)", color: "#ff9800", pad: 4 },
-    { selector: "#convo-list", label: "All conversations across agents", color: "#2196f3", pad: 6 },
+    { selector: UI.convoSearch, label: "Type 3+ chars to search (FTS)", color: "#ff9800", pad: 4 },
+    { selector: UI.filterListPane, label: "All conversations across agents", color: "#2196f3", pad: 6 },
   ]);
 
-  await page.locator("#convo-search").fill("Acme");
+  await page.locator(UI.convoSearch).fill("Acme");
   await page.waitForTimeout(600);
   await page.screenshot({ path: path.join(OUT, "04b-conversations-filtered.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "04b-conversations-filtered.png"), [
-    { selector: "#convo-search", label: "Filtered list (search debounced)", color: "#ff9800", pad: 4 },
-    { selector: "#convo-list", label: "Matches title / FTS snippet", color: "#2196f3", pad: 6 },
+    { selector: UI.convoSearch, label: "Filtered list (search debounced)", color: "#ff9800", pad: 4 },
+    { selector: UI.filterListPane, label: "Matches title / FTS snippet", color: "#2196f3", pad: 6 },
   ]);
 
-  await page.locator("#convo-search").fill("");
+  await page.locator(UI.convoSearch).fill("");
   await page.waitForTimeout(400);
-  await page.locator("#convo-list .card").first().click();
+  await page.locator(`${UI.filterListPane} .card.clickable`).first().click();
   await page.waitForSelector("#convo-timeline", { timeout: 20000 });
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(OUT, "05-conversation-detail.png"), fullPage: true });
@@ -387,11 +398,18 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(BASE + "/ui/tasks");
-  await page.waitForSelector("#task-list table, #task-list .empty-state", { timeout: 20000 });
+  await page.waitForSelector(`${UI.filterListPane} table.data-table, ${UI.filterListPane} .empty-state`, {
+    timeout: 20000,
+  });
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "06-tasks.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "06-tasks.png"), [
-    { selector: "#task-list table", label: "Routed tasks — click row → parent conversation", color: "#2196f3", pad: 8 },
+    {
+      selector: `${UI.filterListPane} table.data-table`,
+      label: "Routed tasks — click row → parent conversation",
+      color: "#2196f3",
+      pad: 8,
+    },
   ]);
 
   await page.goto(BASE + "/ui/capabilities");
@@ -403,19 +421,33 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(BASE + "/ui/skills");
-  await page.waitForSelector("#skill-list", { timeout: 20000 });
+  await page.waitForSelector(`${UI.skillListPane} .card, ${UI.skillListPane} .empty-state`, { timeout: 20000 });
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "08-skills.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "08-skills.png"), [
-    { selector: "#skill-list", label: "Catalog entries from registry store", color: "#ff9800", pad: 8 },
+    { selector: UI.skillListPane, label: "Catalog entries from registry store", color: "#ff9800", pad: 8 },
   ]);
 
   await page.goto(BASE + "/ui/usage");
-  await page.waitForSelector("#usage-content", { timeout: 20000 });
+  await page.waitForFunction(
+    () => {
+      const summary = document.querySelector("#usage-summary .summary-card");
+      const table = document.querySelector("#usage-table table");
+      const empty = document.querySelector("#usage-table .empty-state");
+      return !!(summary && (table || empty));
+    },
+    null,
+    { timeout: 20000 },
+  );
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, "09-usage.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "09-usage.png"), [
-    { selector: "#usage-content table, #usage-content .empty-state", label: "Aggregated from usage events (seeded in capture)", color: "#2196f3", pad: 8 },
+    {
+      selector: "#usage-table table, #usage-table .empty-state",
+      label: "Aggregated from usage events (seeded in capture)",
+      color: "#2196f3",
+      pad: 8,
+    },
   ]);
 
   // Deep-link sanity: second agent by URL

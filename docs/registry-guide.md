@@ -90,13 +90,15 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 | Item | Route | Purpose |
 |------|-------|---------|
-| **Agents** | `/ui` | All enrolled agents; entry point to agent detail. |
-| **Conversations** | `/ui/conversations` | All conversations (search after 3+ characters). |
-| **Tasks** | `/ui/tasks` | Routed tasks table; click a row to jump to the **parent conversation**. |
-| **Capabilities** | `/ui/capabilities` | Global enable/disable for coordination capabilities (operator). |
-| **Skills** | `/ui/skills` | Runtime skill catalog cards (from registry store). |
-| **Usage** | `/ui/usage` | Token/cost aggregates when usage metadata exists. |
+| **Agents** | `/ui` | Paginated agent cards; entry to detail. |
+| **Conversations** | `/ui/conversations` | Paginated list; **search** (≥3 chars, server-side `q`); **status** filter. |
+| **Tasks** | `/ui/tasks` | Paginated routed tasks; **status** filter; row → **parent conversation**. |
+| **Capabilities** | `/ui/capabilities` | Global toggles (confirm); CSRF on POST. |
+| **Skills** | `/ui/skills` | Skill catalog; client-side search. |
+| **Usage** | `/ui/usage` | Ranges: Today / 7d / 30d (`since` / `until`). |
 | **Logout** | `/ui/logout` | Ends operator session. |
+
+On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** width it **collapses** to icons; **desktop** shows full labels. WebSocket **connection status** appears in the sidebar footer when `/v1/ws` is available.
 
 ### 1. Agents (home)
 
@@ -110,7 +112,7 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 ![Agent detail](assets/registry/ui/02-agent-detail-annotated.png)
 
 - Shows **identity**, **registry scope**, **capabilities/tags**, **heartbeat**, and optional **worker** rows when reported.
-- **“Conversations →”** scopes the conversation list to **this agent** (same data as the global list, filtered).
+- **Conversations** for this agent appear **inline** below (paginated). The dedicated route **`/ui/agents/{id}/conversations`** shows the same scoped list in a full-page view (see §3).
 
 ### 3. Agent conversations
 
@@ -122,7 +124,9 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 ![Conversations](assets/registry/ui/04-conversations-annotated.png)
 
-- **Search bar**: type **three or more** characters to filter (debounced).
+- **Pagination** — Previous / Next using cursor + `has_more`.
+- **Search** — type **three or more** characters (debounced); server-side `q`.
+- **Status** — dropdown filter.
 - Click a **row** → **Conversation detail**.
 
 ### 4b. Search filter (same route)
@@ -135,18 +139,19 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 ![Conversation detail](assets/registry/ui/05-conversation-detail-annotated.png)
 
-- **Header**: title, target display name, `origin_channel` (e.g. `registry-ui`, `telegram`), status badge.
-- **Timeline**:
-  - `message.user` / `message.bot` render as **chat bubbles**.
-  - Other event kinds render as **collapsible cards** (kind label + metadata JSON).
-- **Live updates**: the page subscribes to WebSocket topics when the server exposes `/v1/ws` (see [limitations](#what-the-ui-does-not-do-yet)).
+- **Header**: title, target display name, `origin_channel`, status badge.
+- **Actions**: **Messages only** toggle vs all events; **Cancel** conversation; **Export** markdown.
+- **Compose**: operator message (**Enter** to send); uses session cookie + CSRF.
+- **Timeline**: `message.user` / `message.bot` as **bubbles**; other kinds as **collapsible cards**; **Load older** for paginated history.
+- **Live updates**: WebSocket (`/v1/ws`) with reconnect backoff when the ASGI stack supports upgrades.
 
 ### 6. Tasks (routed tasks)
 
 ![Tasks](assets/registry/ui/06-tasks-annotated.png)
 
-- Shows **title, origin, target, status, last update**.
+- **Pagination** and **status** filter; table shows origin, target, status, updated time.
 - **Clicking a row** navigates to the **parent conversation** (delegation context).
+- Task rows can **refresh** when `task.status` events arrive over the WebSocket (wildcard subscription).
 
 ### 7. Capabilities
 
@@ -165,7 +170,8 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 ![Usage](assets/registry/ui/09-usage-annotated.png)
 
-- Aggregated **prompt/completion tokens and cost** by conversation when the store has usage rows (in doc captures, rows come from seeded `usage` events).
+- **Today / 7 days / 30 days** buttons set `since` / `until` on `GET /v1/usage` (calendar-day boundaries for “Today”).
+- Aggregated **prompt/completion tokens and cost** when the store has usage rows (doc captures may use seeded `usage` events).
 
 ### 10. Direct URL to agent detail
 
@@ -177,19 +183,18 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 ![Conversation detail via URL](assets/registry/ui/11-conversation-deep-link-annotated.png)
 
-- Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** read-only timeline as choosing a row from the list — shareable from API responses or task links.
+- Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** conversation detail (timeline, compose, cancel, export) as choosing a row from the list — shareable from API responses or task links.
 
 ---
 
 ## What the UI does *not* do yet
 
-Be explicit so expectations match the code:
-
 | Area | Notes |
 |------|--------|
-| **Send message / approval / export from the timeline** | The REST API exposes `POST …/messages`, `POST …/actions`, `GET …/export`, but the **current** `conversation-detail` view is **read-only** (timeline + metadata). Use API clients or future UI work for compose/export. |
-| **WebSocket “live” badge** | Real-time updates need a WebSocket-capable ASGI stack (e.g. `uvicorn[standard]` with `websockets`/`wsproto`). Without it, `/v1/ws` may not upgrade; the UI still loads history via `GET …/events`. |
-| **Provider guidance editor** | Not a top-level nav item; advanced flows go through `/v1/provider-guidance/...` and related ingress (operator tooling may expand later). |
+| **Full skill lifecycle** | Catalog view only. Draft → submit → approve → publish flows are **API-first** (`/v1/catalog/skills/...`). |
+| **Provider guidance editor** | No top-level nav; use `/v1/provider-guidance/...` or future tooling. |
+| **WebSocket without upgrade** | Live updates need a WebSocket-capable ASGI stack. If `/v1/ws` cannot upgrade, the UI still works via **`GET …/events`** polling on navigation and manual refresh patterns. |
+| **Automatic retry on 5xx** from the browser API client | Single `fetch` with timeout; optional future polish. |
 
 ---
 
@@ -223,19 +228,23 @@ Stops services, removes Docker volumes/networks and `.deploy/`.
 
 ## Regenerating UI screenshots
 
-Screenshots and annotated copies live under `docs/assets/registry/ui/`.
-
-From the repo root (requires Node + project `.venv` with app dependencies):
+Annotated PNGs live under `docs/assets/registry/ui/`. **Re-run capture** after material SPA or CSS changes so guides stay aligned.
 
 ```bash
 cd docs/registry-ui-screenshots
 npm install
 npx playwright install chromium   # once per machine
-npm run capture                     # registry UI → docs/assets/registry/ui/
-../../.venv/bin/python annotate.py  # writes *-annotated.png under docs/assets/registry/ui/ (and docs/assets/manual/ if you ran capture:manual)
+npm run capture                   # registry UI → docs/assets/registry/ui/*.png
+npm run annotate                  # *-annotated.png (uses repo-root .venv)
 ```
 
-The capture harness uses **non-default** tokens (`guide-capture-*`) and a throwaway SQLite file under `docs/registry-ui-screenshots/.capture-registry.sqlite3`. **`seed_usage_sqlite.py`** runs at the end of the seed phase to insert **`usage`** events (the HTTP event API only accepts SDK `kind` values; `usage` is stored for billing-style rollups). **Yellow outlines** use **document coordinates** from Playwright at capture time so they track the real sidebar and cards; re-run capture if the layout changes significantly.
+The harness uses isolated tokens and a throwaway DB under `docs/registry-ui-screenshots/`. **`seed_usage_sqlite.py`** may seed usage rows for screenshots. **Outlines** in annotated images follow DOM positions from capture time — re-capture when layout shifts.
+
+**Other diagrams**
+
+- **Mermaid** (README, manual overview, ARCHITECTURE): edit the fenced blocks in the `.md` files; GitHub renders them.
+- **CLI registry SVGs** (`docs/assets/registry/*.svg`): update the source that produced them, or edit SVGs directly if you own that workflow.
+- **Quickstart SVGs** (`docs/assets/quickstart/`): static assets referenced from the root README.
 
 ---
 

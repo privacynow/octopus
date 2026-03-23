@@ -61,7 +61,7 @@ These are the **logical** branches inside `manage_bot_registry_flow` and related
 
 ## 2. Operator: Registry web UI (browser)
 
-Implementation: [`ui/`](../ui/) (SPA), routes in [`ui/js/app.js`](../ui/js/app.js).
+Implementation: [`ui/`](../ui/) (SPA), entry [`ui/js/app.js`](../ui/js/app.js), routing [`ui/js/router.js`](../ui/js/router.js).
 
 | Flow | Route / action | Documented in |
 |------|----------------|---------------|
@@ -70,8 +70,8 @@ Implementation: [`ui/`](../ui/) (SPA), routes in [`ui/js/app.js`](../ui/js/app.j
 | Agents list | `/ui`, `/ui/` | `01-agents-annotated.png` |
 | Agent detail | `/ui/agents/:id` | `02-agent-detail-annotated.png`, `10-agent-detail-deep-link-annotated.png` |
 | Agent-scoped conversations | `/ui/agents/:id/conversations` | `03-agent-conversations-annotated.png` |
-| All conversations + search (≥3 chars) | `/ui/conversations` | `04`, `04b` |
-| Conversation timeline (read-only) | `/ui/conversations/:id` | `05-conversation-detail-annotated.png` |
+| All conversations + search + status + pagination | `/ui/conversations` | `04`, `04b` |
+| Conversation detail (timeline, compose, cancel, export, load older, WS) | `/ui/conversations/:id` | `05-conversation-detail-annotated.png` |
 | Routed tasks → open parent conversation | `/ui/tasks` + row click | `06-tasks-annotated.png` |
 | Global capability toggles | `/ui/capabilities` | `07-capabilities-annotated.png` |
 | Skill catalog | `/ui/skills` | `08-skills-annotated.png` |
@@ -79,7 +79,7 @@ Implementation: [`ui/`](../ui/) (SPA), routes in [`ui/js/app.js`](../ui/js/app.j
 
 **Not a separate screen:** bookmarking **`/ui/conversations/:id`** loads the same conversation detail as clicking a row (parity with agent deep links).
 
-**Explicit non-flows (API exists; UI does not implement):** compose message, approvals, export from timeline — see registry-guide §“What the UI does *not* do yet”.
+**API-first (not full Registry UI):** skill draft/submit/approve/publish lifecycle, provider guidance editor, conversation-bound skill activation — see [registry-guide](registry-guide.md) §“What the UI does *not* do yet”.
 
 ---
 
@@ -93,7 +93,7 @@ Grouped by **concern** (each endpoint is a **machine flow**; only a subset is mi
 |--------|----------------------|------------|
 | **Auth / session** | `POST` enroll/register/heartbeat/deregister/ack; `GET` agents, agent status | Partially visible via agent list/detail |
 | **Discovery / tasks** | `POST` discovery/search, routed-tasks, status, result; `GET` poll | Tasks view, conversation context |
-| **Conversations** | `GET/POST` conversations; `GET/POST` events; `GET/POST` messages; `POST` actions; `GET` export | Timeline = read-only subset |
+| **Conversations** | `GET/POST` conversations; `GET/POST` events; `GET/POST` messages; `POST` actions; `GET` export | Detail view: messages, compose, cancel, export, event pagination; not all approval paths |
 | **Operator capabilities** | `GET/POST` capabilities enable/disable | Capabilities view |
 | **Usage** | `GET /v1/usage` | Usage view |
 | **Skill catalog (full lifecycle)** | `GET` search/detail/lifecycle/diff; `PUT` draft; `POST` submit/approve/reject/publish/archive/install/uninstall/update | Skills view = **catalog only** (not full lifecycle UI) |

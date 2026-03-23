@@ -2,9 +2,9 @@
   "rects": [
     {
       "x": 244,
-      "y": 134.5,
+      "y": 266.5,
       "width": 1092,
-      "height": 927,
+      "height": 1756,
       "label": "Aggregated from usage events (seeded in capture)",
       "color": "#2196f3"
     }

@@ -10,17 +10,17 @@
     },
     {
       "x": 246,
-      "y": 136.5,
+      "y": 172.5,
       "width": 1088,
-      "height": 89,
+      "height": 107,
       "label": "Agent row → detail",
       "color": "#2196f3"
     },
     {
       "x": 246,
-      "y": 225.5,
+      "y": 279.5,
       "width": 1088,
-      "height": 89,
+      "height": 107,
       "label": "Another enrolled bot",
       "color": "#4caf50"
     }
@@ -30,7 +30,7 @@
       "x1": 790,
       "y1": 54,
       "x2": 790,
-      "y2": 142.5
+      "y2": 178.5
     }
   ]
 }

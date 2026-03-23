@@ -11,7 +11,10 @@ Bots and automation call **`/v1/...`** on the registry with **agent tokens**; op
 ## Implementation
 
 - **Routes:** [`app/channels/registry/http.py`](../../app/channels/registry/http.py)
-- **UI coverage:** the Registry SPA exposes **read-mostly** views for agents, conversations, tasks, capabilities, catalog listing, and usage — **not** the full skill lifecycle or provider-guidance editors (those remain API-first).
+- **UI coverage:** the Registry SPA covers agents, paginated conversations/tasks,
+  operator **compose / cancel / export** on conversations, capabilities, skills
+  catalog, and usage ranges. **Not** covered in the UI: full skill **lifecycle**
+  (draft → publish), **provider-guidance** editors — those remain API-first.
 
 ## Skill catalog lifecycle (API)
 

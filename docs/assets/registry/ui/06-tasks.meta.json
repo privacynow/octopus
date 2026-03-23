@@ -2,9 +2,9 @@
   "rects": [
     {
       "x": 244,
-      "y": 134.5,
+      "y": 170.5,
       "width": 1092,
-      "height": 201,
+      "height": 221,
       "label": "Routed tasks — click row → parent conversation",
       "color": "#2196f3"
     }

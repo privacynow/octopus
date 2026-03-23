@@ -100,7 +100,18 @@ function renderSkillCatalog(container) {
 
     loadSkills();
 
+    // WS: reload on heartbeat (skills may change on agent registration)
+    let reloadDebounce = null;
+    const unsub = WS.subscribe('*', (msg) => {
+        if (msg.type === 'heartbeat') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadSkills, 3000);
+        }
+    });
+
     return function cleanup() {
         clearTimeout(searchTimeout);
+        clearTimeout(reloadDebounce);
+        unsub();
     };
 }

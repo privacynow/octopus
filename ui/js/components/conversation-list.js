@@ -152,8 +152,19 @@ function renderConversationList(container) {
 
     loadPage();
 
+    // WS: reload on any new event (new conversations, status changes)
+    let reloadDebounce = null;
+    const unsub = WS.subscribe('*', (msg) => {
+        if (msg.type === 'event' || msg.type === 'heartbeat') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadPage, 2000);
+        }
+    });
+    cleanups.push(unsub);
+
     return function cleanup() {
         clearTimeout(searchTimeout);
+        clearTimeout(reloadDebounce);
         cleanups.forEach(fn => fn());
     };
 }

@@ -136,12 +136,14 @@ function renderTaskList(container) {
 
     loadPage();
 
-    // WS: subscribe for live task status updates, reload page on change
+    // WS: subscribe for live task updates (task.status, new tasks, completions)
+    let reloadDebounce = null;
     const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event' && msg.data && msg.data.kind === 'task.status') {
-            loadPage();
+        if (msg.type === 'event') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadPage, 2000);
         }
     });
 
-    return function cleanup() { unsub(); };
+    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
 }

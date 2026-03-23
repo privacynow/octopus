@@ -169,5 +169,14 @@ function renderUsageView(container) {
 
     loadUsage();
 
-    return function cleanup() {};
+    // WS: reload usage on new events (token costs update)
+    let reloadDebounce = null;
+    const unsub = WS.subscribe('*', (msg) => {
+        if (msg.type === 'event') {
+            clearTimeout(reloadDebounce);
+            reloadDebounce = setTimeout(loadUsage, 5000);
+        }
+    });
+
+    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
 }

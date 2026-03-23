@@ -22,7 +22,7 @@
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="424" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
-    <text class="label" x="102" y="34">workspace  create and attach bot</text>
+    <text class="label" x="102" y="34">workspace — create and attach bot</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-ws">
       <text class="line" xml:space="preserve">

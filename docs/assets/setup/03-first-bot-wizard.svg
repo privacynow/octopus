@@ -23,7 +23,7 @@
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="384" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
-    <text class="label" x="102" y="34">./octopus  first bot (no .deploy yet)</text>
+    <text class="label" x="102" y="34">./octopus â€” first bot (no .deploy yet)</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-wiz">
       <text class="line" xml:space="preserve">
@@ -36,7 +36,7 @@
         <tspan x="34" dy="29">Setup mode:</tspan>
         <tspan class="muted" x="34" dy="29">  1. Autonomous   2. Safe (default)   3. Advanced</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">’ build image ’ provider login ’ ./octopus doctor ’ start container</tspan>
+        <tspan x="34" dy="29">&gt; build image &gt; provider login &gt; ./octopus doctor &gt; start container</tspan>
       </text>
     </g>
     <use href="#copy-wiz" class="glow-copy"/>

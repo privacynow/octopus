@@ -26,7 +26,7 @@
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-manage">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="94">Bot: Example  @example_bot  claude, registry, running</tspan>
+        <tspan class="prompt" x="34" y="94">Bot: Example — @example_bot — claude, registry, running</tspan>
         <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">  1. View logs</tspan>
         <tspan x="34" dy="29">  2. Restart</tspan>

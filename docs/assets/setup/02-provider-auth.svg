@@ -23,14 +23,14 @@
   <g transform="translate(80 36)">
     <rect class="panel" x="0" y="0" width="1040" height="300" rx="12"/>
     <circle class="dot" cx="22" cy="24" r="6"/><circle class="dot" cx="42" cy="24" r="6"/><circle class="dot" cx="62" cy="24" r="6"/>
-    <text class="title" x="88" y="30">Octopus  provider authentication</text>
+    <text class="title" x="88" y="30">Octopus — provider authentication</text>
     <line class="rule" x1="0" y1="48" x2="1040" y2="48"/>
     <g id="copy-pa">
       <text class="line" xml:space="preserve">
         <tspan x="36" y="88">During ./octopus the CLI may open a browser or print a URL for Claude or Codex.</tspan>
         <tspan x="36" dy="32">Complete login so Docker can run the provider SDK.</tspan>
         <tspan x="36" dy="40"></tspan>
-        <tspan class="dim" x="36" dy="32">Check: ./octopus status � Provider auth: authenticated</tspan>
+        <tspan class="dim" x="36" dy="32">Check: ./octopus status — Provider auth: authenticated</tspan>
       </text>
     </g>
     <use href="#copy-pa" class="glow-copy"/>

@@ -1,13 +1,14 @@
 /**
  * Minimal SPA router using history.pushState.
- * Routes map URL patterns to component render functions.
+ * Supports cleanup callbacks — each view's render function can return
+ * a cleanup function that is called before the next route renders.
  */
 const Router = (() => {
     const routes = [];
     let contentEl = null;
+    let currentCleanup = null;
 
     function register(pattern, render) {
-        // Convert /ui/agents/:id to regex
         const paramNames = [];
         const regexStr = pattern
             .replace(/:[a-zA-Z]+/g, (match) => {
@@ -32,7 +33,6 @@ const Router = (() => {
 
     function resolve() {
         const path = window.location.pathname;
-        // Strip trailing slash (except root)
         const normalized = path.length > 1 ? path.replace(/\/$/, '') : path;
 
         for (const route of routes) {
@@ -48,13 +48,52 @@ const Router = (() => {
             }
         }
         // 404
-        contentEl.innerHTML = '<div class="empty-state">Page not found</div>';
+        _cleanup();
+        if (!contentEl) contentEl = document.getElementById('content');
+        contentEl.textContent = '';
+        const msg = document.createElement('div');
+        msg.className = 'empty-state';
+        msg.textContent = 'Page not found';
+        contentEl.appendChild(msg);
+    }
+
+    function _cleanup() {
+        if (typeof currentCleanup === 'function') {
+            try { currentCleanup(); } catch (e) { console.error('Route cleanup error', e); }
+        }
+        currentCleanup = null;
     }
 
     function _render(renderFn, params) {
+        _cleanup();
         if (!contentEl) contentEl = document.getElementById('content');
-        contentEl.innerHTML = '';
-        renderFn(contentEl, params);
+        // Transition: dim during load
+        contentEl.classList.add('loading-route');
+        contentEl.textContent = '';
+        try {
+            const result = renderFn(contentEl, params);
+            if (typeof result === 'function') {
+                currentCleanup = result;
+            }
+        } catch (e) {
+            console.error('Route render error', e);
+            const errCard = document.createElement('div');
+            errCard.className = 'error-card';
+            const errMsg = document.createElement('p');
+            errMsg.textContent = 'Something went wrong: ' + (e.message || 'Unknown error');
+            errCard.appendChild(errMsg);
+            const retryBtn = document.createElement('button');
+            retryBtn.className = 'btn btn-primary';
+            retryBtn.textContent = 'Retry';
+            retryBtn.addEventListener('click', () => resolve());
+            errCard.appendChild(retryBtn);
+            contentEl.textContent = '';
+            contentEl.appendChild(errCard);
+        }
+        // Remove dim after a microtask (allows DOM to paint skeleton first)
+        requestAnimationFrame(() => {
+            contentEl.classList.remove('loading-route');
+        });
     }
 
     function _updateActiveNav(path) {

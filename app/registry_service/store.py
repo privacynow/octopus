@@ -1469,15 +1469,19 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 
-    def list_agents(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_agents(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         with self._connect() as conn:
             if for_agent_id is not None:
                 rows = conn.execute(
-                    "SELECT * FROM agents WHERE agent_id = ? ORDER BY lower(display_name)",
-                    (for_agent_id,),
+                    "SELECT * FROM agents WHERE agent_id = ? ORDER BY lower(display_name) LIMIT ? OFFSET ?",
+                    (for_agent_id, fetch_limit, cursor),
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT * FROM agents ORDER BY lower(display_name)").fetchall()
+                rows = conn.execute(
+                    "SELECT * FROM agents ORDER BY lower(display_name) LIMIT ? OFFSET ?",
+                    (fetch_limit, cursor),
+                ).fetchall()
         return [self._row_to_agent(row) for row in rows]
 
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
@@ -1535,26 +1539,69 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             actual_id = row["conversation_id"] if row else conversation_id
         return self.get_conversation(actual_id)
 
-    def list_conversations(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            sql = """
-                SELECT
-                    c.*,
-                    a.display_name AS target_name,
-                    COUNT(e.event_id) AS event_count
-                FROM conversations c
-                LEFT JOIN agents a ON a.agent_id = c.target_agent_id
-                LEFT JOIN events e ON e.conversation_id = c.conversation_id
-            """
-            params: list[Any] = []
-            if for_agent_id is not None:
-                sql += " WHERE c.target_agent_id = ?"
-                params.append(for_agent_id)
-            sql += """
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
-                ORDER BY c.updated_at DESC
-            """
-            rows = conn.execute(sql, params).fetchall()
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
+        # When a search query is provided (>= 3 chars), use FTS-based search
+        if q and len(q) >= 3:
+            search_hits = self.search_conversations(q, limit=fetch_limit + cursor)
+            hit_ids = [h["conversation_id"] for h in search_hits]
+            if not hit_ids:
+                return []
+            # Now fetch full conversation rows for those IDs
+            with self._connect() as conn:
+                placeholders = ",".join("?" * len(hit_ids))
+                where_clauses = [f"c.conversation_id IN ({placeholders})"]
+                params: list[Any] = list(hit_ids)
+                if for_agent_id is not None:
+                    where_clauses.append("c.target_agent_id = ?")
+                    params.append(for_agent_id)
+                if status:
+                    where_clauses.append("c.status = ?")
+                    params.append(status)
+                where_sql = " WHERE " + " AND ".join(where_clauses)
+                sql = f"""
+                    SELECT
+                        c.*,
+                        a.display_name AS target_name,
+                        COUNT(e.event_id) AS event_count
+                    FROM conversations c
+                    LEFT JOIN agents a ON a.agent_id = c.target_agent_id
+                    LEFT JOIN events e ON e.conversation_id = c.conversation_id
+                    {where_sql}
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
+                    ORDER BY c.updated_at DESC
+                    LIMIT ? OFFSET ?
+                """
+                params.extend([fetch_limit, cursor])
+                rows = conn.execute(sql, params).fetchall()
+        else:
+            with self._connect() as conn:
+                sql = """
+                    SELECT
+                        c.*,
+                        a.display_name AS target_name,
+                        COUNT(e.event_id) AS event_count
+                    FROM conversations c
+                    LEFT JOIN agents a ON a.agent_id = c.target_agent_id
+                    LEFT JOIN events e ON e.conversation_id = c.conversation_id
+                """
+                params_list: list[Any] = []
+                where_clauses_list: list[str] = []
+                if for_agent_id is not None:
+                    where_clauses_list.append("c.target_agent_id = ?")
+                    params_list.append(for_agent_id)
+                if status:
+                    where_clauses_list.append("c.status = ?")
+                    params_list.append(status)
+                if where_clauses_list:
+                    sql += " WHERE " + " AND ".join(where_clauses_list)
+                sql += """
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
+                    ORDER BY c.updated_at DESC
+                    LIMIT ? OFFSET ?
+                """
+                params_list.extend([fetch_limit, cursor])
+                rows = conn.execute(sql, params_list).fetchall()
         return [
             {
                 "conversation_id": row["conversation_id"],
@@ -1630,17 +1677,28 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "linked_routed_tasks": tasks,
         }
 
-    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT conversation_id, metadata_json, created_at
-                FROM events
-                WHERE kind = 'usage' AND created_at >= ?
-                ORDER BY created_at
-                """,
-                (since_iso,),
-            ).fetchall()
+            if until_iso:
+                rows = conn.execute(
+                    """
+                    SELECT conversation_id, metadata_json, created_at
+                    FROM events
+                    WHERE kind = 'usage' AND created_at >= ? AND created_at <= ?
+                    ORDER BY created_at
+                    """,
+                    (since_iso, until_iso),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT conversation_id, metadata_json, created_at
+                    FROM events
+                    WHERE kind = 'usage' AND created_at >= ?
+                    ORDER BY created_at
+                    """,
+                    (since_iso,),
+                ).fetchall()
         return [
             {
                 "conversation_id": row["conversation_id"],
@@ -1800,7 +1858,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 }
         return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
-    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         with self._connect() as conn:
             sql = """
                 SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
@@ -1809,10 +1868,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 LEFT JOIN agents target ON target.agent_id = t.target_agent_id
             """
             params: list[Any] = []
+            where_clauses: list[str] = []
             if for_agent_id is not None:
-                sql += " WHERE (t.origin_agent_id = ? OR t.target_agent_id = ?)"
+                where_clauses.append("(t.origin_agent_id = ? OR t.target_agent_id = ?)")
                 params.extend([for_agent_id, for_agent_id])
-            sql += " ORDER BY t.updated_at DESC"
+            if status:
+                where_clauses.append("t.status = ?")
+                params.append(status)
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
+            sql += " ORDER BY t.updated_at DESC LIMIT ? OFFSET ?"
+            params.extend([fetch_limit, cursor])
             rows = conn.execute(sql, params).fetchall()
         return [
             {
@@ -1848,6 +1914,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             inserted = 0
             skipped = 0
             inserted_ids: set[str] = set()
+            inserted_events: list[dict[str, Any]] = []
             for event in events:
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
@@ -1858,7 +1925,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 kind = str(event.get("kind", "") or "")
                 if not kind.strip():
                     raise ValueError("kind is required")
-                created_at = str(event.get("timestamp", "") or event.get("created_at", "") or "") or utcnow_iso()
+                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
                 cursor = conn.execute(
                     """
                     INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
@@ -1879,9 +1946,25 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 if cursor.rowcount > 0:
                     inserted += 1
                     inserted_ids.add(event_id)
+                    row = conn.execute(
+                        "SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM events WHERE event_id = ?",
+                        (event_id,),
+                    ).fetchone()
+                    if row:
+                        inserted_events.append({
+                            "seq": row["seq"],
+                            "event_id": row["event_id"],
+                            "conversation_id": row["conversation_id"],
+                            "agent_id": row["agent_id"],
+                            "kind": row["kind"],
+                            "actor": row["actor"],
+                            "content": row["content"],
+                            "metadata": decode_json_field(row["metadata_json"], {}),
+                            "created_at": row["created_at"],
+                        })
                 else:
                     skipped += 1
-        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids)}
+        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids), "inserted_events": inserted_events}
 
     def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1951,6 +2034,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         return {"events": events_list, "next_cursor": next_cursor}
 
     def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
         effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
             rows = conn.execute(
@@ -1962,7 +2046,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 ORDER BY c.updated_at DESC
                 LIMIT ? OFFSET ?
                 """,
-                (effective_agent_id, limit, cursor),
+                (effective_agent_id, fetch_limit, cursor),
             ).fetchall()
         return [
             {

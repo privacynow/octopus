@@ -80,13 +80,11 @@ class RegistryClient:
         )
 
     async def enroll(self, enrollment_token: str, card: dict[str, Any]) -> dict[str, Any]:
-        headers = self._headers()
-        headers["X-Enrollment-Token"] = enrollment_token
+        """Enroll a new agent. No bearer token needed — uses enrollment_token in body."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(
                 f"{self._base_url}/v1/agents/enroll",
-                headers=headers,
-                json=card,
+                json={"enrollment_token": enrollment_token, "agent_card": card},
             )
         if resp.status_code >= 400:
             raise RegistryClientError(resp.status_code, resp.text[:500])

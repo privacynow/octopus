@@ -8,19 +8,27 @@
 </head>
 <body>
     <div id="app">
+        <button id="hamburger" class="hamburger" aria-label="Toggle navigation">
+            <span></span><span></span><span></span>
+        </button>
+        <div id="sidebar-overlay" class="sidebar-overlay"></div>
         <nav id="sidebar">
             <div class="sidebar-header">
                 <h1>Octopus</h1>
             </div>
             <ul class="nav-links">
-                <li><a href="/ui/" data-route="/">Agents</a></li>
-                <li><a href="/ui/conversations" data-route="/conversations">Conversations</a></li>
-                <li><a href="/ui/tasks" data-route="/tasks">Tasks</a></li>
-                <li><a href="/ui/capabilities" data-route="/capabilities">Capabilities</a></li>
-                <li><a href="/ui/skills" data-route="/skills">Skills</a></li>
-                <li><a href="/ui/usage" data-route="/usage">Usage</a></li>
+                <li><a href="/ui/" data-route="/" data-icon="A">Agents</a></li>
+                <li><a href="/ui/conversations" data-route="/conversations" data-icon="C">Conversations</a></li>
+                <li><a href="/ui/tasks" data-route="/tasks" data-icon="T">Tasks</a></li>
+                <li><a href="/ui/capabilities" data-route="/capabilities" data-icon="P">Capabilities</a></li>
+                <li><a href="/ui/skills" data-route="/skills" data-icon="S">Skills</a></li>
+                <li><a href="/ui/usage" data-route="/usage" data-icon="U">Usage</a></li>
             </ul>
             <div class="sidebar-footer">
+                <div id="ws-status" class="ws-status">
+                    <span class="ws-dot"></span>
+                    <span class="ws-label">Connecting</span>
+                </div>
                 <a href="/ui/logout">Logout</a>
             </div>
         </nav>

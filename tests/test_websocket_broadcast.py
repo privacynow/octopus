@@ -144,9 +144,18 @@ def test_publish_events_broadcasts_via_websocket(
 
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
+        ev = _ws_recorder[0]["event_data"]
         assert _ws_recorder[0]["conversation_id"] == conv_id
         assert _ws_recorder[0]["agent_id"] == agent_id
-        assert _ws_recorder[0]["event_data"]["kind"] == "message.bot"
+        assert ev["kind"] == "message.bot"
+        assert ev["event_id"] == "evt-ws-1"
+        assert ev["conversation_id"] == conv_id
+        assert ev["agent_id"] == agent_id
+        assert ev["actor"] == "ws-pub-bot"
+        assert ev["content"] == "Hello from bot"
+        assert "seq" in ev
+        assert "created_at" in ev
+        assert "metadata" in ev
 
 
 def test_add_message_broadcasts_message_user_event(

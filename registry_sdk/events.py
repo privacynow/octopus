@@ -26,7 +26,7 @@ class ConversationEvent(BaseModel):
     kind: str                        # "message.user", "provider.response", etc.
     actor: str = ""                  # display name, not transport-specific ID
     content: str = ""                # text/markdown body
-    timestamp: str = Field(default_factory=_utcnow_iso)
+    created_at: str = Field(default_factory=_utcnow_iso)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,7 +81,7 @@ class ErrorMetadata(BaseModel):
 EVENT_METADATA_SCHEMAS: dict[str, type[BaseModel]] = {
     "message.user": MessageMetadata,
     "message.bot": MessageMetadata,
-    "provider.request": BaseModel,
+    "provider.request": MessageMetadata,  # content field carries the prompt; no extra metadata needed
     "provider.response": ProviderResponseMetadata,
     "tool.execution": ToolExecutionMetadata,
     "file.change": FileChangeMetadata,

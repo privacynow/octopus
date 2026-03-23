@@ -508,8 +508,8 @@ class AbstractRegistryStore(Protocol):
     def list_capabilities(self) -> list[dict[str, Any]]:
         """Return the declared capability universe merged with override state."""
 
-    def list_agents(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
-        """Return all registered agents in UI-ready form."""
+    def list_agents(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+        """Return registered agents in UI-ready form with offset-based pagination."""
 
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
         """Return mirrored runtime-health detail for a registered agent."""
@@ -520,8 +520,8 @@ class AbstractRegistryStore(Protocol):
     def create_conversation(self, *, target_agent_id: str, title: str, origin_channel: str = "registry", external_conversation_ref: str = "") -> dict[str, Any]:
         """Create a new registry-originated conversation."""
 
-    def list_conversations(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
-        """Return the registry conversation index."""
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+        """Return the registry conversation index with offset-based pagination."""
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         """Return one conversation including any linked routed tasks."""
@@ -529,8 +529,8 @@ class AbstractRegistryStore(Protocol):
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         """Return conversation search hits with highlighted snippets."""
 
-    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
-        """Return reported usage timeline rows since the provided UTC ISO timestamp."""
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
+        """Return reported usage timeline rows within the provided UTC ISO timestamp range."""
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
         """Queue a follow-up channel_input for an existing conversation."""
@@ -540,8 +540,8 @@ class AbstractRegistryStore(Protocol):
     ) -> dict[str, Any]:
         """Queue a channel_action for an existing conversation."""
 
-    def list_tasks(self, *, for_agent_id: str | None = None) -> list[dict[str, Any]]:
-        """Return routed tasks in UI-ready form."""
+    def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
+        """Return routed tasks in UI-ready form with offset-based pagination."""
 
     def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist events for a conversation. Idempotent on event_id (ON CONFLICT DO NOTHING)."""

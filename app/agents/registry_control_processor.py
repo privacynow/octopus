@@ -57,6 +57,8 @@ class RegistryControlProcessor(ControlProcessor):
         try:
             if command.capability == "conversation_projection":
                 return await self._process_conversation_projection(command, client)
+            if command.capability == "mirror_retry":
+                return await self._process_mirror_retry(command, client)
             if command.capability == "task_routing":
                 return await self._process_task_routing(command, client)
             if command.capability == "agent_directory":
@@ -100,6 +102,33 @@ class RegistryControlProcessor(ControlProcessor):
             command_id=command.command_id,
             status="failed",
             error=f"unsupported conversation_projection operation {command.operation!r}",
+        )
+
+    async def _process_mirror_retry(self, command: ControlCommand, client) -> ControlReply:
+        if command.operation == "create_conversation":
+            payload = json.loads(command.payload_json)
+            response = await client.create_conversation(
+                target_agent_id=payload["target_agent_id"],
+                origin_channel=payload["origin_channel"],
+                external_conversation_ref=payload["external_conversation_ref"],
+                title=payload.get("title", ""),
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
+        if command.operation == "publish_events":
+            payload = json.loads(command.payload_json)
+            conversation_id = payload["conversation_id"]
+            from registry_sdk.events import ConversationEvent as SdkConversationEvent
+            events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
+            await client.publish_events(conversation_id, events)
+            return ControlReply(command_id=command.command_id, status="completed")
+        return ControlReply(
+            command_id=command.command_id,
+            status="failed",
+            error=f"unsupported mirror_retry operation {command.operation!r}",
         )
 
     async def _process_task_routing(self, command: ControlCommand, client) -> ControlReply:

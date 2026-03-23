@@ -41,7 +41,7 @@ class NoOpConversationProjection:
         del title
         return hashlib.sha256(
             f"{target_agent_id}:{origin_channel}:{external_conversation_ref}".encode()
-        ).hexdigest()[:16]
+        ).hexdigest()[:32]
 
     async def publish_events(
         self,

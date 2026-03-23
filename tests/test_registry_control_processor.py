@@ -145,13 +145,14 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
     mapping = registry_authority_capabilities((channel, coordination, full))
 
     assert mapping == {
-        "registry:channel": {"conversation_projection", "health_publication"},
+        "registry:channel": {"conversation_projection", "health_publication", "mirror_retry"},
         "registry:coord": {"task_routing", "agent_directory", "health_publication"},
         "registry:full": {
             "conversation_projection",
             "task_routing",
             "agent_directory",
             "health_publication",
+            "mirror_retry",
         },
     }
     assert registry_authority_ref("channel") == "registry:channel"

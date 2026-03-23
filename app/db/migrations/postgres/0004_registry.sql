@@ -36,6 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_registry_agents_state
     ON agent_registry.agents (connectivity_state);
 CREATE INDEX IF NOT EXISTS idx_registry_agents_name
     ON agent_registry.agents ((lower(display_name)));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_bot_key
+    ON agent_registry.agents (bot_key) WHERE bot_key != '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.agent_runtime_workers (
     agent_id                  TEXT NOT NULL,

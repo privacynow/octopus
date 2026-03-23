@@ -12,6 +12,7 @@ from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
+    registry_id_from_authority_ref,
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.registry_runtime import RegistryRuntime
@@ -225,7 +226,20 @@ def _services_for_config(config: BotConfig) -> BotServices:
     directory = build_control_plane_directory(
         registry_authority_capabilities(config.agent_registries)
     )
-    return build_bus_bot_services(ControlPlaneBus(config.data_dir), directory)
+
+    def _agent_id_for_authority(authority_ref: str) -> str:
+        from app.agents.state import load_registry_connection_state
+
+        try:
+            rid = registry_id_from_authority_ref(authority_ref)
+        except ValueError:
+            return ""
+        return load_registry_connection_state(config.data_dir, rid).agent_id
+
+    return build_bus_bot_services(
+        ControlPlaneBus(config.data_dir), directory,
+        agent_id_for_authority=_agent_id_for_authority,
+    )
 
 
 @asynccontextmanager

@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
 from app.agents.state import (
+    load_bot_identity_state,
     load_runtime_registry_connection_state,
     save_registry_connection_state,
 )
@@ -98,6 +99,7 @@ class AgentRuntime:
             max_capacity=1,
             channel_capabilities=self._channel_capabilities(),
             version="",
+            bot_key=load_bot_identity_state(self.config.data_dir).bot_id,
         )
 
     def _client(self) -> AgentRegistryClient:

@@ -173,6 +173,9 @@ def validated_agent_card_payload(
         normalized["max_capacity"] = max_capacity
     if require_registry_scope or "registry_scope" in card:
         normalized["registry_scope"] = validated_registry_scope(card.get("registry_scope"))
+    bot_key = _optional_text_field(card, "bot_key")
+    if bot_key is not _MISSING:
+        normalized["bot_key"] = bot_key
     return normalized
 
 

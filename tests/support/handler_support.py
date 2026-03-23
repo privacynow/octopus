@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
-from app.agents.registry_capabilities import registry_authority_capabilities
+from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
 import app.channels.telegram.execution as _telegram_execution
 import app.channels.telegram.ingress as _th
 import app.channels.telegram.progress as _telegram_progress
@@ -527,8 +527,21 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         else {}
     )
     directory = build_control_plane_directory(authority_capabilities)
+
+    def _agent_id_for_authority(authority_ref: str) -> str:
+        from app.agents.state import load_registry_connection_state
+
+        try:
+            rid = registry_id_from_authority_ref(authority_ref)
+        except ValueError:
+            return ""
+        return load_registry_connection_state(config.data_dir, rid).agent_id
+
     services = (
-        build_bus_bot_services(ControlPlaneBus(config.data_dir), directory)
+        build_bus_bot_services(
+            ControlPlaneBus(config.data_dir), directory,
+            agent_id_for_authority=_agent_id_for_authority,
+        )
         if authority_capabilities
         else build_noop_bot_services()
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import uuid
@@ -233,10 +234,35 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
+        bot_key = str(card.get("bot_key", "") or "").strip()
+
+        # If bot_key is provided, check for existing enrollment (idempotent re-enroll)
+        if bot_key:
+            with self._connect() as conn, _write_tx(conn):
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"SELECT agent_id, slug FROM {_SCHEMA}.agents WHERE bot_key = %s",
+                        (bot_key,),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        agent_token = secrets.token_urlsafe(32)
+                        agent_token_hash = hash_agent_token(agent_token)
+                        cur.execute(
+                            f"UPDATE {_SCHEMA}.agents SET agent_token = %s, updated_at = %s WHERE bot_key = %s",
+                            (agent_token_hash, now, bot_key),
+                        )
+                        return {
+                            "agent_id": existing["agent_id"],
+                            "slug": existing["slug"],
+                            "agent_token": agent_token,
+                            "poll_cursor": "0",
+                        }
+
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
         agent_token_hash = hash_agent_token(agent_token)
-        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         with self._connect() as conn, _write_tx(conn):
             slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
             with _cur(conn) as cur:
@@ -246,8 +272,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         agent_id, agent_token, display_name, slug, role, registry_scope,
                         skills_json, tags_json, description, provider, mode,
                         connectivity_state, current_capacity, max_capacity,
-                        channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        channel_capabilities_json, version, bot_key,
+                        created_at, updated_at, last_heartbeat_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         agent_id,
@@ -266,6 +293,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         card.get("max_capacity", 1),
                         _jsonb(card.get("channel_capabilities", [])),
                         card.get("version", ""),
+                        bot_key,
                         now,
                         now,
                         now,
@@ -947,10 +975,24 @@ class RegistryPostgresStore(AbstractRegistryStore):
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
     ) -> dict[str, Any]:
+        if not origin_channel or not origin_channel.strip():
+            raise ValueError("origin_channel must not be empty")
+        if not external_conversation_ref or not external_conversation_ref.strip():
+            raise ValueError("external_conversation_ref must not be empty")
         now = utcnow_iso()
-        conversation_id = uuid.uuid4().hex
+
         with self._connect() as conn, _write_tx(conn):
+            # Look up bot_key for the target agent to compute deterministic conversation_id
             with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (target_agent_id,),
+                )
+                agent_row = cur.fetchone()
+                bot_key = (agent_row["bot_key"] if agent_row else "") or target_agent_id
+                canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
+                conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
+
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
@@ -1181,13 +1223,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
-                    f"SELECT target_agent_id, title FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    f"SELECT target_agent_id, title, origin_channel, external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
                     (conversation_id,),
                 )
                 conversation = cur.fetchone()
             if conversation is None:
                 raise KeyError(conversation_id)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (conversation["target_agent_id"],),
+                )
+                agent_row = cur.fetchone()
+            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
             now = utcnow_iso()
+            event_id = uuid.uuid4().hex
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
@@ -1197,11 +1247,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": conversation["title"],
                     "text": validated_text,
                     "channel": "registry",
+                    "bot_key": bot_key,
+                    "origin_channel": conversation["origin_channel"],
+                    "external_conversation_ref": conversation["external_conversation_ref"],
+                    "stable_event_id": event_id,
+                    "stable_created_at": now,
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-            event_id = uuid.uuid4().hex
             with _cur(conn) as cur:
                 cur.execute(
                     f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
@@ -1238,13 +1292,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
-                    f"SELECT target_agent_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    f"SELECT target_agent_id, origin_channel, external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
                     (conversation_id,),
                 )
                 conversation = cur.fetchone()
             if conversation is None:
                 raise KeyError(conversation_id)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (conversation["target_agent_id"],),
+                )
+                agent_row = cur.fetchone()
+            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
             now = utcnow_iso()
+            event_id_for_action = uuid.uuid4().hex
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
@@ -1255,6 +1317,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "action": validated_action,
                     "payload": action_payload,
                     "channel": "registry",
+                    "bot_key": bot_key,
+                    "origin_channel": conversation["origin_channel"],
+                    "external_conversation_ref": conversation["external_conversation_ref"],
+                    "stable_event_id": event_id_for_action,
+                    "stable_created_at": now,
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1268,7 +1335,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 event_kind = "approval.decided"
                 event_metadata = {"action": validated_action, "decided_by": "operator"}
                 event_content = json.dumps(action_payload) if action_payload else ""
-            event_id = uuid.uuid4().hex
+            event_id = event_id_for_action
             with _cur(conn) as cur:
                 cur.execute(
                     f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)

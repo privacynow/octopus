@@ -66,6 +66,7 @@ class AgentCard:
     max_capacity: int = 1
     channel_capabilities: tuple[str, ...] = ("telegram",)
     version: str = "dev"
+    bot_key: str = ""
 
 
 @dataclass(frozen=True)

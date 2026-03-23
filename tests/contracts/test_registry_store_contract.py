@@ -587,6 +587,8 @@ def test_create_conversation_delivers_channel_input(store):
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
+        origin_channel="registry",
+        external_conversation_ref="alpha-conv-1",
     )
 
     assert conversation["conversation_id"]
@@ -597,6 +599,8 @@ def test_add_conversation_message_requires_non_empty_text(store):
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
+        origin_channel="registry",
+        external_conversation_ref="message-conv-1",
     )
 
     with pytest.raises(ValueError, match="message text"):
@@ -608,6 +612,8 @@ def test_add_conversation_action_requires_non_empty_action(store):
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
+        origin_channel="registry",
+        external_conversation_ref="action-conv-1",
     )
 
     with pytest.raises(ValueError, match="action"):

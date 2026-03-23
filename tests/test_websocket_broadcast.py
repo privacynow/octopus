@@ -22,7 +22,6 @@ def _configure(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
-    monkeypatch.setenv("REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION", "1")
     monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
     reset_auth_attempt_limits_for_test()
 

@@ -118,6 +118,19 @@ class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
     scope_key: str = Field(default="", description="Guidance scope key")
 
 
+def _normalize_conversation_id(raw: str) -> str:
+    """Extract bare conversation_id from a full ref if needed.
+
+    Handles both bare IDs ('453f80ff...') and full refs
+    ('registry:local:conversation:453f80ff...').
+    """
+    # Pattern: registry:<id>:conversation:<cid>
+    parts = raw.split(":")
+    if len(parts) >= 4 and parts[-2] == "conversation":
+        return parts[-1]
+    return raw
+
+
 def _int_value(value: Any) -> int:
     try:
         return int(value or 0)
@@ -153,6 +166,30 @@ async def _registry_lifespan(app: FastAPI):
 
 app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
+
+
+@app.middleware("http")
+async def normalize_conversation_id_middleware(request: Request, call_next):
+    """Strip registry ref prefixes from conversation_id in URL paths.
+
+    The SPA may navigate to /v1/conversations/registry:local:conversation:<cid>
+    (the full ref). The store expects bare <cid>. This middleware rewrites the
+    path so every endpoint receives the normalized ID without duplication.
+    """
+    path = request.scope.get("path", "")
+    prefix = "/v1/conversations/"
+    if path.startswith(prefix):
+        rest = path[len(prefix):]
+        # rest could be "<cid>/events" or just "<cid>"
+        slash_pos = rest.find("/")
+        if slash_pos == -1:
+            raw_id, suffix = rest, ""
+        else:
+            raw_id, suffix = rest[:slash_pos], rest[slash_pos:]
+        normalized = _normalize_conversation_id(raw_id)
+        if normalized != raw_id:
+            request.scope["path"] = prefix + normalized + suffix
+    return await call_next(request)
 
 # In-process WebSocket pub/sub manager (single-process only)
 _ws_manager = WebSocketManager()

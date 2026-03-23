@@ -1077,3 +1077,49 @@ body {
         max-width: calc(var(--content-max) + var(--sidebar-width) + 128px);
     }
 }
+
+/* ── Card actions row ── */
+.card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ── Task detail ── */
+.task-detail {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+    font-size: 13px;
+}
+
+.detail-label {
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    margin-top: 8px;
+}
+
+.detail-label:first-child {
+    margin-top: 0;
+}
+
+.detail-body {
+    white-space: pre-wrap;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* ── Event card approval actions ── */
+.event-card-actions {
+    display: flex;
+    gap: 8px;
+    padding: 8px 0 0;
+}
+
+/* ── Guidance textarea ── */
+.guidance-textarea {
+    min-height: 200px;
+}

@@ -355,6 +355,56 @@ function _createEventElement(e) {
 
     card.appendChild(body);
 
+    // Approval buttons for approval.requested events
+    if (kind === 'approval.requested') {
+        const approvalActions = document.createElement('div');
+        approvalActions.className = 'event-card-actions';
+
+        const approveBtn = document.createElement('button');
+        approveBtn.className = 'btn btn-sm btn-primary';
+        approveBtn.textContent = 'Approve';
+
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'btn btn-sm btn-danger';
+        rejectBtn.textContent = 'Reject';
+
+        const convoId = meta.conversation_id || e.conversation_id || '';
+
+        approveBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            try {
+                await API.conversationAction(convoId, 'approve');
+                approvalActions.textContent = 'Approved';
+                approvalActions.style.color = 'var(--color-success, green)';
+            } catch (err) {
+                approveBtn.disabled = false;
+                rejectBtn.disabled = false;
+                console.error('Approve failed', err);
+            }
+        });
+
+        rejectBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            approveBtn.disabled = true;
+            rejectBtn.disabled = true;
+            try {
+                await API.conversationAction(convoId, 'reject');
+                approvalActions.textContent = 'Rejected';
+                approvalActions.style.color = 'var(--color-danger, red)';
+            } catch (err) {
+                approveBtn.disabled = false;
+                rejectBtn.disabled = false;
+                console.error('Reject failed', err);
+            }
+        });
+
+        approvalActions.appendChild(approveBtn);
+        approvalActions.appendChild(rejectBtn);
+        card.appendChild(approvalActions);
+    }
+
     // Toggle expand on header click
     header.addEventListener('click', () => {
         body.classList.toggle('expanded');

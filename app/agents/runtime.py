@@ -83,13 +83,14 @@ class AgentRuntime:
         return self._registry.enroll_token
 
     def requested_card(self) -> AgentCard:
+        capabilities = self._effective_capabilities()
         return AgentCard(
             agent_id=self._state.agent_id,
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
             registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
-            capabilities=self.config.agent_capabilities,
+            capabilities=capabilities,
             tags=self.config.agent_tags,
             description=self.config.agent_description,
             provider=self.config.provider_name,
@@ -101,6 +102,16 @@ class AgentRuntime:
             version="",
             bot_key=load_bot_identity_state(self.config.data_dir).bot_id,
         )
+
+    def _effective_capabilities(self) -> tuple[str, ...]:
+        """Merge explicit capabilities with auto-detected ones from provider/skills."""
+        caps: set[str] = set(self.config.agent_capabilities)
+        if self.config.provider_name:
+            caps.add(self.config.provider_name)
+        for skill in self.config.default_skills:
+            if skill:
+                caps.add(skill)
+        return tuple(sorted(caps))
 
     def _client(self) -> AgentRegistryClient:
         return AgentRegistryClient(

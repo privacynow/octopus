@@ -9,6 +9,8 @@ from typing import Any
 
 from app.registry_errors import registry_error_summary
 from app.agents.types import RoutedTaskRequest
+from pathlib import Path
+
 from app.config import BotConfig
 from app.identity import parse_conversation_key
 from app.ports.agent_directory import AgentDirectoryPort
@@ -32,6 +34,22 @@ class DelegationRuntime:
     provider_state_factory: Callable[[], dict[str, Any]]
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
+    origin_agent_id: str = ""
+
+
+def resolve_origin_agent_id(config: BotConfig) -> str:
+    """Resolve the bot's registry-assigned agent_id from persisted state.
+
+    Channel-agnostic: works for any channel that participates in delegation.
+    Falls back to config.instance if no registry enrollment exists.
+    """
+    from app.agents.state import load_registry_connection_state
+
+    for reg in config.agent_registries:
+        state = load_registry_connection_state(Path(config.data_dir), reg.registry_id)
+        if state.agent_id:
+            return state.agent_id
+    return config.instance
 
 
 def build_delegation_runtime(
@@ -41,13 +59,16 @@ def build_delegation_runtime(
     provider_state_factory: Callable[[], dict[str, Any]],
     task_routing: TaskRoutingPort,
     agent_directory: AgentDirectoryPort,
+    origin_agent_id: str = "",
 ) -> DelegationRuntime:
+    effective_agent_id = origin_agent_id or resolve_origin_agent_id(config)
     return DelegationRuntime(
         config=config,
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
         task_routing=task_routing,
         agent_directory=agent_directory,
+        origin_agent_id=effective_agent_id,
     )
 
 
@@ -200,7 +221,7 @@ async def handle_delegation_approve(
             request = RoutedTaskRequest(
                 routed_task_id=task.routed_task_id,
                 parent_conversation_id=delegation.conversation_ref,
-                origin_agent_id="",
+                origin_agent_id=runtime.origin_agent_id,
                 target_agent_id=task.target_agent_id,
                 title=task.title,
                 instructions=task.instructions,

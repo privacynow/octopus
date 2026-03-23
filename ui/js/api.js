@@ -85,6 +85,15 @@ const API = (() => {
         // Conversations
         listConversations: (opts = {}) =>
             request('GET', '/v1/conversations', { params: opts }),
+        createConversation: (targetAgentId, title) =>
+            request('POST', '/v1/conversations', {
+                body: {
+                    target_agent_id: targetAgentId,
+                    origin_channel: 'registry',
+                    external_conversation_ref: 'ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+                    title: title || 'New conversation',
+                },
+            }),
         getConversation: (id) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}`),
         getEvents: (id, opts = {}) =>
@@ -111,6 +120,26 @@ const API = (() => {
         // Skills
         listSkills: () =>
             request('GET', '/v1/catalog/skills'),
+        getSkillDetail: (name) =>
+            request('GET', `/v1/catalog/skills/${encodeURIComponent(name)}`),
+        installSkill: (name) =>
+            request('POST', `/v1/catalog/skills/${encodeURIComponent(name)}/install`),
+        uninstallSkill: (name) =>
+            request('POST', `/v1/catalog/skills/${encodeURIComponent(name)}/uninstall`),
+
+        // Provider Guidance
+        getGuidance: (provider) =>
+            request('GET', `/v1/provider-guidance/${encodeURIComponent(provider)}`),
+        updateGuidanceDraft: (provider, body) =>
+            request('PUT', `/v1/provider-guidance/${encodeURIComponent(provider)}/draft`, { body }),
+        previewGuidance: (provider, body = {}) =>
+            request('POST', `/v1/provider-guidance/${encodeURIComponent(provider)}/preview`, { body }),
+        submitGuidance: (provider, body = {}) =>
+            request('POST', `/v1/provider-guidance/${encodeURIComponent(provider)}/submit`, { body }),
+        approveGuidance: (provider, body = {}) =>
+            request('POST', `/v1/provider-guidance/${encodeURIComponent(provider)}/approve`, { body }),
+        publishGuidance: (provider, body = {}) =>
+            request('POST', `/v1/provider-guidance/${encodeURIComponent(provider)}/publish`, { body }),
 
         // Usage
         getUsage: (opts = {}) =>

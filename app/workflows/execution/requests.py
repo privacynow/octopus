@@ -38,6 +38,92 @@ from app.workflows.execution.contracts import (
 )
 from app.workflows.execution.registry_publish import _publish_to_registry
 
+import json
+import logging
+from uuid import uuid4
+
+_log = logging.getLogger(__name__)
+
+_DELEGATION_OPEN = "<delegation>"
+_DELEGATION_CLOSE = "</delegation>"
+
+
+async def _discover_available_agents(
+    runtime: ExecutionRuntime,
+    cfg,
+) -> list[dict[str, str]] | None:
+    """Query agent directory for available agents, returns None if unavailable."""
+    if runtime.agent_directory is None:
+        return None
+    try:
+        from app.agents.types import AgentDiscoveryQuery
+        result = await runtime.agent_directory.search_agents(
+            query=AgentDiscoveryQuery(),
+        )
+        if not result.agents:
+            return None
+        # Exclude self by slug (cfg.instance matches the bot's slug)
+        own_slug = cfg.agent_slug or cfg.instance
+        return [
+            {
+                "display_name": a.display_name,
+                "slug": a.slug,
+                "role": a.role,
+                "capabilities": ", ".join(a.capabilities) if a.capabilities else "",
+                "connectivity_state": a.connectivity_state,
+                "agent_id": a.agent_id,
+            }
+            for a in result.agents
+            if a.slug != own_slug
+        ]
+    except Exception:
+        _log.debug("Agent discovery failed, proceeding without agent context", exc_info=True)
+        return None
+
+
+def _parse_delegation_from_response(
+    text: str,
+    available_agents: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    """Parse <delegation> blocks from provider response and resolve slugs to agent_ids."""
+    if not text or not available_agents:
+        return []
+    # Extract content between <delegation>...</delegation> tags robustly
+    start = text.find(_DELEGATION_OPEN)
+    if start < 0:
+        return []
+    start += len(_DELEGATION_OPEN)
+    end = text.find(_DELEGATION_CLOSE, start)
+    if end < 0:
+        return []
+    raw_json = text[start:end].strip()
+    try:
+        parsed = json.loads(raw_json)
+    except (json.JSONDecodeError, ValueError):
+        _log.warning("Failed to parse delegation JSON from provider response")
+        return []
+    raw_tasks = parsed.get("tasks")
+    if not isinstance(raw_tasks, list):
+        return []
+    # Build slug → agent_id lookup
+    slug_to_agent = {a["slug"]: a for a in available_agents if a.get("slug")}
+    tasks: list[dict[str, str]] = []
+    for task in raw_tasks:
+        if not isinstance(task, dict):
+            continue
+        target_slug = str(task.get("target", "")).strip()
+        agent = slug_to_agent.get(target_slug)
+        if not agent:
+            _log.warning("Delegation target slug '%s' not found in available agents", target_slug)
+            continue
+        tasks.append({
+            "routed_task_id": uuid4().hex,
+            "target_agent_id": agent["agent_id"],
+            "title": str(task.get("title", "")).strip() or "Delegated task",
+            "instructions": str(task.get("instructions", "")).strip(),
+        })
+    return tasks
+
 
 def _conversation_key(chat_id: int | str) -> str:
     if isinstance(chat_id, str):
@@ -54,15 +140,19 @@ def _actor_key(user_id: int | str) -> str:
 def _load(runtime: ExecutionRuntime, chat_id: int | str) -> SessionState:
     cfg = runtime.dispatch.config
     provider = runtime.dispatch.provider
+    conv_key = _conversation_key(chat_id)
     session = load_runtime_session(
         cfg.data_dir,
-        _conversation_key(chat_id),
+        conv_key,
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         approval_mode=cfg.approval_mode,
         default_role=cfg.role,
         default_skills=cfg.default_skills,
     )
+    _log.debug("_load(%s): session_id=%s started=%s", conv_key[:40],
+               session.provider_state.get("session_id", "")[:12],
+               session.provider_state.get("started"))
     if get_skill_activation_service().normalize(session):
         _save(runtime, chat_id, session)
     return session
@@ -165,6 +255,10 @@ async def execute_request(
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
     session = _load(runtime, chat_id)
+    # Persist newly-created sessions so the provider_state.session_id is stable
+    # across reloads within this execution (prevents double new_provider_state).
+    if not session.provider_state.get("started"):
+        _save(runtime, chat_id, session)
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
 
     credential_env = await check_credential_satisfaction(
@@ -186,7 +280,7 @@ async def execute_request(
             "message.user",
             origin_channel="telegram" if isinstance(chat_id, int) else "registry",
             external_conversation_ref=str(chat_id),
-            target_agent_id=cfg.instance,
+            target_agent_id="",
             title=f"Chat {chat_id}",
             actor=str(request_user_id) if request_user_id else "",
             content=prompt,
@@ -204,6 +298,9 @@ async def execute_request(
         if scripts_dir:
             all_extra_dirs.append(str(scripts_dir))
 
+    # Discover available agents for delegation context in system prompt
+    available_agents = await _discover_available_agents(runtime, cfg)
+
     context = guidance.build_run_context(
         resolved.role,
         resolved.active_skills,
@@ -213,6 +310,7 @@ async def execute_request(
         working_dir=resolved.working_dir,
         file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
+        available_agents=available_agents,
     )
     autonomous_grant = cfg.autonomous and session.approval_mode != "on"
     context.skip_permissions = skip_permissions or autonomous_grant
@@ -275,6 +373,27 @@ async def execute_request(
         session.provider_state["thread_id"] = None
 
     _save(runtime, chat_id, session)
+    _log.info("Session saved after provider return: session_id=%s started=%s",
+              session.provider_state.get("session_id", "")[:12],
+              session.provider_state.get("started"))
+
+    # Publish provider.response event with token/cost metadata (all non-cancelled outcomes)
+    if runtime.conversation_projection is not None:
+        await _publish_to_registry(
+            runtime.conversation_projection,
+            cfg,
+            "provider.response",
+            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
+            external_conversation_ref=str(chat_id),
+            target_agent_id="",
+            title=f"Chat {chat_id}",
+            metadata={
+                "prompt_tokens": result.prompt_tokens,
+                "completion_tokens": result.completion_tokens,
+                "cost_usd": result.cost_usd,
+                "provider": prov.name,
+            },
+        )
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
@@ -294,7 +413,7 @@ async def execute_request(
                 "error",
                 origin_channel="telegram" if isinstance(chat_id, int) else "registry",
                 external_conversation_ref=str(chat_id),
-                target_agent_id=cfg.instance,
+                target_agent_id="",
                 title=f"Chat {chat_id}",
                 content=error_text[:500],
                 metadata={"error_type": "provider_error", "message": error_text[:500]},
@@ -333,9 +452,20 @@ async def execute_request(
             cost_usd=result.cost_usd,
         )
 
+    # Parse delegation intent from provider response if not already populated
+    if not result.delegation_tasks and available_agents:
+        parsed_tasks = _parse_delegation_from_response(result.text, available_agents)
+        if parsed_tasks:
+            _log.info("Parsed %d delegation tasks from provider response", len(parsed_tasks))
+            result.delegation_tasks.extend(parsed_tasks)
+
     if result.delegation_tasks:
+        _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
         await progress.update("Delegation plan ready.", force=True)
         session = _load(runtime, chat_id)
+        _log.info("Session reloaded for delegation: session_id=%s started=%s",
+                  session.provider_state.get("session_id", "")[:12],
+                  session.provider_state.get("started"))
         return await runtime.propose_delegation_plan(
             chat_id,
             message,
@@ -362,7 +492,7 @@ async def execute_request(
             "message.bot",
             origin_channel="telegram" if isinstance(chat_id, int) else "registry",
             external_conversation_ref=str(chat_id),
-            target_agent_id=cfg.instance,
+            target_agent_id="",
             title=f"Chat {chat_id}",
             actor=cfg.agent_display_name,
             content=cleaned_reply[:2000] if cleaned_reply else "",

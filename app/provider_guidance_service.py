@@ -47,7 +47,12 @@ class ProviderGuidanceService:
                 tracks.append(record)
         return tracks
 
-    def system_prompt(self, role: str, active_skills: list[str]) -> str:
+    def system_prompt(
+        self,
+        role: str,
+        active_skills: list[str],
+        available_agents: list[dict[str, str]] | None = None,
+    ) -> str:
         parts: list[str] = []
         if role:
             stripped = role.strip()
@@ -59,7 +64,31 @@ class ProviderGuidanceService:
                 parts.append(f"You are a {stripped}.\n")
         for record in self._tracks(active_skills):
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
+        if available_agents:
+            parts.append(self._format_agent_discovery_section(available_agents))
         return "\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _format_agent_discovery_section(agents: list[dict[str, str]]) -> str:
+        lines = [
+            "## Available Agents\n",
+            "You can delegate work to these agents. When a task should be handled by a specialist,",
+            "include a delegation block in your response:\n",
+            "<delegation>",
+            '{"tasks": [{"target": "agent-slug", "title": "task title", "instructions": "what to do"}]}',
+            "</delegation>\n",
+            "| Agent | Slug | Role | Capabilities | Status |",
+            "|-------|------|------|--------------|--------|",
+        ]
+        for agent in agents:
+            name = agent.get("display_name", "")
+            slug = agent.get("slug", "")
+            a_role = agent.get("role", "")
+            caps = agent.get("capabilities", "")
+            state = agent.get("connectivity_state", "connected")
+            lines.append(f"| {name} | {slug} | {a_role} | {caps} | {state} |")
+        lines.append("")
+        return "\n".join(lines)
 
     def preflight_prompt(self, role: str, active_skills: list[str]) -> str:
         parts: list[str] = []
@@ -220,13 +249,14 @@ class ProviderGuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        available_agents: list[dict[str, str]] | None = None,
     ) -> RunContext:
         credential_env = credential_env or {}
         provider_config = self.provider_config(provider_name, active_skills, credential_env) if provider_name else {}
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return RunContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.system_prompt(role, active_skills),
+            system_prompt=self.system_prompt(role, active_skills, available_agents=available_agents),
             capability_summary=capability_summary,
             provider_config=provider_config,
             credential_env=credential_env,

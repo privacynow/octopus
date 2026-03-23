@@ -91,6 +91,14 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=json.dumps(response),
             )
+        if command.operation == "get_conversation":
+            payload = json.loads(command.payload_json)
+            response = await client.get_conversation(payload["conversation_id"])
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
         if command.operation == "publish_events":
             payload = json.loads(command.payload_json)
             conversation_id = payload["conversation_id"]

@@ -164,34 +164,51 @@ class BusConversationProjection:
             self._directory.authorities_for_capability("conversation_projection")
         )
 
+        # On cache miss, recover canonical identity from any healthy authority
+        if conversation_id not in self._identity_cache and authorities:
+            recovery_authority = authorities[0]
+            try:
+                reply = await self._bus.request(
+                    ControlCommand(
+                        command_id=uuid4().hex,
+                        capability="conversation_projection",
+                        operation="get_conversation",
+                        payload_json=json.dumps({"conversation_id": conversation_id}),
+                        authority_ref=recovery_authority,
+                    ),
+                    timeout_seconds=5.0,
+                )
+                if reply.status == "completed" and reply.result_json:
+                    conv = json.loads(reply.result_json)
+                    oc = conv.get("origin_channel", "")
+                    ecr = conv.get("external_conversation_ref", "")
+                    if oc and ecr:
+                        self._identity_cache[conversation_id] = {
+                            "target_agent_id": conv.get("target_agent_id", ""),
+                            "origin_channel": oc,
+                            "external_conversation_ref": ecr,
+                            "title": conv.get("title", ""),
+                        }
+                        log.info(
+                            "Recovered canonical identity for conversation %s from %s",
+                            conversation_id,
+                            recovery_authority,
+                        )
+            except Exception:
+                log.warning(
+                    "Failed to recover canonical identity for conversation %s",
+                    conversation_id,
+                    exc_info=True,
+                )
+
         for authority_ref in authorities:
-            # Create-before-publish: ensure conversation exists on this authority.
-            # On cache miss, re-derive identity and call create (idempotent).
             cached = self._identity_cache.get(conversation_id)
             if not cached:
-                # Cache miss (e.g. process restart). Submit a deferred retry via the bus
-                # so the ProcessorRunner can attempt it later when the cache is warm.
-                log.info(
-                    "publish_events cache miss for conversation_id=%s on %s; "
-                    "submitting deferred mirror_retry",
+                log.warning(
+                    "publish_events: cannot recover canonical identity for %s on %s; skipping",
                     conversation_id,
                     authority_ref,
                 )
-                try:
-                    await self._bus.submit(ControlCommand(
-                        command_id=uuid4().hex,
-                        capability="mirror_retry",
-                        operation="publish_events",
-                        payload_json=json.dumps({
-                            "conversation_id": conversation_id,
-                            "events": [e.model_dump() for e in events],
-                        }),
-                        authority_ref=authority_ref,
-                        idempotency_key=f"mirror:publish:{conversation_id}:{','.join(e.event_id for e in events)}",
-                        max_retries=10,
-                    ))
-                except Exception:
-                    log.warning("Failed to submit deferred mirror_retry for %s", authority_ref, exc_info=True)
                 continue
 
             # Ensure conversation row exists on this authority (idempotent)

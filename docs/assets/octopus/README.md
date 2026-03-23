@@ -9,6 +9,7 @@ Terminal-style diagrams for **non-registry** Octopus flows. They use the same pa
 | [03-workspace.svg](03-workspace.svg) | `workspace create` / `add-bot` / `verify` |
 | [04-advanced-webhook.svg](04-advanced-webhook.svg) | `advanced_menu` + `configure_webhook_mode_flow` |
 | [05-clean.svg](05-clean.svg) | `cmd_clean` confirmation |
+| [06-status.svg](06-status.svg) | `./octopus status` output |
 
 **Registry-specific** SVGs remain under [`../registry/`](../registry/) (connect, switch, disconnect, …).
 

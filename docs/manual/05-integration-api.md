@@ -6,7 +6,7 @@ Bots and automation call **`/v1/...`** on the registry with **agent tokens**; op
 
 ## Surface map
 
-![API domains](../assets/manual/api-01-surface-annotated.png)
+![Main API areas](../assets/product/api-surface.svg)
 
 ## Implementation
 

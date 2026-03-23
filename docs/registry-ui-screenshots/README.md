@@ -1,6 +1,6 @@
 # Registry UI screenshot capture
 
-Used to refresh PNGs under `docs/assets/registry/ui/` for `docs/registry-guide.md`, PNGs under `docs/assets/manual/` for `docs/manual/`, and annotated overlays for both.
+Refreshes **annotated PNGs** under `docs/assets/registry/ui/` (used by [registry-guide.md](../registry-guide.md) and [manual § Registry web UI](../manual/03-operator-registry.md)). Optional **`capture:manual`** writes raw PNGs under `docs/assets/manual/` for fixture-based captures; the user manual uses **SVG** elsewhere, so that directory is maintainer-only if present.
 
 ## Prerequisites
 

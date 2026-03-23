@@ -1,5 +1,5 @@
 /**
- * Skill catalog — runtime skills list via API.listSkills().
+ * Skill catalog — runtime skills list with install/uninstall actions.
  */
 function renderSkillCatalog(container) {
     let searchTimeout = null;
@@ -61,7 +61,7 @@ function renderSkillCatalog(container) {
         if (filtered.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'empty-state';
-            empty.textContent = allSkills.length === 0 ? 'No skills installed' : 'No skills match search';
+            empty.textContent = allSkills.length === 0 ? 'No skills available' : 'No skills match search';
             listEl.appendChild(empty);
             return;
         }
@@ -86,13 +86,41 @@ function renderSkillCatalog(container) {
 
             row.appendChild(info);
 
+            const actions = document.createElement('div');
+            actions.className = 'card-actions';
+
             if (s.status) {
                 const badge = document.createElement('span');
                 badge.className = 'badge badge-' + s.status;
                 badge.textContent = s.status;
-                row.appendChild(badge);
+                actions.appendChild(badge);
             }
 
+            const skillName = s.slug || s.name || '';
+            const isInstalled = s.status === 'installed' || s.status === 'published' || s.status === 'active';
+
+            const actionBtn = document.createElement('button');
+            actionBtn.className = 'btn btn-sm' + (isInstalled ? ' btn-danger' : ' btn-primary');
+            actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
+            actionBtn.addEventListener('click', async () => {
+                actionBtn.disabled = true;
+                actionBtn.textContent = isInstalled ? 'Uninstalling...' : 'Installing...';
+                try {
+                    if (isInstalled) {
+                        await API.uninstallSkill(skillName);
+                    } else {
+                        await API.installSkill(skillName);
+                    }
+                    loadSkills();
+                } catch (err) {
+                    actionBtn.disabled = false;
+                    actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
+                    console.error('Skill action failed', err);
+                }
+            });
+            actions.appendChild(actionBtn);
+
+            row.appendChild(actions);
             card.appendChild(row);
             listEl.appendChild(card);
         });

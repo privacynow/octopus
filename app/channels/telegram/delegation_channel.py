@@ -10,7 +10,7 @@ from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
 from app.agents.delegation import (
-    DelegationRuntime,
+    build_delegation_runtime,
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
     preview_delegation_targets,
@@ -88,9 +88,9 @@ async def publish_delegation_proposed_event(
             "delegation.proposed",
             origin_channel="telegram",
             external_conversation_ref=chat_id,
-            target_agent_id=config.instance,
+            target_agent_id="",
             title=delegation.title or "Delegation",
-            actor=config.instance,
+            actor=config.agent_display_name or config.instance,
             content=delegation.title or "",
             metadata={
                 "task_count": len(delegation.tasks),
@@ -127,8 +127,6 @@ async def propose_delegation_plan(
 
     # Autonomous mode: auto-submit delegation without buttons.
     if runtime.config.autonomous and session.approval_mode != "on":
-        from app.agents.delegation import build_delegation_runtime
-        conversation_ref_resolved = telegram_conversation_ref(runtime.config, chat_id)
         delegation_rt = build_delegation_runtime(
             config=runtime.config,
             provider_name=runtime.provider.name,
@@ -139,7 +137,7 @@ async def propose_delegation_plan(
         try:
             await handle_channel_delegation_approve(
                 chat_id,
-                conversation_ref_resolved,
+                conversation_ref,
                 _AutoSubmitEgress(message),
                 runtime=delegation_rt,
                 retry_markup=None,

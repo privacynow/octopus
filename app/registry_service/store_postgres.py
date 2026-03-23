@@ -1161,7 +1161,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"""
                         SELECT conversation_id, metadata_json, created_at
                         FROM {_SCHEMA}.events
-                        WHERE kind = 'usage' AND created_at >= %s AND created_at <= %s
+                        WHERE kind = 'provider.response' AND created_at >= %s AND created_at <= %s
                         ORDER BY created_at
                         """,
                         (since_iso, until_iso),
@@ -1171,7 +1171,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"""
                         SELECT conversation_id, metadata_json, created_at
                         FROM {_SCHEMA}.events
-                        WHERE kind = 'usage' AND created_at >= %s
+                        WHERE kind = 'provider.response' AND created_at >= %s
                         ORDER BY created_at
                         """,
                         (since_iso,),
@@ -1628,7 +1628,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind = 'usage'"
+            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind = 'provider.response'"
             params: list[Any] = []
             if agent_id:
                 sql += " AND agent_id = %s"

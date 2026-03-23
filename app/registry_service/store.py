@@ -1323,7 +1323,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """
                     SELECT conversation_id, metadata_json, created_at
                     FROM events
-                    WHERE kind = 'usage' AND created_at >= ? AND created_at <= ?
+                    WHERE kind = 'provider.response' AND created_at >= ? AND created_at <= ?
                     ORDER BY created_at
                     """,
                     (since_iso, until_iso),
@@ -1333,7 +1333,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """
                     SELECT conversation_id, metadata_json, created_at
                     FROM events
-                    WHERE kind = 'usage' AND created_at >= ?
+                    WHERE kind = 'provider.response' AND created_at >= ?
                     ORDER BY created_at
                     """,
                     (since_iso,),
@@ -1756,7 +1756,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = "SELECT * FROM events WHERE kind = 'usage'"
+            sql = "SELECT * FROM events WHERE kind = 'provider.response'"
             params: list[Any] = []
             if agent_id:
                 sql += " AND agent_id = ?"

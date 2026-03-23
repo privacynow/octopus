@@ -1,5 +1,5 @@
 /**
- * Task list — routed tasks across agents with pagination and status filter.
+ * Task list — routed tasks across agents with pagination, status filter, and inline detail.
  */
 function renderTaskList(container) {
     let cursor = 0;
@@ -60,58 +60,95 @@ function renderTaskList(container) {
                 return;
             }
 
-            const wrap = document.createElement('div');
-            wrap.className = 'table-wrap';
-            const tbl = document.createElement('table');
-            tbl.className = 'data-table responsive';
-
-            const thead = document.createElement('thead');
-            thead.innerHTML = '<tr><th>Title</th><th>Origin</th><th>Target</th><th>Status</th><th>Updated</th></tr>';
-            tbl.appendChild(thead);
-
-            const tbody = document.createElement('tbody');
             tasks.forEach(t => {
-                const tr = document.createElement('tr');
-                tr.className = 'clickable';
-                tr.addEventListener('click', () => {
-                    if (t.parent_conversation_id) {
-                        Router.navigate('/ui/conversations/' + t.parent_conversation_id);
-                    }
-                });
+                const card = document.createElement('div');
+                card.className = 'card task-card';
 
-                const cells = [
-                    ['Title', t.title || t.routed_task_id],
-                    ['Origin', t.origin_display_name || t.origin_agent_id || ''],
-                    ['Target', t.target_display_name || t.target_agent_id || ''],
-                ];
-                cells.forEach(([label, val]) => {
-                    const td = document.createElement('td');
-                    td.setAttribute('data-label', label);
-                    td.textContent = val;
-                    tr.appendChild(td);
-                });
+                // Summary row
+                const row = document.createElement('div');
+                row.className = 'card-row clickable';
 
-                // Status badge
-                const statusTd = document.createElement('td');
-                statusTd.setAttribute('data-label', 'Status');
+                const info = document.createElement('div');
+                const title = document.createElement('div');
+                title.className = 'card-title';
+                title.textContent = t.title || t.routed_task_id;
+                info.appendChild(title);
+
+                const sub = document.createElement('div');
+                sub.className = 'card-subtitle';
+                const parts = [];
+                if (t.origin_display_name || t.origin_agent_id) {
+                    parts.push('From: ' + (t.origin_display_name || t.origin_agent_id));
+                }
+                if (t.target_display_name || t.target_agent_id) {
+                    parts.push('To: ' + (t.target_display_name || t.target_agent_id));
+                }
+                if (t.updated_at) {
+                    parts.push(_relativeTime(t.updated_at));
+                }
+                sub.textContent = parts.join(' \u00b7 ');
+                info.appendChild(sub);
+
+                row.appendChild(info);
+
                 const badge = document.createElement('span');
                 badge.className = 'badge badge-' + (t.status || 'queued');
                 badge.textContent = t.status || 'queued';
-                statusTd.appendChild(badge);
-                tr.appendChild(statusTd);
+                row.appendChild(badge);
 
-                // Updated time
-                const updTd = document.createElement('td');
-                updTd.setAttribute('data-label', 'Updated');
-                updTd.setAttribute('data-timestamp', t.updated_at || '');
-                updTd.textContent = _relativeTime(t.updated_at);
-                tr.appendChild(updTd);
+                card.appendChild(row);
 
-                tbody.appendChild(tr);
+                // Detail section (collapsed by default)
+                const detail = document.createElement('div');
+                detail.className = 'task-detail';
+                detail.style.display = 'none';
+
+                if (t.instructions) {
+                    const instrLabel = document.createElement('div');
+                    instrLabel.className = 'detail-label';
+                    instrLabel.textContent = 'Instructions';
+                    detail.appendChild(instrLabel);
+                    const instrBody = document.createElement('div');
+                    instrBody.className = 'detail-body';
+                    instrBody.textContent = t.instructions;
+                    detail.appendChild(instrBody);
+                }
+
+                if (t.result_summary || t.result_text) {
+                    const resultLabel = document.createElement('div');
+                    resultLabel.className = 'detail-label';
+                    resultLabel.textContent = 'Result';
+                    detail.appendChild(resultLabel);
+                    const resultBody = document.createElement('div');
+                    resultBody.className = 'detail-body';
+                    resultBody.textContent = t.result_summary || t.result_text || '';
+                    detail.appendChild(resultBody);
+                }
+
+                if (t.parent_conversation_id) {
+                    const linkWrap = document.createElement('div');
+                    linkWrap.style.marginTop = '8px';
+                    const link = document.createElement('a');
+                    link.href = '/ui/conversations/' + t.parent_conversation_id;
+                    link.textContent = 'View parent conversation';
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        Router.navigate('/ui/conversations/' + t.parent_conversation_id);
+                    });
+                    linkWrap.appendChild(link);
+                    detail.appendChild(linkWrap);
+                }
+
+                card.appendChild(detail);
+
+                // Toggle detail on click
+                row.addEventListener('click', () => {
+                    detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+                });
+
+                listEl.appendChild(card);
             });
-            tbl.appendChild(tbody);
-            wrap.appendChild(tbl);
-            listEl.appendChild(wrap);
 
             pagEl.textContent = '';
             _renderPagination(pagEl, {

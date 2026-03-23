@@ -248,7 +248,7 @@ class RegistryChannelEgress(ChannelEgress):
             return None
 
         status = str(getattr(outcome, "status", "") or "")
-        if status == "delegation_proposed":
+        if status in ("delegation_proposed", "delegation_submitted"):
             return None
         if status.startswith("completed"):
             body = getattr(outcome, "reply_text", "") or self._plain_text_snippet(self.last_status_text, limit=400)

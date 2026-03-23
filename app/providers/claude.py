@@ -450,10 +450,14 @@ class ClaudeProvider:
             )
 
         if rc != 0:
+            # Check both stderr and structured JSON errors for resume failure
+            error_text = stderr
+            if result_data.get("errors"):
+                error_text = error_text + " " + " ".join(str(e) for e in result_data["errors"])
             return RunResult(
                 text=f"[Claude error (rc={rc})]",
                 returncode=rc,
-                resume_failed=is_resume and self._is_resume_failure(stderr),
+                resume_failed=is_resume and self._is_resume_failure(error_text),
             )
 
         final_text = result_data.get("result", accumulated) or accumulated

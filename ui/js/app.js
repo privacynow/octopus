@@ -254,6 +254,7 @@ Router.register('/ui/tasks', renderTaskList);
 Router.register('/ui/capabilities', renderCapabilityList);
 Router.register('/ui/skills', renderSkillCatalog);
 Router.register('/ui/usage', renderUsageView);
+Router.register('/ui/guidance', renderGuidanceEditor);
 Router.register('/ui/login', renderLoginForm);
 
 // ── Initialize ──

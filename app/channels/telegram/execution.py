@@ -356,6 +356,7 @@ def build_execution_runtime(
         send_compact_reply=send_compact_reply,
         propose_delegation_plan=collaborators.propose_delegation_plan,
         conversation_projection=runtime.services.control_plane.conversation_projection,
+        agent_directory=runtime.services.control_plane.agent_directory,
     )
 
 

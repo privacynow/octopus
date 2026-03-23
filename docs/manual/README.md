@@ -7,7 +7,7 @@ For **operators** (Docker, `./octopus`, Registry browser) and **chat users** (Te
 1. [Overview & terminology](00-overview.md) — how the pieces fit together
 2. [Setup](01-setup.md) — token, provider auth, first run
 3. [Octopus CLI](02-operator-octopus.md) — menus, status, workspaces, clean
-4. [Registry web UI](03-operator-registry.md) — hub; feature pages in [registry-ui/](registry-ui/) (one screenshot per page)
+4. [Registry web UI](03-operator-registry.md) — hub, then [Sign in](registry-ui/sign-in.md) … [Deep links](registry-ui/deep-links.md) (feature pages under [registry-ui/](registry-ui/))
 5. [Telegram](04-product-telegram.md) — commands and chat behavior
 6. [Registry HTTP API](05-integration-api.md) — `/v1/…` and UI coverage
 7. [Troubleshooting](06-troubleshooting.md) — what to run when something fails

@@ -1,6 +1,6 @@
 # Registry UI: Routed tasks
 
-[← Conversation detail](conversation-detail.md) · [Registry UI hub](../03-operator-registry.md) · [Next: Capabilities →](capabilities.md)
+[← Manual home](../README.md) · [Prev: Conversation detail](conversation-detail.md) · [Next: Capabilities →](capabilities.md)
 
 **Route:** `/ui/tasks` — **routed tasks** across agents: title, origin, target, status, updated time. **Pagination** and **status** filter match the conversations list pattern.
 

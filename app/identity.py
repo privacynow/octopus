@@ -100,6 +100,14 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
     chat_id = telegram_chat_id_from_ref(conversation_ref)
     if chat_id is not None:
         return telegram_conversation_key(chat_id)
+    # Collapse registry conversation refs across registries:
+    # registry:<id>:conversation:<cid> → registry:conversation:<cid>
+    # but keep task refs un-collapsed:
+    # registry:<id>:task:<tid> stays as-is
+    if conversation_ref.startswith("registry:"):
+        parts = conversation_ref.split(":", 3)
+        if len(parts) == 4 and parts[2] == "conversation":
+            return f"registry:conversation:{parts[3]}"
     return conversation_ref
 
 

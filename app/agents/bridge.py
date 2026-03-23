@@ -113,11 +113,14 @@ async def admit_registry_delivery(
         if not registry_id:
             return "rejected"
         conversation_ref = qualify_registry_conversation_ref(registry_id, str(payload["conversation_id"]))
+        # Use stable_event_id from the delivery payload for cross-registry dedup
+        stable_event_id = str(payload.get("stable_event_id", "") or "")
+        effective_delivery_id = stable_event_id if stable_event_id else delivery_id
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=payload.get("text", ""),
             actor_ref=f"registry-ui:{conversation_ref}",
-            delivery_id=delivery_id,
+            delivery_id=effective_delivery_id,
             registry_id=registry_id,
         )
         status, _ = work_queue.record_and_admit_message(

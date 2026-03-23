@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import secrets
 import sqlite3
 import time
@@ -55,7 +55,7 @@ from app.registry_service.store_base import (
     validated_registry_scope,
 )
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 1
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS agents (
     max_capacity INTEGER NOT NULL DEFAULT 1,
     channel_capabilities_json TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL DEFAULT '',
+    bot_key TEXT NOT NULL DEFAULT '',
     runtime_health_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -277,23 +278,6 @@ def _execute_sql_script(conn: sqlite3.Connection, script: str) -> None:
         conn.execute(statement)
 
 
-def _run_migration_step(conn: sqlite3.Connection, version: int, migration) -> None:
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        migration(conn)
-        conn.execute(
-            """
-            INSERT INTO meta (key, value) VALUES ('schema_version', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (str(version),),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-
-
 class RegistrySQLiteStore(AbstractRegistryStore):
     """SQLite-backed registry store used by the FastAPI registry service."""
 
@@ -309,395 +293,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            # Detect whether this is an existing (possibly legacy) database by
-            # checking for user tables. If present, skip the fresh-install base
-            # schema and let migrations handle upgrades.
-            existing_tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                ).fetchall()
-            }
-            if not existing_tables:
-                conn.executescript(_BASE_SCHEMA_SQL)
-                # Fresh install: set schema_version so migrations are skipped.
-                conn.execute(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (str(_SCHEMA_VERSION),),
-                )
-                conn.commit()
-            else:
-                # Ensure meta table exists for legacy databases that predate it.
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-                )
-                conn.commit()
-            self._run_migrations(conn)
-
-    def _current_schema_version(self, conn: sqlite3.Connection) -> int:
-        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if row is None:
-            return 0
-        try:
-            return int(row[0])
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("Unsupported registry SQLite schema") from exc
-
-    def _set_schema_version(self, conn: sqlite3.Connection, version: int) -> None:
-        conn.execute(
-            """
-            INSERT INTO meta (key, value) VALUES ('schema_version', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (str(version),),
-        )
-
-    def _migrate_v1(self, conn: sqlite3.Connection) -> None:
-        _execute_sql_script(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS skills_override (
-                skill_name TEXT PRIMARY KEY,
-                enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
-                set_by TEXT NOT NULL DEFAULT 'ui',
-                set_at REAL NOT NULL
-            );
-            """,
-        )
-
-    def _migrate_v2_timeline_fts(self, conn: sqlite3.Connection) -> None:
-        # Only create FTS infrastructure if timeline_events table exists.
-        # Fresh installs no longer provision timeline_events.
-        has_timeline = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_events'"
-        ).fetchone()
-        if not has_timeline:
-            return
-        _execute_sql_script(
-            conn,
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
-            USING fts5(body, content=timeline_events, content_rowid=seq);
-
-            CREATE TRIGGER IF NOT EXISTS tl_ai AFTER INSERT ON timeline_events BEGIN
-              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-            END;
-            CREATE TRIGGER IF NOT EXISTS tl_ad AFTER DELETE ON timeline_events BEGIN
-              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-            END;
-            CREATE TRIGGER IF NOT EXISTS tl_au AFTER UPDATE ON timeline_events BEGIN
-              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-            END;
-            """,
-        )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO timeline_fts(rowid, body)
-            SELECT seq, body FROM timeline_events
-            WHERE body IS NOT NULL AND body != ''
-            """
-        )
-
-    def _migrate_v3_runtime_health(self, conn: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
-        if "runtime_health_json" not in columns:
+            _execute_sql_script(conn, _BASE_SCHEMA_SQL)
             conn.execute(
-                "ALTER TABLE agents ADD COLUMN runtime_health_json TEXT NOT NULL DEFAULT '{}'"
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(_SCHEMA_VERSION),),
             )
-        _execute_sql_script(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS agent_runtime_workers (
-                agent_id TEXT NOT NULL,
-                worker_id TEXT NOT NULL,
-                process_role TEXT NOT NULL DEFAULT '',
-                started_at TEXT NOT NULL DEFAULT '',
-                last_seen_at TEXT NOT NULL DEFAULT '',
-                current_item_id TEXT NOT NULL DEFAULT '',
-                current_conversation_key TEXT NOT NULL DEFAULT '',
-                current_kind TEXT NOT NULL DEFAULT '',
-                items_processed INTEGER NOT NULL DEFAULT 0,
-                stale_recoveries_seen INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT NOT NULL DEFAULT '',
-                mirrored_at TEXT NOT NULL,
-                PRIMARY KEY (agent_id, worker_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_agent_runtime_workers_seen
-                ON agent_runtime_workers (agent_id, last_seen_at DESC);
-            """,
-        )
-
-    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
-        return {
-            row["name"]
-            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-        }
-
-    def _migrate_v4_channel_vocabulary(self, conn: sqlite3.Connection) -> None:
-        agent_columns = self._table_columns(conn, "agents")
-        if (
-            "surface_capabilities_json" in agent_columns
-            and "channel_capabilities_json" not in agent_columns
-        ):
-            conn.execute(
-                """
-                ALTER TABLE agents
-                RENAME COLUMN surface_capabilities_json TO channel_capabilities_json
-                """
-            )
-
-        conversation_columns = self._table_columns(conn, "conversations")
-        if "origin_surface" in conversation_columns and "origin_channel" not in conversation_columns:
-            conn.execute(
-                """
-                ALTER TABLE conversations
-                RENAME COLUMN origin_surface TO origin_channel
-                """
-            )
-
-        conn.execute(
-            "UPDATE deliveries SET kind = 'channel_input' WHERE kind = 'surface_input'"
-        )
-        conn.execute(
-            "UPDATE deliveries SET kind = 'channel_action' WHERE kind = 'surface_action'"
-        )
-
-    def _migrate_v5_agent_token_hashing(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute("SELECT agent_id, agent_token FROM agents").fetchall()
-        for row in rows:
-            conn.execute(
-                "UPDATE agents SET agent_token = ? WHERE agent_id = ?",
-                (hash_agent_token(str(row["agent_token"])), row["agent_id"]),
-            )
-
-    def _migrate_v6_registry_scope(self, conn: sqlite3.Connection) -> None:
-        columns = self._table_columns(conn, "agents")
-        if "registry_scope" not in columns:
-            conn.execute(
-                "ALTER TABLE agents ADD COLUMN registry_scope TEXT NOT NULL DEFAULT 'full'"
-            )
-        conn.execute(
-            "UPDATE agents SET registry_scope = 'full' WHERE coalesce(registry_scope, '') = ''"
-        )
-
-    def _migrate_v7_events_table(self, conn: sqlite3.Connection) -> None:
-        # Drop old FTS triggers
-        conn.execute("DROP TRIGGER IF EXISTS tl_ai")
-        conn.execute("DROP TRIGGER IF EXISTS tl_ad")
-        conn.execute("DROP TRIGGER IF EXISTS tl_au")
-        # Drop and recreate FTS virtual table (clean state since we truncate)
-        conn.execute("DROP TABLE IF EXISTS timeline_fts")
-        # Truncate timeline_events if it exists (keep table for legacy code)
-        has_timeline = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_events'"
-        ).fetchone()
-        if has_timeline:
-            conn.execute("DELETE FROM timeline_events")
-            # Recreate FTS and triggers for legacy timeline search
-            _execute_sql_script(
-                conn,
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
-                USING fts5(body, content=timeline_events, content_rowid=seq);
-
-                CREATE TRIGGER IF NOT EXISTS tl_ai AFTER INSERT ON timeline_events BEGIN
-                  INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-                END;
-                CREATE TRIGGER IF NOT EXISTS tl_ad AFTER DELETE ON timeline_events BEGIN
-                  INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-                END;
-                CREATE TRIGGER IF NOT EXISTS tl_au AFTER UPDATE ON timeline_events BEGIN
-                  INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
-                  INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
-                END;
-                """,
-            )
-        # Truncate conversations
-        conn.execute("DELETE FROM conversations")
-        # Add new columns to conversations
-        conversation_columns = self._table_columns(conn, "conversations")
-        if "origin_channel" not in conversation_columns:
-            conn.execute(
-                "ALTER TABLE conversations ADD COLUMN origin_channel TEXT NOT NULL DEFAULT ''"
-            )
-        if "external_conversation_ref" not in conversation_columns:
-            conn.execute(
-                "ALTER TABLE conversations ADD COLUMN external_conversation_ref TEXT NOT NULL DEFAULT ''"
-            )
-        # Create unique index on conversations
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_external
-            ON conversations(target_agent_id, origin_channel, external_conversation_ref)
-            """
-        )
-        # Create events table
-        _execute_sql_script(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS events (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id TEXT NOT NULL UNIQUE,
-                conversation_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL DEFAULT '',
-                kind TEXT NOT NULL,
-                actor TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL DEFAULT '',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_events_conversation ON events(conversation_id, seq);
-            CREATE INDEX IF NOT EXISTS idx_events_kind ON events(conversation_id, kind, seq);
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(content, content=events, content_rowid=seq);
-
-            CREATE TRIGGER IF NOT EXISTS ev_ai AFTER INSERT ON events BEGIN
-              INSERT INTO events_fts(rowid, content) VALUES (new.seq, new.content);
-            END;
-            CREATE TRIGGER IF NOT EXISTS ev_ad AFTER DELETE ON events BEGIN
-              INSERT INTO events_fts(events_fts, rowid, content) VALUES ('delete', old.seq, old.content);
-            END;
-            CREATE TRIGGER IF NOT EXISTS ev_au AFTER UPDATE ON events BEGIN
-              INSERT INTO events_fts(events_fts, rowid, content) VALUES ('delete', old.seq, old.content);
-              INSERT INTO events_fts(rowid, content) VALUES (new.seq, new.content);
-            END;
-            """,
-        )
-
-    def _migrate_v8_content_tables(self, conn: sqlite3.Connection) -> None:
-        _execute_sql_script(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS runtime_skills (
-                slug TEXT PRIMARY KEY,
-                display_name TEXT NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                source_kind TEXT NOT NULL DEFAULT 'custom',
-                source_uri TEXT NOT NULL DEFAULT '',
-                owner_actor TEXT NOT NULL DEFAULT '',
-                visibility TEXT NOT NULL DEFAULT 'private',
-                is_mutable INTEGER NOT NULL DEFAULT 1,
-                archived INTEGER NOT NULL DEFAULT 0,
-                instruction_body TEXT NOT NULL DEFAULT '',
-                requirements_json TEXT NOT NULL DEFAULT '[]',
-                provider_config_json TEXT NOT NULL DEFAULT '{}',
-                files_json TEXT NOT NULL DEFAULT '[]',
-                active_revision_id TEXT NOT NULL DEFAULT '',
-                published_revision_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS skill_revisions (
-                revision_id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL,
-                instruction_body TEXT NOT NULL DEFAULT '',
-                requirements_json TEXT NOT NULL DEFAULT '[]',
-                provider_config_json TEXT NOT NULL DEFAULT '{}',
-                files_json TEXT NOT NULL DEFAULT '[]',
-                version_label TEXT NOT NULL DEFAULT '',
-                changelog TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'draft',
-                created_by TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS skill_approvals (
-                record_id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL,
-                revision_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                actor TEXT NOT NULL DEFAULT '',
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS provider_guidance (
-                provider TEXT NOT NULL,
-                scope_kind TEXT NOT NULL DEFAULT 'instance',
-                scope_key TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL DEFAULT '',
-                format TEXT NOT NULL DEFAULT 'text',
-                is_mutable INTEGER NOT NULL DEFAULT 1,
-                active_revision_id TEXT NOT NULL DEFAULT '',
-                published_revision_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (provider, scope_kind, scope_key)
-            );
-
-            CREATE TABLE IF NOT EXISTS guidance_revisions (
-                revision_id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                scope_kind TEXT NOT NULL DEFAULT 'instance',
-                scope_key TEXT NOT NULL DEFAULT '',
-                content TEXT NOT NULL DEFAULT '',
-                format TEXT NOT NULL DEFAULT 'text',
-                status TEXT NOT NULL DEFAULT 'draft',
-                created_by TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS guidance_approvals (
-                record_id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                scope_kind TEXT NOT NULL DEFAULT 'instance',
-                scope_key TEXT NOT NULL DEFAULT '',
-                revision_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                actor TEXT NOT NULL DEFAULT '',
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT ''
-            );
-            """,
-        )
-
-    def _run_migrations(self, conn: sqlite3.Connection) -> None:
-        current = self._current_schema_version(conn)
-        if current > _SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Registry DB schema version {current} is newer than supported version {_SCHEMA_VERSION}. Upgrade the registry."
-            )
-        if current < 1:
-            _run_migration_step(conn, 1, self._migrate_v1)
-            current = 1
-        if current < 2:
-            _run_migration_step(conn, 2, self._migrate_v2_timeline_fts)
-            current = 2
-        if current < 3:
-            _run_migration_step(conn, 3, self._migrate_v3_runtime_health)
-            current = 3
-        if current < 4:
-            _run_migration_step(conn, 4, self._migrate_v4_channel_vocabulary)
-            current = 4
-        if current < 5:
-            _run_migration_step(conn, 5, self._migrate_v5_agent_token_hashing)
-            current = 5
-        if current < 6:
-            _run_migration_step(conn, 6, self._migrate_v6_registry_scope)
-            current = 6
-        if current < 7:
-            # v7 is destructive: drops timeline_events, truncates conversations.
-            # Require explicit opt-in in non-interactive environments.
-            if not os.environ.get("REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION"):
-                import sys
-                if not sys.stdin.isatty():
-                    raise RuntimeError(
-                        "Destructive schema migration required (v7: events table replaces timeline_events). "
-                        "Set REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION=1 to proceed. "
-                        "Back up .deploy/registry/ first."
-                    )
-                else:
-                    log.warning(
-                        "Registry schema upgrade will reset event history. "
-                        "Timeline data from before this version will not be preserved."
-                    )
-            _run_migration_step(conn, 7, self._migrate_v7_events_table)
-            current = 7
-        if current < 8:
-            _run_migration_step(conn, 8, self._migrate_v8_content_tables)
+            conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
         slug = requested
@@ -816,10 +417,34 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
+        bot_key = str(card.get("bot_key", "") or "").strip()
+
+        # If bot_key is provided, check for existing enrollment (idempotent re-enroll)
+        if bot_key:
+            with self._connect() as conn:
+                existing = conn.execute(
+                    "SELECT agent_id, slug FROM agents WHERE bot_key = ?",
+                    (bot_key,),
+                ).fetchone()
+                if existing:
+                    # Re-enroll: issue a fresh token but preserve the agent_id and slug
+                    agent_token = secrets.token_urlsafe(32)
+                    agent_token_hash = hash_agent_token(agent_token)
+                    conn.execute(
+                        "UPDATE agents SET agent_token = ?, updated_at = ? WHERE bot_key = ?",
+                        (agent_token_hash, now, bot_key),
+                    )
+                    return {
+                        "agent_id": existing["agent_id"],
+                        "slug": existing["slug"],
+                        "agent_token": agent_token,
+                        "poll_cursor": "0",
+                    }
+
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
         agent_token_hash = hash_agent_token(agent_token)
-        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         with self._connect() as conn:
             slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
             conn.execute(
@@ -828,8 +453,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     agent_id, agent_token, display_name, slug, role, registry_scope,
                     skills_json, tags_json, description, provider, mode,
                     connectivity_state, current_capacity, max_capacity,
-                    channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    channel_capabilities_json, version, bot_key,
+                    created_at, updated_at, last_heartbeat_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
@@ -848,6 +474,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     card.get("max_capacity", 1),
                     ensure_json(card.get("channel_capabilities", [])),
                     card.get("version", ""),
+                    bot_key,
                     now,
                     now,
                     now,
@@ -1513,9 +1140,22 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
     ) -> dict[str, Any]:
+        if not origin_channel or not origin_channel.strip():
+            raise ValueError("origin_channel must not be empty")
+        if not external_conversation_ref or not external_conversation_ref.strip():
+            raise ValueError("external_conversation_ref must not be empty")
         now = utcnow_iso()
-        conversation_id = uuid.uuid4().hex
+
+        # Look up bot_key for the target agent to compute deterministic conversation_id
         with self._connect() as conn:
+            agent_row = conn.execute(
+                "SELECT bot_key FROM agents WHERE agent_id = ?",
+                (target_agent_id,),
+            ).fetchone()
+            bot_key = (agent_row["bot_key"] if agent_row else "") or target_agent_id
+            canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
+            conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
+
             conn.execute(
                 """
                 INSERT INTO conversations (
@@ -1742,12 +1382,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         validated_text = validated_conversation_message_text(text)
         with self._connect() as conn:
             conversation = conn.execute(
-                "SELECT target_agent_id, title FROM conversations WHERE conversation_id = ?",
+                "SELECT target_agent_id, title, origin_channel, external_conversation_ref FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
             if conversation is None:
                 raise KeyError(conversation_id)
+            agent_row = conn.execute(
+                "SELECT bot_key FROM agents WHERE agent_id = ?",
+                (conversation["target_agent_id"],),
+            ).fetchone()
+            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
             now = utcnow_iso()
+            event_id = uuid.uuid4().hex
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
@@ -1757,11 +1403,15 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     "title": conversation["title"],
                     "text": validated_text,
                     "channel": "registry",
+                    "bot_key": bot_key,
+                    "origin_channel": conversation["origin_channel"],
+                    "external_conversation_ref": conversation["external_conversation_ref"],
+                    "stable_event_id": event_id,
+                    "stable_created_at": now,
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-            event_id = uuid.uuid4().hex
             conn.execute(
                 """INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1794,12 +1444,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         validated_action, action_payload = validated_conversation_action(action, payload)
         with self._connect() as conn:
             conversation = conn.execute(
-                "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
+                "SELECT target_agent_id, origin_channel, external_conversation_ref FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
             if conversation is None:
                 raise KeyError(conversation_id)
+            agent_row = conn.execute(
+                "SELECT bot_key FROM agents WHERE agent_id = ?",
+                (conversation["target_agent_id"],),
+            ).fetchone()
+            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
             now = utcnow_iso()
+            event_id_for_action = uuid.uuid4().hex
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
@@ -1810,6 +1466,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     "action": validated_action,
                     "payload": action_payload,
                     "channel": "registry",
+                    "bot_key": bot_key,
+                    "origin_channel": conversation["origin_channel"],
+                    "external_conversation_ref": conversation["external_conversation_ref"],
+                    "stable_event_id": event_id_for_action,
+                    "stable_created_at": now,
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1823,7 +1484,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 event_kind = "approval.decided"
                 event_metadata = {"action": validated_action, "decided_by": "operator"}
                 event_content = json.dumps(action_payload) if action_payload else ""
-            event_id = uuid.uuid4().hex
+            event_id = event_id_for_action
             conn.execute(
                 """INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)

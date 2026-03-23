@@ -5,14 +5,12 @@ import os
 from pathlib import Path
 import re
 import shutil
-import sqlite3
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
 import app.content_store as content_store_mod
-import app.registry_service.store as registry_store_module
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
@@ -20,7 +18,6 @@ from app.channels.registry import auth as registry_auth
 from app.channels.registry.http import app
 from app.channels.registry import ingress
 from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -39,7 +36,6 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
-    monkeypatch.setenv("REGISTRY_ALLOW_DESTRUCTIVE_MIGRATION", "1")
     monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
     registry_auth.reset_auth_attempt_limits_for_test()
 
@@ -1351,162 +1347,106 @@ def test_registry_routed_task_result_requires_explicit_status(monkeypatch, tmp_p
     assert "status" in result.json()["detail"]
 
 
-def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_columns(tmp_path: Path):
-    db_path = tmp_path / "registry.sqlite3"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE agents ("
-        "agent_id TEXT PRIMARY KEY, agent_token TEXT NOT NULL UNIQUE, "
-        "display_name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, "
-        "role TEXT NOT NULL DEFAULT '', skills_json TEXT NOT NULL DEFAULT '[]', "
-        "tags_json TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '', "
-        "provider TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'standalone', "
-        "connectivity_state TEXT NOT NULL DEFAULT 'standalone', "
-        "current_capacity INTEGER NOT NULL DEFAULT 0, max_capacity INTEGER NOT NULL DEFAULT 1, "
-        "surface_capabilities_json TEXT NOT NULL DEFAULT '[]', "
-        "version TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
-        "updated_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)"
+# ---------------------------------------------------------------------------
+# Phase 2: Deterministic conversation ID contract tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_conversation_returns_deterministic_id(monkeypatch, tmp_path: Path):
+    """Creating a conversation with the same canonical fields must return the same conversation_id."""
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Det Bot", "det-bot")
+
+    conv1 = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "ext-ref-1",
+        title="First title",
+        origin_channel="telegram",
+        external_conversation_ref="ext-ref-1",
     )
-    conn.execute(
-        """
-        INSERT INTO agents (
-            agent_id, agent_token, display_name, slug, role, skills_json, tags_json,
-            description, provider, mode, connectivity_state, current_capacity,
-            max_capacity, surface_capabilities_json, version, created_at, updated_at,
-            last_heartbeat_at
-        ) VALUES (
-            'agent-1', 'raw-agent-token', 'Agent 1', 'agent-1', '', '[]', '[]', '',
-            'codex', 'registry', 'connected', 0, 1, '[]', '', '2026-03-18T00:00:00+00:00',
-            '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'
-        )
-        """
+    conv2 = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "ext-ref-1",
+        title="Second title",
+        origin_channel="telegram",
+        external_conversation_ref="ext-ref-1",
     )
-    conn.execute(
-        "CREATE TABLE deliveries ("
-        "seq INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT NOT NULL UNIQUE, "
-        "target_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, "
-        "state TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL, "
-        "updated_at TEXT NOT NULL, leased_at TEXT, acked_at TEXT)"
+    assert conv1["conversation_id"] == conv2["conversation_id"]
+
+
+def test_create_conversation_rejects_empty_origin_channel(monkeypatch, tmp_path: Path):
+    """Creating a conversation with an empty origin_channel must fail validation."""
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Det Bot", "det-bot-oc")
+
+    resp = client.post(
+        "/v1/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "bad",
+            "origin_channel": "",
+            "external_conversation_ref": "ref-1",
+        },
     )
-    conn.execute(
-        "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, target_agent_id TEXT NOT NULL, "
-        "title TEXT NOT NULL DEFAULT '', origin_surface TEXT NOT NULL DEFAULT 'registry', "
-        "status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any("origin_channel" in str(item) for item in (detail if isinstance(detail, list) else [detail]))
+
+
+def test_create_conversation_rejects_empty_external_ref(monkeypatch, tmp_path: Path):
+    """Creating a conversation with an empty external_conversation_ref must fail validation."""
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Det Bot", "det-bot-er")
+
+    resp = client.post(
+        "/v1/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "bad",
+            "origin_channel": "telegram",
+            "external_conversation_ref": "",
+        },
     )
-    conn.execute(
-        """
-        INSERT INTO deliveries (
-            delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
-        ) VALUES
-            ('legacy-input', 'agent-1', 'surface_input', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'),
-            ('legacy-action', 'agent-1', 'surface_action', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00')
-        """
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any("external_conversation_ref" in str(item) for item in (detail if isinstance(detail, list) else [detail]))
+
+
+def test_create_conversation_idempotent_on_same_agent(monkeypatch, tmp_path: Path):
+    """Creating twice with identical canonical fields returns the same row."""
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Idem Bot", "idem-bot")
+
+    conv1 = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "idem-ref",
+        title="Original",
+        origin_channel="telegram",
+        external_conversation_ref="idem-ref",
     )
-    conn.commit()
-    conn.close()
-
-    RegistrySQLiteStore(db_path)
-    RegistrySQLiteStore(db_path)
-
-    conn = sqlite3.connect(db_path)
-    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert int(version) >= 7  # v7 events, v8+ may add skill/guidance tables
-    agent_columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(agents)").fetchall()
-    }
-    assert "channel_capabilities_json" in agent_columns
-    assert "registry_scope" in agent_columns
-    assert "surface_capabilities_json" not in agent_columns
-    stored_agent_token = conn.execute(
-        "SELECT agent_token FROM agents WHERE agent_id = 'agent-1'"
-    ).fetchone()[0]
-    assert stored_agent_token == hash_agent_token("raw-agent-token")
-    assert stored_agent_token != "raw-agent-token"
-    conversation_columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
-    }
-    assert "origin_channel" in conversation_columns
-    assert "external_conversation_ref" in conversation_columns
-    assert "origin_surface" not in conversation_columns
-    delivery_kinds = conn.execute(
-        "SELECT delivery_id, kind FROM deliveries ORDER BY delivery_id"
-    ).fetchall()
-    assert delivery_kinds == [
-        ("legacy-action", "channel_action"),
-        ("legacy-input", "channel_input"),
-    ]
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-    }
-    assert "skills_override" in tables
-    triggers = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger'"
-        ).fetchall()
-    }
-    # timeline_events was not in the legacy test schema, so timeline FTS
-    # triggers should NOT exist (v2/v7 migrations skip when table is absent).
-    assert "tl_ai" not in triggers
-    assert "tl_ad" not in triggers
-    assert "tl_au" not in triggers
-    assert "ev_ai" in triggers
-    assert "ev_ad" in triggers
-    assert "ev_au" in triggers
-    fts_row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_fts'"
-    ).fetchone()
-    assert fts_row is None
-    events_fts_row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='events_fts'"
-    ).fetchone()
-    assert events_fts_row is not None
-    assert "events" in tables or conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
-    ).fetchone() is not None
-    conn.close()
-
-
-def test_registry_store_migration_rolls_back_schema_version_when_step_fails(
-    tmp_path: Path,
-    monkeypatch,
-):
-    db_path = tmp_path / "registry.sqlite3"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(registry_store_module._BASE_SCHEMA_SQL)
-    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
-    conn.commit()
-    conn.close()
-
-    store = registry_store_module.RegistrySQLiteStore.__new__(
-        registry_store_module.RegistrySQLiteStore
+    conv2 = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "idem-ref",
+        title="Updated title",
+        origin_channel="telegram",
+        external_conversation_ref="idem-ref",
     )
-    store.db_path = db_path
+    assert conv1["conversation_id"] == conv2["conversation_id"]
+    # Title should be updated by the second call
+    assert conv2["title"] == "Updated title"
 
-    def fail_migration(conn: sqlite3.Connection) -> None:
-        conn.execute("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
-        raise RuntimeError("boom")
 
-    monkeypatch.setattr(store, "_migrate_v2_timeline_fts", fail_migration)
-
-    verify = sqlite3.connect(db_path)
-    verify.row_factory = sqlite3.Row
-    with pytest.raises(RuntimeError, match="boom"):
-        store._run_migrations(verify)
-
-    version = verify.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    tables = {
-        row[0]
-        for row in verify.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-    }
-    verify.close()
-
-    assert version == "1"
-    assert "migration_probe" not in tables

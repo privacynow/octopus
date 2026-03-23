@@ -157,11 +157,14 @@ async def handle_registry_delivery(
         if action in {"recovery_discard", "recovery_replay"} and "update_id" not in action_payload:
             action_payload = dict(action_payload)
             action_payload["update_id"] = payload.get("update_id")
+        # Use stable_event_id from the delivery payload for cross-registry dedup
+        stable_event_id = str(payload.get("stable_event_id", "") or "")
+        effective_delivery_id = stable_event_id if stable_event_id else delivery_id
         envelope = _registry_semantic_action(
             conversation_ref=conversation_ref,
             action=action,
             payload=action_payload,
-            delivery_id=delivery_id,
+            delivery_id=effective_delivery_id,
             registry_id=registry_id,
         )
         if envelope is None:

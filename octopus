@@ -137,7 +137,7 @@ def emit(path, fallback_id):
 if registries_dir.exists():
     for path in sorted(registries_dir.glob("*.json")):
         emit(path, path.stem)
-' 2>/dev/null || true
+' </dev/null 2>/dev/null || true
 }
 
 print_bot_registry_connection_lines() {
@@ -497,7 +497,7 @@ else:
     for registry_id in registry_ids:
         if registries_dir.exists():
             (registries_dir / f"{registry_id}.json").unlink(missing_ok=True)
-' >/dev/null 2>&1 || true
+' </dev/null >/dev/null 2>&1 || true
 }
 
 restart_bot_after_config_change() {
@@ -538,7 +538,7 @@ for path in paths:
         raise SystemExit(0)
 
 raise SystemExit(1)
-' >/dev/null 2>&1
+' </dev/null >/dev/null 2>&1
 }
 
 registry_logs_excerpt() {
@@ -1177,12 +1177,12 @@ prompt_local_registry_connect_after_start() {
   bot_count="$(count_bots)"
   [ "$bot_count" -gt 0 ] || return 0
 
-  while IFS= read -r slug; do
+  for slug in $(list_bot_slugs); do
     [ -n "$slug" ] || continue
     slugs+=("$slug")
     state="$(bot_local_registry_connection_state "$slug")"
     [ "$state" = "enrolled" ] || eligible+=("$slug")
-  done < <(list_bot_slugs)
+  done
 
   [ "${#eligible[@]}" -gt 0 ] || return 0
 
@@ -1273,12 +1273,12 @@ connect_bot_to_local_registry_menu() {
   local slug="" choice="" state="" label="" scope="full"
   local slugs=()
   local eligible=()
-  while IFS= read -r slug; do
+  for slug in $(list_bot_slugs); do
     [ -n "$slug" ] || continue
     slugs+=("$slug")
     state="$(bot_local_registry_connection_state "$slug")"
     [ "$state" = "enrolled" ] || eligible+=("$slug")
-  done < <(list_bot_slugs)
+  done
 
   case "${#slugs[@]}" in
     0)
@@ -1587,12 +1587,12 @@ registry_connect_cmd() {
       return 1
     fi
     local targets=() state="" eligible_count=0
-    while IFS= read -r arg; do
+    for arg in $(list_bot_slugs); do
       [ -n "$arg" ] || continue
       targets+=("$arg")
       state="$(bot_local_registry_connection_state "$arg")"
       [ "$state" = "enrolled" ] || eligible_count=$((eligible_count + 1))
-    done < <(list_bot_slugs)
+    done
     if [ "$eligible_count" -eq 0 ]; then
       printf 'All bots are already enrolled on the local registry.\n'
       return 0
@@ -2123,7 +2123,7 @@ run_bot_doctor() {
   local slug="$1"
   shift || true
   ensure_bot_provider_image_ready "$slug" || return 1
-  bot_compose "$slug" run --rm bot python -m app.main --doctor "$@" 2>&1
+  bot_compose "$slug" run --rm bot python -m app.main --doctor "$@" </dev/null 2>&1
 }
 
 run_bot_doctor_until_ready() {

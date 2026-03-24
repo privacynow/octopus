@@ -83,7 +83,7 @@ provider_is_authed() {
   local exit_code=0
   ensure_provider_auth_dir "$provider"
   check_provider_image "$provider" >/dev/null
-  if provider_compose "$provider" run --rm bot-provider >/dev/null 2>&1; then
+  if provider_compose "$provider" run --rm bot-provider </dev/null >/dev/null 2>&1; then
     exit_code=0
   else
     exit_code=$?

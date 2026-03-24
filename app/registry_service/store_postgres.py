@@ -33,6 +33,9 @@ from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
+    routed_task_created_event,
+    routed_task_progress_event,
+    routed_task_result_event,
     validated_ack_request,
     validated_agent_card_payload,
     validated_conversation_action,
@@ -649,6 +652,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now = utcnow_iso()
         validated_request = validated_routed_task_request(request)
         with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT conversation_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    (validated_request["parent_conversation_id"],),
+                )
+                conversation_row = cur.fetchone()
+            if conversation_row is None:
+                raise KeyError(validated_request["parent_conversation_id"])
             disabled_capabilities = self._disabled_capabilities(conn)
             for capability in requested_routed_capabilities(validated_request):
                 if capability.lower() in disabled_capabilities:
@@ -689,9 +700,58 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            mirrored_event = routed_task_created_event(validated_request)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(event_id) DO NOTHING
+                    """,
+                    (
+                        mirrored_event["event_id"],
+                        mirrored_event["conversation_id"],
+                        validated_request["target_agent_id"],
+                        mirrored_event["kind"],
+                        "",
+                        mirrored_event["content"],
+                        _jsonb(mirrored_event["metadata"]),
+                        mirrored_event["created_at"],
+                    ),
+                )
+                inserted = cur.rowcount > 0
+            inserted_events: list[dict[str, Any]] = []
+            if inserted:
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"SELECT seq FROM {_SCHEMA}.events WHERE event_id = %s",
+                        (mirrored_event["event_id"],),
+                    )
+                    seq_row = cur.fetchone()
+                inserted_events.append({
+                    "seq": int(seq_row["seq"]) if seq_row is not None else 0,
+                    "event_id": mirrored_event["event_id"],
+                    "conversation_id": mirrored_event["conversation_id"],
+                    "agent_id": validated_request["target_agent_id"],
+                    "kind": mirrored_event["kind"],
+                    "actor": "",
+                    "content": mirrored_event["content"],
+                    "metadata": mirrored_event["metadata"],
+                    "created_at": mirrored_event["created_at"],
+                })
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                        (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+                    )
         return {
             "routed_task_id": validated_request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
+            "events_written": bool(inserted_events),
+            "inserted_events": inserted_events,
+            "parent_conversation_id": validated_request["parent_conversation_id"],
+            "origin_agent_id": validated_request["origin_agent_id"],
+            "target_agent_id": validated_request["target_agent_id"],
         }
 
     def poll(self, agent_token: str, *, cursor: int, limit: int) -> dict[str, Any]:
@@ -817,8 +877,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 updated = cur.rowcount
             events_written = False
             inserted_events: list[dict[str, Any]] = []
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT parent_conversation_id, origin_agent_id, target_agent_id FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
+                    (routed_task_id,),
+                )
+                task_row = cur.fetchone()
             if updated > 0:
-                for event in validated_payload["timeline_events"]:
+                source_events = list(validated_payload["timeline_events"])
+                if not source_events and task_row is not None:
+                    source_events = [
+                        routed_task_progress_event(
+                            routed_task_id=routed_task_id,
+                            parent_conversation_id=task_row["parent_conversation_id"],
+                            payload=validated_payload,
+                        )
+                    ]
+                for event in source_events:
                     event_metadata = {"status": validated_payload["status"]}
                     if event.get("progress") is not None:
                         event_metadata["progress"] = event["progress"]
@@ -842,8 +917,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             ),
                         )
                         if cur.rowcount > 0:
+                            cur.execute(
+                                f"SELECT seq FROM {_SCHEMA}.events WHERE event_id = %s",
+                                (event["event_id"],),
+                            )
+                            seq_row = cur.fetchone()
                             events_written = True
                             inserted_events.append({
+                                "seq": int(seq_row["seq"]) if seq_row is not None else 0,
                                 "event_id": event["event_id"],
                                 "conversation_id": event["conversation_id"],
                                 "agent_id": row["agent_id"],
@@ -853,13 +934,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 "metadata": event_metadata,
                                 "created_at": event["created_at"],
                             })
-            # Return enough context for WebSocket broadcast
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT parent_conversation_id, origin_agent_id, target_agent_id FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
-                    (routed_task_id,),
-                )
-                task_row = cur.fetchone()
+                if events_written and task_row is not None:
+                    mirrored_updated_at = inserted_events[-1]["created_at"] if inserted_events else now
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                            (mirrored_updated_at, task_row["parent_conversation_id"]),
+                        )
             result = {"routed_task_id": routed_task_id, "status": validated_payload["status"], "events_written": events_written, "inserted_events": inserted_events}
             if task_row:
                 result["parent_conversation_id"] = task_row["parent_conversation_id"]
@@ -910,7 +991,63 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
-        return {"routed_task_id": routed_task_id, "status": validated_payload["status"]}
+            mirrored_event = routed_task_result_event(
+                routed_task_id=routed_task_id,
+                parent_conversation_id=task["parent_conversation_id"],
+                payload=validated_payload,
+            )
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(event_id) DO NOTHING
+                    """,
+                    (
+                        mirrored_event["event_id"],
+                        mirrored_event["conversation_id"],
+                        row["agent_id"],
+                        mirrored_event["kind"],
+                        "",
+                        mirrored_event["content"],
+                        _jsonb(mirrored_event["metadata"]),
+                        mirrored_event["created_at"],
+                    ),
+                )
+                inserted = cur.rowcount > 0
+            inserted_events: list[dict[str, Any]] = []
+            if inserted:
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"SELECT seq FROM {_SCHEMA}.events WHERE event_id = %s",
+                        (mirrored_event["event_id"],),
+                    )
+                    seq_row = cur.fetchone()
+                inserted_events.append({
+                    "seq": int(seq_row["seq"]) if seq_row is not None else 0,
+                    "event_id": mirrored_event["event_id"],
+                    "conversation_id": mirrored_event["conversation_id"],
+                    "agent_id": row["agent_id"],
+                    "kind": mirrored_event["kind"],
+                    "actor": "",
+                    "content": mirrored_event["content"],
+                    "metadata": mirrored_event["metadata"],
+                    "created_at": mirrored_event["created_at"],
+                })
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                        (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+                    )
+        return {
+            "routed_task_id": routed_task_id,
+            "status": validated_payload["status"],
+            "events_written": bool(inserted_events),
+            "inserted_events": inserted_events,
+            "parent_conversation_id": task["parent_conversation_id"],
+            "origin_agent_id": task["origin_agent_id"],
+            "target_agent_id": task["target_agent_id"],
+        }
 
     def deregister(self, agent_token: str) -> dict[str, Any]:
         now = utcnow_iso()
@@ -930,10 +1067,39 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
         return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 
-    def list_agents(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+    def list_agents(
+        self,
+        *,
+        for_agent_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 25,
+        q: str = "",
+        connectivity_state: str = "",
+    ) -> list[dict[str, Any]]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
+                if q or connectivity_state:
+                    cur.execute(f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name)")
+                    rows = cur.fetchall()
+                    agents = [self._row_to_agent(row) for row in rows]
+                    if for_agent_id is not None:
+                        agents = [agent for agent in agents if agent["agent_id"] == for_agent_id]
+                    q_lower = q.strip().lower()
+                    if q_lower:
+                        agents = [
+                            agent for agent in agents
+                            if q_lower in (agent["display_name"] or "").lower()
+                            or q_lower in (agent["slug"] or "").lower()
+                            or q_lower in (agent["role"] or "").lower()
+                            or q_lower in (agent["provider"] or "").lower()
+                        ]
+                    if connectivity_state:
+                        agents = [
+                            agent for agent in agents
+                            if (agent["connectivity_state"] or "") == connectivity_state
+                        ]
+                    return agents[cursor: cursor + fetch_limit]
                 if for_agent_id is not None:
                     cur.execute(
                         f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s ORDER BY lower(display_name) LIMIT %s OFFSET %s",

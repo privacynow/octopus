@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.agents.client import AgentRegistryClient
+from app.agents.state import load_runtime_registry_connection_state
+from app.agents.types import RoutedTaskUpdate
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
@@ -154,11 +157,67 @@ class RegistryChannelEgress(ChannelEgress):
             )
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
-        # Progress updates are ephemeral — not persisted as events.
-        # The progress-bar edit mechanism still works via RegistryEditableHandle,
-        # but we don't write a permanent event to the store.
-        del html_text, event_id
-        return
+        del event_id
+        summary = self._plain_text_snippet(html_text, limit=240)
+        if not summary:
+            return
+        now = time.monotonic()
+        if now - self._last_progress_published_at < self._PROGRESS_MIN_INTERVAL:
+            return
+        self._last_progress_published_at = now
+
+        if self._is_task_ref():
+            if not self.routed_task_id or not self.authority_ref:
+                return
+            try:
+                await self._services.control_plane.task_routing.update_routed_task_status(
+                    update=RoutedTaskUpdate(
+                        routed_task_id=self.routed_task_id,
+                        status="running",
+                        summary=summary,
+                    ),
+                    authority_ref=self.authority_ref,
+                )
+            except Exception:
+                log.warning(
+                    "Routed task progress publish failed for %s",
+                    self.conversation_ref,
+                    exc_info=True,
+                )
+            return
+
+        registry = next(
+            (item for item in self.config.agent_registries if item.registry_id == self.registry_id),
+            None,
+        )
+        if registry is None or not registry.url:
+            return
+        state = load_runtime_registry_connection_state(
+            self.config.data_dir,
+            self.registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if not state.agent_token:
+            return
+        parsed = parse_registry_ref(self.conversation_ref)
+        conversation_id = parsed[2] if parsed else self.conversation_ref
+        client = AgentRegistryClient(
+            registry.url,
+            agent_token=state.agent_token,
+            timeout_seconds=10.0,
+        )
+        try:
+            await client.publish_progress(
+                conversation_id,
+                content=summary,
+                created_at=_utcnow_iso(),
+            )
+        except Exception:
+            log.warning(
+                "Conversation progress publish failed for %s",
+                self.conversation_ref,
+                exc_info=True,
+            )
 
     async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         del kwargs

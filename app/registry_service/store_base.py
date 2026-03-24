@@ -564,6 +564,61 @@ def runtime_health_detail(value: Any, workers: list[dict[str, Any]]) -> dict[str
     }
 
 
+def routed_task_created_event(request: dict[str, Any]) -> dict[str, Any]:
+    created_at = str(request.get("created_at") or utcnow_iso())
+    routed_task_id = str(request["routed_task_id"])
+    title = str(request.get("title") or routed_task_id)
+    return {
+        "event_id": f"routed-task:{routed_task_id}:queued:{created_at}",
+        "conversation_id": str(request["parent_conversation_id"]),
+        "kind": "task.status",
+        "content": title,
+        "metadata": {"status": "queued"},
+        "created_at": created_at,
+    }
+
+
+def routed_task_progress_event(
+    *,
+    routed_task_id: str,
+    parent_conversation_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    created_at = str(payload.get("updated_at") or utcnow_iso())
+    metadata: dict[str, Any] = {"status": str(payload["status"])}
+    if payload.get("progress") is not None:
+        metadata["progress"] = payload["progress"]
+    return {
+        "event_id": (
+            f"routed-task:{routed_task_id}:{payload['status']}:"
+            f"{created_at}"
+        ),
+        "conversation_id": parent_conversation_id,
+        "kind": "task.status",
+        "content": str(payload.get("summary") or payload["status"]),
+        "metadata": metadata,
+        "created_at": created_at,
+    }
+
+
+def routed_task_result_event(
+    *,
+    routed_task_id: str,
+    parent_conversation_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    created_at = str(payload.get("completed_at") or utcnow_iso())
+    content = str(payload.get("summary") or payload.get("full_text") or payload["status"])
+    return {
+        "event_id": f"routed-task:{routed_task_id}:result:{created_at}",
+        "conversation_id": parent_conversation_id,
+        "kind": "task.status",
+        "content": content,
+        "metadata": {"status": str(payload["status"])},
+        "created_at": created_at,
+    }
+
+
 class AbstractRegistryStore(Protocol):
     """Backend-neutral contract for the registry service persistence layer."""
 
@@ -619,7 +674,15 @@ class AbstractRegistryStore(Protocol):
     def list_capabilities(self) -> list[dict[str, Any]]:
         """Return the declared capability universe merged with override state."""
 
-    def list_agents(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+    def list_agents(
+        self,
+        *,
+        for_agent_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 25,
+        q: str = "",
+        connectivity_state: str = "",
+    ) -> list[dict[str, Any]]:
         """Return registered agents in UI-ready form with offset-based pagination."""
 
     def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:

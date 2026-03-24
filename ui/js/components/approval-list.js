@@ -161,11 +161,9 @@ function renderApprovalList(container) {
     }
 
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 1500);
-        }
+    const unsub = WS.subscribe('approvals', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
     });
     cleanups.add(unsub);
 

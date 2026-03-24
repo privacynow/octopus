@@ -53,13 +53,20 @@ function renderDashboard(container) {
         return card;
     }
 
-    function createPreviewList(title, subtitle, emptyText, items) {
+    function createPreviewList(title, subtitle, emptyText, items, href) {
         const section = document.createElement('section');
         section.className = 'card dashboard-section';
 
         const head = document.createElement('div');
         head.className = 'dashboard-section-header';
         head.innerHTML = `<div><strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span></div>`;
+        if (href) {
+            const link = document.createElement('a');
+            link.href = href;
+            link.className = 'section-link';
+            link.textContent = 'View all';
+            head.appendChild(link);
+        }
         section.appendChild(head);
 
         if (!items.length) {
@@ -157,21 +164,25 @@ function renderDashboard(container) {
             value: String(summary.agents?.connected || 0),
             label: 'Connected agents',
             detail: `${summary.agents?.total || 0} enrolled`,
+            href: '/ui/agents?state=connected',
         }));
         healthGrid.appendChild(UI.renderStatCard({
             value: String(summary.conversations?.active || 0),
             label: 'Open conversations',
             detail: `${summary.conversations?.total || 0} total`,
+            href: '/ui/conversations?status=open',
         }));
         healthGrid.appendChild(UI.renderStatCard({
             value: String(summary.tasks?.running || 0),
             label: 'Running tasks',
             detail: `${summary.tasks?.pending || 0} pending`,
+            href: '/ui/tasks?status=running',
         }));
         healthGrid.appendChild(UI.renderStatCard({
             value: `$${Number(summary.usage_24h?.cost_usd || 0).toFixed(2)}`,
             label: '24h cost',
             detail: `${Number(summary.usage_24h?.prompt_tokens || 0).toLocaleString()} prompt tokens`,
+            href: '/ui/usage',
         }));
         content.appendChild(healthGrid);
 
@@ -194,6 +205,7 @@ function renderDashboard(container) {
             'Decisions that are currently blocking work.',
             'Nothing is waiting for approval.',
             approvalRows,
+            '/ui/approvals',
         ));
 
         const conversationRows = (conversationsData.conversations || []).map((item) => createPreviewRow({
@@ -211,6 +223,7 @@ function renderDashboard(container) {
             'The most recently updated open threads.',
             'No open conversations right now.',
             conversationRows,
+            '/ui/conversations?status=open',
         ));
 
         const taskRows = (failedTasksData.tasks || []).map((item) => createPreviewRow({
@@ -228,6 +241,7 @@ function renderDashboard(container) {
             'Tasks that need follow-up or retry decisions.',
             'No failed tasks in the last page of work.',
             taskRows,
+            '/ui/tasks?status=failed',
         ));
 
         content.appendChild(lowerGrid);
@@ -254,13 +268,12 @@ function renderDashboard(container) {
     }
 
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event' || msg.type === 'heartbeat') {
+    ['summary', 'agents', 'conversations', 'tasks', 'approvals', 'usage'].forEach((topic) => {
+        cleanups.add(WS.subscribe(topic, () => {
             clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadSummary, 2000);
-        }
+            reloadDebounce = setTimeout(loadSummary, 400);
+        }));
     });
-    cleanups.add(unsub);
 
     loadSummary();
     cleanups.add(() => clearTimeout(reloadDebounce));

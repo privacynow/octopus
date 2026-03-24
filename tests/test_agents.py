@@ -17,7 +17,10 @@ from app.agents.delivery import build_registry_delivery_runtime, handle_registry
 from app.agents.runtime import AgentRuntime
 from app.agents.state import bot_identity
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
+from app.channels.registry.channel import _services_for_registry
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
+from app.agents.registry_capabilities import registry_authority_ref
+from app.control_plane.bus import ControlPlaneBus
 from app.config import derive_agent_slug
 from app.identity import conversation_key_for_ref, telegram_conversation_ref
 from app.runtime.inbound_types import deserialize_inbound
@@ -122,6 +125,35 @@ def test_save_registry_connection_state_uses_private_file_permissions(tmp_path: 
     mode = state_path.stat().st_mode & 0o777
 
     assert mode == 0o600
+
+
+def test_registry_channel_services_resolve_runtime_agent_id_after_enrollment(tmp_path: Path):
+    registry = make_registry_connection(registry_id="local")
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(registry,),
+    )
+    services = _services_for_registry(
+        ControlPlaneBus(tmp_path),
+        registry=registry,
+        authority_capabilities={registry_authority_ref("local"): {"conversation_projection"}},
+        config=config,
+    )
+
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id="local",
+            registry_scope="full",
+            agent_id="agent-live",
+            agent_token="token-live",
+        ),
+    )
+
+    projection = services.control_plane.conversation_projection
+
+    assert projection._agent_id_for_authority("registry:local") == "agent-live"
 
 
 def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(

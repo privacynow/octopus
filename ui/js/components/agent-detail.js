@@ -238,7 +238,6 @@ function renderAgentDetail(container, params) {
         });
     }
 
-    // WS: subscribe to agent-specific + wildcard for full live updates
     let reloadDebounce = null;
     const unsub = WS.subscribe('agent:' + agentId, (msg) => {
         if (msg.type === 'heartbeat' && msg.data) {
@@ -251,14 +250,15 @@ function renderAgentDetail(container, params) {
     });
     cleanups.add(unsub);
 
-    // Also reload conversations sub-list on any event for this agent
-    const unsubEvents = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event' && msg.data && msg.data.agent_id === agentId) {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadConversations, 2000);
-        }
+    const unsubEvents = WS.subscribe('conversations', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadConversations, 400);
     });
     cleanups.add(unsubEvents);
+    cleanups.add(WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadDetail, 400);
+    }));
 
     loadDetail();
     cleanups.add(() => clearTimeout(reloadDebounce));

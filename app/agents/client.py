@@ -16,6 +16,7 @@ from registry_sdk.agents import AgentCard as SdkAgentCard
 from registry_sdk.client import RegistryClient as SdkRegistryClient
 from registry_sdk.client import RegistryClientError
 from registry_sdk.discovery import AgentDiscoveryQuery as SdkAgentDiscoveryQuery
+from registry_sdk.realtime import ConversationProgressUpdate as SdkConversationProgressUpdate
 from registry_sdk.tasks import RoutedTaskRequest as SdkRoutedTaskRequest
 from registry_sdk.tasks import RoutedTaskResult as SdkRoutedTaskResult
 from registry_sdk.tasks import RoutedTaskUpdate as SdkRoutedTaskUpdate
@@ -43,6 +44,10 @@ def _sdk_routed_task_result(result: RoutedTaskResult) -> SdkRoutedTaskResult:
     payload = dict(to_wire(result))
     payload.pop("routed_task_id", None)
     return SdkRoutedTaskResult.model_validate(payload)
+
+
+def _sdk_conversation_progress(content: str, *, created_at: str) -> SdkConversationProgressUpdate:
+    return SdkConversationProgressUpdate(content=content, created_at=created_at)
 
 
 class AgentRegistryClient(SdkRegistryClient):
@@ -118,4 +123,16 @@ class AgentRegistryClient(SdkRegistryClient):
         return await super().routed_task_result(
             routed_task_id,
             _sdk_routed_task_result(result),
+        )
+
+    async def publish_progress(
+        self,
+        conversation_id: str,
+        *,
+        content: str,
+        created_at: str,
+    ) -> None:
+        await super().publish_progress(
+            conversation_id,
+            _sdk_conversation_progress(content, created_at=created_at),
         )

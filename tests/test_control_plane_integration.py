@@ -351,10 +351,16 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
     )
     _install_store_backed_clients(monkeypatch, [seeded])
     services = _services_for_config(config)
+    parent = seeded.store.create_conversation(
+        target_agent_id=seeded.origin_agent_id,
+        title="Shared worker parent",
+        origin_channel="registry",
+        external_conversation_ref="parent-1",
+    )
     seeded.store.create_routed_task(
         {
             "routed_task_id": "task-1",
-            "parent_conversation_id": "parent-1",
+            "parent_conversation_id": parent["conversation_id"],
             "origin_agent_id": seeded.origin_agent_id,
             "target_agent_id": seeded.local_agent_id,
             "title": "Review",
@@ -414,10 +420,16 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
     )
     _install_store_backed_clients(monkeypatch, [seeded])
     services = _services_for_config(config)
+    parent = seeded.store.create_conversation(
+        target_agent_id=seeded.origin_agent_id,
+        title="Status parent",
+        origin_channel="registry",
+        external_conversation_ref="parent-status-1",
+    )
     seeded.store.create_routed_task(
         {
             "routed_task_id": "task-status-1",
-            "parent_conversation_id": "parent-status-1",
+            "parent_conversation_id": parent["conversation_id"],
             "origin_agent_id": seeded.origin_agent_id,
             "target_agent_id": seeded.local_agent_id,
             "title": "Status task",
@@ -435,7 +447,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
                 timeline_events=(
                     {
                         "event_id": "evt-1",
-                        "conversation_id": "parent-status-1",
+                        "conversation_id": parent["conversation_id"],
                         "kind": "progress",
                         "title": "Halfway",
                         "progress": 50,
@@ -448,17 +460,21 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
         )
         await _wait_for(
             lambda: seeded.store.list_tasks()[0]["status"] == "running"
-            and bool(seeded.store.list_events("parent-status-1")["events"]),
+            and bool(seeded.store.list_events(parent["conversation_id"])["events"]),
             message="routed task status update did not reach registry store",
         )
 
     task = seeded.store.list_tasks()[0]
-    timeline = seeded.store.list_events("parent-status-1")["events"]
+    timeline = seeded.store.list_events(parent["conversation_id"])["events"]
 
     assert task["status"] == "running"
     assert task["summary"] == "halfway"
-    assert timeline[0]["event_id"] == "evt-1"
-    assert timeline[0]["metadata"].get("progress") == 50
+    assert [event["metadata"].get("status") for event in timeline if event["kind"] == "task.status"] == [
+        "queued",
+        "running",
+    ]
+    assert any(event["event_id"] == "evt-1" for event in timeline)
+    assert any(event["metadata"].get("progress") == 50 for event in timeline)
 
 
 @pytest.mark.asyncio
@@ -487,10 +503,16 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
     )
     _install_store_backed_clients(monkeypatch, [seeded])
     services = _services_for_config(config)
+    parent = seeded.store.create_conversation(
+        target_agent_id=seeded.origin_agent_id,
+        title="Fallback parent",
+        origin_channel="registry",
+        external_conversation_ref="parent-fallback-1",
+    )
     seeded.store.create_routed_task(
         {
             "routed_task_id": "task-fallback-1",
-            "parent_conversation_id": "parent-fallback-1",
+            "parent_conversation_id": parent["conversation_id"],
             "origin_agent_id": seeded.origin_agent_id,
             "target_agent_id": seeded.local_agent_id,
             "title": "Fallback task",

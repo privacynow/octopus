@@ -6,7 +6,7 @@ function renderTaskList(container) {
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
-    let currentStatus = '';
+    let currentStatus = UI.readQueryParam('status', '');
 
     // Header
     const header = document.createElement('div');
@@ -40,8 +40,10 @@ function renderTaskList(container) {
         currentStatus = statusSelect.value;
         cursor = 0;
         cursorStack = [];
+        UI.updateQueryParams({ status: currentStatus });
         loadPage();
     });
+    statusSelect.value = currentStatus;
 
     function loadPage() {
         listEl.textContent = '';
@@ -161,13 +163,10 @@ function renderTaskList(container) {
 
     loadPage();
 
-    // WS: subscribe for live task updates (task.status, new tasks, completions)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 2000);
-        }
+    const unsub = WS.subscribe('tasks', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
     });
     cleanups.add(() => clearTimeout(reloadDebounce));
     cleanups.add(unsub);

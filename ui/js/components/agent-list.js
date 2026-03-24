@@ -6,8 +6,8 @@ function renderAgentList(container) {
     let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let cursorStack = []; // stack of previous cursors for "prev"
-    let nameFilter = '';
-    let stateFilter = '';
+    let nameFilter = UI.readQueryParam('q', '');
+    let stateFilter = UI.readQueryParam('state', '');
 
     // Shell
     const header = document.createElement('div');
@@ -37,7 +37,8 @@ function renderAgentList(container) {
     stateSelect.innerHTML = '<option value="">All states</option>' +
         '<option value="connected">Connected</option>' +
         '<option value="degraded">Degraded</option>' +
-        '<option value="stopped">Stopped</option>';
+        '<option value="disconnected">Disconnected</option>' +
+        '<option value="offline">Offline</option>';
     filterBar.appendChild(stateSelect);
 
     container.appendChild(filterBar);
@@ -56,9 +57,10 @@ function renderAgentList(container) {
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
-            nameFilter = searchInput.value.trim().toLowerCase();
+            nameFilter = searchInput.value.trim();
             cursor = 0;
             cursorStack = [];
+            UI.updateQueryParams({ q: nameFilter, state: stateFilter });
             loadPage();
         }, 300);
     });
@@ -67,17 +69,18 @@ function renderAgentList(container) {
         stateFilter = stateSelect.value;
         cursor = 0;
         cursorStack = [];
+        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
         loadPage();
     });
-
-    let lastData = null;
+    searchInput.value = nameFilter;
+    stateSelect.value = stateFilter;
 
     function loadPage() {
         listEl.textContent = '';
         UI.renderSkeletons(listEl, 5, 'row');
+        pagEl.textContent = '';
 
-        API.listAgents({ cursor, limit }).then(data => {
-            lastData = data;
+        API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then(data => {
             const agents = data.agents || data || [];
             renderCards(agents, data.has_more, data.next_cursor);
         }).catch(err => {
@@ -90,24 +93,12 @@ function renderAgentList(container) {
         listEl.textContent = '';
         pagEl.textContent = '';
 
-        // Client-side name filter
-        let filtered = agents;
-        if (nameFilter) {
-            filtered = agents.filter(a => {
-                const name = (a.display_name || a.slug || '').toLowerCase();
-                return name.includes(nameFilter);
-            });
-        }
-        if (stateFilter) {
-            filtered = filtered.filter(a => a.connectivity_state === stateFilter);
-        }
-
-        if (filtered.length === 0) {
-            listEl.appendChild(UI.renderEmptyState(agents.length === 0 ? 'No agents enrolled' : 'No agents match filters'));
+        if (agents.length === 0) {
+            listEl.appendChild(UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled'));
             return;
         }
 
-        filtered.forEach(a => {
+        agents.forEach(a => {
             const sub = document.createElement('span');
             const parts = [a.role || 'agent', a.provider || '', a.slug].filter(Boolean);
             sub.appendChild(document.createTextNode(parts.join(' \u00b7 ')));
@@ -149,24 +140,11 @@ function renderAgentList(container) {
         });
     }
 
-    // WS: subscribe to * for heartbeat + event updates
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'heartbeat' && msg.data) {
-            const row = document.getElementById('agent-badge-' + msg.data.agent_id);
-            const badge = row && row.querySelector('.badge');
-            if (badge && msg.data.connectivity_state) {
-                badge.className = 'badge badge-' + msg.data.connectivity_state;
-                badge.textContent = msg.data.connectivity_state;
-            }
-        }
-        // Reload agent list on any event (new conversations change counts)
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 2000);
-        }
-    });
-    cleanups.add(unsub);
+    cleanups.add(WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
+    }));
 
     loadPage();
     cleanups.add(() => clearTimeout(searchTimeout));

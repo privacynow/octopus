@@ -172,11 +172,9 @@ function renderUsageView(container) {
 
     // WS: reload usage on new events (token costs update)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadUsage, 5000);
-        }
+    const unsub = WS.subscribe('usage', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadUsage, 600);
     });
     cleanups.add(() => clearTimeout(reloadDebounce));
     cleanups.add(unsub);

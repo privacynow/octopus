@@ -63,6 +63,36 @@ window.UI = (() => {
         return cleaned || fallback;
     }
 
+    function readQueryParam(name, fallback = '') {
+        try {
+            const url = new URL(window.location.href);
+            return url.searchParams.get(name) || fallback;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function updateQueryParams(updates, { replace = true } = {}) {
+        try {
+            const url = new URL(window.location.href);
+            Object.entries(updates || {}).forEach(([key, value]) => {
+                if (value === undefined || value === null || value === '') {
+                    url.searchParams.delete(key);
+                } else {
+                    url.searchParams.set(key, String(value));
+                }
+            });
+            const next = `${url.pathname}${url.search}${url.hash}`;
+            if (replace) {
+                history.replaceState(null, '', next);
+            } else {
+                history.pushState(null, '', next);
+            }
+        } catch (e) {
+            console.warn('Failed to update query params', e);
+        }
+    }
+
     function _getToastRegion() {
         if (toastRegion && document.body.contains(toastRegion)) return toastRegion;
         toastRegion = document.getElementById('toast-region');
@@ -245,9 +275,12 @@ window.UI = (() => {
         return el;
     }
 
-    function renderStatCard({ value, label, detail = '' }) {
-        const card = document.createElement('div');
+    function renderStatCard({ value, label, detail = '', href = '' }) {
+        const card = document.createElement(href ? 'a' : 'div');
         card.className = 'stat-card';
+        if (href) {
+            card.href = href;
+        }
 
         const valueEl = document.createElement('div');
         valueEl.className = 'stat-card-value';
@@ -416,6 +449,8 @@ window.UI = (() => {
         formatTime,
         formatApprovalTime,
         safeFilename,
+        readQueryParam,
+        updateQueryParams,
         notify,
         reportError,
         createCleanupBag,

@@ -6,8 +6,8 @@ function renderConversationList(container) {
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
-    let currentQ = '';
-    let currentStatus = '';
+    let currentQ = UI.readQueryParam('q', '');
+    let currentStatus = UI.readQueryParam('status', '');
     let searchTimeout = null;
 
     // Header
@@ -72,9 +72,10 @@ function renderConversationList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             const q = searchInput.value.trim();
-            currentQ = q.length >= 3 ? q : '';
+            currentQ = q;
             cursor = 0;
             cursorStack = [];
+            UI.updateQueryParams({ q: currentQ, status: currentStatus });
             loadPage();
         }, 300);
     });
@@ -83,8 +84,11 @@ function renderConversationList(container) {
         currentStatus = statusSelect.value;
         cursor = 0;
         cursorStack = [];
+        UI.updateQueryParams({ q: currentQ, status: currentStatus });
         loadPage();
     });
+    searchInput.value = currentQ;
+    statusSelect.value = currentStatus;
 
     function loadPage() {
         listEl.textContent = '';
@@ -154,15 +158,11 @@ function renderConversationList(container) {
 
     loadPage();
 
-    // WS: reload on any new event (new conversations, status changes)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event' || msg.type === 'heartbeat') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 2000);
-        }
-    });
-    cleanups.add(unsub);
+    cleanups.add(WS.subscribe('conversations', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
+    }));
 
     function _showNewConversationDialog() {
         const overlay = document.createElement('div');
@@ -198,7 +198,7 @@ function renderConversationList(container) {
         dialog.appendChild(agentSelect);
 
         // Load agents
-        API.listAgents().then(data => {
+        API.listAgents({ limit: 100 }).then(data => {
             const agents = data.agents || data || [];
             agentSelect.innerHTML = '';
             if (agents.length === 0) {

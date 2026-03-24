@@ -27,6 +27,15 @@ from registry_sdk.tasks import (
     RoutedTaskUpdate,
     TimelineEventPayload,
 )
+from registry_sdk.realtime import (
+    CollectionTopic,
+    ConversationProgressUpdate,
+    RealtimeEventEnvelope,
+    RealtimeHeartbeatEnvelope,
+    RealtimeInvalidationEnvelope,
+    RealtimeInvalidationPayload,
+    RealtimeProgressEnvelope,
+)
 from registry_sdk.discovery import AgentDiscoveryQuery, DiscoveredAgentRef
 
 __all__ = [
@@ -49,6 +58,13 @@ __all__ = [
     "RoutedTaskResult",
     "RoutedTaskUpdate",
     "TimelineEventPayload",
+    "CollectionTopic",
+    "ConversationProgressUpdate",
+    "RealtimeEventEnvelope",
+    "RealtimeHeartbeatEnvelope",
+    "RealtimeInvalidationEnvelope",
+    "RealtimeInvalidationPayload",
+    "RealtimeProgressEnvelope",
     "AgentDiscoveryQuery",
     "DiscoveredAgentRef",
 ]

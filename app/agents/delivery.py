@@ -16,6 +16,7 @@ from app.agents.bridge import (
     qualify_registry_parent_ref,
 )
 from app.agents.types import RoutedTaskResult
+from app.agents.state import runtime_registry_agent_id
 from app.config import BotConfig
 from app.identity import conversation_key_for_ref
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
@@ -281,7 +282,7 @@ async def handle_registry_delivery(
                 conversation_key=conversation_key,
                 origin_channel="registry",
                 external_conversation_ref=parent_conversation_id,
-                target_agent_id=config.agent_id_for_registry(registry_id),
+                target_agent_id=runtime_registry_agent_id(config.data_dir, registry_id),
             )
             sink = build_event_sink_for_context(
                 transport,

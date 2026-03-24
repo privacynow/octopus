@@ -222,6 +222,67 @@ async function publishEvents(token: string, conversationId: string, suffix: stri
   expect(payload.skipped).toBe(0);
 }
 
+async function publishEvent(token: string, conversationId: string, event: Record<string, unknown>) {
+  const response = await fetch(`${BASE}/v1/conversations/${conversationId}/events`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ events: [event] }),
+  });
+  const responseText = await response.text();
+  expect(response.ok, responseText).toBeTruthy();
+}
+
+async function publishProgress(token: string, conversationId: string, content: string) {
+  const response = await fetch(`${BASE}/v1/conversations/${conversationId}/progress`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content,
+      created_at: iso(0),
+    }),
+  });
+  expect(response.ok, await response.text()).toBeTruthy();
+}
+
+async function createRoutedTask(
+  token: string,
+  payload: Record<string, unknown>,
+) {
+  const response = await fetch(`${BASE}/v1/agents/routed-tasks`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const responseText = await response.text();
+  expect(response.ok, responseText).toBeTruthy();
+  return JSON.parse(responseText);
+}
+
+async function updateRoutedTaskStatus(
+  token: string,
+  routedTaskId: string,
+  payload: Record<string, unknown>,
+) {
+  const response = await fetch(`${BASE}/v1/agents/routed-tasks/${routedTaskId}/status`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  expect(response.ok, await response.text()).toBeTruthy();
+}
+
 async function waitForViewReady(page: import("@playwright/test").Page, selector?: string) {
   await page.waitForFunction(() => {
     const content = document.getElementById("content");
@@ -236,6 +297,11 @@ async function waitForViewReady(page: import("@playwright/test").Page, selector?
     await page.waitForSelector(selector);
   }
   await page.waitForTimeout(200);
+}
+
+async function statValue(card: import("@playwright/test").Locator): Promise<number> {
+  const text = await card.locator(".stat-card-value").innerText();
+  return Number.parseInt(text.replace(/[^\d]/g, ""), 10);
 }
 
 async function seedSmokeConversation(suffix: string) {
@@ -289,6 +355,90 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await expect(page.getByText("Agent started work")).toBeVisible();
   await expect(page.getByText("Agent finished work")).toBeVisible();
   await expect(page.getByText("Used a tool")).toBeVisible();
+});
+
+test("dashboard and conversation views react to live registry updates", async ({ page }) => {
+  const suffix = `${Date.now()}-realtime`;
+  const { primaryDisplay, primary, conversationTitle, conversation } = await seedSmokeConversation(suffix);
+
+  await page.goto("/ui/login");
+  await page.getByLabel("Password").fill(UI_TOKEN);
+  await page.getByRole("button", { name: /sign in/i }).click();
+
+  await expect(page).toHaveURL(/\/ui\/?$/);
+  await waitForViewReady(page, ".dashboard-shell");
+
+  const connectedAgentsCard = page.locator("a.stat-card").filter({ hasText: "Connected agents" });
+  const openConversationsCard = page.locator("a.stat-card").filter({ hasText: "Open conversations" });
+  const runningTasksCard = page.locator("a.stat-card").filter({ hasText: "Running tasks" });
+
+  const initialConnectedAgents = await statValue(connectedAgentsCard);
+  const initialOpenConversations = await statValue(openConversationsCard);
+  const initialRunningTasks = await statValue(runningTasksCard);
+
+  const extraAgent = await enrollAgent(`support-bot-${suffix}`, `Support Bot ${suffix}`);
+  const secondConversation = await createConversation(
+    primary.token,
+    primary.agentId,
+    `ui-overhaul-live-${suffix}`,
+    `Live follow-up ${suffix}`,
+  );
+
+  await expect
+    .poll(async () => statValue(connectedAgentsCard))
+    .toBe(initialConnectedAgents + 1);
+  await expect
+    .poll(async () => statValue(openConversationsCard))
+    .toBe(initialOpenConversations + 1);
+  await expect(page.getByText(`Live follow-up ${suffix}`)).toBeVisible();
+
+  await createRoutedTask(primary.token, {
+    routed_task_id: `task-live-${suffix}`,
+    parent_conversation_id: conversation.conversation_id,
+    origin_agent_id: primary.agentId,
+    target_agent_id: extraAgent.agentId,
+    title: "Live delegated review",
+    instructions: "Review the deployment plan.",
+    requested_capabilities: ["reviewer"],
+    created_at: iso(-2),
+  });
+  await updateRoutedTaskStatus(extraAgent.token, `task-live-${suffix}`, {
+    status: "running",
+    summary: "Review underway",
+    timeline_events: [],
+  });
+
+  await expect
+    .poll(async () => statValue(runningTasksCard))
+    .toBe(initialRunningTasks + 1);
+
+  await page.locator(".nav-links").getByRole("link", { name: /Conversations/ }).click();
+  await waitForViewReady(page, ".list-container .list-row");
+  await expect(page.getByText(conversationTitle)).toBeVisible();
+  await page.getByText(conversationTitle).click();
+
+  await waitForViewReady(page, ".timeline-events .event-card, .timeline-events .chat-bubble");
+  await publishProgress(primary.token, conversation.conversation_id as string, "Thinking through the handoff");
+  await expect(page.locator(".conversation-progress-banner")).toContainText("Thinking through the handoff");
+
+  await publishEvent(primary.token, conversation.conversation_id as string, {
+    event_id: eventId(suffix, "live-bot"),
+    kind: "message.bot",
+    actor: "release-bot",
+    content: "The handoff is ready for review.",
+    created_at: iso(5),
+    metadata: {},
+  });
+  await expect(page.getByText("The handoff is ready for review.")).toBeVisible();
+  await expect(page.locator(".conversation-progress-banner")).toBeHidden();
+
+  await page.goBack();
+  await waitForViewReady(page, ".list-container .list-row");
+  await expect(page.getByText(`Live follow-up ${suffix}`)).toBeVisible();
+  await page.goBack();
+  await waitForViewReady(page, ".dashboard-shell");
+  await expect(runningTasksCard).toContainText("1");
+  await expect(page.getByText(`Live follow-up ${suffix}`)).toBeVisible();
 });
 
 test.describe("mobile review", () => {

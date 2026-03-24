@@ -16,6 +16,7 @@ from registry_sdk.agents import AgentCard
 from registry_sdk.conversations import ConversationCreate
 from registry_sdk.discovery import AgentDiscoveryQuery
 from registry_sdk.events import ConversationEvent, validate_event_metadata
+from registry_sdk.realtime import ConversationProgressUpdate
 from registry_sdk.tasks import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
 
 
@@ -167,6 +168,18 @@ class RegistryClient:
             "POST",
             f"/v1/conversations/{conversation_id}/events",
             json={"events": [event.model_dump() for event in validated_events]},
+        )
+
+    async def publish_progress(
+        self,
+        conversation_id: str,
+        progress: ConversationProgressUpdate | Mapping[str, Any],
+    ) -> None:
+        payload = _validated_model(progress, ConversationProgressUpdate)
+        await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/progress",
+            json=payload.model_dump(),
         )
 
     async def enroll(

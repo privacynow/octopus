@@ -100,25 +100,22 @@ const WS = (() => {
         }, delay);
     }
 
-    function _dispatch(msg) {
+    function _topicsForMessage(msg) {
         const data = msg.data || {};
-        const topics = [];
-        if (data.conversation_id) topics.push(`conversation:${data.conversation_id}`);
-        if (data.agent_id) topics.push(`agent:${data.agent_id}`);
+        const topics = new Set();
+        if (data.topic) topics.add(data.topic);
+        if (data.conversation_id) topics.add(`conversation:${data.conversation_id}`);
+        if (data.agent_id) topics.add(`agent:${data.agent_id}`);
+        return Array.from(topics);
+    }
 
-        for (const topic of topics) {
+    function _dispatch(msg) {
+        for (const topic of _topicsForMessage(msg)) {
             const cbs = listeners.get(topic);
             if (cbs) {
                 for (const cb of cbs) {
-                    try { cb(msg); } catch (e) { console.error('WS listener error', { topic, type: msg.type, data }, e); }
+                    try { cb(msg); } catch (e) { console.error('WS listener error', { topic, type: msg.type, data: msg.data || {} }, e); }
                 }
-            }
-        }
-        // Wildcard listeners
-        const wildcardCbs = listeners.get('*');
-        if (wildcardCbs) {
-            for (const cb of wildcardCbs) {
-                try { cb(msg); } catch (e) { console.error('WS listener error', { topic: '*', type: msg.type, data }, e); }
             }
         }
     }

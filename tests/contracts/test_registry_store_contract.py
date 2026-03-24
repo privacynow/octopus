@@ -175,13 +175,23 @@ def _routed_task_row(store, routed_task_id: str):
     return row
 
 
-def _create_routed_task(store, *, routed_task_id: str = "task-1") -> tuple[dict, str, str, str]:
+def _create_routed_task(
+    store,
+    *,
+    routed_task_id: str = "task-1",
+) -> tuple[dict, str, str, str, str]:
     origin_id, _origin_token = _enroll(store, f"origin-{routed_task_id}")
     target_id, target_token = _enroll(store, f"target-{routed_task_id}", ["reviewer"])
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title=f"Conversation {routed_task_id}",
+        origin_channel="registry",
+        external_conversation_ref=f"conv-{routed_task_id}",
+    )
     routed = store.create_routed_task(
         {
             "routed_task_id": routed_task_id,
-            "parent_conversation_id": f"conv-{routed_task_id}",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review task",
@@ -193,7 +203,7 @@ def _create_routed_task(store, *, routed_task_id: str = "task-1") -> tuple[dict,
             "created_at": "2026-03-16T00:00:00+00:00",
         }
     )
-    return routed, origin_id, target_id, target_token
+    return routed, origin_id, target_id, target_token, conversation["conversation_id"]
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -329,7 +339,7 @@ def test_search_agents_excludes_offline(store):
 
 
 def test_create_routed_task_and_lookup(store):
-    routed, origin_id, target_id, target_token = _create_routed_task(
+    routed, origin_id, target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-1"
     )
 
@@ -341,15 +351,36 @@ def test_create_routed_task_and_lookup(store):
     assert deliveries[0]["kind"] == "routed_task"
 
 
+def test_create_routed_task_mirrors_parent_conversation_event(store):
+    routed, _origin_id, _target_id, _target_token, conversation_id = _create_routed_task(
+        store, routed_task_id="task-mirror-create"
+    )
+
+    events = store.list_events(conversation_id)["events"]
+
+    assert routed["events_written"] is True
+    assert routed["inserted_events"][0]["seq"] > 0
+    assert len(events) == 1
+    assert events[0]["kind"] == "task.status"
+    assert events[0]["metadata"] == {"status": "queued"}
+    assert events[0]["seq"] == routed["inserted_events"][0]["seq"]
+
+
 def test_create_routed_task_requires_required_fields(store):
     origin_id, _origin_token = _enroll(store, "origin-create")
     target_id, _target_token = _enroll(store, "target-create", ["reviewer"])
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Create validation conversation",
+        origin_channel="registry",
+        external_conversation_ref="conv-create",
+    )
 
     with pytest.raises(ValueError, match="title"):
         store.create_routed_task(
             {
                 "routed_task_id": "task-missing-title",
-                "parent_conversation_id": "conv-create",
+                "parent_conversation_id": conversation["conversation_id"],
                 "origin_agent_id": origin_id,
                 "target_agent_id": target_id,
                 "instructions": "Review the spec.",
@@ -362,7 +393,7 @@ def test_create_routed_task_requires_required_fields(store):
 def test_routed_task_status_updates_do_not_overwrite_protected_status(store, protected_status):
     routed_task_id = f"task-status-{protected_status}"
     protected_summary = f"{protected_status} summary"
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id=routed_task_id
     )
 
@@ -406,7 +437,7 @@ def test_routed_task_status_updates_do_not_overwrite_protected_status(store, pro
 
 
 def test_routed_task_result_can_overwrite_partialfailed(store):
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-status-recovered"
     )
 
@@ -437,8 +468,56 @@ def test_routed_task_result_can_overwrite_partialfailed(store):
     assert "Recovered result" in str(task["result_json"])
 
 
+def test_routed_task_status_and_result_auto_mirror_events(store):
+    _routed, _origin_id, _target_id, target_token, conversation_id = _create_routed_task(
+        store, routed_task_id="task-auto-mirror"
+    )
+
+    status_result = store.update_routed_task_status(
+        target_token,
+        "task-auto-mirror",
+        {
+            "status": "running",
+            "summary": "halfway there",
+            "timeline_events": [],
+        },
+    )
+    result_result = store.update_routed_task_result(
+        target_token,
+        "task-auto-mirror",
+        {
+            "status": "completed",
+            "summary": "done",
+            "full_text": "All set",
+            "completed_at": "2026-03-16T00:01:00+00:00",
+        },
+    )
+
+    events = store.list_events(conversation_id)["events"]
+
+    assert status_result["events_written"] is True
+    assert status_result["inserted_events"][0]["seq"] > 0
+    assert result_result["events_written"] is True
+    assert result_result["inserted_events"][0]["seq"] > 0
+    assert [event["metadata"]["status"] for event in events] == ["queued", "running", "completed"]
+
+
+def test_list_agents_supports_query_and_connectivity_filters(store):
+    _enroll(store, "alpha-reviewer")
+    beta_id, beta_token = _enroll(store, "beta-builder")
+    store.deregister(beta_token)
+
+    q_hits = store.list_agents(q="review")
+    connected_hits = store.list_agents(connectivity_state="connected")
+    offline_hits = store.list_agents(connectivity_state="offline")
+
+    assert [item["slug"] for item in q_hits] == ["alpha-reviewer"]
+    assert {item["slug"] for item in connected_hits} == {"alpha-reviewer"}
+    assert [item["agent_id"] for item in offline_hits] == [beta_id]
+
+
 def test_routed_task_status_requires_explicit_non_empty_status(store):
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-status-required"
     )
 
@@ -454,7 +533,7 @@ def test_routed_task_status_requires_explicit_non_empty_status(store):
 
 
 def test_routed_task_result_requires_explicit_non_empty_status(store):
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-result-required"
     )
 
@@ -471,7 +550,7 @@ def test_routed_task_result_requires_explicit_non_empty_status(store):
 
 def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
     routed_task_id = "task-status-no-timeline-upsert"
-    _routed, _origin_id, _target_id, target_token = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id=routed_task_id
     )
 
@@ -562,13 +641,19 @@ def test_coordination_scope_poll_filters_channel_deliveries(store):
 def test_create_routed_task_disabled_capability_raises(store):
     origin_id, _ = _enroll(store, "origin-bot")
     target_id, _ = _enroll(store, "target-bot", ["reviewer"])
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Disabled capability conversation",
+        origin_channel="registry",
+        external_conversation_ref="conv-1",
+    )
     store.set_capability_override("reviewer", enabled=False)
 
     with pytest.raises(CapabilityDisabledError):
         store.create_routed_task(
             {
                 "routed_task_id": "task-disabled",
-                "parent_conversation_id": "conv-1",
+                "parent_conversation_id": conversation["conversation_id"],
                 "origin_agent_id": origin_id,
                 "target_agent_id": target_id,
                 "title": "Disabled review task",

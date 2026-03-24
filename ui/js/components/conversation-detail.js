@@ -108,9 +108,14 @@ function renderConversationDetail(container, params) {
     liveRegion.setAttribute('aria-atomic', 'true');
     timelinePanel.appendChild(liveRegion);
 
+    const progressBanner = document.createElement('div');
+    progressBanner.className = 'conversation-progress-banner';
+    progressBanner.hidden = true;
+    timelinePanel.appendChild(progressBanner);
+
     const sentinel = document.createElement('div');
     sentinel.className = 'history-sentinel';
-    sentinel.textContent = 'Older activity loads as you scroll up';
+    sentinel.setAttribute('aria-hidden', 'true');
     timeline.appendChild(sentinel);
 
     const historyStatus = document.createElement('div');
@@ -138,6 +143,22 @@ function renderConversationDetail(container, params) {
     sendBtn.textContent = 'Send';
     sendBtn.setAttribute('aria-label', 'Send message');
     composer.appendChild(sendBtn);
+
+    let progressTimer = null;
+
+    function clearProgressBanner() {
+        progressBanner.hidden = true;
+        progressBanner.textContent = '';
+        clearTimeout(progressTimer);
+    }
+
+    function showProgressBanner(text) {
+        if (!text) return;
+        progressBanner.hidden = false;
+        progressBanner.textContent = text;
+        clearTimeout(progressTimer);
+        progressTimer = setTimeout(clearProgressBanner, 15000);
+    }
 
     function updateTimelineHeader() {
         const label = showConversationView ? 'Conversation' : 'Full activity';
@@ -337,6 +358,7 @@ function renderConversationDetail(container, params) {
             topObserver = null;
         }
         clearTimelineForLoad();
+        clearProgressBanner();
         try {
             const result = await API.getEvents(convoId, {
                 limit: UI.EVENT_PAGE_LIMIT,
@@ -431,6 +453,11 @@ function renderConversationDetail(container, params) {
     }
 
     const unsub = WS.subscribe(`conversation:${convoId}`, (msg) => {
+        if (msg.type === 'progress' && msg.data) {
+            showProgressBanner(msg.data.content || '');
+            liveRegion.textContent = 'Agent progress update';
+            return;
+        }
         if (msg.type !== 'event' || !msg.data) return;
         const event = msg.data;
         if (showConversationView && !conversationKinds.includes(event.kind || '')) return;
@@ -441,8 +468,20 @@ function renderConversationDetail(container, params) {
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId));
         if (seq) latestSeq = Math.max(latestSeq, seq);
+        if (meta) {
+            meta.event_count = Number(meta.event_count || 0) + 1;
+            meta.updated_at = event.created_at || meta.updated_at;
+            renderMetaCard(meta);
+        }
         if (event.kind === 'message.user' || event.kind === 'message.bot' || event.kind === 'approval.requested') {
             liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
+        }
+        if (
+            event.kind === 'message.bot'
+            || event.kind === 'error'
+            || (event.kind === 'task.status' && ['completed', 'failed', 'cancelled'].includes((event.metadata && event.metadata.status) || ''))
+        ) {
+            clearProgressBanner();
         }
         if (shouldStick) {
             requestAnimationFrame(() => {
@@ -454,6 +493,7 @@ function renderConversationDetail(container, params) {
 
     loadConversation();
     reloadEvents();
+    cleanups.add(() => clearTimeout(progressTimer));
 }
 
 function _readConversationViewParam() {

@@ -138,6 +138,19 @@ def load_runtime_registry_connection_state(
     return state
 
 
+def runtime_registry_agent_id(
+    data_dir: Path,
+    registry_id: str,
+    *,
+    registry_scope: str = "full",
+) -> str:
+    return load_runtime_registry_connection_state(
+        data_dir,
+        registry_id,
+        registry_scope=registry_scope,
+    ).agent_id
+
+
 def save_registry_connection_state(data_dir: Path, state: RegistryConnectionState) -> None:
     path = registry_connection_state_path(data_dir, state.registry_id)
     _atomic_write_private_json(path, asdict(state))

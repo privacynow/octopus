@@ -20,7 +20,7 @@ class TransportIdentity:
     conversation maps to registry projection, session storage, and UI.
     Replaces the former ExecutionChannelContext.
     """
-    conversation_key: str = ""
+    conversation_key: str
     origin_channel: str = ""
     external_conversation_ref: str = ""
     target_agent_id: str = ""
@@ -34,12 +34,11 @@ class TransportIdentity:
 
 @dataclass(frozen=True)
 class ExecutionChannelMetadata:
+    conversation_key: str
     descriptor: ChannelDescriptor | None = None
     message_conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
-    chat_id: int | str = ""
-    conversation_key: str = ""
     origin_channel: str = ""
     external_conversation_ref: str = ""
     target_agent_id: str = ""

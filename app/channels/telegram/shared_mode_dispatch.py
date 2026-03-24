@@ -288,7 +288,7 @@ async def _shared_cancel_command(
         event.chat_id,
         update.effective_message,
         runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
-        actor_user_id=_actor_key(event.user.id),
+        actor_key=_actor_key(event.user.id),
         allow_admin_override=access.is_admin_user(runtime.config, event.user),
         update_id=update.update_id,
     )

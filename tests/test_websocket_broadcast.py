@@ -54,6 +54,7 @@ def _enroll_and_register(client: TestClient, slug: str) -> tuple[str, str]:
                 "mode": "registry",
                 "channel_capabilities": ["registry"],
                 "version": "test",
+                "bot_key": f"bot-{slug}",
             },
         },
     )
@@ -135,6 +136,7 @@ def test_publish_events_broadcasts_via_websocket(
                         "kind": "message.bot",
                         "actor": "ws-pub-bot",
                         "content": "Hello from bot",
+                        "created_at": "2026-03-22T00:00:00+00:00",
                         "metadata": {},
                     }
                 ]
@@ -203,6 +205,11 @@ def test_add_action_broadcasts_approval_decided_event(
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
         assert _ws_recorder[0]["event_data"]["kind"] == "approval.decided"
+        assert _ws_recorder[0]["event_data"]["metadata"] == {
+            "action": "approve",
+            "decided_by": "operator",
+            "decision": "approved",
+        }
         assert _ws_recorder[0]["conversation_id"] == conv_id
         # Full stored event includes seq, event_id, created_at
         assert "event_id" in _ws_recorder[0]["event_data"]
@@ -228,6 +235,7 @@ def test_routed_task_status_broadcasts_task_status_event(
             "target_agent_id": target_id,
             "title": "WebSocket task",
             "instructions": "Test WS broadcast",
+            "created_at": "2026-03-22T00:00:00+00:00",
         })
 
         resp = client.post(
@@ -258,5 +266,5 @@ def test_routed_task_status_broadcasts_task_status_event(
         assert ev["kind"] == "task.status"
         assert _ws_recorder[0]["conversation_id"] == "ws-parent-conv-1"
         assert ev["event_id"] == "evt-ws-task-1"
-        assert ev["metadata"]["routed_task_id"] == "ws-task-1"
+        assert ev["metadata"] == {"status": "running", "progress": 50}
         assert "created_at" in ev

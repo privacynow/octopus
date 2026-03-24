@@ -10,23 +10,21 @@ HTTP boundary. The metadata schemas are the machine-checkable contract.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ConversationEvent(BaseModel):
     """Single event published to a registry conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+
     event_id: str                    # REQUIRED — publisher-generated, stable across retries
     kind: str                        # "message.user", "provider.response", etc.
     actor: str = ""                  # display name, not transport-specific ID
     content: str = ""                # text/markdown body
-    created_at: str = Field(default_factory=_utcnow_iso)
+    created_at: str = Field(..., min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -35,71 +33,82 @@ class ConversationEvent(BaseModel):
 # ---------------------------------------------------------------------------
 
 class MessageMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     attachments: list[str] = Field(default_factory=list)
 
 
 class ProviderResponseMetadata(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cost_usd: float = 0.0
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int = Field(..., ge=0)
+    completion_tokens: int = Field(..., ge=0)
+    cost_usd: float = Field(..., ge=0.0)
+    provider: str = Field(..., min_length=1)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class ToolExecutionMetadata(BaseModel):
-    tool_name: str = ""
-    input_summary: str = ""
-    output_summary: str = ""
-    duration_ms: int = 0
-
-
-class FileChangeMetadata(BaseModel):
-    path: str = ""
-    diff_summary: str = ""
-
-
 class ApprovalMetadata(BaseModel):
-    action: str = ""         # what's being approved
-    decided_by: str = ""     # who decided (for approval.decided)
-    decision: str = ""       # "approved" | "rejected" (for approval.decided)
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(..., min_length=1)
+    decided_by: str = Field(..., min_length=1)
+    decision: Literal["approved", "rejected"]
+
+
+class DelegationTaskSummary(BaseModel):
+    """One task in a delegation plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(..., min_length=1)
+    target: str = Field(..., min_length=1)  # target agent slug or agent_id
+    status: str = Field(..., min_length=1)  # proposed, submitted, completed, failed
 
 
 class DelegationMetadata(BaseModel):
-    task_count: int = 0
-    target_agents: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    tasks: list[DelegationTaskSummary] = Field(..., min_length=1)
 
 
 class TaskStatusMetadata(BaseModel):
-    status: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(..., min_length=1)
     progress: int | None = None
 
 
 class ErrorMetadata(BaseModel):
-    error_type: str = ""
-    message: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    error_type: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1)
 
 
 EVENT_METADATA_SCHEMAS: dict[str, type[BaseModel]] = {
     "message.user": MessageMetadata,
     "message.bot": MessageMetadata,
-    "provider.request": MessageMetadata,  # content field carries the prompt; no extra metadata needed
     "provider.response": ProviderResponseMetadata,
-    "tool.execution": ToolExecutionMetadata,
-    "file.change": FileChangeMetadata,
-    "approval.requested": ApprovalMetadata,
     "approval.decided": ApprovalMetadata,
     "delegation.proposed": DelegationMetadata,
     "delegation.submitted": DelegationMetadata,
+    "delegation.completed": DelegationMetadata,
     "task.status": TaskStatusMetadata,
     "error": ErrorMetadata,
 }
 
 
-def validate_event_metadata(event: ConversationEvent) -> None:
+def validate_event_metadata(event: ConversationEvent) -> dict[str, Any]:
     """Validate that event.metadata matches the schema for event.kind.
 
+    Returns the normalized metadata payload.
     Raises ValueError for unknown kinds or invalid metadata.
     """
     schema = EVENT_METADATA_SCHEMAS.get(event.kind)
     if schema is None:
         raise ValueError(f"Unknown event kind: {event.kind!r}")
-    schema.model_validate(event.metadata)
+    return schema.model_validate(event.metadata).model_dump(
+        exclude_defaults=True,
+        exclude_none=True,
+    )

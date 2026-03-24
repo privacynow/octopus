@@ -288,7 +288,7 @@ async def handle_registry_delivery(
                 runtime.services.control_plane.conversation_projection,
                 config,
             )
-            tasks_summary = [{"title": t.title, "status": t.status} for t in (applied.pending.tasks or [])]
+            tasks_summary = [{"title": t.title, "target": t.target_agent_id, "status": t.status} for t in (applied.pending.tasks or [])]
             await sink.on_delegation_completed(tasks_summary)
         return "accepted"
 

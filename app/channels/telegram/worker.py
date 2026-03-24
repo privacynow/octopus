@@ -66,6 +66,17 @@ async def _noop_async(*args: Any, **kwargs: Any) -> None:
     del args, kwargs
 
 
+def _item_conversation_key(item: dict[str, Any]) -> str:
+    conversation_key_value = str(item.get("conversation_key", "")).strip()
+    if not conversation_key_value:
+        raise RuntimeError(f"worker item missing conversation_key: {item.get('id')}")
+    return conversation_key_value
+
+
+def _normalized_event_text(text: str | None) -> str:
+    return "" if text is None else text
+
+
 def _channel_dispatcher(runtime: TelegramRuntime):
     dispatcher = getattr(runtime, "channel_dispatcher", None)
     if dispatcher is None:
@@ -169,7 +180,7 @@ def _build_action_channel_egress(
     *,
     item: dict[str, Any],
 ):
-    action_conversation_key = str(item.get("conversation_key") or event.conversation_key)
+    action_conversation_key = _item_conversation_key(item)
     return _build_channel_egress(
         runtime,
         conversation_key=action_conversation_key,
@@ -197,9 +208,12 @@ def _build_channel_egress(
     dispatcher = _channel_dispatcher(runtime)
     chat_id = telegram_numeric_id(conversation_key)
     runtime_chat = chat_id if chat_id is not None else conversation_key
-    resolved_conversation_ref = conversation_ref or (
-        telegram_conversation_ref(runtime.config, chat_id) if chat_id is not None else conversation_key
-    )
+    resolved_conversation_ref = conversation_ref
+    if not resolved_conversation_ref:
+        if chat_id is not None:
+            resolved_conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
+        else:
+            resolved_conversation_ref = conversation_key
     channel_egress = dispatcher.create_egress(
         resolved_conversation_ref,
         config=runtime.config,
@@ -263,17 +277,27 @@ async def _execute_worker_action(
     ):
         return
 
-    action_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
+    action_conversation_key = _item_conversation_key(item)
 
     if action == "delegation_approve":
         from app.workflows.execution.event_sink import build_event_sink_for_context
         from app.workflows.execution.contracts import TransportIdentity
-        target_key = params.get("target_conversation_key") or action_conversation_key
+        from app.agents.registry_capabilities import registry_id_from_authority_ref
+        target_key = action_conversation_key
+        if params.get("target_conversation_key"):
+            target_key = str(params["target_conversation_key"])
+        authority = str(item.get("authority_ref", ""))
+        if not authority:
+            authority = getattr(event, "authority_ref", "")
+        try:
+            reg_id = registry_id_from_authority_ref(authority) if authority else ""
+        except ValueError:
+            reg_id = ""
         transport = TransportIdentity(
             conversation_key=target_key,
             origin_channel=source,
-            external_conversation_ref=target_key,
-            target_agent_id=runtime.config.agent_id_for_registry("default"),
+            external_conversation_ref=conversation_ref,
+            target_agent_id=runtime.config.agent_id_for_registry(reg_id),
         )
         sink = build_event_sink_for_context(
             transport,
@@ -290,7 +314,9 @@ async def _execute_worker_action(
         return
 
     if action == "delegation_cancel":
-        target_key = params.get("target_conversation_key") or action_conversation_key
+        target_key = action_conversation_key
+        if params.get("target_conversation_key"):
+            target_key = str(params["target_conversation_key"])
         await handle_channel_delegation_cancel(
             target_key,
             conversation_ref,
@@ -342,18 +368,21 @@ async def worker_dispatch(
 
     if isinstance(event, InboundMessage):
         source = getattr(event, "source", "telegram")
-        message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
+        message_conversation_key = _item_conversation_key(item)
         routed_task_id = getattr(event, "routed_task_id", "")
         authority_ref = getattr(event, "authority_ref", "")
         is_routed_task = bool(routed_task_id)
-        title = summarize_text(event.text) or "Conversation"
+        title = summarize_text(event.text)
+        if not title:
+            title = "Conversation"
         dispatcher = _channel_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
-        admission_conversation_ref = event.conversation_ref or (
-            telegram_conversation_ref(runtime.config, message_chat_id)
-            if message_chat_id is not None
-            else message_conversation_key
-        )
+        admission_conversation_ref = event.conversation_ref
+        if not admission_conversation_ref:
+            if message_chat_id is not None:
+                admission_conversation_ref = telegram_conversation_ref(runtime.config, message_chat_id)
+            else:
+                admission_conversation_ref = message_conversation_key
         channel_egress, runtime_chat, chat_id, conversation_ref, source = _build_channel_egress(
             runtime,
             conversation_key=message_conversation_key,
@@ -376,11 +405,13 @@ async def worker_dispatch(
             return
 
         if item.get("dispatch_mode") == "recovery":
-            update_id = telegram_numeric_id(str(item.get("event_id") or "")) or 0
+            raw_event_id = str(item.get("event_id", ""))
+            numeric_event_id = telegram_numeric_id(raw_event_id)
+            update_id = 0 if numeric_event_id is None else numeric_event_id
             recovery_outcome = await get_recovery_use_cases().dispatch_worker_recovery(
                 data_dir=data_dir,
                 item_id=item["id"],
-                original_text=event.text or "",
+                original_text=_normalized_event_text(event.text),
                 update_id=update_id,
                 bind_egress=(
                     (lambda: channel_egress.bind(title=title, config=runtime.config))
@@ -427,8 +458,13 @@ async def worker_dispatch(
 
                 async def _run_message(cancel_event: asyncio.Event | None):
                     nonlocal outcome
-                    outcome = await dispatch_message_request(
+                    transport = execution_runtime.build_transport_identity(
+                        channel_egress,
                         runtime_chat,
+                        actor_key=user_id,
+                    )
+                    outcome = await dispatch_message_request(
+                        transport,
                         prompt,
                         image_paths,
                         list(event.attachments),
@@ -436,7 +472,6 @@ async def worker_dispatch(
                         approval_mode=approval_mode,
                         routed_task_id=routed_task_id,
                         skip_approval=getattr(event, "skip_approval", False),
-                        actor_key=user_id,
                         trust_tier=admission.trust_tier,
                         cancel_event=cancel_event,
                         runtime=execution_runtime,
@@ -458,7 +493,7 @@ async def worker_dispatch(
                 conversation_key=message_conversation_key,
                 runtime_chat=runtime_chat,
                 conversation_ref=conversation_ref,
-                chat_id=chat_id or 0,
+                chat_id=0 if chat_id is None else chat_id,
                 routed_task_id=routed_task_id,
                 authority_ref=authority_ref,
                 skip_approval=getattr(event, "skip_approval", False),

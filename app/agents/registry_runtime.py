@@ -177,7 +177,7 @@ class RegistryRuntime:
                     display_name=str(row.get("display_name", "")),
                     slug=str(row.get("slug", "")),
                     role=str(row.get("role", "")),
-                    capabilities=tuple(str(item) for item in row.get("capabilities", row.get("skills", [])) if item),
+                    capabilities=tuple(str(item) for item in row.get("capabilities", []) if item),
                     tags=tuple(str(item) for item in row.get("tags", []) if item),
                     description=str(row.get("description", "")),
                     connectivity_state=str(row.get("connectivity_state", "")),

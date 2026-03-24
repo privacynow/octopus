@@ -51,7 +51,7 @@ def _create_pending_recovery(
 
 
 def test_admit_worker_message_fails_unauthorized_telegram_item() -> None:
-    with fresh_env(config_overrides={"allowed_user_ids": frozenset()}) as (data_dir, _cfg, _prov):
+    with fresh_env(config_overrides={"allowed_actor_keys": frozenset()}) as (data_dir, _cfg, _prov):
         _, item_id = work_queue.record_and_enqueue(
             data_dir,
             telegram_event_id(8101),
@@ -92,6 +92,7 @@ def test_admit_worker_message_allows_registry_input() -> None:
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, _prov):
@@ -110,7 +111,7 @@ def test_admit_worker_message_allows_registry_input() -> None:
 
 
 def test_admit_worker_message_does_not_auto_allow_unknown_surface() -> None:
-    with fresh_env(config_overrides={"allowed_user_ids": frozenset()}) as (data_dir, _cfg, _prov):
+    with fresh_env(config_overrides={"allowed_actor_keys": frozenset()}) as (data_dir, _cfg, _prov):
         _, item_id = work_queue.record_and_enqueue(
             data_dir,
             "future-event-1",
@@ -360,6 +361,7 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, _prov):

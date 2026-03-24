@@ -40,7 +40,6 @@ class _ProjectionRecorder:
             self.event_calls.append({
                 "conversation_id": conversation_id,
                 "kind": event.kind if hasattr(event, "kind") else "",
-                "title": meta.get("title", ""),
                 "body": event.content if hasattr(event, "content") else "",
                 "status": meta.get("status", ""),
             })

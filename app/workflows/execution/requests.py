@@ -29,6 +29,7 @@ from app.runtime.inbound_types import InboundAttachment
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
     RequestExecutionOutcome,
+    TransportIdentity,
 )
 from app.ports.delegation import DelegationIntentParser
 from app.workflows.execution.delegation_parser import XmlTagDelegationParser
@@ -186,12 +187,11 @@ async def check_credential_satisfaction(
 
 
 async def execute_request(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     message,
     extra_dirs: list[str] | None = None,
-    actor_key: str = "",
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
@@ -202,8 +202,6 @@ async def execute_request(
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
 
-    # Build transport identity and event sink FIRST — all durable operations use transport fields
-    transport = runtime.build_transport_identity(message, chat_id, actor_key=actor_key)
     conversation_key = transport.conversation_key
     event_sink = runtime.build_event_sink(transport)
 
@@ -273,7 +271,7 @@ async def execute_request(
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
 
     dispatched = await run_provider_request(
-        chat_id,
+        conversation_key,
         prompt=prompt,
         image_paths=image_paths,
         message=message,
@@ -302,7 +300,7 @@ async def execute_request(
         if prov.name == "codex":
             session.provider_state["thread_id"] = None
         else:
-            session.provider_state.update(prov.new_provider_state())
+            session.provider_state.update(prov.new_provider_state(conversation_key))
     elif prov.name == "codex" and is_resume and not result.timed_out and result.returncode and result.returncode != 0:
         session.provider_state["thread_id"] = None
 
@@ -332,7 +330,7 @@ async def execute_request(
         await progress.update(_msg.progress_completed_with_blocked(), force=True)
         session = _load(runtime, conversation_key)
         session.pending_retry = PendingRetry(
-            actor_key=actor_key,
+            actor_key=transport.actor,
             prompt=prompt,
             image_paths=image_paths,
             context_hash=context_hash,
@@ -350,7 +348,7 @@ async def execute_request(
         cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
             await runtime.send_formatted_reply(message, cleaned_reply)
-            await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+            await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
         return RequestExecutionOutcome(
             status="completed_with_denials",
             reply_text=cleaned_reply,
@@ -370,11 +368,11 @@ async def execute_request(
     if result.delegation_tasks:
         _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
         await progress.update("Delegation plan ready.", force=True)
-        tasks_summary = [{"title": t.get("title", ""), "target": t.get("target_agent_id", "")} for t in result.delegation_tasks]
+        tasks_summary = [{"title": t.get("title", ""), "target": t.get("target_agent_id", ""), "status": "proposed"} for t in result.delegation_tasks]
         await event_sink.on_delegation_proposed(tasks_summary)
         session = _load(runtime, conversation_key)
         return await runtime.propose_delegation_plan(
-            chat_id,
+            conversation_key,
             message,
             session,
             conversation_ref=transport.conversation_ref,
@@ -387,10 +385,10 @@ async def execute_request(
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     if compact and len(cleaned_reply) > 800 and transport.origin_channel == "telegram":
-        await runtime.send_compact_reply(message, cleaned_reply, chat_id, slot)
+        await runtime.send_compact_reply(message, cleaned_reply, conversation_key, slot)
     else:
         await runtime.send_formatted_reply(message, cleaned_reply)
-    await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
     await event_sink.on_bot_reply(cleaned_reply[:2000] if cleaned_reply else "")
     return RequestExecutionOutcome(
         status="completed",
@@ -402,7 +400,7 @@ async def execute_request(
 
 
 async def dispatch_message_request(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     attachments: list[InboundAttachment],
@@ -411,30 +409,27 @@ async def dispatch_message_request(
     approval_mode: str,
     routed_task_id: str = "",
     skip_approval: bool = False,
-    actor_key: str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     runtime: ExecutionRuntime,
 ) -> RequestExecutionOutcome | None:
     if not routed_task_id and not skip_approval and approval_mode == "on":
         await request_approval(
-            chat_id,
+            transport,
             prompt,
             image_paths,
             attachments,
             message,
-            actor_key=actor_key,
             trust_tier=trust_tier,
             cancel_event=cancel_event,
             runtime=runtime,
         )
         return None
     return await execute_request(
-        chat_id,
+        transport,
         prompt,
         image_paths,
         message,
-        actor_key=actor_key,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
         runtime=runtime,
@@ -442,12 +437,11 @@ async def dispatch_message_request(
 
 
 async def request_approval(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     attachments,
     message,
-    actor_key: str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     *,
@@ -456,7 +450,6 @@ async def request_approval(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    transport = runtime.build_transport_identity(message, chat_id, actor_key=actor_key)
     conversation_key = transport.conversation_key
     session = _load(runtime, conversation_key)
 
@@ -491,7 +484,7 @@ async def request_approval(
     context_hash = resolved.context_hash
 
     dispatched = await run_provider_preflight(
-        chat_id,
+        conversation_key,
         prompt=build_preflight_prompt(prompt, prov.name),
         image_paths=image_paths,
         message=message,
@@ -528,7 +521,7 @@ async def request_approval(
         for a in attachments
     ]
     session.pending_approval = PendingApproval(
-        actor_key=actor_key,
+        actor_key=transport.actor,
         prompt=prompt,
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,

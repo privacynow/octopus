@@ -20,12 +20,12 @@ from tests.support.handler_support import (
 from tests.support.config_support import make_registry_connection
 
 
-def _setup_runtime(*, allow_open: bool = False, allowed_user_ids=frozenset({1})):
+def _setup_runtime(*, allow_open: bool = False, allowed_actor_keys=frozenset({"tg:1"})):
     tmp = tempfile.TemporaryDirectory()
     cfg = make_config(
         Path(tmp.name),
         allow_open=allow_open,
-        allowed_user_ids=allowed_user_ids,
+        allowed_actor_keys=allowed_actor_keys,
         allowed_usernames=frozenset(),
     )
     setup_globals(cfg, FakeProvider("claude"))
@@ -89,7 +89,7 @@ def test_dispatcher_trust_tier_registry_ref_is_trusted():
 
 
 def test_dispatcher_trust_tier_telegram_ref_uses_user_tier():
-    tmp, cfg = _setup_runtime(allow_open=True, allowed_user_ids=frozenset())
+    tmp, cfg = _setup_runtime(allow_open=True, allowed_actor_keys=frozenset())
     try:
         tier = trust_tier_for_ref(
             telegram_conversation_ref(cfg, 12345),

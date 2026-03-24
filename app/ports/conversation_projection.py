@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Protocol, runtime_checkable
 
 
@@ -38,10 +37,8 @@ class NoOpConversationProjection:
         external_conversation_ref: str,
         title: str,
     ) -> str:
-        del title
-        return hashlib.sha256(
-            f"{target_agent_id}:{origin_channel}:{external_conversation_ref}".encode()
-        ).hexdigest()[:32]
+        del target_agent_id, origin_channel, external_conversation_ref, title
+        return ""
 
     async def publish_events(
         self,

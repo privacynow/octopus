@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.formatting import summarize_text
-from app.identity import telegram_conversation_ref
+from app.identity import telegram_conversation_ref, telegram_numeric_id
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
@@ -64,7 +64,7 @@ class _AutoSubmitEgress:
 
 async def propose_delegation_plan(
     runtime: TelegramRuntime,
-    chat_id: int,
+    conversation_key_value: str,
     message,
     session: SessionState,
     *,
@@ -83,8 +83,9 @@ async def propose_delegation_plan(
         agent_directory=runtime.services.control_plane.agent_directory,
     )
     session.pending_delegation = delegation
-    save_session(runtime, chat_id, session)
+    save_session(runtime, conversation_key_value, session)
     # delegation.proposed event is published by execute_request via the event sink
+    numeric_chat_id = telegram_numeric_id(conversation_key_value)
 
     # Autonomous mode: auto-submit delegation without buttons.
     if runtime.config.autonomous and session.approval_mode != "on":
@@ -95,15 +96,12 @@ async def propose_delegation_plan(
             task_routing=runtime.services.control_plane.task_routing,
             agent_directory=runtime.services.control_plane.agent_directory,
         )
-        from app.channels.telegram.session_io import conversation_key as _conversation_key
         from app.workflows.execution.event_sink import build_event_sink_for_context
         from app.workflows.execution.contracts import TransportIdentity
-        conv_key = _conversation_key(chat_id)
         transport = TransportIdentity(
-            conversation_key=conv_key,
+            conversation_key=conversation_key_value,
             origin_channel="telegram",
-            external_conversation_ref=str(chat_id),
-            target_agent_id=runtime.config.agent_id_for_registry("local"),
+            external_conversation_ref=str(numeric_chat_id) if numeric_chat_id is not None else conversation_key_value,
         )
         sink = build_event_sink_for_context(
             transport,
@@ -112,7 +110,7 @@ async def propose_delegation_plan(
         )
         try:
             await handle_channel_delegation_approve(
-                conv_key,
+                conversation_key_value,
                 conversation_ref,
                 _AutoSubmitEgress(message),
                 runtime=delegation_rt,
@@ -121,13 +119,13 @@ async def propose_delegation_plan(
             )
         except Exception:
             # Ensure pending_delegation is not stuck in proposed state
-            session_after = load_session(runtime, chat_id)
+            session_after = load_session(runtime, conversation_key_value)
             if (
                 session_after.pending_delegation
                 and session_after.pending_delegation.status == "proposed"
             ):
                 session_after.pending_delegation.status = "cancelled"
-                save_session(runtime, chat_id, session_after)
+                save_session(runtime, conversation_key_value, session_after)
             raise
         return RequestExecutionOutcome(status="delegation_submitted")
 
@@ -139,7 +137,7 @@ async def propose_delegation_plan(
     await send_plan(
         rendered.text,
         parse_mode=rendered.parse_mode,
-        reply_markup=delegation_reply_markup(chat_id),
+        reply_markup=delegation_reply_markup(numeric_chat_id) if numeric_chat_id is not None else None,
     )
     return RequestExecutionOutcome(status="delegation_proposed")
 
@@ -170,7 +168,6 @@ async def handle_delegation_approve(
         conversation_key=conv_key,
         origin_channel="telegram",
         external_conversation_ref=str(chat_id),
-        target_agent_id=runtime.config.agent_id_for_registry("local"),
     )
     sink = build_event_sink_for_context(
         transport,

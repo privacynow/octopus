@@ -422,6 +422,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         now = utcnow_iso()
         card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         bot_key = str(card.get("bot_key", "") or "").strip()
+        if not bot_key:
+            raise ValueError("bot_key requires non-empty text")
 
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
@@ -502,6 +504,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            requested_bot_key = str(card.get("bot_key", "") or "").strip()
+            current_bot_key = str(row["bot_key"] or "").strip()
+            if requested_bot_key and requested_bot_key != current_bot_key:
+                raise ValueError("bot_key must match the enrolled agent identity")
             current_skills = decode_json_field(row["skills_json"], [])
             current_tags = decode_json_field(row["tags_json"], [])
             current_channel_capabilities = decode_json_field(row["channel_capabilities_json"], [])
@@ -990,11 +996,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             inserted_events: list[dict[str, Any]] = []
             if cursor.rowcount > 0:
                 for event in validated_payload["timeline_events"]:
-                    event_metadata = {"status": validated_payload["status"], "routed_task_id": routed_task_id}
-                    if event.get("title"):
-                        event_metadata["title"] = event["title"]
+                    event_metadata = {"status": validated_payload["status"]}
                     if event.get("progress") is not None:
                         event_metadata["progress"] = event["progress"]
+                    event_content = str(event.get("body", "") or event.get("title", "") or "")
                     ev_cursor = conn.execute(
                         """
                         INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
@@ -1007,7 +1012,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                             row["agent_id"],
                             "task.status",
                             "",
-                            event.get("body", ""),
+                            event_content,
                             ensure_json(event_metadata),
                             event["created_at"],
                         ),
@@ -1020,7 +1025,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                             "agent_id": row["agent_id"],
                             "kind": "task.status",
                             "actor": "",
-                            "content": event.get("body", ""),
+                            "content": event_content,
                             "metadata": event_metadata,
                             "created_at": event["created_at"],
                         })
@@ -1151,7 +1156,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "SELECT bot_key FROM agents WHERE agent_id = ?",
                 (target_agent_id,),
             ).fetchone()
-            bot_key = (agent_row["bot_key"] if agent_row else "") or target_agent_id
+            bot_key = ""
+            if agent_row is not None:
+                bot_key = str(agent_row["bot_key"] or "").strip()
+            if not bot_key:
+                raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
             canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
             conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
 
@@ -1323,7 +1332,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """
                     SELECT conversation_id, metadata_json, created_at
                     FROM events
-                    WHERE kind IN ('provider.response', 'usage') AND created_at >= ? AND created_at <= ?
+                    WHERE kind = 'provider.response' AND created_at >= ? AND created_at <= ?
                     ORDER BY created_at
                     """,
                     (since_iso, until_iso),
@@ -1333,7 +1342,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """
                     SELECT conversation_id, metadata_json, created_at
                     FROM events
-                    WHERE kind IN ('provider.response', 'usage') AND created_at >= ?
+                    WHERE kind = 'provider.response' AND created_at >= ?
                     ORDER BY created_at
                     """,
                     (since_iso,),
@@ -1390,7 +1399,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "SELECT bot_key FROM agents WHERE agent_id = ?",
                 (conversation["target_agent_id"],),
             ).fetchone()
-            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
+            bot_key = ""
+            if agent_row is not None:
+                bot_key = str(agent_row["bot_key"] or "").strip()
+            if not bot_key:
+                raise ValueError(
+                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
+                )
             now = utcnow_iso()
             event_id = uuid.uuid4().hex
             self._create_delivery(
@@ -1452,7 +1467,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "SELECT bot_key FROM agents WHERE agent_id = ?",
                 (conversation["target_agent_id"],),
             ).fetchone()
-            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
+            bot_key = ""
+            if agent_row is not None:
+                bot_key = str(agent_row["bot_key"] or "").strip()
+            if not bot_key:
+                raise ValueError(
+                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
+                )
             now = utcnow_iso()
             event_id_for_action = uuid.uuid4().hex
             self._create_delivery(
@@ -1481,7 +1502,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 event_content = ""
             else:
                 event_kind = "approval.decided"
-                event_metadata = {"action": validated_action, "decided_by": "operator"}
+                decision = "rejected" if validated_action.startswith("reject") else "approved"
+                event_metadata = {
+                    "action": validated_action,
+                    "decided_by": "operator",
+                    "decision": decision,
+                }
                 event_content = json.dumps(action_payload) if action_payload else ""
             event_id = event_id_for_action
             conn.execute(
@@ -1756,7 +1782,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = "SELECT * FROM events WHERE kind IN ('provider.response', 'usage')"
+            sql = "SELECT * FROM events WHERE kind = 'provider.response'"
             params: list[Any] = []
             if agent_id:
                 sql += " AND agent_id = ?"

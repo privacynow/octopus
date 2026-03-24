@@ -151,7 +151,7 @@ def test_codex_context_hash_invalidation():
     hash3 = _hash(role="engineer", active_skills=["code-review", "testing"], skill_digests={"code-review": "aaa", "testing": "bbb"})
 
     p_codex = CodexProvider(make_config(provider_name="codex"))
-    state = p_codex.new_provider_state()
+    state = p_codex.new_provider_state("tg:test")
     assert state.get("thread_id") is None
     # After first run, thread_id would be set by the provider
     # We simulate: state has a thread and a stored hash

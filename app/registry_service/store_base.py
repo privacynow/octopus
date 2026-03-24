@@ -123,6 +123,17 @@ def _optional_string_list_field(payload: dict[str, Any], field_name: str) -> lis
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _reject_unknown_fields(
+    payload: dict[str, Any],
+    *,
+    allowed_fields: set[str],
+    field_name: str,
+) -> None:
+    unknown = sorted(set(payload) - allowed_fields)
+    if unknown:
+        raise ValueError(f"{field_name} contains unsupported fields: {', '.join(unknown)}")
+
+
 def validated_registry_scope(value: Any) -> str:
     scope = str(value or "").strip().lower()
     if not scope:
@@ -140,6 +151,27 @@ def validated_agent_card_payload(
     require_registry_scope: bool,
 ) -> dict[str, Any]:
     card = _require_mapping(value, "agent_card")
+    _reject_unknown_fields(
+        card,
+        allowed_fields={
+            "bot_key",
+            "display_name",
+            "slug",
+            "role",
+            "registry_scope",
+            "capabilities",
+            "tags",
+            "description",
+            "provider",
+            "mode",
+            "connectivity_state",
+            "current_capacity",
+            "max_capacity",
+            "channel_capabilities",
+            "version",
+        },
+        field_name="agent_card",
+    )
     normalized: dict[str, Any] = {}
     for field_name in (
         "display_name",
@@ -155,8 +187,6 @@ def validated_agent_card_payload(
         if field_value is not _MISSING:
             normalized[field_name] = field_value
     capabilities = _optional_string_list_field(card, "capabilities")
-    if capabilities is _MISSING:
-        capabilities = _optional_string_list_field(card, "skills")
     if capabilities is not _MISSING:
         normalized["capabilities"] = capabilities
     tags = _optional_string_list_field(card, "tags")
@@ -181,6 +211,11 @@ def validated_agent_card_payload(
 
 def validated_register_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(payload, "register payload")
+    _reject_unknown_fields(
+        data,
+        allowed_fields={"agent_card", "connectivity_state", "current_capacity", "max_capacity"},
+        field_name="register payload",
+    )
     normalized: dict[str, Any] = {
         "agent_card": validated_agent_card_payload(
             data.get("agent_card"),
@@ -201,6 +236,11 @@ def validated_register_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def validated_heartbeat_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(payload, "heartbeat payload")
+    _reject_unknown_fields(
+        data,
+        allowed_fields={"connectivity_state", "current_capacity", "max_capacity", "runtime_health"},
+        field_name="heartbeat payload",
+    )
     normalized: dict[str, Any] = {}
     connectivity_state = _optional_text_field(data, "connectivity_state")
     if connectivity_state is not _MISSING:
@@ -259,14 +299,17 @@ def validated_timeline_events(value: Any, *, field_name: str = "events") -> list
 
 def validated_search_query(query: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(query, "search_agents query")
+    _reject_unknown_fields(
+        data,
+        allowed_fields={"role", "required_state", "free_text", "capabilities", "tags", "exclude_agent_ids"},
+        field_name="search_agents query",
+    )
     normalized: dict[str, Any] = {}
     for field_name in ("role", "required_state", "free_text"):
         field_value = _optional_text_field(data, field_name)
         if field_value is not _MISSING:
             normalized[field_name] = field_value
     capabilities = _optional_string_list_field(data, "capabilities")
-    if capabilities is _MISSING:
-        capabilities = _optional_string_list_field(data, "skills")
     if capabilities is not _MISSING:
         normalized["capabilities"] = capabilities
     tags = _optional_string_list_field(data, "tags")
@@ -280,16 +323,35 @@ def validated_search_query(query: dict[str, Any]) -> dict[str, Any]:
 
 def validated_routed_task_request(request: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(request, "create_routed_task payload")
-    normalized = dict(data)
+    _reject_unknown_fields(
+        data,
+        allowed_fields={
+            "routed_task_id",
+            "parent_conversation_id",
+            "origin_agent_id",
+            "target_agent_id",
+            "title",
+            "instructions",
+            "context",
+            "constraints",
+            "requested_capabilities",
+            "priority",
+            "created_at",
+        },
+        field_name="create_routed_task payload",
+    )
+    normalized: dict[str, Any] = {}
     for field_name in (
         "routed_task_id",
         "parent_conversation_id",
         "origin_agent_id",
         "target_agent_id",
         "title",
+        "instructions",
+        "created_at",
     ):
         normalized[field_name] = _required_text(data.get(field_name), field_name)
-    for field_name in ("instructions", "priority", "created_at", "skill"):
+    for field_name in ("priority",):
         field_value = _optional_text_field(data, field_name)
         if field_value is not _MISSING:
             normalized[field_name] = field_value
@@ -317,11 +379,25 @@ def validated_ack_request(*, delivery_ids: Any, classification: Any) -> tuple[li
 
 def validated_routed_task_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(payload, "routed_task_status payload")
+    _reject_unknown_fields(
+        data,
+        allowed_fields={"status", "summary", "timeline_events", "progress", "updated_at"},
+        field_name="routed_task_status payload",
+    )
     normalized = {
         "status": _required_text(data.get("status"), "status"),
         "summary": str(data.get("summary", "") or ""),
         "timeline_events": [],
     }
+    progress = data.get("progress")
+    if progress not in (None, ""):
+        try:
+            normalized["progress"] = int(progress)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("progress requires an integer value") from exc
+    updated_at = _optional_text_field(data, "updated_at")
+    if updated_at is not _MISSING:
+        normalized["updated_at"] = updated_at
     if "timeline_events" in data:
         normalized["timeline_events"] = validated_timeline_events(
             data.get("timeline_events"),
@@ -332,9 +408,41 @@ def validated_routed_task_status_payload(payload: dict[str, Any]) -> dict[str, A
 
 def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = _require_mapping(payload, "routed_task_result payload")
-    normalized = dict(data)
-    normalized["status"] = _required_text(data.get("status"), "status")
-    normalized["summary"] = str(data.get("summary", "") or "")
+    _reject_unknown_fields(
+        data,
+        allowed_fields={
+            "status",
+            "summary",
+            "full_text",
+            "artifacts",
+            "follow_up_questions",
+            "completed_at",
+        },
+        field_name="routed_task_result payload",
+    )
+    normalized = {
+        "status": _required_text(data.get("status"), "status"),
+        "summary": str(data.get("summary", "") or ""),
+        "full_text": str(data.get("full_text", "") or ""),
+    }
+    artifacts = data.get("artifacts", [])
+    if artifacts in (None, ""):
+        artifacts = []
+    if isinstance(artifacts, str) or not isinstance(artifacts, (list, tuple)):
+        raise ValueError("artifacts must be a list")
+    normalized["artifacts"] = list(artifacts)
+    follow_up_questions = data.get("follow_up_questions", [])
+    if follow_up_questions in (None, ""):
+        follow_up_questions = []
+    if isinstance(follow_up_questions, str) or not isinstance(follow_up_questions, (list, tuple)):
+        raise ValueError("follow_up_questions must be a list")
+    normalized["follow_up_questions"] = [
+        str(item)
+        for item in follow_up_questions
+    ]
+    completed_at = _optional_text_field(data, "completed_at")
+    if completed_at is not _MISSING:
+        normalized["completed_at"] = completed_at
     return normalized
 
 

@@ -160,7 +160,7 @@ async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
             last_successful_contact_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         ),
     )
-    session = default_session(provider.name, provider.new_provider_state(), "off")
+    session = default_session(provider.name, provider.new_provider_state("tg:test"), "off")
     session["pending_delegation"] = {
         "conversation_ref": "telegram:agent:1001",
         "title": "Delegation plan",
@@ -197,7 +197,7 @@ async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: P
         agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
-    session = default_session(provider.name, provider.new_provider_state(), "off")
+    session = default_session(provider.name, provider.new_provider_state("tg:test"), "off")
     session["pending_delegation"] = {
         "conversation_ref": "telegram:agent:1002",
         "title": "Delegation plan",

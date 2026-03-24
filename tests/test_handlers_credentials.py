@@ -112,7 +112,7 @@ async def test_credential_validation_failure(monkeypatch):
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
@@ -159,7 +159,7 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
@@ -195,7 +195,7 @@ async def test_doctor_credential_check():
         prov._health_errors = []
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -211,14 +211,14 @@ async def test_doctor_public_user_ignores_raw_session_skills():
         cfg = make_config(
             data_dir,
             allow_open=True,
-            allowed_user_ids=frozenset({42}),
+            allowed_actor_keys=frozenset({"tg:42"}),
             public_working_dir="/tmp/public-sandbox",
         )
         prov = FakeProvider("claude")
         prov._health_errors = []
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -236,7 +236,7 @@ async def test_multi_credential():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["my-skill"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
@@ -340,7 +340,7 @@ async def test_credential_completion_activates():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = []
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
@@ -387,7 +387,7 @@ async def test_skills_remove_cancels_setup():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
@@ -414,7 +414,7 @@ async def test_skills_clear_cancels_setup():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
@@ -534,7 +534,7 @@ async def test_group_check_cred_satisfaction_no_overwrite():
         chat = FakeChat(12345)
         bob = FakeUser(uid=200, username="bob")
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(100),
@@ -564,7 +564,7 @@ async def test_cross_user_skills_remove_blocked():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(100),
@@ -599,7 +599,7 @@ async def test_cross_user_skills_clear_blocked():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration", "testing"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(100),
@@ -634,7 +634,7 @@ async def test_cross_user_new_blocked():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["provider_state"]["started"] = True
         session["awaiting_skill_setup"] = {
@@ -674,7 +674,7 @@ async def test_expired_foreign_setup_allows_recovery():
         chat = FakeChat(12345)
         bob = FakeUser(uid=200, username="bob")
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(100),
@@ -726,7 +726,7 @@ async def test_expired_setup_persisted_on_noop_remove():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = []
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(100),
@@ -806,7 +806,7 @@ async def test_handler_provider_context_has_skill_and_creds():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
             save_session(data_dir, telegram_conversation_key(1001), session)
 
@@ -844,7 +844,7 @@ async def test_handler_second_skill_changes_prompt():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
             save_session(data_dir, telegram_conversation_key(1001), session)
 
@@ -888,7 +888,7 @@ async def test_handler_skills_remove_drops_cred_env():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha", "beta"]
             save_session(data_dir, telegram_conversation_key(1001), session)
 
@@ -931,7 +931,7 @@ async def test_handler_skills_clear_preserves_credentials():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
             save_session(data_dir, telegram_conversation_key(1001), session)
 
@@ -966,7 +966,7 @@ async def test_handler_new_resets_state_not_credentials():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
             session["role"] = "senior engineer"
             save_session(data_dir, telegram_conversation_key(1001), session)
@@ -1003,7 +1003,7 @@ async def test_regression_readd_after_new_skips_setup():
 
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
-            save_session(data_dir, telegram_conversation_key(1001), default_session(prov.name, prov.new_provider_state(), "off"))
+            save_session(data_dir, telegram_conversation_key(1001), default_session(prov.name, prov.new_provider_state("tg:test"), "off"))
 
             await send_command(_th.cmd_skills, chat, alice, "/skills add alpha", ["add", "alpha"])
             session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
@@ -1056,7 +1056,7 @@ async def test_cancel_setup():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
@@ -1090,11 +1090,11 @@ async def test_cancel_nothing():
 
 async def test_cancel_admin_foreign_setup():
     with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, admin_user_ids=frozenset({99}))
+        cfg = make_config(data_dir, admin_actor_keys=frozenset({"tg:99"}))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
@@ -1114,11 +1114,11 @@ async def test_cancel_admin_foreign_setup():
 async def test_cancel_foreign_setup_shows_another_user_message():
     """Non-admin /cancel when another user's credential setup is in progress shows centralized message."""
     with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, admin_user_ids=frozenset())  # no admin
+        cfg = make_config(data_dir, admin_actor_keys=frozenset())  # no admin
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
@@ -1218,7 +1218,7 @@ async def test_clear_credentials_confirm_flow():
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(42), "cred-test", "API_TOKEN", "old-value", key)
 
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["awaiting_skill_setup"] = {
                 "actor_key": telegram_actor_key(42),
                 "skill": "cred-test",

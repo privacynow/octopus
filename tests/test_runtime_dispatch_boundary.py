@@ -226,11 +226,14 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
         runtime = current_execution_runtime()
 
         outcome = await execute_request(
-            chat.id,
+            runtime.build_transport_identity(
+                message,
+                chat.id,
+                actor_key=telegram_actor_key(42),
+            ),
             "test prompt",
             [],
             message,
-            actor_key=telegram_actor_key(42),
             runtime=runtime,
         )
 
@@ -265,17 +268,17 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
             send_retry_prompt=_no_op,
             send_approval_prompt=send_approval_prompt,
             send_formatted_reply=current_execution_runtime().send_formatted_reply,
-            send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: send_directed_artifacts(
-                chat_id,
+            send_directed_artifacts=lambda conversation_key_value, message, directives, resolved_ctx=None: send_directed_artifacts(
+                conversation_key_value,
                 message,
                 directives,
                 resolved_ctx,
                 runtime=current_runtime(),
             ),
             send_compact_reply=send_compact_reply,
-            propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
+            propose_delegation_plan=lambda conversation_key_value, message, session, conversation_ref, result: propose_delegation_plan(
                 current_runtime(),
-                chat_id,
+                conversation_key_value,
                 message,
                 session,
                 conversation_ref=conversation_ref,
@@ -284,12 +287,15 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         )
 
         await request_approval(
-            chat.id,
+            runtime.build_transport_identity(
+                message,
+                chat.id,
+                actor_key=telegram_actor_key(42),
+            ),
             "please review files",
             [],
             [],
             message,
-            actor_key=telegram_actor_key(42),
             runtime=runtime,
         )
 
@@ -303,6 +309,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
 def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
+            conversation_key="registry:conversation:12345",
             descriptor=ChannelDescriptor(
                 channel_type="registry",
                 display_name="Registry",
@@ -314,11 +321,9 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
                 supports_conversation_binding=True,
                 supports_timeline=True,
             ),
-            message_conversation_ref="",
+            message_conversation_ref="registry:12345",
             routed_task_id="task-9",
-            chat_id=12345,
         ),
-        build_conversation_ref=lambda chat_id: f"registry:{chat_id}",
         conversation_callback_factory=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: _no_op(
                 conversation_ref,
@@ -346,6 +351,7 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
 def test_workflow_context_builder_keeps_registry_task_without_timeline_callback() -> None:
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
+            conversation_key="registry:ops:task:task-1",
             descriptor=ChannelDescriptor(
                 channel_type="registry",
                 display_name="Registry Tasks",
@@ -360,9 +366,7 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
             message_conversation_ref="registry:ops:task:task-1",
             routed_task_id="task-1",
             authority_ref="registry:ops",
-            chat_id="registry:ops:task:task-1",
         ),
-        build_conversation_ref=lambda chat_id: str(chat_id),
         conversation_callback_factory=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: _no_op(
                 conversation_ref,
@@ -398,6 +402,7 @@ async def test_workflow_context_builder_chooses_routed_task_callback_by_concern(
 
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
+            conversation_key="registry:ops:task:task-1",
             descriptor=ChannelDescriptor(
                 channel_type="registry",
                 display_name="Registry Tasks",
@@ -412,9 +417,7 @@ async def test_workflow_context_builder_chooses_routed_task_callback_by_concern(
             message_conversation_ref="registry:ops:task:task-1",
             routed_task_id="task-1",
             authority_ref="registry:ops",
-            chat_id="registry:ops:task:task-1",
         ),
-        build_conversation_ref=lambda chat_id: str(chat_id),
         conversation_callback_factory=lambda _conversation_ref, _routed_task_id: fake_conversation,
         routed_task_callback_factory=lambda _routed_task_id, _authority_ref: fake_routed_task,
     )

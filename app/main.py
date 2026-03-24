@@ -330,6 +330,11 @@ def main() -> None:
         if authority_capabilities
         else build_noop_bot_services()
     )
+    if authority_capabilities and not config.registry_agent_ids:
+        log.warning(
+            "Registry capabilities configured but no agent enrollment found. "
+            "Event publishing and delegation will not work until bots enroll."
+        )
     dispatcher = ChannelDispatcher()
     telegram_ingress = None
     worker_runtime_bundle = None

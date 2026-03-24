@@ -81,7 +81,7 @@ async def test_export_not_allowed():
         cfg = make_config(
             data_dir,
             allow_open=False,
-            allowed_user_ids=frozenset({99}),
+            allowed_actor_keys=frozenset({"tg:99"}),
         )
         setup_globals(cfg, FakeProvider())
 

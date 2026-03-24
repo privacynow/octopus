@@ -23,7 +23,7 @@ async def test_rate_limit_blocks_after_threshold():
         prov.run_results = [RunResult(text="ok")] * 5
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -47,14 +47,14 @@ async def test_rate_limit_admin_exempt():
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_users_explicit=True,
         )
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 5
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -77,7 +77,7 @@ async def test_rate_limit_disabled_by_default():
         prov.run_results = [RunResult(text="ok")] * 10
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -97,7 +97,7 @@ async def test_rate_limit_per_user_isolation():
         prov.run_results = [RunResult(text="ok")] * 10
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -127,15 +127,15 @@ async def test_rate_limit_implicit_admin_not_exempt():
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
-            allowed_user_ids=frozenset({42}),
-            admin_user_ids=frozenset({42}),  # same as allowed (fallback)
+            allowed_actor_keys=frozenset({"tg:42"}),
+            admin_actor_keys=frozenset({"tg:42"}),  # same as allowed (fallback)
             admin_users_explicit=False,       # not explicitly set
         )
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 5
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -158,15 +158,15 @@ async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
-            allowed_user_ids=frozenset({42}),
-            admin_user_ids=frozenset({42}),
+            allowed_actor_keys=frozenset({"tg:42"}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_users_explicit=True,  # explicitly set
         )
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 5
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)

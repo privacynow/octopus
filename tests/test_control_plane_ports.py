@@ -36,7 +36,7 @@ async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> No
         title="Chat",
     )
     assert isinstance(conversation_id, str)
-    assert len(conversation_id) > 0
+    assert conversation_id == ""
 
     await projection.publish_events(
         conversation_id=conversation_id,

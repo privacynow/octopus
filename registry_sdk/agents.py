@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentCard(BaseModel):
     """Agent identity and capability declaration sent during enrollment/registration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bot_key: str = Field(..., min_length=1)
     agent_id: str = ""
     display_name: str = ""
     slug: str = ""

@@ -157,11 +157,8 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
     def _make_optional(cls, raw):
         if raw is None or not isinstance(raw, dict):
             return None
-        # Filter out keys not in the dataclass to tolerate legacy extras
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in raw.items() if k in valid_keys}
-        if "actor_key" in filtered:
-            filtered["actor_key"] = parse_actor_key(filtered["actor_key"])
         try:
             return cls(**filtered)
         except TypeError:

@@ -157,17 +157,17 @@ async def test_doctor_reads_sqlite_not_json():
 
     with fresh_env() as (data_dir, cfg, prov):
         # Create stale pending session directly via storage API
-        s1 = default_session("claude", prov.new_provider_state(), "off")
+        s1 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         s1["pending_approval"] = {"prompt": "do something", "created_at": 0}
         save_session(data_dir, telegram_conversation_key(9001), s1)
 
         # Create stale setup session
-        s2 = default_session("claude", prov.new_provider_state(), "off")
-        s2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": 0}
+        s2 = default_session("claude", prov.new_provider_state("tg:test"), "off")
+        s2["awaiting_skill_setup"] = {"actor_key": "tg:42", "skill": "test", "started_at": 0}
         save_session(data_dir, telegram_conversation_key(9002), s2)
 
         # Create clean session (should not trigger warnings)
-        s3 = default_session("claude", prov.new_provider_state(), "off")
+        s3 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(9003), s3)
 
         # Verify no JSON session dir exists
@@ -203,7 +203,7 @@ async def test_delete_session():
     load_session returns a fresh default."""
     with fresh_env() as (data_dir, cfg, prov):
         # Create and save a session with some state
-        s = default_session("claude", prov.new_provider_state(), "on")
+        s = default_session("claude", prov.new_provider_state("tg:test"), "on")
         s["active_skills"] = ["my-skill"]
         s["role"] = "custom role"
         save_session(data_dir, telegram_conversation_key(5001), s)
@@ -306,18 +306,18 @@ async def test_prompt_size_cross_chat_reads_sqlite():
     from app.workflows.execution.requests import check_prompt_size_cross_chat
 
     with fresh_env(config_overrides={
-        "admin_user_ids": frozenset({100}),
+        "admin_actor_keys": frozenset({"tg:100"}),
         "admin_usernames": frozenset({"admin"}),
         "admin_users_explicit": True,
     }) as (data_dir, cfg, prov):
         # Create two sessions with a skill active, directly in SQLite
         for cid in (4001, 4002):
-            s = default_session("claude", prov.new_provider_state(), "off")
+            s = default_session("claude", prov.new_provider_state("tg:test"), "off")
             s["active_skills"] = ["big-skill"]
             save_session(data_dir, cid, s)
 
         # Create a session without the skill
-        s3 = default_session("claude", prov.new_provider_state(), "off")
+        s3 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(4003), s3)
 
         # No JSON dir

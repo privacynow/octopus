@@ -26,6 +26,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
             "registry_publish_level": "off",
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -91,6 +92,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
             "registry_publish_level": "off",
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -119,7 +121,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
@@ -142,7 +144,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         assert len(submitted) == 1
         request, authority_ref = submitted[0]
         assert request.routed_task_id == "task-1"
-        assert request.origin_agent_id == "test"  # falls back to config.instance when no registries
+        assert request.origin_agent_id == "test-agent"
         assert request.target_agent_id == "developer-1"
         assert request.instructions == "Build the feature end to end."
         assert authority_ref == "registry:default"
@@ -159,6 +161,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -178,7 +181,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
@@ -208,6 +211,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -236,7 +240,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
@@ -269,6 +273,7 @@ async def test_delegation_approve_no_pending_is_a_no_op():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, _, prov):
         import app.channels.telegram.ingress as th
@@ -289,6 +294,7 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -315,7 +321,7 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
@@ -364,7 +370,7 @@ async def test_delegation_approve_rejects_stale_plan_without_submission(monkeypa
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
@@ -403,7 +409,7 @@ async def test_stale_submitted_delegation_expires_on_next_worker_message():
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(_cfg, chat.id),
             "title": "Feature delegation",
@@ -438,6 +444,7 @@ async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_a
             "agent_registries": (make_registry_connection(),),
             "delegation_timeout_seconds": 3600,
             "registry_publish_level": "off",
+            "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -462,7 +469,7 @@ async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_a
 
         chat = FakeChat()
         user = FakeUser()
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",

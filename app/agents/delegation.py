@@ -9,6 +9,7 @@ from typing import Any
 
 from app.registry_errors import registry_error_summary
 from app.agents.types import RoutedTaskRequest
+from app.agents.registry_capabilities import registry_id_from_authority_ref
 
 
 from app.config import BotConfig
@@ -33,23 +34,14 @@ class DelegationRuntime:
     provider_state_factory: Callable[[str], dict[str, Any]]
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
-    origin_agent_id: str = ""
 
 
-def resolve_origin_agent_id(config: BotConfig, registry_id: str = "") -> str:
-    """Resolve the bot's registry-assigned agent_id.
+def resolve_origin_agent_id(config: BotConfig, registry_id: str) -> str:
+    """Resolve the bot's registry-assigned agent_id for a specific registry.
 
-    When registry_id is provided, returns the agent_id for that specific registry.
-    Otherwise falls back to first available or config.instance.
+    Requires registry_id — no first-hit fallback.
     """
-    if registry_id:
-        agent_id = config.agent_id_for_registry(registry_id)
-        if agent_id:
-            return agent_id
-    for agent_id in config.registry_agent_ids.values():
-        if agent_id:
-            return agent_id
-    return config.instance
+    return config.agent_id_for_registry(registry_id)
 
 
 def build_delegation_runtime(
@@ -59,16 +51,13 @@ def build_delegation_runtime(
     provider_state_factory: Callable[[str], dict[str, Any]],
     task_routing: TaskRoutingPort,
     agent_directory: AgentDirectoryPort,
-    origin_agent_id: str = "",
 ) -> DelegationRuntime:
-    effective_agent_id = origin_agent_id or resolve_origin_agent_id(config)
     return DelegationRuntime(
         config=config,
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
         task_routing=task_routing,
         agent_directory=agent_directory,
-        origin_agent_id=effective_agent_id,
     )
 
 
@@ -219,10 +208,34 @@ async def handle_delegation_approve(
                     reply_markup=retry_markup,
                 )
                 return
+            origin_agent_id = resolve_origin_agent_id(
+                runtime.config,
+                registry_id_from_authority_ref(resolution.authority_ref),
+            )
+            if not origin_agent_id:
+                _save_session(runtime, conversation_key, session)
+                detail = (
+                    "Delegation unavailable: this bot has no enrolled agent identity for "
+                    f"{resolution.authority_ref}."
+                )
+                if submitted_ids:
+                    await channel_egress.send_text(
+                        _partial_submission_message(
+                            session.pending_delegation,
+                            reason=detail,
+                        ),
+                        reply_markup=retry_markup,
+                    )
+                    return
+                await channel_egress.send_text(
+                    detail,
+                    reply_markup=retry_markup,
+                )
+                return
             request = RoutedTaskRequest(
                 routed_task_id=task.routed_task_id,
                 parent_conversation_id=delegation.conversation_ref,
-                origin_agent_id=runtime.origin_agent_id,
+                origin_agent_id=origin_agent_id,
                 target_agent_id=task.target_agent_id,
                 title=task.title,
                 instructions=task.instructions,
@@ -287,7 +300,7 @@ async def handle_delegation_approve(
 
     _save_session(runtime, conversation_key, session)
     if event_sink is not None:
-        tasks_summary = [{"title": t.title, "target": t.target_agent_id} for t in session.pending_delegation.tasks]
+        tasks_summary = [{"title": t.title, "target": t.target_agent_id, "status": "submitted"} for t in session.pending_delegation.tasks]
         await event_sink.on_delegation_submitted(tasks_summary)
     await channel_egress.send_text(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."

@@ -70,11 +70,13 @@ def _enroll_and_register(
     *,
     registry_scope: str = "full",
 ) -> tuple[str, str]:
+    bot_key = f"bot:{slug}"
     enroll = client.post(
         "/v1/agents/enroll",
         json={
             "enrollment_token": "enroll-secret",
             "agent_card": {
+                "bot_key": bot_key,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
@@ -98,6 +100,7 @@ def _enroll_and_register(
         headers={"Authorization": f"Bearer {token}"},
         json={
             "agent_card": {
+                "bot_key": bot_key,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
@@ -760,6 +763,7 @@ def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_p
     payload = {
         "enrollment_token": "wrong-secret",
         "agent_card": {
+            "bot_key": "bot:dev-bot",
             "display_name": "Dev Bot",
             "slug": "dev-bot",
             "role": "developer",
@@ -786,6 +790,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
     bad_payload = {
         "enrollment_token": "wrong-secret",
         "agent_card": {
+            "bot_key": "bot:dev-bot",
             "display_name": "Dev Bot",
             "slug": "dev-bot",
             "role": "developer",
@@ -805,6 +810,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
         json={
             "enrollment_token": "enroll-secret",
             "agent_card": {
+                "bot_key": "bot:dev-bot",
                 "display_name": "Dev Bot",
                 "slug": "dev-bot",
                 "role": "developer",
@@ -1015,20 +1021,22 @@ def test_publish_events_stores_events(monkeypatch, tmp_path: Path):
         headers={"Authorization": f"Bearer {token}"},
         json={
             "events": [
-                {
-                    "event_id": "evt-1",
-                    "kind": "message.user",
-                    "actor": "alice",
-                    "content": "Hello bot",
-                    "metadata": {},
-                },
-                {
-                    "event_id": "evt-2",
-                    "kind": "message.bot",
-                    "actor": "bot",
-                    "content": "Hello alice",
-                    "metadata": {},
-                },
+                    {
+                        "event_id": "evt-1",
+                        "kind": "message.user",
+                        "actor": "alice",
+                        "content": "Hello bot",
+                        "created_at": "2026-03-15T00:00:00+00:00",
+                        "metadata": {},
+                    },
+                    {
+                        "event_id": "evt-2",
+                        "kind": "message.bot",
+                        "actor": "bot",
+                        "content": "Hello alice",
+                        "created_at": "2026-03-15T00:00:01+00:00",
+                        "metadata": {},
+                    },
             ]
         },
     )
@@ -1095,15 +1103,16 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
         headers={"Authorization": f"Bearer {token}"},
         json={
             "events": [
-                {
-                    "event_id": "evt-cancel-progress",
-                    "kind": "task.status",
-                    "content": "Still winding down",
-                    "metadata": {"title": "Working..."},
-                }
-            ]
-        },
-    )
+                    {
+                        "event_id": "evt-cancel-progress",
+                        "kind": "task.status",
+                        "content": "Still winding down",
+                        "created_at": "2026-03-15T00:00:02+00:00",
+                        "metadata": {"status": "running"},
+                    }
+                ]
+            },
+        )
     assert publish.status_code == 200
 
     conversation = client.get(
@@ -1208,7 +1217,6 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
         "/v1/agents/routed-tasks/task-1/result",
         headers={"Authorization": f"Bearer {target_token}"},
         json={
-            "routed_task_id": "task-1",
             "status": "completed",
             "summary": "Added missing tests",
             "full_text": "Test plan updated with edge cases.",
@@ -1303,6 +1311,8 @@ def test_registry_routed_task_status_requires_explicit_status(monkeypatch, tmp_p
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review test plan",
+            "instructions": "Find missing test coverage.",
+            "created_at": "2026-03-15T00:00:00+00:00",
         },
     )
     assert routed.status_code == 200
@@ -1333,6 +1343,8 @@ def test_registry_routed_task_result_requires_explicit_status(monkeypatch, tmp_p
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review test plan",
+            "instructions": "Find missing test coverage.",
+            "created_at": "2026-03-15T00:00:00+00:00",
         },
     )
     assert routed.status_code == 200
@@ -1448,5 +1460,3 @@ def test_create_conversation_idempotent_on_same_agent(monkeypatch, tmp_path: Pat
     assert conv1["conversation_id"] == conv2["conversation_id"]
     # Title should be updated by the second call
     assert conv2["title"] == "Updated title"
-
-

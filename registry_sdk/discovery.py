@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentDiscoveryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     role: str = ""
     capabilities: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -15,6 +17,8 @@ class AgentDiscoveryQuery(BaseModel):
 
 
 class DiscoveredAgentRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     authority_ref: str
     agent_id: str
     display_name: str = ""

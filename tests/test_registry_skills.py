@@ -14,6 +14,7 @@ from app.registry_service.store import RegistrySQLiteStore
 def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabilities: list[str]) -> tuple[str, str]:
     enrolled = store.enroll(
         {
+            "bot_key": f"bot:{slug}",
             "display_name": name,
             "slug": slug,
             "role": "developer",
@@ -32,6 +33,7 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabil
         enrolled["agent_token"],
         {
             "agent_card": {
+                "bot_key": f"bot:{slug}",
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",

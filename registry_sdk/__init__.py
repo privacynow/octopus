@@ -9,16 +9,20 @@ from registry_sdk.events import (
     EVENT_METADATA_SCHEMAS,
     ApprovalMetadata,
     DelegationMetadata,
+    DelegationTaskSummary,
     ErrorMetadata,
-    FileChangeMetadata,
     MessageMetadata,
     ProviderResponseMetadata,
     TaskStatusMetadata,
-    ToolExecutionMetadata,
 )
 from registry_sdk.agents import AgentCard
 from registry_sdk.conversations import ConversationCreate
-from registry_sdk.tasks import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from registry_sdk.tasks import (
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+    TimelineEventPayload,
+)
 from registry_sdk.discovery import AgentDiscoveryQuery, DiscoveredAgentRef
 
 __all__ = [
@@ -26,17 +30,17 @@ __all__ = [
     "EVENT_METADATA_SCHEMAS",
     "ApprovalMetadata",
     "DelegationMetadata",
+    "DelegationTaskSummary",
     "ErrorMetadata",
-    "FileChangeMetadata",
     "MessageMetadata",
     "ProviderResponseMetadata",
     "TaskStatusMetadata",
-    "ToolExecutionMetadata",
     "AgentCard",
     "ConversationCreate",
     "RoutedTaskRequest",
     "RoutedTaskResult",
     "RoutedTaskUpdate",
+    "TimelineEventPayload",
     "AgentDiscoveryQuery",
     "DiscoveredAgentRef",
 ]

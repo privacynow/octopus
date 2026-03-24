@@ -144,14 +144,14 @@ async def cancel_chat_operation(
     message,
     *,
     runtime: TelegramConversationRuntime,
-    actor_user_id: int | str = "",
+    actor_key: int | str = "",
     allow_admin_override: bool = False,
     update_id: int | None = None,
 ) -> None:
     fast_outcome = request_cancel_fast_path(
         chat_id,
         runtime=runtime,
-        actor_key=_actor_key(actor_user_id),
+        actor_key=actor_key,
         cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
         allow_override=allow_admin_override,
     )
@@ -166,7 +166,7 @@ async def cancel_chat_operation(
             session,
             data_dir=runtime.state.config.data_dir,
             conversation_key=_conversation_key(chat_id),
-            actor_key=_actor_key(actor_user_id),
+            actor_key=actor_key,
             cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
             allow_override=allow_admin_override,
         )
@@ -207,7 +207,7 @@ async def cmd_cancel(event, update: Update, context, *, runtime: TelegramConvers
         event.chat_id,
         update.effective_message,
         runtime=runtime,
-        actor_user_id=_actor_key(event.user.id),
+        actor_key=_actor_key(event.user.id),
         allow_admin_override=_is_admin(runtime, event.user),
         update_id=update.update_id,
     )

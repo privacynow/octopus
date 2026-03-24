@@ -71,7 +71,7 @@ def test_validate_config_valid():
         make_config(
             telegram_token="fake-token",
             allow_open=False,
-            allowed_user_ids=frozenset({123}),
+            allowed_actor_keys=frozenset({"tg:123"}),
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
         )
@@ -85,7 +85,7 @@ def test_validate_config_missing_token():
         make_config(
             telegram_token="",
             allow_open=False,
-            allowed_user_ids=frozenset({123}),
+            allowed_actor_keys=frozenset({"tg:123"}),
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
         )
@@ -135,7 +135,7 @@ def test_validate_config_bad_provider():
         make_config(
             telegram_token="fake-token",
             allow_open=False,
-            allowed_user_ids=frozenset({123}),
+            allowed_actor_keys=frozenset({"tg:123"}),
             provider_name="invalid",
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
@@ -147,7 +147,7 @@ def test_validate_config_no_users_no_open():
     errors4 = validate_config(
         make_config(
             telegram_token="fake-token",
-            allowed_user_ids=frozenset(),
+            allowed_actor_keys=frozenset(),
             allow_open=False,
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
@@ -181,7 +181,7 @@ def test_validate_config_open_access():
     errors5 = validate_config(
         make_config(
             telegram_token="fake-token",
-            allowed_user_ids=frozenset(),
+            allowed_actor_keys=frozenset(),
             allow_open=True,
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
@@ -194,7 +194,7 @@ def test_validate_config_codex_mutual_exclusion():
         make_config(
             telegram_token="fake-token",
             allow_open=False,
-            allowed_user_ids=frozenset({123}),
+            allowed_actor_keys=frozenset({"tg:123"}),
             working_dir=Path.home(),
             data_dir=Path("/tmp/test-agent-bot"),
             codex_full_auto=True,
@@ -1444,11 +1444,14 @@ def test_all_levels_include_message_user_and_message_bot():
         assert "message.bot" in kinds, f"{level} missing message.bot"
 
 
-def test_full_level_includes_provider_request_tool_execution_file_change():
+def test_full_level_only_includes_live_detailed_event_kinds():
     kinds = PUBLISH_LEVEL_KINDS["full"]
-    assert "provider.request" in kinds
-    assert "tool.execution" in kinds
-    assert "file.change" in kinds
+    assert "provider.response" in kinds
+    assert "approval.decided" in kinds
+    assert "delegation.completed" in kinds
+    assert "provider.request" not in kinds
+    assert "tool.execution" not in kinds
+    assert "file.change" not in kinds
 
 
 def test_minimal_level_excludes_approval_delegation_provider_response():

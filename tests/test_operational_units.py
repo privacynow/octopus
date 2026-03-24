@@ -7,7 +7,7 @@ Tests the new modules introduced by the remediation plan:
 - normalize_conversation_id / delegation_session_key (identity.py)
 - registry_agent_ids on BotConfig (config.py)
 - prompt_weight parity with system_prompt (provider_guidance_service.py)
-- Dual usage query compatibility (store.py)
+- provider.response usage query contract (store.py)
 
 All tests are pure unit tests — no bus, no harness, no async waits.
 Target: <2 seconds total.
@@ -24,7 +24,7 @@ import pytest
 class TestTransportIdentity:
     def test_default_fields_are_empty(self):
         from app.workflows.execution.contracts import TransportIdentity
-        t = TransportIdentity()
+        t = TransportIdentity(conversation_key="")
         assert t.conversation_key == ""
         assert t.origin_channel == ""
         assert t.external_conversation_ref == ""
@@ -246,12 +246,12 @@ class TestPromptWeightParity:
 
 
 # ---------------------------------------------------------------------------
-# Dual usage query (provider.response + legacy usage kind)
+# Usage query
 # ---------------------------------------------------------------------------
 
-class TestDualUsageQuery:
-    def test_usage_query_accepts_both_kinds(self):
-        """Verify the SQL queries for usage include both 'provider.response' and legacy 'usage' kind."""
+class TestUsageQuery:
+    def test_usage_query_only_accepts_provider_response(self):
+        """Verify the SQL queries for usage only include the live provider.response kind."""
         import sqlite3, json, tempfile, pathlib
         with tempfile.TemporaryDirectory() as d:
             db_path = pathlib.Path(d) / "test.db"
@@ -264,9 +264,9 @@ class TestDualUsageQuery:
             conn.execute("INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 ("e3", "c1", "a1", "message.user", "", "", "{}", "2025-01-03T00:00:00Z"))
             conn.commit()
-            # Both provider.response and usage should match; message.user should not
-            rows = conn.execute("SELECT * FROM events WHERE kind IN ('provider.response', 'usage')").fetchall()
-            assert len(rows) == 2
+            rows = conn.execute("SELECT * FROM events WHERE kind = 'provider.response'").fetchall()
+            assert len(rows) == 1
+            assert rows[0][3] == "provider.response"
             conn.close()
 
 
@@ -289,12 +289,11 @@ class TestDeterministicSessionId:
         s2 = p.new_provider_state("tg:99999")
         assert s1["session_id"] != s2["session_id"]
 
-    def test_empty_conversation_key_produces_random_session_id(self):
+    def test_provider_state_requires_explicit_conversation_key(self):
         from app.providers.claude import ClaudeProvider
         p = ClaudeProvider.__new__(ClaudeProvider)
-        s1 = p.new_provider_state()
-        s2 = p.new_provider_state()
-        assert s1["session_id"] != s2["session_id"]
+        with pytest.raises(TypeError):
+            p.new_provider_state()
 
 
 # ---------------------------------------------------------------------------

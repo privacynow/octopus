@@ -236,29 +236,30 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now = utcnow_iso()
         card = validated_agent_card_payload(requested_card, require_registry_scope=True)
         bot_key = str(card.get("bot_key", "") or "").strip()
+        if not bot_key:
+            raise ValueError("bot_key requires non-empty text")
 
         # If bot_key is provided, check for existing enrollment (idempotent re-enroll)
-        if bot_key:
-            with self._connect() as conn, _write_tx(conn):
-                with _cur(conn) as cur:
+        with self._connect() as conn, _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT agent_id, slug FROM {_SCHEMA}.agents WHERE bot_key = %s",
+                    (bot_key,),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    agent_token = secrets.token_urlsafe(32)
+                    agent_token_hash = hash_agent_token(agent_token)
                     cur.execute(
-                        f"SELECT agent_id, slug FROM {_SCHEMA}.agents WHERE bot_key = %s",
-                        (bot_key,),
+                        f"UPDATE {_SCHEMA}.agents SET agent_token = %s, updated_at = %s WHERE bot_key = %s",
+                        (agent_token_hash, now, bot_key),
                     )
-                    existing = cur.fetchone()
-                    if existing:
-                        agent_token = secrets.token_urlsafe(32)
-                        agent_token_hash = hash_agent_token(agent_token)
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.agents SET agent_token = %s, updated_at = %s WHERE bot_key = %s",
-                            (agent_token_hash, now, bot_key),
-                        )
-                        return {
-                            "agent_id": existing["agent_id"],
-                            "slug": existing["slug"],
-                            "agent_token": agent_token,
-                            "poll_cursor": "0",
-                        }
+                    return {
+                        "agent_id": existing["agent_id"],
+                        "slug": existing["slug"],
+                        "agent_token": agent_token,
+                        "poll_cursor": "0",
+                    }
 
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
@@ -322,6 +323,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            requested_bot_key = str(card.get("bot_key", "") or "").strip()
+            current_bot_key = str(row["bot_key"] or "").strip()
+            if requested_bot_key and requested_bot_key != current_bot_key:
+                raise ValueError("bot_key must match the enrolled agent identity")
             current_skills = decode_json_field(row.get("skills_json"), [])
             current_tags = decode_json_field(row.get("tags_json"), [])
             current_channel_capabilities = decode_json_field(
@@ -814,11 +819,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             inserted_events: list[dict[str, Any]] = []
             if updated > 0:
                 for event in validated_payload["timeline_events"]:
-                    event_metadata = {"status": validated_payload["status"], "routed_task_id": routed_task_id}
-                    if event.get("title"):
-                        event_metadata["title"] = event["title"]
+                    event_metadata = {"status": validated_payload["status"]}
                     if event.get("progress") is not None:
                         event_metadata["progress"] = event["progress"]
+                    event_content = str(event.get("body", "") or event.get("title", "") or "")
                     with _cur(conn) as cur:
                         cur.execute(
                             f"""
@@ -832,7 +836,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 row["agent_id"],
                                 "task.status",
                                 "",
-                                event.get("body", ""),
+                                event_content,
                                 _jsonb(event_metadata),
                                 event["created_at"],
                             ),
@@ -845,7 +849,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 "agent_id": row["agent_id"],
                                 "kind": "task.status",
                                 "actor": "",
-                                "content": event.get("body", ""),
+                                "content": event_content,
                                 "metadata": event_metadata,
                                 "created_at": event["created_at"],
                             })
@@ -989,7 +993,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (target_agent_id,),
                 )
                 agent_row = cur.fetchone()
-                bot_key = (agent_row["bot_key"] if agent_row else "") or target_agent_id
+                bot_key = ""
+                if agent_row is not None:
+                    bot_key = str(agent_row["bot_key"] or "").strip()
+                if not bot_key:
+                    raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
                 canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
                 conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
 
@@ -1161,7 +1169,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"""
                         SELECT conversation_id, metadata_json, created_at
                         FROM {_SCHEMA}.events
-                        WHERE kind IN ('provider.response', 'usage') AND created_at >= %s AND created_at <= %s
+                        WHERE kind = 'provider.response' AND created_at >= %s AND created_at <= %s
                         ORDER BY created_at
                         """,
                         (since_iso, until_iso),
@@ -1171,7 +1179,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"""
                         SELECT conversation_id, metadata_json, created_at
                         FROM {_SCHEMA}.events
-                        WHERE kind IN ('provider.response', 'usage') AND created_at >= %s
+                        WHERE kind = 'provider.response' AND created_at >= %s
                         ORDER BY created_at
                         """,
                         (since_iso,),
@@ -1235,7 +1243,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (conversation["target_agent_id"],),
                 )
                 agent_row = cur.fetchone()
-            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
+            bot_key = ""
+            if agent_row is not None:
+                bot_key = str(agent_row["bot_key"] or "").strip()
+            if not bot_key:
+                raise ValueError(
+                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
+                )
             now = utcnow_iso()
             event_id = uuid.uuid4().hex
             self._create_delivery(
@@ -1304,7 +1318,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (conversation["target_agent_id"],),
                 )
                 agent_row = cur.fetchone()
-            bot_key = (agent_row["bot_key"] if agent_row else "") or conversation["target_agent_id"]
+            bot_key = ""
+            if agent_row is not None:
+                bot_key = str(agent_row["bot_key"] or "").strip()
+            if not bot_key:
+                raise ValueError(
+                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
+                )
             now = utcnow_iso()
             event_id_for_action = uuid.uuid4().hex
             self._create_delivery(
@@ -1333,7 +1353,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 event_content = ""
             else:
                 event_kind = "approval.decided"
-                event_metadata = {"action": validated_action, "decided_by": "operator"}
+                decision = "rejected" if validated_action.startswith("reject") else "approved"
+                event_metadata = {
+                    "action": validated_action,
+                    "decided_by": "operator",
+                    "decision": decision,
+                }
                 event_content = json.dumps(action_payload) if action_payload else ""
             event_id = event_id_for_action
             with _cur(conn) as cur:
@@ -1628,7 +1653,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind IN ('provider.response', 'usage')"
+            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind = 'provider.response'"
             params: list[Any] = []
             if agent_id:
                 sql += " AND agent_id = %s"

@@ -62,24 +62,16 @@ class CapabilityService:
 
 
 def declared_capabilities(card: dict[str, Any]) -> list[str]:
-    """Return capability names from a registry card payload.
+    """Return capability names from a registry card payload."""
 
-    Accept legacy ``skills`` payloads at the edge while keeping the internal
-    concept named as capabilities.
-    """
-
-    raw = card.get("capabilities")
-    if raw is None:
-        raw = card.get("skills", [])
+    raw = card.get("capabilities", [])
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
 def query_capabilities(query: dict[str, Any]) -> set[str]:
     """Return requested capability filters from a discovery query payload."""
 
-    raw = query.get("capabilities")
-    if raw is None:
-        raw = query.get("skills", [])
+    raw = query.get("capabilities", [])
     return {
         str(item).strip().lower()
         for item in raw
@@ -88,16 +80,11 @@ def query_capabilities(query: dict[str, Any]) -> set[str]:
 
 
 def requested_routed_capabilities(request: dict[str, Any]) -> tuple[str, ...]:
-    """Return the capabilities requested by a routed task payload.
-
-    ``requested_capabilities`` is canonical. A legacy single ``skill`` field is
-    still tolerated at the API edge for transition safety.
-    """
+    """Return the capabilities requested by a routed task payload."""
 
     raw = request.get("requested_capabilities")
     if isinstance(raw, (list, tuple)):
         caps = [str(item).strip() for item in raw if str(item).strip()]
         if caps:
             return tuple(caps)
-    legacy = str(request.get("skill") or "").strip()
-    return (legacy,) if legacy else ()
+    return ()

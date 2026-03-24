@@ -122,11 +122,11 @@ def fresh_data_dir():
 def public_user_config_overrides(**extra):
     """Default config overrides for tests that need a public (non-trusted) user.
 
-    Returns allow_open=True and allowed_user_ids=frozenset({42}) so that
+    Returns allow_open=True and allowed_actor_keys=frozenset({"tg:42"}) so that
     uid 42 is trusted and any other uid (e.g. 999) is public. Merge with
     test-specific overrides, e.g. public_model_profiles=frozenset({\"fast\"}).
     """
-    return {"allow_open": True, "allowed_user_ids": frozenset({42}), **extra}
+    return {"allow_open": True, "allowed_actor_keys": frozenset({"tg:42"}), **extra}
 
 
 @contextlib.contextmanager
@@ -322,14 +322,12 @@ class FakeProvider:
         self.preflight_results = []
         self._health_errors = []
 
-    def new_provider_state(self, conversation_key: str = ""):
+    def new_provider_state(self, conversation_key: str):
         if self.name == "codex":
+            del conversation_key
             return {"thread_id": None}
         import uuid
-        if conversation_key:
-            sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
-        else:
-            sid = str(uuid.uuid4())
+        sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
         return {"session_id": sid, "started": False}
 
     async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
@@ -374,7 +372,7 @@ def make_config(data_dir, **overrides):
         typing_interval_seconds=60.0,
         # Default test users are trusted — covers UIDs commonly used in tests.
         # Excludes 999 (test-stranger used for unauthorized user tests).
-        allowed_user_ids=frozenset({1, 2, 3, 42, 50, 99, 100, 200}),
+        allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3", "tg:42", "tg:50", "tg:99", "tg:100", "tg:200"}),
     )
     defaults.update(overrides)
     return _make_config(**defaults)

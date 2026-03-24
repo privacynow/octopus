@@ -316,15 +316,12 @@ def main() -> None:
     directory = build_control_plane_directory(authority_capabilities)
 
     def _agent_id_for_authority(authority_ref: str) -> str:
-        """Resolve the per-registry agent_id from persisted connection state."""
-        from app.agents.state import load_registry_connection_state
-
+        """Resolve the per-registry agent_id from BotConfig (single source of truth)."""
         try:
             registry_id = registry_id_from_authority_ref(authority_ref)
         except ValueError:
             return ""
-        state = load_registry_connection_state(config.data_dir, registry_id)
-        return state.agent_id
+        return config.agent_id_for_registry(registry_id)
 
     services = (
         build_bus_bot_services(

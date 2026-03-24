@@ -35,13 +35,11 @@ def _services_for_registry(
     directory = build_control_plane_directory({authority_ref: set(capabilities)})
 
     def _agent_id_for_authority(ref: str) -> str:
-        from app.agents.state import load_registry_connection_state
-
         try:
             rid = registry_id_from_authority_ref(ref)
         except ValueError:
             return ""
-        return load_registry_connection_state(config.data_dir, rid).agent_id
+        return config.agent_id_for_registry(rid)
 
     return build_bus_bot_services(
         bus, directory, agent_id_for_authority=_agent_id_for_authority,

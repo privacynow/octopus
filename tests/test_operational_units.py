@@ -45,10 +45,6 @@ class TestTransportIdentity:
         assert t.origin_channel == "telegram"
         assert t.target_agent_id == "agent-abc"
 
-    def test_backward_compat_alias(self):
-        from app.workflows.execution.contracts import ExecutionChannelContext, TransportIdentity
-        assert ExecutionChannelContext is TransportIdentity
-
     def test_frozen(self):
         from app.workflows.execution.contracts import TransportIdentity
         t = TransportIdentity(conversation_key="tg:1")

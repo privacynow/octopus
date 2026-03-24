@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable
 
 from app.ports.agent_directory import AgentDirectoryPort
 from app.ports.channel import ChannelDescriptor
 from app.ports.delegation import DelegationIntentParser
+from app.ports.execution_events import ExecutionEventSink
 from app.runtime.dispatch import RuntimeDispatchRuntime
 
 
@@ -30,9 +31,6 @@ class TransportIdentity:
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
-# Backward compat alias — callers being migrated
-ExecutionChannelContext = TransportIdentity
-
 
 @dataclass(frozen=True)
 class ExecutionChannelMetadata:
@@ -47,18 +45,6 @@ class ExecutionChannelMetadata:
     target_agent_id: str = ""
     actor: str = ""
 
-
-@runtime_checkable
-class ExecutionEventSink(Protocol):
-    """Port for publishing execution events to registries."""
-
-    async def on_user_message(self, content: str, *, actor: str = "") -> None: ...
-    async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None: ...
-    async def on_bot_reply(self, content: str) -> None: ...
-    async def on_error(self, content: str, *, error_type: str = "execution", message: str = "") -> None: ...
-    async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None: ...
-    async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None: ...
-    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None: ...
 
 
 @dataclass(frozen=True)

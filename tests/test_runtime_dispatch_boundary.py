@@ -21,11 +21,11 @@ from app.runtime.dispatch import (
 )
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
-    ExecutionChannelContext,
+    TransportIdentity,
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
 )
-from app.workflows.execution.context import build_execution_channel_context
+from app.workflows.execution.context import build_transport_identity_from_metadata
 from app.workflows.execution.requests import execute_request, request_approval
 from tests.support.handler_support import (
     FakeChat,
@@ -252,7 +252,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         _noop = NoOpEventSink()
         runtime = ExecutionRuntime(
             dispatch=current_execution_runtime().dispatch,
-            build_transport_identity=lambda _message, _chat_id, *, actor_key="": ExecutionChannelContext(
+            build_transport_identity=lambda _message, _chat_id, *, actor_key="": TransportIdentity(
                 conversation_key=f"tg:{_chat_id}" if isinstance(_chat_id, int) else str(_chat_id),
                 origin_channel="telegram" if isinstance(_chat_id, int) else "registry",
                 external_conversation_ref=str(_chat_id),
@@ -301,7 +301,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
 
 
 def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:
-    context = build_execution_channel_context(
+    context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             descriptor=ChannelDescriptor(
                 channel_type="registry",
@@ -344,7 +344,7 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
 
 
 def test_workflow_context_builder_keeps_registry_task_without_timeline_callback() -> None:
-    context = build_execution_channel_context(
+    context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             descriptor=ChannelDescriptor(
                 channel_type="registry",
@@ -396,7 +396,7 @@ async def test_workflow_context_builder_chooses_routed_task_callback_by_concern(
     async def fake_conversation(html_text: str, force: bool = False) -> None:
         observed.append(("conversation", html_text, str(force)))
 
-    context = build_execution_channel_context(
+    context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             descriptor=ChannelDescriptor(
                 channel_type="registry",

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Awaitable, Callable
 
 from app.workflows.execution.contracts import (
-    ExecutionChannelContext,
     ExecutionChannelMetadata,
     TransportIdentity,
 )
@@ -22,7 +21,7 @@ def _transport_fields(metadata: ExecutionChannelMetadata) -> dict:
     )
 
 
-def build_execution_channel_context(
+def build_transport_identity_from_metadata(
     metadata: ExecutionChannelMetadata,
     *,
     build_conversation_ref: Callable[[int], str],

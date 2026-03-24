@@ -100,9 +100,6 @@ def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
         default_role=cfg.role,
         default_skills=cfg.default_skills,
     )
-    _log.debug("_load(%s): session_id=%s started=%s", conversation_key[:40],
-               session.provider_state.get("session_id", "")[:12],
-               session.provider_state.get("started"))
     if get_skill_activation_service().normalize(session):
         _save(runtime, conversation_key, session)
     return session
@@ -310,9 +307,6 @@ async def execute_request(
         session.provider_state["thread_id"] = None
 
     _save(runtime, conversation_key, session)
-    _log.info("Session saved after provider return: session_id=%s started=%s",
-              session.provider_state.get("session_id", "")[:12],
-              session.provider_state.get("started"))
 
     await event_sink.on_provider_response(
         prompt_tokens=result.prompt_tokens,
@@ -379,9 +373,6 @@ async def execute_request(
         tasks_summary = [{"title": t.get("title", ""), "target": t.get("target_agent_id", "")} for t in result.delegation_tasks]
         await event_sink.on_delegation_proposed(tasks_summary)
         session = _load(runtime, conversation_key)
-        _log.info("Session reloaded for delegation: session_id=%s started=%s",
-                  session.provider_state.get("session_id", "")[:12],
-                  session.provider_state.get("started"))
         return await runtime.propose_delegation_plan(
             chat_id,
             message,

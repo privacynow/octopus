@@ -350,15 +350,18 @@ def test_extracted_telegram_modules_import_only_shared_types_and_routing_targets
         assert not unexpected, f"{path} has unexpected sibling imports: {sorted(unexpected)}"
 
 
-def test_no_channel_module_constructs_execution_channel_context() -> None:
+def test_no_channel_module_constructs_transport_identity_outside_approved_sites() -> None:
+    """Channel modules may construct TransportIdentity for event sink wiring.
+    Only delegation_channel.py and worker.py are allowed; other channel files should not."""
     repo_root = Path(__file__).resolve().parents[1]
     channels_root = repo_root / "app" / "channels"
+    approved = {"delegation_channel.py", "worker.py"}
     for path in sorted(channels_root.rglob("*.py")):
-        if "__pycache__" in path.parts:
+        if "__pycache__" in path.parts or path.name in approved:
             continue
         text = path.read_text()
-        assert "ExecutionChannelContext(" not in text, (
-            f"workflow execution context still constructed in channel code at {path}"
+        assert "TransportIdentity(" not in text, (
+            f"TransportIdentity constructed in non-approved channel code at {path}"
         )
 
 

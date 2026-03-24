@@ -32,38 +32,21 @@ flowchart LR
 
 ### Layering
 
+The system map above shows running systems. The layering view below is narrower:
+it shows code ownership boundaries and the main dependency direction between
+`app/`, `octopus_sdk/`, and the registry service.
+
 ```mermaid
 flowchart TB
-    subgraph Ops["Operator Surfaces"]
-        CLI["./octopus"]
-        UI["Registry SPA"]
-    end
+    Ops["Operator surfaces<br/>./octopus and Registry SPA"]
+    App["Application layer (app/)<br/>composition root, channels, providers,<br/>workflows, control-plane adapters"]
+    SDK["Shared SDK (octopus_sdk)<br/>contracts, runtime orchestration,<br/>registry client and models"]
+    Registry["Registry service<br/>HTTP, websocket, persistence"]
 
-    subgraph App["Bot Application (app/)"]
-        Main["Composition root<br/>app.main"]
-        Ch["Transport implementation<br/>telegram today, new transports later"]
-        Impl["Providers, workflows,<br/>control-plane adapters"]
-    end
-
-    subgraph SDK["octopus_sdk"]
-        RegSdk["registry client + models"]
-        CoreSdk["channels, egress, execution,<br/>runtime ports, identity, sessions"]
-    end
-
-    subgraph Registry["Registry Service"]
-        Api["HTTP + WS"]
-        Store["SQLite / Postgres store"]
-    end
-
-    CLI --> Main
-    Main --> Ch
-    Main --> Impl
-    Ch --> CoreSdk
-    Impl --> CoreSdk
-    CoreSdk <--> Api
-    RegSdk <--> Api
-    UI --> Api
-    Api --> Store
+    Ops --> App
+    Ops --> Registry
+    App --> SDK
+    App --> Registry
 ```
 
 ## Deployment And Process Model
@@ -245,7 +228,8 @@ sequenceDiagram
 
     Note over Bolt,RegistrySdk: Slack bot process
     S->>Bolt: events / commands
-    Transport->>Runtime: hand off normalized inbound work
+    Bolt->>Transport: normalize inbound
+    Transport->>Runtime: identity + input
     Runtime->>Provider: run / preflight
     Runtime->>Transport: reply / actions / artifacts
     Transport->>Bolt: outbound requests

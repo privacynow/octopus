@@ -526,6 +526,22 @@ async function writeOverlayMeta(
   await fs.promises.writeFile(metaPath, JSON.stringify({ rects: outRects, arrows: outArrows }, null, 2), "utf-8");
 }
 
+async function waitForViewReady(page: import("@playwright/test").Page, selector?: string) {
+  await page.waitForFunction(() => {
+    const content = document.getElementById("content");
+    const inner = document.querySelector("#content > .content-inner");
+    if (!content || !inner) return false;
+    return (
+      !content.classList.contains("loading-route") &&
+      Number.parseFloat(getComputedStyle(inner).opacity || "1") >= 0.99
+    );
+  });
+  if (selector) {
+    await page.waitForSelector(selector);
+  }
+  await page.waitForTimeout(250);
+}
+
 async function seedGuidanceDraft(page: import("@playwright/test").Page) {
   const result = await page.evaluate(async () => {
     const csrfResp = await fetch("/v1/auth/csrf", { credentials: "same-origin" });
@@ -675,6 +691,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/ui");
   await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
+  await waitForViewReady(page, ".dashboard-shell");
 
   await page.screenshot({ path: path.join(OUT, "01-dashboard.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "01-dashboard.png"), [
@@ -686,7 +703,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
 
   await page.goto("/ui/approvals");
   await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
-  await page.waitForSelector(".approval-card");
+  await waitForViewReady(page, ".approval-card");
   await page.screenshot({ path: path.join(OUT, "01b-approvals.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "01b-approvals.png"), [
     { selector: ".approval-card:nth-of-type(1)", label: "Pending request with clear decision actions", color: "#2196f3", pad: 8 },
@@ -695,7 +712,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  await page.waitForSelector("#agent-list-content .card.clickable");
+  await waitForViewReady(page, "#agent-list-content .card.clickable");
   await page.screenshot({ path: path.join(OUT, "02-agents.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "02-agents.png"), [
     { selector: ".filter-bar", label: "Current-page filters for name and state", color: "#ff9800", pad: 6 },
@@ -704,7 +721,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);
-  await page.waitForSelector("#agent-detail-content .card");
+  await waitForViewReady(page, "#agent-detail-content .card");
   await page.screenshot({ path: path.join(OUT, "03-agent-detail.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "03-agent-detail.png"), [
     { selector: ".page-header", label: "Identity, role, provider, and connectivity", color: "#ff9800", pad: 6 },
@@ -714,15 +731,14 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}/conversations`);
-  await page.waitForSelector("#agent-convos .card, #agent-convos .empty-state");
+  await waitForViewReady(page, "#agent-convos .card, #agent-convos .empty-state");
   await page.screenshot({ path: path.join(OUT, "04-agent-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "04-agent-conversations.png"), [
     { selector: "#agent-convos", label: "All conversations scoped to the selected agent", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/conversations");
-  await page.waitForSelector(".filter-bar");
-  await page.waitForSelector(".card.clickable");
+  await waitForViewReady(page, ".card.clickable");
   await page.screenshot({ path: path.join(OUT, "05-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05-conversations.png"), [
     { selector: ".action-bar", label: "Start a conversation or jump to the approvals queue", color: "#4caf50", pad: 6 },
@@ -732,6 +748,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
 
   await page.locator(".search-input").first().fill("Release");
   await page.waitForTimeout(700);
+  await waitForViewReady(page, ".card.clickable");
   await page.screenshot({ path: path.join(OUT, "05b-conversations-filtered.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05b-conversations-filtered.png"), [
     { selector: ".search-input", label: "Search activates after 3+ characters", color: "#ff9800", pad: 6 },
@@ -739,8 +756,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(`/ui/conversations/${seed.focusConversationId}`);
-  await page.waitForSelector(".conversation-page");
-  await page.waitForSelector(".timeline-events .event-card, .timeline-events .chat-bubble");
+  await waitForViewReady(page, ".timeline-events .event-card, .timeline-events .chat-bubble");
   await page.screenshot({ path: path.join(OUT, "06-conversation-detail.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "06-conversation-detail.png"), [
     { selector: ".conversation-meta", label: "Readable summary: who this is with, source, status, and reference", color: "#ff9800", pad: 6 },
@@ -750,7 +766,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/tasks");
-  await page.waitForSelector(".task-card");
+  await waitForViewReady(page, ".task-card");
   await page.screenshot({ path: path.join(OUT, "07-tasks.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "07-tasks.png"), [
     { selector: ".filter-bar", label: "Status filter for routed work", color: "#ff9800", pad: 6 },
@@ -758,15 +774,14 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/capabilities");
-  await page.waitForSelector("#cap-list .card, #cap-list .empty-state");
+  await waitForViewReady(page, "#cap-list .card, #cap-list .empty-state");
   await page.screenshot({ path: path.join(OUT, "08-capabilities.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "08-capabilities.png"), [
     { selector: "#cap-list", label: "Global capability overrides declared by active agents", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/skills");
-  await page.waitForSelector(".search-input");
-  await page.waitForSelector(".card, .empty-state");
+  await waitForViewReady(page, ".card, .empty-state");
   await page.screenshot({ path: path.join(OUT, "09-skills.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "09-skills.png"), [
     { selector: ".search-input", label: "Client-side search across the skill catalog", color: "#ff9800", pad: 6 },
@@ -774,8 +789,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/usage");
-  await page.waitForSelector("#usage-summary .summary-card, #usage-summary .stat-card");
-  await page.waitForSelector("#usage-table table, #usage-table .empty-state");
+  await waitForViewReady(page, "#usage-table table, #usage-table .empty-state");
   await page.screenshot({ path: path.join(OUT, "10-usage.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "10-usage.png"), [
     { selector: ".date-range-bar", label: "Date-range shortcuts map to /v1/usage", color: "#ff9800", pad: 6 },
@@ -785,7 +799,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
 
   await seedGuidanceDraft(page);
   await page.goto("/ui/guidance");
-  await page.waitForSelector(".guidance-textarea");
+  await waitForViewReady(page, ".guidance-textarea");
   await page.screenshot({ path: path.join(OUT, "11-guidance.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "11-guidance.png"), [
     { selector: ".filter-bar", label: "Provider selector", color: "#ff9800", pad: 6 },
@@ -795,14 +809,14 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);
-  await page.waitForSelector("#agent-detail-content");
+  await waitForViewReady(page, "#agent-detail-content");
   await page.screenshot({ path: path.join(OUT, "12-agent-detail-deep-link.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "12-agent-detail-deep-link.png"), [
     { selector: "#content", label: "Direct deep link to /ui/agents/{agent_id}", color: "#4caf50", pad: 6 },
   ]);
 
   await page.goto(`/ui/conversations/${seed.focusConversationId}`);
-  await page.waitForSelector(".conversation-page");
+  await waitForViewReady(page, ".conversation-page");
   await page.screenshot({ path: path.join(OUT, "13-conversation-deep-link.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "13-conversation-deep-link.png"), [
     { selector: ".conversation-page", label: "Direct deep link to /ui/conversations/{conversation_id}", color: "#4caf50", pad: 6 },

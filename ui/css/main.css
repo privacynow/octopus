@@ -1133,21 +1133,21 @@ body {
 /* ========================================================================== */
 
 :root {
-    --bg: #f7f3ee;
+    --bg: #f5f1eb;
     --bg-secondary: #ffffff;
-    --bg-tertiary: #f0e9e1;
-    --border: rgba(61, 45, 31, 0.14);
+    --bg-tertiary: #ece4da;
+    --border: rgba(56, 40, 27, 0.18);
     --border-color: var(--border);
-    --text: #221a14;
-    --text-secondary: #5e4f43;
-    --text-muted: #7b6d61;
+    --text: #1f1813;
+    --text-secondary: #4d4034;
+    --text-muted: #695b4f;
     --accent: #b34d2f;
     --accent-hover: #8f3d23;
     --success: #226f52;
     --warning: #9b6300;
     --danger: #ab392c;
-    --shadow-soft: 0 18px 42px rgba(34, 26, 20, 0.10);
-    --shadow-card: 0 10px 24px rgba(34, 26, 20, 0.06);
+    --shadow-soft: 0 16px 36px rgba(34, 26, 20, 0.08);
+    --shadow-card: 0 8px 18px rgba(34, 26, 20, 0.04);
     --surface-glass: var(--bg-secondary);
     --focus-ring: 0 0 0 3px rgba(179, 77, 47, 0.22);
     --radius-lg: 20px;
@@ -1191,9 +1191,7 @@ html {
 }
 
 body {
-    background:
-        linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 20rem),
-        var(--bg);
+    background: var(--bg);
     color: var(--text);
 }
 
@@ -1239,9 +1237,13 @@ select {
 }
 
 #sidebar {
-    backdrop-filter: blur(10px);
-    background: color-mix(in srgb, var(--bg-tertiary) 66%, var(--bg-secondary) 34%);
+    backdrop-filter: none;
+    background: #efe8df;
     box-shadow: inset -1px 0 0 var(--border);
+}
+
+[data-theme="dark"] #sidebar {
+    background: #201a17;
 }
 
 .sidebar-header {
@@ -1267,7 +1269,8 @@ select {
 }
 
 .nav-links li a::before {
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid var(--border);
 }
 
 .nav-group {
@@ -1291,7 +1294,7 @@ select {
     gap: var(--space-3);
     width: 100%;
     border: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.78);
+    background: var(--bg-secondary);
     color: var(--text);
     border-radius: var(--radius-sm);
     padding: 0.8rem 0.95rem;
@@ -1332,6 +1335,7 @@ select {
 .page-header h2 {
     font-size: 2.15rem;
     margin-bottom: var(--space-1);
+    color: var(--text);
 }
 
 .page-header p {
@@ -1411,7 +1415,7 @@ select {
     padding: 0.3rem;
     border-radius: 999px;
     border: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.3);
+    background: var(--bg-tertiary);
 }
 
 .segmented-control-btn {
@@ -1449,6 +1453,7 @@ select {
     background: var(--bg-secondary);
     color: var(--text);
     box-shadow: none;
+    font-weight: 600;
 }
 
 .btn:hover:not(:disabled) {
@@ -1478,12 +1483,12 @@ select {
     padding: 0.42rem 0.7rem;
 }
 
-.badge-open { background: rgba(179, 77, 47, 0.14); color: var(--accent); }
-.badge-running, .badge-connected { background: rgba(35, 121, 90, 0.12); color: var(--success); }
-.badge-completed, .badge-enabled, .badge-installed { background: rgba(52, 83, 63, 0.12); color: var(--success); }
-.badge-failed, .badge-disconnected, .badge-cancelled { background: rgba(176, 58, 46, 0.12); color: var(--danger); }
-.badge-degraded, .badge-queued, .badge-cancelling { background: rgba(160, 107, 0, 0.12); color: var(--warning); }
-.badge-stopped, .badge-disabled { background: rgba(97, 83, 74, 0.12); color: var(--text-muted); }
+.badge-open { background: rgba(179, 77, 47, 0.16); color: var(--accent); }
+.badge-running, .badge-connected { background: rgba(35, 121, 90, 0.16); color: var(--success); }
+.badge-completed, .badge-enabled, .badge-installed { background: rgba(52, 83, 63, 0.16); color: var(--success); }
+.badge-failed, .badge-disconnected, .badge-cancelled { background: rgba(176, 58, 46, 0.16); color: var(--danger); }
+.badge-degraded, .badge-queued, .badge-cancelling { background: rgba(160, 107, 0, 0.16); color: var(--warning); }
+.badge-stopped, .badge-disabled { background: rgba(97, 83, 74, 0.16); color: var(--text-muted); }
 
 .empty-state,
 .error-card {
@@ -1567,6 +1572,7 @@ select {
 .dashboard-lead p,
 .dashboard-lead-note {
     color: var(--text-secondary);
+    font-size: 1rem;
 }
 
 .dashboard-lead-actions {
@@ -1817,7 +1823,7 @@ select {
 .conversation-panel-header span {
     display: block;
     color: var(--text-secondary);
-    font-size: 0.92rem;
+    font-size: 0.95rem;
     margin-top: 0.2rem;
 }
 
@@ -1826,7 +1832,7 @@ select {
     min-height: 24rem;
     overflow-y: auto;
     padding: var(--space-4) var(--space-5);
-    background: linear-gradient(180deg, rgba(240, 233, 225, 0.7), rgba(240, 233, 225, 0.18));
+    background: #f2ebe3;
 }
 
 .timeline-events {
@@ -1872,7 +1878,7 @@ select {
 
 .chat-bubble.user {
     margin-left: auto;
-    background: rgba(179, 77, 47, 0.10);
+    background: rgba(179, 77, 47, 0.12);
     border: 1px solid rgba(179, 77, 47, 0.24);
 }
 
@@ -1932,6 +1938,7 @@ select {
 .event-card-header .kind {
     font-size: 0.98rem;
     color: var(--text);
+    font-weight: 700;
 }
 
 .event-card-actor,
@@ -2009,7 +2016,7 @@ select {
 }
 
 .event-pre {
-    background: rgba(34, 23, 18, 0.08);
+    background: #f0e7dd;
     border-radius: var(--radius-md);
     padding: 1rem;
     white-space: pre-wrap;
@@ -2041,6 +2048,18 @@ select {
     padding: 0.85rem 0.95rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.approval-card {
+    border-width: 1px;
+}
+
+.approval-summary {
+    font-size: 1.03rem;
+}
+
+.approval-fact {
     background: var(--bg-secondary);
 }
 
@@ -2245,10 +2264,15 @@ select {
 
     .compose-box {
         grid-template-columns: 1fr;
+        padding: var(--space-3);
     }
 
     .chat-bubble {
         max-width: 100%;
+    }
+
+    .chat-timeline {
+        padding: var(--space-3);
     }
 
     .conversation-toolbar {
@@ -2258,10 +2282,12 @@ select {
     .toolbar-actions {
         margin-left: 0;
         width: 100%;
+        justify-content: flex-start;
     }
 
     .toolbar-actions > * {
-        flex: 1;
+        flex: 1 1 0;
+        min-width: 0;
     }
 
     .meta-badge-stack {
@@ -2276,6 +2302,24 @@ select {
     .conversation-meta-facts,
     .approval-facts {
         grid-template-columns: 1fr;
+    }
+
+    .conversation-meta .card-title {
+        display: none;
+    }
+
+    .metadata-grid,
+    .inline-metrics {
+        grid-template-columns: 1fr;
+    }
+
+    .event-card-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .action-status {
+        min-height: 1.25rem;
     }
 
     .approval-actions > * {

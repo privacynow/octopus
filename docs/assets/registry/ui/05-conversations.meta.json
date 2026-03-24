@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 151.32064819335938,
+      "y": 150.140625,
       "width": 1060,
       "height": 49.5,
       "label": "Start a conversation or jump to the approvals queue",
@@ -10,7 +10,7 @@
     },
     {
       "x": 274,
-      "y": 204.82064819335938,
+      "y": 203.640625,
       "width": 1060,
       "height": 58,
       "label": "Server-backed search and status filter",
@@ -18,7 +18,7 @@
     },
     {
       "x": 274,
-      "y": 268.3201904296875,
+      "y": 267.640625,
       "width": 1060,
       "height": 112.796875,
       "label": "Conversation row → timeline detail",

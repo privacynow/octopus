@@ -11,9 +11,10 @@
 | **Compose** | Operator message; **Enter** to send; session + CSRF. |
 | **Cancel** | Conversation cancel via actions API. |
 | **Export** | Markdown export download. |
-| **Messages only** | Toggle between chat-only and the full event stream. |
+| **Conversation** | Default view: replies, approvals, delegation progress, task updates, and problems. |
+| **Full activity** | Shows every stored event, including provider and tool activity. |
 | **Scroll up for older history** | Older activity loads automatically when the top sentinel enters view. |
 
-**Timeline:** user/bot lines render as **bubbles**; structured kinds such as **provider request/response**, **tool execution**, **approval**, **delegation**, **task status**, and **error** render as event cards. With **WebSocket** upgrade on `/v1/ws`, new events append live; older history comes from sequence-based `/events` pagination.
+**Timeline:** user/bot lines render as **bubbles**. The default view is now human-first: approvals, delegation updates, task progress, and errors stay visible, while lower-level provider/tool activity moves behind the **Full activity** toggle. With **WebSocket** upgrade on `/v1/ws`, new events append live; older history comes from sequence-based `/events` pagination.
 
 ![Conversation detail](../../assets/registry/ui/06-conversation-detail-annotated.png)

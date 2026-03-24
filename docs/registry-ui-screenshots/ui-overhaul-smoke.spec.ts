@@ -160,18 +160,6 @@ async function publishEvents(token: string, conversationId: string, suffix: stri
       },
     },
     {
-      event_id: eventId(suffix, "approval-decided"),
-      kind: "approval.decided",
-      actor: "operator",
-      content: "",
-      created_at: iso(-40),
-      metadata: {
-        action: "approve",
-        decided_by: "operator",
-        decision: "approved",
-      },
-    },
-    {
       event_id: eventId(suffix, "delegation"),
       kind: "delegation.submitted",
       actor: "",
@@ -246,9 +234,14 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await page.getByRole("button", { name: "Sign In" }).click();
 
   await expect(page).toHaveURL(/\/ui\/?$/);
-  await expect(page.getByRole("heading", { name: "Registry Dashboard" })).toBeVisible();
-  await expect(page.getByText("Connected Agents")).toBeVisible();
-  await expect(page.locator(".stat-card-label", { hasText: "Pending Approvals" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
+  await expect(page.getByText("Start with the next decision")).toBeVisible();
+  await expect(page.getByText("Pending approvals")).toBeVisible();
+
+  await page.locator(".nav-links").getByRole("link", { name: /Approvals/ }).click();
+  await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await expect(page.getByText("Retry with production credentials?")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
 
   await page.locator(".nav-links").getByRole("link", { name: /Agents/ }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
@@ -258,15 +251,13 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
   await page.getByText(conversationTitle).click();
 
-  await expect(page.getByRole("heading", { name: "Conversation" })).toBeVisible();
-  await expect(page.getByText("provider · request")).toBeVisible();
-  await expect(page.getByText("provider · response")).toBeVisible();
-  await expect(page.getByText("tool · execution")).toBeVisible();
-  await expect(page.getByText("approval · requested")).toBeVisible();
-  await expect(page.getByText("approval · decided")).toBeVisible();
-  await expect(page.getByText("delegation · submitted")).toBeVisible();
-  await expect(page.getByText("task · status")).toBeVisible();
+  await expect(page.getByRole("heading", { name: conversationTitle })).toBeVisible();
   await expect(page.getByText("Kick off a release readiness review.")).toBeVisible();
+  await expect(page.getByText("Approval needed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Messages only" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Full activity" })).toBeVisible();
+  await page.getByRole("button", { name: "Full activity" }).click();
+  await expect(page.getByText("Agent started work")).toBeVisible();
+  await expect(page.getByText("Agent finished work")).toBeVisible();
+  await expect(page.getByText("Used a tool")).toBeVisible();
 });

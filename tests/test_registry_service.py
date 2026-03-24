@@ -1261,6 +1261,79 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     }
 
 
+def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    agent_id, agent_token = _enroll_and_register(client, "Approval Bot", "approval-endpoint")
+    pending = _create_conversation(client, agent_token, agent_id, "conv-approval-pending", title="Pending review")
+    decided = _create_conversation(client, agent_token, agent_id, "conv-approval-decided", title="Already handled")
+
+    pending_publish = client.post(
+        f"/v1/conversations/{pending['conversation_id']}/events",
+        headers={"Authorization": f"Bearer {agent_token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-approval-pending",
+                    "kind": "approval.requested",
+                    "actor": "operator",
+                    "content": "Review the plan",
+                    "created_at": now_iso,
+                    "metadata": {
+                        "request_kind": "preflight",
+                        "actor_key": "reg:operator",
+                        "trust_tier": "trusted",
+                        "expires_at": "2026-04-16T00:05:00+00:00",
+                    },
+                },
+            ],
+        },
+    )
+    assert pending_publish.status_code == 200
+
+    decided_publish = client.post(
+        f"/v1/conversations/{decided['conversation_id']}/events",
+        headers={"Authorization": f"Bearer {agent_token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-approval-decided",
+                    "kind": "approval.requested",
+                    "actor": "operator",
+                    "content": "Approve the release",
+                    "created_at": now_iso,
+                    "metadata": {
+                        "request_kind": "delegation",
+                        "actor_key": "reg:operator",
+                        "trust_tier": "trusted",
+                        "expires_at": "2026-04-16T00:05:00+00:00",
+                    },
+                },
+            ],
+        },
+    )
+    assert decided_publish.status_code == 200
+
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    decision = client.post(
+        f"/v1/conversations/{decided['conversation_id']}/actions",
+        headers={"X-CSRF-Token": csrf},
+        json={"action": "approve", "payload": {"request_id": "evt-approval-decided"}},
+    )
+    assert decision.status_code == 200
+
+    approvals = client.get("/v1/approvals")
+    assert approvals.status_code == 200
+    payload = approvals.json()
+    assert payload["has_more"] is False
+    assert [item["conversation_id"] for item in payload["approvals"]] == [pending["conversation_id"]]
+    assert payload["approvals"][0]["request_id"] == "evt-approval-pending"
+    assert payload["approvals"][0]["request_kind"] == "preflight"
+
+
 def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_reopen(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

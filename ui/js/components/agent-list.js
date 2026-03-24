@@ -12,7 +12,7 @@ function renderAgentList(container) {
     // Shell
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Agents</h2><p>Registry members and their current operating state</p>';
+    header.innerHTML = '<h2>Agents</h2><p>See which agents are healthy, which ones are struggling, and where to drill in when work slows down.</p>';
     container.appendChild(header);
 
     // Filter bar

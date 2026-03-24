@@ -338,6 +338,7 @@ function _initTheme() {
 // ── Register routes ──
 Router.register('/ui', renderDashboard);
 Router.register('/ui/', renderDashboard);
+Router.register('/ui/approvals', renderApprovalList);
 Router.register('/ui/agents', renderAgentList);
 Router.register('/ui/agents/:id', renderAgentDetail);
 Router.register('/ui/agents/:id/conversations', renderAgentConversations);

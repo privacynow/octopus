@@ -9,8 +9,19 @@ function renderConversationDetail(container, params) {
     let latestSeq = 0;
     let hasMoreBefore = false;
     let loadingOlder = false;
-    let showMessagesOnly = false;
+    let showConversationView = true;
     let topObserver = null;
+    const conversationKinds = [
+        'message.user',
+        'message.bot',
+        'approval.requested',
+        'approval.decided',
+        'delegation.proposed',
+        'delegation.submitted',
+        'delegation.completed',
+        'task.status',
+        'error',
+    ];
 
     const header = document.createElement('div');
     header.className = 'page-header page-header-tight';
@@ -35,12 +46,12 @@ function renderConversationDetail(container, params) {
 
     const allBtn = document.createElement('button');
     allBtn.className = 'segmented-control-btn active';
-    allBtn.textContent = 'All events';
+    allBtn.textContent = 'Conversation';
     filterGroup.appendChild(allBtn);
 
     const messagesBtn = document.createElement('button');
     messagesBtn.className = 'segmented-control-btn';
-    messagesBtn.textContent = 'Messages only';
+    messagesBtn.textContent = 'Full activity';
     filterGroup.appendChild(messagesBtn);
 
     const actionGroup = document.createElement('div');
@@ -67,7 +78,7 @@ function renderConversationDetail(container, params) {
 
     const timelineHeader = document.createElement('div');
     timelineHeader.className = 'conversation-panel-header';
-    timelineHeader.innerHTML = '<div><strong>Timeline</strong><span>Structured events and chat flow</span></div>';
+    timelineHeader.innerHTML = '<div><strong>Conversation</strong><span>Replies, approvals, and progress updates</span></div>';
     timelinePanel.appendChild(timelineHeader);
 
     const timeline = document.createElement('div');
@@ -101,15 +112,24 @@ function renderConversationDetail(container, params) {
     sendBtn.textContent = 'Send';
     composer.appendChild(sendBtn);
 
-    function applyFilter(nextMessagesOnly) {
-        showMessagesOnly = nextMessagesOnly;
-        allBtn.classList.toggle('active', !showMessagesOnly);
-        messagesBtn.classList.toggle('active', showMessagesOnly);
+    function updateTimelineHeader() {
+        const label = showConversationView ? 'Conversation' : 'Full activity';
+        const subtitle = showConversationView
+            ? 'Replies, approvals, and progress updates'
+            : 'Every stored event, including provider and tool activity';
+        timelineHeader.innerHTML = `<div><strong>${esc(label)}</strong><span>${esc(subtitle)}</span></div>`;
+    }
+
+    function applyFilter(nextConversationView) {
+        showConversationView = nextConversationView;
+        allBtn.classList.toggle('active', showConversationView);
+        messagesBtn.classList.toggle('active', !showConversationView);
+        updateTimelineHeader();
         reloadEvents();
     }
 
-    allBtn.addEventListener('click', () => applyFilter(false));
-    messagesBtn.addEventListener('click', () => applyFilter(true));
+    allBtn.addEventListener('click', () => applyFilter(true));
+    messagesBtn.addEventListener('click', () => applyFilter(false));
 
     exportBtn.addEventListener('click', async () => {
         exportBtn.disabled = true;
@@ -166,33 +186,34 @@ function renderConversationDetail(container, params) {
     }
 
     function currentKindFilter() {
-        return showMessagesOnly ? 'message.user,message.bot' : undefined;
+        return showConversationView ? conversationKinds.join(',') : undefined;
     }
 
     function renderMetaCard(data) {
         meta = data;
         metaCard.textContent = '';
+        const title = data.title || convoId;
+        header.innerHTML = `<h2>${esc(title)}</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
 
-        const row = document.createElement('div');
-        row.className = 'card-row';
+        const hero = document.createElement('div');
+        hero.className = 'conversation-meta-hero';
 
         const info = document.createElement('div');
-        const title = document.createElement('div');
-        title.className = 'card-title';
-        title.textContent = data.title || convoId;
-        info.appendChild(title);
+        const titleEl = document.createElement('div');
+        titleEl.className = 'card-title';
+        titleEl.textContent = title;
+        info.appendChild(titleEl);
 
         const sub = document.createElement('div');
         sub.className = 'card-subtitle';
         const parts = [];
         if (data.target_display_name || data.target_agent_id) {
-            parts.push(data.target_display_name || data.target_agent_id);
+            parts.push(`With ${data.target_display_name || data.target_agent_id}`);
         }
-        if (data.origin_channel) parts.push(data.origin_channel);
-        if (data.external_conversation_ref) parts.push(data.external_conversation_ref);
+        if (data.origin_channel) parts.push(`Started on ${data.origin_channel}`);
         sub.textContent = parts.join(' \u00b7 ');
         info.appendChild(sub);
-        row.appendChild(info);
+        hero.appendChild(info);
 
         const statusWrap = document.createElement('div');
         statusWrap.className = 'meta-badge-stack';
@@ -208,9 +229,24 @@ function renderConversationDetail(container, params) {
             updated.textContent = _relativeTime(data.updated_at);
             statusWrap.appendChild(updated);
         }
-        row.appendChild(statusWrap);
+        hero.appendChild(statusWrap);
 
-        metaCard.appendChild(row);
+        const facts = document.createElement('div');
+        facts.className = 'conversation-meta-facts';
+        [
+            ['Agent', data.target_display_name || data.target_agent_id || '—'],
+            ['Source', data.origin_channel || 'registry'],
+            ['Reference', data.external_conversation_ref || '—'],
+            ['Events', data.event_count !== undefined ? String(data.event_count) : '—'],
+        ].forEach(([label, value]) => {
+            const item = document.createElement('div');
+            item.className = 'conversation-meta-fact';
+            item.innerHTML = `<span>${esc(label)}</span><strong>${esc(value)}</strong>`;
+            facts.appendChild(item);
+        });
+
+        metaCard.appendChild(hero);
+        metaCard.appendChild(facts);
     }
 
     function clearTimelineForLoad() {
@@ -349,7 +385,7 @@ function renderConversationDetail(container, params) {
     const unsub = WS.subscribe(`conversation:${convoId}`, (msg) => {
         if (msg.type !== 'event' || !msg.data) return;
         const event = msg.data;
-        if (showMessagesOnly && event.kind !== 'message.user' && event.kind !== 'message.bot') return;
+        if (showConversationView && !conversationKinds.includes(event.kind || '')) return;
         const seq = Number(event.seq || 0);
         if (seq && latestSeq && seq <= latestSeq) return;
         const shouldStick = isNearBottom();
@@ -496,7 +532,7 @@ function _renderProviderRequestCard(body, event, metadata) {
         details.className = 'event-details';
         details.open = false;
         const summary = document.createElement('summary');
-        summary.textContent = 'View prompt';
+        summary.textContent = 'View full prompt';
         details.appendChild(summary);
         const pre = document.createElement('pre');
         pre.className = 'event-pre';
@@ -509,8 +545,8 @@ function _renderProviderRequestCard(body, event, metadata) {
 function _renderProviderResponseCard(body, metadata) {
     const metrics = document.createElement('div');
     metrics.className = 'inline-metrics';
-    metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), 'Prompt'));
-    metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), 'Completion'));
+    metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), 'Input'));
+    metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), 'Reply'));
     metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
     metrics.appendChild(_createInlineMetric(metadata.provider || 'unknown', 'Provider'));
     body.appendChild(metrics);
@@ -553,16 +589,16 @@ function _renderToolExecutionCard(body, metadata) {
 
 function _renderApprovalRequestedCard(body, event, metadata, convoId) {
     body.appendChild(_metadataGrid([
-        ['Type', metadata.request_kind || ''],
-        ['Actor', metadata.actor_key || ''],
+        ['Request', metadata.request_kind || 'approval'],
+        ['Requested by', metadata.actor_key || event.actor || 'agent'],
         ['Trust tier', metadata.trust_tier || ''],
-        ['Expires', metadata.expires_at ? _formatApprovalTime(metadata.expires_at) : '—'],
+        ['Expires', metadata.expires_at ? _formatApprovalTime(metadata.expires_at) : 'No deadline'],
     ]));
 
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Approval request</strong><p>${esc(event.content)}</p>`;
+        content.innerHTML = `<strong>Needs a decision</strong><p>${esc(event.content)}</p>`;
         body.appendChild(content);
     }
 
@@ -611,7 +647,7 @@ function _renderApprovalDecidedCard(body, metadata) {
     body.appendChild(_metadataGrid([
         ['Decision', metadata.decision || ''],
         ['Action', metadata.action || ''],
-        ['Decided by', metadata.decided_by || ''],
+        ['Handled by', metadata.decided_by || ''],
     ]));
 }
 
@@ -648,14 +684,14 @@ function _renderTaskStatusCard(body, event, metadata) {
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Detail</strong><p>${esc(event.content)}</p>`;
+        content.innerHTML = `<strong>Update</strong><p>${esc(event.content)}</p>`;
         body.appendChild(content);
     }
 }
 
 function _renderErrorCard(body, event, metadata) {
     body.appendChild(_metadataGrid([
-        ['Type', metadata.error_type || 'execution'],
+        ['Problem type', metadata.error_type || 'execution'],
         ['Message', metadata.message || event.content || ''],
     ]));
     if (event.content && event.content !== metadata.message) {
@@ -716,7 +752,21 @@ function _formatApprovalTime(iso) {
 }
 
 function _eventKindLabel(kind) {
-    return (kind || 'event').replace(/\./g, ' \u00b7 ');
+    const labels = {
+        'provider.request': 'Agent started work',
+        'provider.response': 'Agent finished work',
+        'tool.execution': 'Used a tool',
+        'approval.requested': 'Approval needed',
+        'approval.decided': 'Approval recorded',
+        'delegation.proposed': 'Plan proposed',
+        'delegation.submitted': 'Delegated work started',
+        'delegation.completed': 'Delegated work finished',
+        'task.status': 'Work update',
+        'error': 'Problem reported',
+        'message.user': 'Operator message',
+        'message.bot': 'Agent message',
+    };
+    return labels[kind] || (kind || 'event').replace(/\./g, ' \u00b7 ');
 }
 
 function _eventCardClass(kind) {

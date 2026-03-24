@@ -15,7 +15,7 @@ For a **complete inventory** of operator and product flows (including Octopus me
 7. [Verification & troubleshooting](#verification--troubleshooting)
 8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
-**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, and `13-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
+**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `01b-approvals`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, and `13-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
 
 ---
 
@@ -90,7 +90,8 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 
 | Item | Route | Purpose |
 |------|-------|---------|
-| **Dashboard** | `/ui`, `/ui/` | Global summary from `/v1/summary`. |
+| **Dashboard** | `/ui`, `/ui/` | Attention-first home screen built from summary + approvals/tasks/conversations. |
+| **Approvals** | `/ui/approvals` | Pending decisions that still block work. |
 | **Agents** | `/ui/agents` | Paginated agent cards; entry to detail. |
 | **Conversations** | `/ui/conversations` | Paginated list; **search** (≥3 chars, server-side `q`); **status** filter. |
 | **Tasks** | `/ui/tasks` | Routed task cards; **status** filter; expand → **parent conversation**. |
@@ -106,8 +107,15 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 
 ![Dashboard](assets/registry/ui/01-dashboard-annotated.png)
 
-- The hero cards come directly from **`GET /v1/summary`**.
-- Use this screen for the fastest read on **agents**, **active conversations**, **pending approvals**, **running tasks**, and **24h usage**.
+- The home screen now starts with the next operator action instead of a pure metrics wall.
+- It combines **`GET /v1/summary`** with preview data from approvals, conversations, and tasks so you can see what needs attention first.
+
+### 1b. Approvals
+
+![Approvals](assets/registry/ui/01b-approvals-annotated.png)
+
+- This is the fastest path for pending decisions.
+- Each card shows the request text, agent context, expiry, and direct **Approve** / **Reject** actions.
 
 ### 2. Agents list
 
@@ -137,7 +145,8 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 - **Pagination** — Previous / Next using cursor + `has_more`.
 - **Search** — type **three or more** characters (debounced); server-side `q`.
 - **Status** — dropdown filter.
-- **New Conversation** starts an operator-created registry conversation.
+- **Start a conversation** creates an operator-owned registry conversation.
+- **Review approvals** is the shortcut into the dedicated approvals queue.
 - Click a **row** → **Conversation detail**.
 
 ### 5b. Search filter (same route)
@@ -150,10 +159,10 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 
 ![Conversation detail](assets/registry/ui/06-conversation-detail-annotated.png)
 
-- **Header**: title, target display name, `origin_channel`, status badge.
-- **Actions**: **Messages only** toggle vs all events; **Cancel** conversation; **Export** markdown.
+- **Header**: title, target display name, source, reference, and status.
+- **Actions**: **Conversation** view vs **Full activity**; **Cancel** conversation; **Export** markdown.
 - **Compose**: operator message (**Enter** to send); uses session cookie + CSRF.
-- **Timeline**: `message.user` / `message.bot` as **bubbles**; structured kinds such as **provider request/response**, **tool execution**, **approval**, **delegation**, **task status**, and **error** render as event cards.
+- **Timeline**: `message.user` / `message.bot` as **bubbles**; the default view keeps approvals, delegation, task updates, and problems visible while lower-level provider/tool activity moves into **Full activity**.
 - **History**: older activity loads automatically when you **scroll up** to the top sentinel.
 - **Live updates**: WebSocket (`/v1/ws`) with reconnect backoff when the ASGI stack supports upgrades.
 

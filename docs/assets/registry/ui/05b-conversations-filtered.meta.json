@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 190.140625,
+      "y": 203.640625,
       "width": 932,
       "height": 58,
       "label": "Search activates after 3+ characters",
@@ -10,7 +10,7 @@
     },
     {
       "x": 274,
-      "y": 254.140625,
+      "y": 267.640625,
       "width": 1060,
       "height": 112.796875,
       "label": "Filtered results from registry search",

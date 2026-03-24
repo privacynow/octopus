@@ -793,6 +793,21 @@ def resource_summary(
     return store.get_summary(now_iso=now_iso)
 
 
+@app.get("/v1/approvals")
+def resource_list_approvals(
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    approvals = store.list_approvals(
+        for_agent_id=_scoped_agent_id(auth),
+        cursor=cursor,
+        limit=limit,
+    )
+    return _paginated_response("approvals", approvals, cursor, limit)
+
+
 @app.get("/v1/catalog/skills")
 def api_catalog_skills(
     q: str = "",

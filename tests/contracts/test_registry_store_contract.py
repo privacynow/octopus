@@ -621,6 +621,64 @@ def test_add_conversation_action_requires_non_empty_action(store):
         store.add_conversation_action(conversation["conversation_id"], "   ")
 
 
+def test_list_approvals_returns_only_pending_requests(store):
+    agent_id, agent_token = _enroll(store, "approval-bot")
+    pending = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Pending approval conversation",
+        origin_channel="registry",
+        external_conversation_ref="approval-pending-1",
+    )
+    decided = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Decided approval conversation",
+        origin_channel="registry",
+        external_conversation_ref="approval-decided-1",
+    )
+
+    store.publish_events(
+        agent_token,
+        pending["conversation_id"],
+        [{
+            "event_id": "approval-pending-event",
+            "kind": "approval.requested",
+            "actor": "operator",
+            "content": "Review this change",
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "metadata": {
+                "request_kind": "preflight",
+                "actor_key": "reg:operator",
+                "trust_tier": "trusted",
+                "expires_at": "2026-04-16T01:00:00+00:00",
+            },
+        }],
+    )
+    store.publish_events(
+        agent_token,
+        decided["conversation_id"],
+        [{
+            "event_id": "approval-decided-event",
+            "kind": "approval.requested",
+            "actor": "operator",
+            "content": "Approve this deployment",
+            "created_at": "2026-03-16T00:05:00+00:00",
+            "metadata": {
+                "request_kind": "delegation",
+                "actor_key": "reg:operator",
+                "trust_tier": "trusted",
+                "expires_at": "2026-04-16T01:05:00+00:00",
+            },
+        }],
+    )
+    store.add_conversation_action(decided["conversation_id"], "approve", {"request_id": "approval-decided-event"})
+
+    approvals = store.list_approvals()
+
+    assert [item["conversation_id"] for item in approvals] == [pending["conversation_id"]]
+    assert approvals[0]["request_id"] == "approval-pending-event"
+    assert approvals[0]["request_kind"] == "preflight"
+
+
 def test_heartbeat_persists_runtime_health_and_workers(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
 

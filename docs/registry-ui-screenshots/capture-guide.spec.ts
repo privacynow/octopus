@@ -674,13 +674,23 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.getByLabel("Password").fill(UI_TOKEN);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/ui");
-  await expect(page.getByRole("heading", { name: "Registry Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
 
   await page.screenshot({ path: path.join(OUT, "01-dashboard.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "01-dashboard.png"), [
     { selector: "#sidebar", label: "Primary navigation", color: "#ff9800", pad: 6 },
-    { selector: ".stat-grid-hero", label: "Canonical summary cards from /v1/summary", color: "#2196f3", pad: 8 },
-    { selector: ".quick-links", label: "Jump straight to the operational routes", color: "#4caf50", pad: 8 },
+    { selector: ".dashboard-lead", label: "Start with the next decision, not the raw telemetry", color: "#2196f3", pad: 8 },
+    { selector: ".attention-grid", label: "Action-first panels for approvals, health, and failed work", color: "#4caf50", pad: 8 },
+    { selector: ".dashboard-grid-wide", label: "Preview lists for review work, conversations, and failures", color: "#9c27b0", pad: 8 },
+  ]);
+
+  await page.goto("/ui/approvals");
+  await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await page.waitForSelector(".approval-card");
+  await page.screenshot({ path: path.join(OUT, "01b-approvals.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "01b-approvals.png"), [
+    { selector: ".approval-card:nth-of-type(1)", label: "Pending request with clear decision actions", color: "#2196f3", pad: 8 },
+    { selector: ".approval-actions", label: "Approve, reject, or open the full conversation", color: "#4caf50", pad: 8 },
   ]);
 
   await page.goto("/ui/agents");
@@ -715,7 +725,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.waitForSelector(".card.clickable");
   await page.screenshot({ path: path.join(OUT, "05-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05-conversations.png"), [
-    { selector: ".btn.btn-primary.btn-sm", label: "Create a new operator conversation", color: "#4caf50", pad: 6 },
+    { selector: ".action-bar", label: "Start a conversation or jump to the approvals queue", color: "#4caf50", pad: 6 },
     { selector: ".filter-bar", label: "Server-backed search and status filter", color: "#ff9800", pad: 6 },
     { selector: ".card.clickable:nth-of-type(1)", label: "Conversation row → timeline detail", color: "#2196f3", pad: 6 },
   ]);
@@ -733,9 +743,9 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.waitForSelector(".timeline-events .event-card, .timeline-events .chat-bubble");
   await page.screenshot({ path: path.join(OUT, "06-conversation-detail.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "06-conversation-detail.png"), [
-    { selector: ".conversation-meta", label: "Title, target agent, origin, and current status", color: "#ff9800", pad: 6 },
-    { selector: ".conversation-toolbar", label: "Filter, export, and cancel actions", color: "#4caf50", pad: 6 },
-    { selector: ".chat-timeline", label: "Mixed message bubbles and structured event cards", color: "#2196f3", pad: 8 },
+    { selector: ".conversation-meta", label: "Readable summary: who this is with, source, status, and reference", color: "#ff9800", pad: 6 },
+    { selector: ".conversation-toolbar", label: "Default conversation view plus optional full activity log", color: "#4caf50", pad: 6 },
+    { selector: ".chat-timeline", label: "Human-first conversation flow with approvals and progress updates", color: "#2196f3", pad: 8 },
     { selector: ".compose-box", label: "Operator compose box for /messages", color: "#9c27b0", pad: 6 },
   ]);
 

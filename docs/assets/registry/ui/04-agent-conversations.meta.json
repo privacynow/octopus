@@ -2,9 +2,9 @@
   "rects": [
     {
       "x": 272,
-      "y": 152.80865478515625,
+      "y": 152.39549255371094,
       "width": 1064,
-      "height": 229.59375,
+      "height": 229.59376525878906,
       "label": "All conversations scoped to the selected agent",
       "color": "#2196f3"
     }

@@ -13,16 +13,23 @@ function renderConversationList(container) {
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Conversations</h2><p>Browse live threads, approvals, and outcomes across the registry</p>';
+    header.innerHTML = '<h2>Conversations</h2><p>Follow active threads, send replies, and jump into work that still needs a decision.</p>';
     container.appendChild(header);
 
-    // New conversation button
+    const actions = document.createElement('div');
+    actions.className = 'action-bar';
     const newBtn = document.createElement('button');
-    newBtn.className = 'btn btn-primary btn-sm';
-    newBtn.textContent = '+ New Conversation';
-    newBtn.style.marginBottom = '12px';
+    newBtn.className = 'btn btn-primary';
+    newBtn.textContent = 'Start a conversation';
     newBtn.addEventListener('click', () => _showNewConversationDialog());
-    container.appendChild(newBtn);
+    actions.appendChild(newBtn);
+
+    const approvalLink = document.createElement('a');
+    approvalLink.href = '/ui/approvals';
+    approvalLink.className = 'btn';
+    approvalLink.textContent = 'Review approvals';
+    actions.appendChild(approvalLink);
+    container.appendChild(actions);
 
     // Filter bar
     const filterBar = document.createElement('div');

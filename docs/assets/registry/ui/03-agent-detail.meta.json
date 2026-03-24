@@ -4,21 +4,21 @@
       "x": 274,
       "y": 26,
       "width": 1060,
-      "height": 119.8125,
+      "height": 114.1875,
       "label": "Identity, role, provider, and connectivity",
       "color": "#ff9800"
     },
     {
       "x": 272,
-      "y": 155.8125,
+      "y": 150.1875,
       "width": 1064,
-      "height": 385.703125,
+      "height": 384.078125,
       "label": "Registry identity, scope, heartbeat, capabilities, and tags",
       "color": "#2196f3"
     },
     {
       "x": 272,
-      "y": 537.515625,
+      "y": 530.265625,
       "width": 1064,
       "height": 192.0625,
       "label": "Worker state from runtime heartbeat",
@@ -26,9 +26,9 @@
     },
     {
       "x": 272,
-      "y": 729.578125,
+      "y": 722.328125,
       "width": 1064,
-      "height": 342.390625,
+      "height": 292.390625,
       "label": "Inline conversations for this agent",
       "color": "#4caf50"
     }

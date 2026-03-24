@@ -2,17 +2,17 @@
   "rects": [
     {
       "x": 274,
-      "y": 203.640625,
-      "width": 932,
+      "y": 199.296875,
+      "width": 851.234375,
       "height": 58,
       "label": "Search activates after 3+ characters",
       "color": "#ff9800"
     },
     {
-      "x": 274,
-      "y": 267.640625,
-      "width": 1060,
-      "height": 112.796875,
+      "x": 275,
+      "y": 264.296875,
+      "width": 1058,
+      "height": 93.296875,
       "label": "Filtered results from registry search",
       "color": "#2196f3"
     }

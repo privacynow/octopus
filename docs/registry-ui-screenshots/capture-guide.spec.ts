@@ -774,7 +774,7 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/capabilities");
-  await waitForViewReady(page, "#cap-list .card, #cap-list .empty-state");
+  await waitForViewReady(page, "#cap-list .settings-row, #cap-list .empty-state");
   await page.screenshot({ path: path.join(OUT, "08-capabilities.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "08-capabilities.png"), [
     { selector: "#cap-list", label: "Global capability overrides declared by active agents", color: "#2196f3", pad: 8 },

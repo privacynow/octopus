@@ -2,25 +2,25 @@
   "rects": [
     {
       "x": 274,
-      "y": 150.140625,
+      "y": 145.796875,
       "width": 1060,
       "height": 58,
       "label": "Server-side search and state filters",
       "color": "#ff9800"
     },
     {
-      "x": 274,
-      "y": 214.140625,
-      "width": 1060,
-      "height": 130.796875,
+      "x": 275,
+      "y": 210.796875,
+      "width": 1058,
+      "height": 93.296875,
       "label": "Agent row → detail",
       "color": "#2196f3"
     },
     {
-      "x": 274,
-      "y": 344.9375,
-      "width": 1060,
-      "height": 130.796875,
+      "x": 275,
+      "y": 292.09375,
+      "width": 1058,
+      "height": 93.296875,
       "label": "Additional enrolled registry member",
       "color": "#4caf50"
     }

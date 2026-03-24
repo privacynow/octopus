@@ -2,17 +2,17 @@
   "rects": [
     {
       "x": 274,
-      "y": 150.140625,
+      "y": 145.796875,
       "width": 1060,
       "height": 58,
       "label": "Status filter for routed work",
       "color": "#ff9800"
     },
     {
-      "x": 272,
-      "y": 212.140625,
-      "width": 1064,
-      "height": 116.796875,
+      "x": 273,
+      "y": 208.796875,
+      "width": 1062,
+      "height": 97.296875,
       "label": "Task rows expand inline and link to parent conversation",
       "color": "#2196f3"
     }

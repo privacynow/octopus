@@ -89,6 +89,19 @@ def _success_reply(conversation_id: str) -> ControlReply:
     )
 
 
+def _projection_adapter(
+    bus: _FakeBus,
+    directory: ControlPlaneDirectory,
+    *,
+    agent_id: str = "agent-1",
+) -> BusConversationProjection:
+    return BusConversationProjection(
+        bus,
+        directory,
+        agent_id_for_authority=lambda _authority_ref: agent_id,
+    )
+
+
 # ===================================================================
 # 1. Store contract tests
 # ===================================================================
@@ -230,7 +243,7 @@ class TestBusConversationProjectionAdapter:
         bus._request_replies["registry:alpha"] = _success_reply(expected_cid)
         bus._request_replies["registry:beta"] = _success_reply(expected_cid)
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         cid = await adapter.create_conversation(
             target_agent_id="agent-1",
             origin_channel="telegram",
@@ -251,7 +264,7 @@ class TestBusConversationProjectionAdapter:
         bus._request_replies["registry:alpha"] = _success_reply(cid)
         bus._request_replies["registry:beta"] = _success_reply(cid)
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         await adapter.create_conversation(
             target_agent_id="agent-1",
             origin_channel="telegram",
@@ -294,7 +307,7 @@ class TestBusConversationProjectionAdapter:
         bus._request_replies["registry:alpha"] = _success_reply("id-aaaa")
         bus._request_replies["registry:beta"] = _success_reply("id-bbbb")
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         with caplog.at_level(logging.CRITICAL):
             cid = await adapter.create_conversation(
                 target_agent_id="agent-1",
@@ -315,7 +328,7 @@ class TestBusConversationProjectionAdapter:
         cid = "cached-id"
         bus._request_replies["registry:alpha"] = _success_reply(cid)
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         await adapter.create_conversation(
             target_agent_id="agent-1",
             origin_channel="telegram",
@@ -438,7 +451,7 @@ class TestBusRetryOnFailure:
         bus._request_replies["registry:alpha"] = ConnectionError("registry down")
         bus._request_replies["registry:beta"] = _success_reply("cid-ok")
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         cid = await adapter.create_conversation(
             target_agent_id="agent-1",
             origin_channel="telegram",
@@ -490,7 +503,7 @@ class TestBusRetryOnFailure:
         cid = "conv-publish-test"
         bus._request_replies["registry:alpha"] = _success_reply(cid)
 
-        adapter = BusConversationProjection(bus, directory)
+        adapter = _projection_adapter(bus, directory)
         # First create so cache is populated
         await adapter.create_conversation(
             target_agent_id="agent-1",

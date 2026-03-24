@@ -1008,7 +1008,7 @@ async def test_usage_recording_failure_keeps_item_done_via_worker_loop(monkeypat
     from app.worker import worker_loop
     from app.runtime.inbound_types import InboundMessage, InboundUser, serialize_inbound
 
-    with fresh_env(config_overrides={"allowed_user_ids": frozenset({42})}) as (data_dir, _cfg, prov):
+    with fresh_env(config_overrides={"allowed_actor_keys": frozenset({"tg:42"})}) as (data_dir, _cfg, prov):
         chat_id = 16002
         worker_id = "test-worker-usage"
         prov.run_results = [RunResult(text="usage still completes")]

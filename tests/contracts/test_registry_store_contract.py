@@ -41,6 +41,7 @@ def _card(
         "connectivity_state": "connected",
         "channel_capabilities": ["registry"],
         "version": "test",
+        "bot_key": f"bot-{slug}",
     }
 
 
@@ -571,8 +572,8 @@ def test_create_routed_task_disabled_capability_raises(store):
                 "origin_agent_id": origin_id,
                 "target_agent_id": target_id,
                 "title": "Disabled review task",
-                "skill": "reviewer",
                 "instructions": "Review the spec.",
+                "requested_capabilities": ["reviewer"],
                 "context": {},
                 "constraints": {},
                 "priority": "normal",

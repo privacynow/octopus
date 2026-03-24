@@ -453,7 +453,8 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             calls.append(("register", card.agent_id, connectivity_state))
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             calls.append(("heartbeat", connectivity_state, str(current_capacity)))
             return {"ok": True}
 
@@ -509,11 +510,9 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
             connectivity_state: str,
             current_capacity: int,
             max_capacity: int,
-            active_work_count: int = 0,
-            timeline_checkpoint: str = "",
             runtime_health: dict | None = None,
         ):
-            calls.append(("heartbeat", runtime_health, active_work_count))
+            calls.append(("heartbeat", runtime_health))
             return {"ok": True}
 
     class FakeHealthProvider:
@@ -581,7 +580,6 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
                 "snapshot": None,
                 "diagnostics": [],
             },
-            2,
         )
     ]
 
@@ -605,7 +603,8 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             return {"ok": True}
 
         async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
@@ -680,7 +679,8 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             return {"ok": True}
 
         async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):

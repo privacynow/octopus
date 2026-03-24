@@ -290,21 +290,6 @@ class BotConfig:
     # Keys are registry_id (e.g. "local"), values are the agent_id assigned by that registry.
     registry_agent_ids: dict[str, str]  # e.g. {"local": "0ace408e..."}; empty dict if no registries
 
-    @property
-    def allowed_user_ids(self) -> frozenset[int]:
-        return frozenset(
-            numeric
-            for key in self.allowed_actor_keys
-            if (numeric := telegram_numeric_id(key)) is not None
-        )
-
-    @property
-    def admin_user_ids(self) -> frozenset[int]:
-        return frozenset(
-            numeric
-            for key in self.admin_actor_keys
-            if (numeric := telegram_numeric_id(key)) is not None
-        )
 
     @property
     def provider(self) -> str:
@@ -319,16 +304,15 @@ PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
     "minimal": {"message.user", "message.bot", "task.status", "error"},
     "standard": {
         "message.user", "message.bot", "task.status", "error",
-        "approval.requested", "approval.decided",
+        "approval.decided",
         "delegation.proposed", "delegation.submitted", "delegation.completed",
         "provider.response",
     },
     "full": {
         "message.user", "message.bot", "task.status", "error",
-        "approval.requested", "approval.decided",
+        "approval.decided",
         "delegation.proposed", "delegation.submitted", "delegation.completed",
-        "provider.response", "provider.request",
-        "tool.execution", "file.change",
+        "provider.response",
     },
 }
 

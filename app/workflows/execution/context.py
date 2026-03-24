@@ -24,13 +24,10 @@ def _transport_fields(metadata: ExecutionChannelMetadata) -> dict:
 def build_transport_identity_from_metadata(
     metadata: ExecutionChannelMetadata,
     *,
-    build_conversation_ref: Callable[[int], str],
     conversation_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
     routed_task_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
 ) -> TransportIdentity:
     conversation_ref = metadata.message_conversation_ref
-    if not conversation_ref and isinstance(metadata.chat_id, int):
-        conversation_ref = build_conversation_ref(metadata.chat_id)
     transport = _transport_fields(metadata)
     if metadata.routed_task_id and metadata.authority_ref:
         return TransportIdentity(

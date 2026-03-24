@@ -549,8 +549,10 @@ async def resource_publish_events(
     for i, raw in enumerate(raw_events):
         try:
             event = ConversationEvent.model_validate(raw)
-            validate_event_metadata(event)
-            validated.append(event.model_dump())
+            validated_metadata = validate_event_metadata(event)
+            validated.append(
+                event.model_copy(update={"metadata": validated_metadata}).model_dump()
+            )
         except (ValueError, Exception) as exc:
             raise HTTPException(status_code=422, detail=f"Event {i}: {exc}") from exc
     result = store.publish_events(agent_token, conversation_id, validated)

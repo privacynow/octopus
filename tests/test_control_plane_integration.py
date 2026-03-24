@@ -99,18 +99,22 @@ class _StoreBackedRegistryClient:
 
     async def routed_task_status(self, routed_task_id: str, update) -> dict[str, object]:
         self._maybe_fail("routed_task_status")
+        payload = dict(to_wire(update))
+        payload.pop("routed_task_id", None)
         return self._store().update_routed_task_status(
             self.agent_token,
             routed_task_id,
-            to_wire(update),
+            payload,
         )
 
     async def routed_task_result(self, routed_task_id: str, result) -> dict[str, object]:
         self._maybe_fail("routed_task_result")
+        payload = dict(to_wire(result))
+        payload.pop("routed_task_id", None)
         return self._store().update_routed_task_result(
             self.agent_token,
             routed_task_id,
-            to_wire(result),
+            payload,
         )
 
     async def heartbeat(
@@ -119,11 +123,8 @@ class _StoreBackedRegistryClient:
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        active_work_count: int = 0,
-        timeline_checkpoint: str = "",
         runtime_health: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del active_work_count, timeline_checkpoint
         self._maybe_fail("heartbeat")
         return self._store().heartbeat(
             self.agent_token,
@@ -138,6 +139,7 @@ class _StoreBackedRegistryClient:
 
 def _agent_card(*, name: str, slug: str, registry_scope: str) -> dict[str, object]:
     return {
+        "bot_key": f"bot:{slug}",
         "display_name": name,
         "slug": slug,
         "role": "assistant",
@@ -357,6 +359,7 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
             "target_agent_id": seeded.local_agent_id,
             "title": "Review",
             "instructions": "Review the spec",
+            "created_at": "2026-03-20T00:00:00+00:00",
         }
     )
 
@@ -419,6 +422,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
             "target_agent_id": seeded.local_agent_id,
             "title": "Status task",
             "instructions": "Keep me updated",
+            "created_at": "2026-03-20T00:00:00+00:00",
         }
     )
 
@@ -435,6 +439,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
                         "kind": "progress",
                         "title": "Halfway",
                         "progress": 50,
+                        "created_at": "2026-03-20T00:00:10+00:00",
                     },
                 ),
                 progress=50,
@@ -490,6 +495,7 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
             "target_agent_id": seeded.local_agent_id,
             "title": "Fallback task",
             "instructions": "Keep me safe",
+            "created_at": "2026-03-20T00:00:00+00:00",
         }
     )
 

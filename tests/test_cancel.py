@@ -139,7 +139,7 @@ class TestCancelLiveExecution:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Simulate a live execution by registering a cancel event
@@ -166,7 +166,7 @@ class TestCancelLiveExecution:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             # No _LIVE_CANCEL entry — should fall through to nothing_to_cancel
@@ -185,7 +185,7 @@ class TestCancelLiveExecution:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["pending_approval"] = {
                 "actor_key": "tg:42",
                 "prompt": "test",
@@ -211,7 +211,7 @@ class TestCancelLiveExecution:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Admit a message (no worker drain yet)
@@ -252,7 +252,7 @@ class TestCancelledOutcome:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do something")
@@ -284,7 +284,7 @@ class TestCancelledOutcome:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "on")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="plan something")
@@ -314,7 +314,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
@@ -336,7 +336,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
@@ -356,7 +356,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             cancel_event = asyncio.Event()
@@ -390,7 +390,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Execute a request to completion (admit then drain so item is completed)
@@ -425,7 +425,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="first")
@@ -458,7 +458,7 @@ class TestCancelRegressions:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             # First request — cancelled
@@ -662,7 +662,7 @@ class TestCancelConcurrency:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
@@ -707,7 +707,7 @@ class TestCancelConcurrency:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
@@ -744,7 +744,7 @@ class TestCancelConcurrency:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="mid-stream work")
@@ -780,7 +780,7 @@ class TestCancelConcurrency:
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg1 = FakeMessage(chat=chat, text="first")
@@ -823,7 +823,7 @@ class TestCancelConcurrency:
             import app.channels.telegram.ingress as th
             chat = FakeChat(12345)
             user = FakeUser(42)
-            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg_a = FakeMessage(chat=chat, text="first request")

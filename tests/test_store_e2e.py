@@ -36,9 +36,9 @@ def _admin_cfg(data_dir: Path):
     return make_config(
         data_dir=data_dir,
         registry_url=REGISTRY_URL,
-        admin_user_ids=frozenset({100}),
+        admin_actor_keys=frozenset({"tg:100"}),
         admin_usernames=frozenset({"admin"}),
-        allowed_user_ids=frozenset({100, 200}),
+        allowed_actor_keys=frozenset({"tg:100", "tg:200"}),
         allowed_usernames=frozenset({"admin", "regular"}),
     )
 

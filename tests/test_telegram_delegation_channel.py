@@ -56,7 +56,7 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
 
     outcome = await delegation_channel.propose_delegation_plan(
         runtime,
-        12345,
+        "tg:12345",
         message,
         session,
         conversation_ref="conv-1",
@@ -107,7 +107,7 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
 
     await delegation_channel.propose_delegation_plan(
         runtime,
-        12345,
+        "tg:12345",
         message,
         session,
         conversation_ref="conv-1",

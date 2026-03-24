@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class ConversationCreate(BaseModel):
@@ -11,6 +11,9 @@ class ConversationCreate(BaseModel):
     All three identity fields are required and non-empty. The registry enforces
     a unique constraint on (target_agent_id, origin_channel, external_conversation_ref).
     """
+
+    model_config = ConfigDict(extra="forbid")
+
     target_agent_id: str
     origin_channel: str
     external_conversation_ref: str

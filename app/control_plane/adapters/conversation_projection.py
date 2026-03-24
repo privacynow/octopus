@@ -14,6 +14,12 @@ from app.control_plane.models import ControlCommand
 log = logging.getLogger(__name__)
 
 
+def _unconfigured_agent_id_for_authority(authority_ref: str) -> str:
+    raise RuntimeError(
+        f"conversation_projection agent_id_for_authority not configured for {authority_ref}"
+    )
+
+
 class BusConversationProjection:
     """Projects conversations onto all authorities that expose ``conversation_projection``.
 
@@ -37,11 +43,22 @@ class BusConversationProjection:
     ) -> None:
         self._bus = bus
         self._directory = directory
-        self._agent_id_for_authority = agent_id_for_authority or (lambda _ref: "")
+        if agent_id_for_authority is None:
+            self._agent_id_for_authority = _unconfigured_agent_id_for_authority
+        else:
+            self._agent_id_for_authority = agent_id_for_authority
 
         # Volatile in-memory cache:
         #   conversation_id -> {target_agent_id, origin_channel, external_conversation_ref, title}
         self._identity_cache: dict[str, dict[str, str]] = {}
+
+    def _resolved_agent_id(self, authority_ref: str) -> str:
+        agent_id = self._agent_id_for_authority(authority_ref)
+        if not agent_id:
+            raise RuntimeError(
+                f"conversation_projection missing agent_id for authority {authority_ref}"
+            )
+        return agent_id
 
     # ------------------------------------------------------------------
     # create_conversation -- mirrored to every authority
@@ -65,7 +82,7 @@ class BusConversationProjection:
         first_conversation_id: str = ""
 
         for authority_ref in authorities:
-            resolved_agent_id = self._agent_id_for_authority(authority_ref) or target_agent_id
+            resolved_agent_id = self._resolved_agent_id(authority_ref)
             payload = json.dumps({
                 "target_agent_id": resolved_agent_id,
                 "origin_channel": origin_channel,
@@ -94,7 +111,8 @@ class BusConversationProjection:
                         reply.error,
                     )
                     continue
-                result = json.loads(reply.result_json or "{}")
+                result_json = reply.result_json if reply.result_json is not None else "{}"
+                result = json.loads(result_json)
                 cid = str(result.get("conversation_id", ""))
                 if not cid:
                     log.error("create_conversation on %s returned empty conversation_id", authority_ref)
@@ -214,7 +232,15 @@ class BusConversationProjection:
                 continue
 
             # Ensure conversation row exists on this authority (idempotent)
-            resolved_agent_id = self._agent_id_for_authority(authority_ref) or cached.get("target_agent_id", "")
+            try:
+                resolved_agent_id = self._resolved_agent_id(authority_ref)
+            except RuntimeError:
+                log.warning(
+                    "publish_events: missing agent_id for authority %s; skipping create-before-publish for %s",
+                    authority_ref,
+                    conversation_id,
+                )
+                continue
             try:
                 create_payload = json.dumps({
                     "target_agent_id": resolved_agent_id,

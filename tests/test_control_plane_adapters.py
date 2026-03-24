@@ -112,6 +112,7 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
                     "kind": "progress",
                     "title": "Halfway",
                     "progress": 50,
+                    "created_at": "2026-03-20T00:00:00+00:00",
                 },
             ),
             progress=50,

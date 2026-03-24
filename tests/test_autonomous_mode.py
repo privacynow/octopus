@@ -29,7 +29,7 @@ def _run_bash(script: str, *, cwd: Path, check: bool = True) -> subprocess.Compl
 
 
 def test_autonomous_parses_true():
-    cfg = make_config(autonomous=True, allow_open=False, allowed_user_ids=[42])
+    cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
     assert cfg.autonomous is True
 
 
@@ -42,7 +42,7 @@ def test_autonomous_defaults_false():
 
 
 def test_autonomous_rejects_allow_open():
-    cfg = make_config(autonomous=True, allow_open=True, allowed_user_ids=[42])
+    cfg = make_config(autonomous=True, allow_open=True, allowed_actor_keys=frozenset({"tg:42"}))
     errors = validate_config(cfg)
     assert any("BOT_AUTONOMOUS=1 and BOT_ALLOW_OPEN=1" in e for e in errors)
 
@@ -64,7 +64,7 @@ def test_autonomous_with_admin_only_still_rejected():
         allow_open=False,
         allowed_actor_keys=frozenset(),
         allowed_usernames=frozenset(),
-        admin_user_ids=[99],
+        admin_actor_keys=frozenset({"tg:99"}),
     )
     errors = validate_config(cfg)
     assert any("BOT_ALLOWED_USERS" in e for e in errors)
@@ -74,7 +74,7 @@ def test_autonomous_with_allowed_users_passes():
     cfg = make_config(
         autonomous=True,
         allow_open=False,
-        allowed_user_ids=[42],
+        allowed_actor_keys=frozenset({"tg:42"}),
     )
     errors = validate_config(cfg)
     assert not any("BOT_AUTONOMOUS" in e for e in errors)
@@ -84,7 +84,7 @@ def test_autonomous_codex_dangerous_coexist():
     cfg = make_config(
         autonomous=True,
         allow_open=False,
-        allowed_user_ids=[42],
+        allowed_actor_keys=frozenset({"tg:42"}),
         codex_dangerous=True,
     )
     errors = validate_config(cfg)
@@ -145,7 +145,7 @@ async def test_autonomous_grants_skip_permissions():
         provider_state={},
         approval_mode="off",
     )
-    cfg = make_config(autonomous=True, allow_open=False, allowed_user_ids=[42])
+    cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
 
     # Build a minimal RunContext mock to capture skip_permissions
     context = MagicMock()
@@ -167,7 +167,7 @@ async def test_autonomous_respects_approval_on_override():
         approval_mode="on",
         approval_mode_explicit=True,
     )
-    cfg = make_config(autonomous=True, allow_open=False, allowed_user_ids=[42])
+    cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
 
     autonomous_grant = cfg.autonomous and session.approval_mode != "on"
     skip_permissions = False or autonomous_grant

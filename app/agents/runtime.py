@@ -117,18 +117,16 @@ class AgentRuntime:
             agent_token=self._state.agent_token,
         )
 
-    async def _runtime_health_payload(self) -> tuple[dict[str, Any] | None, int]:
+    async def _runtime_health_payload(self) -> dict[str, Any] | None:
         if self._runtime_health_provider is None or self._provider is None:
-            return None, 0
+            return None
         report = await self._runtime_health_provider.collect(
             self.config,
             self._provider,
             caller_is_bot=True,
             session_context=None,
         )
-        payload = self._runtime_health_projector.project(report)
-        active_work_count = report.summary.claimed_count
-        return payload, active_work_count
+        return self._runtime_health_projector.project(report)
 
     def _save_state(self) -> None:
         if self._registry is None:
@@ -196,9 +194,8 @@ class AgentRuntime:
                 max_capacity=1,
             )
             runtime_health_payload = None
-            active_work_count = 0
             try:
-                runtime_health_payload, active_work_count = await self._runtime_health_payload()
+                runtime_health_payload = await self._runtime_health_payload()
             except Exception:
                 log.exception(
                     "Runtime health collection failed for %s; continuing without mirrored health",
@@ -208,7 +205,6 @@ class AgentRuntime:
                 "connectivity_state": "connected",
                 "current_capacity": 0,
                 "max_capacity": 1,
-                "active_work_count": active_work_count,
             }
             if runtime_health_payload is not None:
                 heartbeat_kwargs["runtime_health"] = runtime_health_payload

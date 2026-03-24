@@ -12,6 +12,7 @@ All failures are logged as warnings and swallowed — never blocks execution.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.config import BotConfig, should_publish_event
@@ -19,6 +20,10 @@ from app.ports.conversation_projection import ConversationProjectionPort
 from app.workflows.execution.contracts import TransportIdentity
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class NoOpEventSink:
@@ -95,6 +100,7 @@ class RegistryEventSink:
                 kind=kind,
                 actor=actor,
                 content=content,
+                created_at=_utcnow_iso(),
                 metadata=metadata or {},
             )
             await self._projection.publish_events(
@@ -125,12 +131,18 @@ class RegistryEventSink:
         })
 
     async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None:
+        if not tasks:
+            return
         await self._publish("delegation.proposed", metadata={"tasks": tasks})
 
     async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
+        if not tasks:
+            return
         await self._publish("delegation.submitted", metadata={"tasks": tasks})
 
     async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
+        if not tasks:
+            return
         await self._publish("delegation.completed", metadata={"tasks": tasks})
 
 

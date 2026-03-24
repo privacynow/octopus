@@ -55,7 +55,7 @@ class TelegramChannelBootstrap(ChannelBootstrap):
         self,
         *,
         conversation_ref: str,
-        conversation_key: str = "",
+        conversation_key: str,
         chat_id: int | None = None,
     ) -> int | None:
         if chat_id is not None:

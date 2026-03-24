@@ -174,6 +174,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             "completion_webhook_url": "https://hooks.example.com/completed",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, prov):
@@ -239,6 +240,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_routed_task(monkeypa
             "completion_webhook_url": "https://hooks.example.com/completed",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, prov):
@@ -325,6 +327,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, prov):
@@ -418,6 +421,7 @@ async def test_discover_degraded_reports_registry_connectivity():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, prov):
@@ -462,6 +466,7 @@ async def test_discover_registry_failure_omits_backend_response_details():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -509,6 +514,7 @@ async def test_registry_channel_input_respects_approval_mode():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -543,6 +549,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -571,7 +578,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
             data_dir,
             _reg_conv(_reg_ref("conv-approve")),
             {
-                **default_session(prov.name, prov.new_provider_state(), "off"),
+                **default_session(prov.name, prov.new_provider_state("tg:test"), "off"),
                 "pending_delegation": {
                     "conversation_ref": _reg_ref("conv-approve"),
                     "title": "Registry delegation",
@@ -618,6 +625,7 @@ async def test_cancel_delegation_from_registry_delivery():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -625,7 +633,7 @@ async def test_cancel_delegation_from_registry_delivery():
             data_dir,
             _reg_conv(_reg_ref("conv-cancel")),
             {
-                **default_session(prov.name, prov.new_provider_state(), "off"),
+                **default_session(prov.name, prov.new_provider_state("tg:test"), "off"),
                 "pending_delegation": {
                     "conversation_ref": _reg_ref("conv-cancel"),
                     "title": "Registry delegation",
@@ -669,6 +677,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
             "approval_mode": "off",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_, _, prov):
@@ -717,6 +726,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_, cfg, prov):
@@ -779,6 +789,7 @@ async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_, _cfg, prov):
@@ -850,6 +861,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_, cfg, prov):
@@ -932,6 +944,7 @@ async def test_registry_routed_task_interactive_block_reports_failure(monkeypatc
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (_, _cfg, _prov):
@@ -998,12 +1011,13 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Spec delegation",
@@ -1056,12 +1070,13 @@ async def test_delegation_completion_sends_final_message_all_completed():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Spec delegation",
@@ -1108,12 +1123,13 @@ async def test_delegation_completion_sends_final_message_partial_failed():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Spec delegation",
@@ -1182,12 +1198,13 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Spec delegation",
@@ -1239,12 +1256,13 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Spec delegation",
@@ -1298,12 +1316,13 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Two-child delegation",
@@ -1385,6 +1404,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -1401,7 +1421,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
 
         conversation_ref = _reg_ref("parent-conv-1")
         chat_id = _reg_conv(conversation_ref)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Registry parent delegation",
@@ -1450,11 +1470,12 @@ async def test_registry_channel_action_retry_skip_clears_pending_retry():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_retry"] = {
             "actor_key": "tg:42",
             "prompt": "Retry this",
@@ -1493,11 +1514,12 @@ async def test_registry_channel_action_retry_allow_executes_request():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_retry"] = {
             "actor_key": "tg:42",
             "prompt": "Retry this with extra access",
@@ -1538,6 +1560,7 @@ async def test_registry_channel_action_recovery_discard_discards_pending_recover
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -1584,6 +1607,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -1627,11 +1651,12 @@ async def test_registry_channel_action_recovery_replay_executes_request():
         assert row["state"] == "done"
 
 
-async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch):
+async def test_registry_recovery_notice_timeline_uses_sdk_error_metadata(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
             "registry_publish_level": "off",
         }
         ) as (_, cfg, prov):
@@ -1667,7 +1692,10 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
 
             recovery_events = [item for item in published if item["kind"] == "error" and item.get("metadata", {}).get("error_type") == "recovery"]
             assert recovery_events
-            assert recovery_events[0]["metadata"]["update_id"] == 8123
+            assert recovery_events[0]["metadata"] == {
+                "error_type": "recovery",
+                "message": "Execution paused. Choose how to continue.",
+            }
 
 
 async def test_cmd_new():
@@ -1806,7 +1834,7 @@ async def test_new_preserves_default_skills():
         key = derive_encryption_key(cfg.telegram_token)
         save_user_credential(data_dir, _actor(42), "github-integration", "GITHUB_TOKEN", "ghp_test", key)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["github-integration", "extra-skill"]
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -1938,7 +1966,7 @@ async def test_help_and_start_public_user_excludes_project_and_policy():
         cfg = make_config(
             data_dir,
             allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
+            allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -1964,7 +1992,7 @@ async def test_help_and_start_public_user_excludes_project_and_policy():
 async def test_help_and_start_non_admin_excludes_admin_sessions():
     """Bucket B follow-up: non-admin trusted users must not see /admin sessions in /start or /help."""
     with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
+        cfg = make_config(data_dir, admin_actor_keys=frozenset(), admin_usernames=frozenset())
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
         import app.channels.telegram.ingress as th
@@ -1983,7 +2011,7 @@ async def test_help_and_start_non_admin_excludes_admin_sessions():
 async def test_help_and_start_admin_sees_admin_sessions_and_trusted_commands():
     """Bucket B follow-up: admin users see /admin sessions and full trusted command set."""
     with fresh_env(config_overrides={
-        "admin_user_ids": frozenset({42}),
+        "admin_actor_keys": frozenset({"tg:42"}),
         "admin_usernames": frozenset(),
         "projects": (("testproj", "/tmp", ()),),
     }) as (data_dir, cfg, prov):
@@ -2158,13 +2186,13 @@ async def test_doctor_admin_warning():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            admin_user_ids=frozenset({1, 2, 3}),
+            allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
+            admin_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.channels.telegram.ingress as th
@@ -2180,14 +2208,14 @@ async def test_doctor_no_warning_explicit_admin():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            admin_user_ids=frozenset({1}),
+            allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
+            admin_actor_keys=frozenset({"tg:1"}),
             admin_users_explicit=True,
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.channels.telegram.ingress as th
@@ -2220,7 +2248,7 @@ async def test_prompt_size_warning_before_activation():
             prov.run_results = [RunResult(text="ok")]
             setup_globals(cfg, prov)
 
-            session = default_session("claude", prov.new_provider_state(), "off")
+            session = default_session("claude", prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(1), session)
 
             import app.channels.telegram.ingress as th
@@ -2262,7 +2290,7 @@ async def test_prompt_size_no_warning_small_skill():
             prov.run_results = [RunResult(text="ok")]
             setup_globals(cfg, prov)
 
-            session = default_session("claude", prov.new_provider_state(), "off")
+            session = default_session("claude", prov.new_provider_state("tg:test"), "off")
             save_session(data_dir, telegram_conversation_key(1), session)
 
             import app.channels.telegram.ingress as th
@@ -2288,15 +2316,15 @@ async def test_doctor_stale_session_warnings():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session1 = default_session("claude", prov.new_provider_state(), "off")
+        session1 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session1["pending_approval"] = {"prompt": "do something", "created_at": 0}
         save_session(data_dir, telegram_conversation_key(100), session1)
 
-        session2 = default_session("claude", prov.new_provider_state(), "off")
-        session2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": 0}
+        session2 = default_session("claude", prov.new_provider_state("tg:test"), "off")
+        session2["awaiting_skill_setup"] = {"actor_key": "tg:42", "skill": "test", "started_at": 0}
         save_session(data_dir, telegram_conversation_key(200), session2)
 
-        session3 = default_session("claude", prov.new_provider_state(), "off")
+        session3 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(300), session3)
 
         import app.channels.telegram.ingress as th
@@ -2314,14 +2342,14 @@ async def test_doctor_no_warning_explicit_admin_equal_to_allowed():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            admin_user_ids=frozenset({1, 2, 3}),
+            allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
+            admin_actor_keys=frozenset({"tg:1", "tg:2", "tg:3"}),
             admin_users_explicit=True,
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.channels.telegram.ingress as th
@@ -2339,12 +2367,12 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session1 = default_session("claude", prov.new_provider_state(), "off")
+        session1 = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session1["pending_approval"] = {"prompt": "do something", "created_at": _time.time()}
         save_session(data_dir, telegram_conversation_key(100), session1)
 
-        session2 = default_session("claude", prov.new_provider_state(), "off")
-        session2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": _time.time()}
+        session2 = default_session("claude", prov.new_provider_state("tg:test"), "off")
+        session2["awaiting_skill_setup"] = {"actor_key": "tg:42", "skill": "test", "started_at": _time.time()}
         save_session(data_dir, telegram_conversation_key(200), session2)
 
         import app.channels.telegram.ingress as th
@@ -2707,7 +2735,7 @@ async def test_project_switch_invalidates_pending():
             user = FakeUser(1)
 
             # Create a session with a pending request
-            session = default_session("claude", prov.new_provider_state(), "on")
+            session = default_session("claude", prov.new_provider_state("tg:test"), "on")
             session["pending_approval"] = {"prompt": "do something", "created_at": 0}
             save_session(data_dir, telegram_conversation_key(5001), session)
 
@@ -3234,7 +3262,7 @@ async def test_settings_callback_project_clear_no_projects_no_mutation():
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["project_id"] = "stale_project"
         save_session(data_dir, telegram_conversation_key(1), session)
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
@@ -3399,7 +3427,7 @@ async def test_settings_callback_project_clears_pending():
         }) as (data_dir, cfg, prov):
             chat = FakeChat(1)
             user = FakeUser(42)
-            session = default_session("claude", prov.new_provider_state(), "on")
+            session = default_session("claude", prov.new_provider_state("tg:test"), "on")
             session["pending_approval"] = {"prompt": "do it", "created_at": 0}
             save_session(data_dir, telegram_conversation_key(1), session)
             await send_callback(th.handle_settings_callback, chat, user, "setting_project:proj1")
@@ -3527,7 +3555,7 @@ async def test_skills_command_hides_unresolvable_session_skills():
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(uid=42, username="owner")
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["active_skills"] = ["code-review", "missing-skill"]
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
@@ -4198,8 +4226,8 @@ async def test_allowuser_grants_access_without_restart():
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({1, 100}),
-        "admin_user_ids": frozenset({1}),
+        "allowed_actor_keys": frozenset({"tg:1", "tg:100"}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=12345)
         admin = FakeUser(uid=1, username="admin")
@@ -4226,8 +4254,8 @@ async def test_blockuser_blocks_allowed_user_without_restart():
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({1, 100}),
-        "admin_user_ids": frozenset({1}),
+        "allowed_actor_keys": frozenset({"tg:1", "tg:100"}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=12345)
         admin = FakeUser(uid=1, username="admin")
@@ -4253,8 +4281,8 @@ async def test_listaccess_shows_rows():
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({1}),
-        "admin_user_ids": frozenset({1}),
+        "allowed_actor_keys": frozenset({"tg:1"}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         del data_dir, cfg, prov
         chat = FakeChat(chat_id=12345)
@@ -4279,7 +4307,7 @@ async def test_access_commands_reject_non_admin(handler_name):
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "admin_user_ids": frozenset({1}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         del data_dir, cfg, prov
         chat = FakeChat(chat_id=12345)
@@ -4294,8 +4322,8 @@ async def test_allowuser_usage_hint_for_missing_arg():
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({1}),
-        "admin_user_ids": frozenset({1}),
+        "allowed_actor_keys": frozenset({"tg:1"}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         del data_dir, cfg, prov
         chat = FakeChat(chat_id=12345)
@@ -4313,8 +4341,8 @@ async def test_allowuser_accepts_actor_keys_and_user_ids(arg, expected_actor):
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({1}),
-        "admin_user_ids": frozenset({1}),
+        "allowed_actor_keys": frozenset({"tg:1"}),
+        "admin_actor_keys": frozenset({"tg:1"}),
     }) as (data_dir, cfg, prov):
         del data_dir, cfg, prov
         chat = FakeChat(chat_id=12345)

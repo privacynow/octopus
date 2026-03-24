@@ -52,12 +52,8 @@ class ProgressSink(Protocol):
 class Provider(Protocol):
     name: str
 
-    def new_provider_state(self, conversation_key: str = "") -> dict[str, Any]:
+    def new_provider_state(self, conversation_key: str) -> dict[str, Any]:
         """Return provider-specific fields for a fresh session.
-
-        When conversation_key is provided, implementations produce a
-        deterministic session_id (e.g. via uuid5) so that the same
-        conversation always gets the same initial provider state.
         """
         ...
 

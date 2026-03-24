@@ -256,7 +256,7 @@ def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | No
                     started_at=str(worker.get("started_at", "")),
                     last_seen_at=str(worker.get("last_seen_at", "")),
                     current_item_id=str(worker.get("current_item_id", "")),
-                    current_conversation_key=str(worker.get("current_conversation_key", "")),
+                    current_conversation_key=worker.get("current_conversation_key"),
                     current_kind=str(worker.get("current_kind", "")),
                     items_processed=int(worker.get("items_processed", 0) or 0),
                     stale_recoveries_seen=int(worker.get("stale_recoveries_seen", 0) or 0),

@@ -34,6 +34,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "origin-agent-default"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -61,7 +62,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
 
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Feature delegation",
@@ -111,12 +112,13 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "origin-agent-default"},
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Feature delegation",
@@ -190,6 +192,10 @@ async def test_delegation_partial_submission_message_names_sent_and_remaining_ta
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {
+                "developer-1": "origin-agent-developer",
+                "reviewer-1": "origin-agent-reviewer",
+            },
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
@@ -219,7 +225,7 @@ async def test_delegation_partial_submission_message_names_sent_and_remaining_ta
 
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
             "title": "Feature delegation",

@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +25,14 @@ log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class RegistryEditableHandle(EditableHandle):
-    def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str, kind: str, title: str) -> None:
+    def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str) -> None:
         self._conversation = conversation
         self._event_id = event_id
-        self._kind = kind
-        self._title = title
 
     async def edit_text(self, text: str, **kwargs: Any) -> None:
         del kwargs
@@ -97,9 +100,6 @@ class RegistryChannelEgress(ChannelEgress):
     def _is_task_ref(self) -> bool:
         return self._ref_kind == "task"
 
-    def _metadata(self) -> dict[str, Any]:
-        return {"routed_task_id": self.routed_task_id} if self.routed_task_id else {}
-
     def _append_output(self, kind: str, text: str) -> None:
         if self._output_log is None:
             return
@@ -126,17 +126,16 @@ class RegistryChannelEgress(ChannelEgress):
         from registry_sdk.events import ConversationEvent
 
         resolved_event_id = event_id or uuid.uuid4().hex
-        merged_metadata: dict[str, Any] = {**self._metadata(), **(metadata or {})}
+        merged_metadata: dict[str, Any] = dict(metadata or {})
         if status:
             merged_metadata["status"] = status
         if progress is not None:
             merged_metadata["progress"] = progress
-        if title:
-            merged_metadata["title"] = title
         event = ConversationEvent(
             event_id=resolved_event_id,
             kind=kind,
-            content=body,
+            content=body or title,
+            created_at=_utcnow_iso(),
             metadata=merged_metadata,
         )
         # Extract conversation_id from the qualified registry ref
@@ -173,7 +172,7 @@ class RegistryChannelEgress(ChannelEgress):
                 body=text,
                 event_id=event_id,
             )
-        return RegistryEditableHandle(self, event_id=event_id, kind="message.bot", title="Bot reply")
+        return RegistryEditableHandle(self, event_id=event_id)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
         if self._is_task_ref():
@@ -273,12 +272,12 @@ class RegistryChannelEgress(ChannelEgress):
     ) -> None:
         if self._is_task_ref():
             return
-        del run_again_label, skip_label
+        del run_again_label, skip_label, update_id
         await self._publish_event(
             kind="error",
             title="Recovery available",
             body=f"{preview}\n\n{prompt}".strip(),
-            metadata={"error_type": "recovery", "message": preview, "update_id": update_id},
+            metadata={"error_type": "recovery", "message": preview},
         )
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:

@@ -27,7 +27,7 @@ async def test_compact_toggle():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -55,7 +55,7 @@ async def test_raw_retrieves_response():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
@@ -82,7 +82,7 @@ async def test_e2e_table_in_provider_response():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         table_response = (
@@ -115,7 +115,7 @@ async def test_e2e_compact_mode_uses_blockquote():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = True
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -153,7 +153,7 @@ async def test_e2e_compact_off_no_summarize():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         long_response = "Full verbose response. " * 50
@@ -181,7 +181,7 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = True
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -225,7 +225,7 @@ async def test_compact_mode_injects_summary_first_instruction():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = True
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -248,7 +248,7 @@ async def test_compact_off_no_summary_first_instruction():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = False
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -287,7 +287,7 @@ async def test_compact_long_response_shows_expand_button():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = True
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -329,7 +329,7 @@ async def test_expand_callback_shows_full_response():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         session["compact_mode"] = True
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -377,7 +377,7 @@ async def test_expand_collapse_round_trip_with_short_full_text():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         # Write a short raw text directly to ring buffer — short enough for
@@ -432,7 +432,7 @@ async def test_collapse_callback_restores_compact_with_expand_button():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         # Write raw text directly to ring buffer
@@ -467,7 +467,7 @@ async def test_expand_callback_rotated_buffer():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", prov.new_provider_state(), "off")
+        session = default_session("codex", prov.new_provider_state("tg:test"), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
         # Fire expand callback for a slot that was never written

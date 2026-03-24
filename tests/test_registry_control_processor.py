@@ -449,6 +449,7 @@ async def test_registry_control_processor_processes_publish_events() -> None:
                         "kind": "message.user",
                         "actor": "user",
                         "content": "Hello",
+                        "created_at": "2026-03-20T00:00:00+00:00",
                         "metadata": {},
                     }
                 ],

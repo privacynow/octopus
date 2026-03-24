@@ -224,7 +224,7 @@ class RegistryControlProcessor(ControlProcessor):
                     role=str(row.get("role", "")),
                     capabilities=tuple(
                         str(item)
-                        for item in row.get("capabilities", row.get("skills", []))
+                        for item in row.get("capabilities", [])
                         if item
                     ),
                     tags=tuple(str(item) for item in row.get("tags", []) if item),

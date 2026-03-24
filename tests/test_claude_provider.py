@@ -16,7 +16,7 @@ from tests.support.handler_support import FakeProgress
 
 def test_new_provider_state():
     p = ClaudeProvider(make_config())
-    state = p.new_provider_state()
+    state = p.new_provider_state("tg:test")
     assert bool(state.get("session_id"))
     assert state["started"] is False
 
@@ -353,7 +353,7 @@ def test_claude_preflight_hardening():
 def test_claude_error_state():
     """RunResult distinguishes success (started=True) from error (empty updates)."""
     p = ClaudeProvider(make_config(provider_name="claude"))
-    fresh = p.new_provider_state()
+    fresh = p.new_provider_state("tg:test")
     assert fresh["started"] is False
 
     success_result = RunResult(text="ok", provider_state_updates={"started": True})

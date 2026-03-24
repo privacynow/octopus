@@ -230,7 +230,7 @@ async def test_shared_skills_command_routes_through_runtime_skill_owner(monkeypa
 async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
         chat_id = 12345
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_approval"] = {
             "actor_key": "tg:42",
             "prompt": "Ship it",

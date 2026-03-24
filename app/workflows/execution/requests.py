@@ -206,7 +206,7 @@ async def execute_request(
     guidance = get_provider_guidance_service()
 
     # Build transport identity and event sink FIRST — all durable operations use transport fields
-    transport = runtime.build_transport_identity(message, chat_id)
+    transport = runtime.build_transport_identity(message, chat_id, actor_key=actor_key)
     conversation_key = transport.conversation_key
     event_sink = runtime.build_event_sink(transport)
 
@@ -465,7 +465,7 @@ async def request_approval(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    transport = runtime.build_transport_identity(message, chat_id)
+    transport = runtime.build_transport_identity(message, chat_id, actor_key=actor_key)
     conversation_key = transport.conversation_key
     session = _load(runtime, conversation_key)
 

@@ -368,14 +368,14 @@ def test_session_persistence():
 
         # Save and reload
         save_session(data_dir, telegram_conversation_key(100), session)
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda: {"session_id": "y", "started": False}, "on", "default-role", ("testing",))
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": {"session_id": "y", "started": False}, "on", "default-role", ("testing",))
 
         # Saved values should override defaults
         assert loaded["active_skills"] == ["code-review"]
         assert loaded["role"] == "engineer"
 
         # Fresh session for new chat uses defaults
-        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda: {"session_id": "z", "started": False}, "on", "default-role", ("testing",))
+        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda _ck="": {"session_id": "z", "started": False}, "on", "default-role", ("testing",))
         assert fresh["role"] == "default-role"
         assert fresh["active_skills"] == ["testing"]
 
@@ -706,7 +706,7 @@ def test_awaiting_skill_setup_persistence():
         session["awaiting_skill_setup"] = setup_state
         save_session(data_dir, telegram_conversation_key(100), session)
 
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda: {"session_id": "y", "started": False}, "on")
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": {"session_id": "y", "started": False}, "on")
         assert loaded.get("awaiting_skill_setup") is not None
         assert loaded["awaiting_skill_setup"]["actor_key"] == "tg:111"
         assert loaded["awaiting_skill_setup"]["skill"] == "github"

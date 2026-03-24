@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol
 from app.config import BotConfig
 from app.session_state import SessionState
 
-ProviderStateFactory = Callable[[], dict]
+ProviderStateFactory = Callable[[str], dict]
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,7 @@ class ConversationControlPort(Protocol):
         approval_mode_default: str,
         default_role: str,
         default_skills: tuple[str, ...],
+        conversation_key: str,
     ) -> ConversationResetOutcome: ...
 
     def cancel_conversation(
@@ -108,6 +109,7 @@ class ConversationSettingsPort(Protocol):
         *,
         cfg: BotConfig,
         provider_state_factory: ProviderStateFactory,
+        conversation_key: str,
     ) -> SettingMutationOutcome: ...
 
     def set_file_policy(
@@ -119,4 +121,5 @@ class ConversationSettingsPort(Protocol):
         provider_name: str,
         trust_tier: str,
         provider_state_factory: ProviderStateFactory,
+        conversation_key: str,
     ) -> SettingMutationOutcome: ...

@@ -452,7 +452,7 @@ async def test_duplicate_pending_blocked():
         assert (session.get("pending_approval") or session.get("pending_retry")) is not None
 
 
-async def test_denial_preserves_request_user_id():
+async def test_denial_preserves_actor_key():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="off")
         prov = FakeProvider("claude")

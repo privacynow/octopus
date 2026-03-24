@@ -92,6 +92,7 @@ def test_admit_worker_message_allows_registry_input() -> None:
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, _prov):
         result = admit_worker_message(
@@ -359,6 +360,7 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, _prov):
         calls: list[str] = []

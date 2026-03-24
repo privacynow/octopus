@@ -174,6 +174,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             "completion_webhook_url": "https://hooks.example.com/completed",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -238,6 +239,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_routed_task(monkeypa
             "completion_webhook_url": "https://hooks.example.com/completed",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_data_dir, _cfg, prov):
         called: list[dict[str, object]] = []
@@ -301,6 +303,7 @@ async def test_help_and_start_include_discover_in_registry_mode():
             data_dir,
             agent_mode="registry",
             agent_registries=(make_registry_connection(),),
+            registry_publish_level="off",
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -322,6 +325,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -414,6 +418,7 @@ async def test_discover_degraded_reports_registry_connectivity():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -457,6 +462,7 @@ async def test_discover_registry_failure_omits_backend_response_details():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -503,6 +509,7 @@ async def test_registry_channel_input_respects_approval_mode():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -536,6 +543,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         submitted = []
@@ -610,6 +618,7 @@ async def test_cancel_delegation_from_registry_delivery():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         save_session(
@@ -660,6 +669,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
             "approval_mode": "off",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_, _, prov):
         import app.channels.telegram.ingress as th
@@ -707,6 +717,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -768,6 +779,7 @@ async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_, _cfg, prov):
         status_updates: list[tuple[str, object]] = []
@@ -838,6 +850,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -919,6 +932,7 @@ async def test_registry_routed_task_interactive_block_reports_failure(monkeypatc
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (_, _cfg, _prov):
         from app.channels.registry.egress import RegistryChannelEgress
@@ -984,6 +998,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1041,6 +1056,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1092,6 +1108,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1165,6 +1182,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1221,6 +1239,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1279,6 +1298,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1365,6 +1385,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -1429,6 +1450,7 @@ async def test_registry_channel_action_retry_skip_clears_pending_retry():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1471,6 +1493,7 @@ async def test_registry_channel_action_retry_allow_executes_request():
             "approval_mode": "on",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1515,6 +1538,7 @@ async def test_registry_channel_action_recovery_discard_discards_pending_recover
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.runtime_backend as runtime_backend
@@ -1560,6 +1584,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.runtime_backend as runtime_backend
@@ -1607,6 +1632,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
         ) as (_, cfg, prov):
             import app.channels.telegram.ingress as th

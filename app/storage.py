@@ -85,7 +85,7 @@ def load_session(
     data_dir: Path,
     conversation_key: str,
     provider_name: str,
-    provider_state_factory: Callable[[], dict[str, Any]],
+    provider_state_factory: Callable[[str], dict[str, Any]],
     approval_mode: str,
     role: str = "",
     default_skills: tuple[str, ...] = (),

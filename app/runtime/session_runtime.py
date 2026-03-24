@@ -33,7 +33,7 @@ def load_runtime_session(
     conversation_key: str,
     *,
     provider_name: str,
-    provider_state_factory: Callable[[], dict],
+    provider_state_factory: Callable[[str], dict],
     approval_mode: str,
     default_role: str = "",
     default_skills: tuple[str, ...] = (),
@@ -78,15 +78,16 @@ def apply_runtime_delegation_result(
 def default_runtime_session(
     *,
     provider_name: str,
-    provider_state_factory: Callable[[], dict],
+    provider_state_factory: Callable[[str], dict],
     approval_mode: str,
+    conversation_key: str,
     default_role: str = "",
     default_skills: tuple[str, ...] = (),
 ) -> SessionState:
     return session_from_dict(
         default_session(
             provider_name,
-            provider_state_factory(),
+            provider_state_factory(conversation_key),
             approval_mode,
             default_role,
             default_skills,

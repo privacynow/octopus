@@ -77,7 +77,7 @@ async def test_credential_capture(monkeypatch):
         assert "github-integration" not in session.get("active_skills", [])
         assert session.get("awaiting_skill_setup") is not None
         setup = session["awaiting_skill_setup"]
-        assert setup["user_id"] == telegram_actor_key(42)
+        assert setup["actor_key"] == telegram_actor_key(42)
         assert setup["skill"] == "github-integration"
         assert any(r["key"] == "GITHUB_TOKEN" for r in setup["remaining"])
         assert setup["remaining"][0].get("validate") is not None
@@ -115,7 +115,7 @@ async def test_credential_validation_failure(monkeypatch):
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "github-integration",
             "remaining": [{
                 "key": "GITHUB_TOKEN",
@@ -161,7 +161,7 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
             "remaining": [{"key": "TOKEN", "prompt": "Enter token", "help_url": None, "validate": None}],
         }
@@ -239,7 +239,7 @@ async def test_multi_credential():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["my-skill"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "my-skill",
             "remaining": [
                 {"key": "API_KEY", "prompt": "Enter API key", "help_url": None, "validate": None},
@@ -343,7 +343,7 @@ async def test_credential_completion_activates():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = []
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "github-integration",
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
         }
@@ -390,7 +390,7 @@ async def test_skills_remove_cancels_setup():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -417,7 +417,7 @@ async def test_skills_clear_cancels_setup():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -487,21 +487,21 @@ async def test_group_chat_setup_isolation(monkeypatch):
         )
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
         await _th.cmd_skills(
             FakeUpdate(message=FakeMessage(chat=chat, text="/skills add github-integration"), user=bob, chat=chat),
             FakeContext(args=["add", "github-integration"]),
         )
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
         await _th.cmd_skills(
             FakeUpdate(message=FakeMessage(chat=chat, text="/skills setup github-integration"), user=bob, chat=chat),
             FakeContext(args=["setup", "github-integration"]),
         )
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
         bob_secret = FakeMessage(chat=chat, text="ghp_bob_secret_token")
         await _th.handle_message(FakeUpdate(message=bob_secret, user=bob, chat=chat), FakeContext())
@@ -509,7 +509,7 @@ async def test_group_chat_setup_isolation(monkeypatch):
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
 
         alice_secret = FakeMessage(chat=chat, text="ghp_alice_real_token")
         await _th.handle_message(FakeUpdate(message=alice_secret, user=alice, chat=chat), FakeContext())
@@ -537,7 +537,7 @@ async def test_group_check_cred_satisfaction_no_overwrite():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -553,7 +553,7 @@ async def test_group_check_cred_satisfaction_no_overwrite():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         setup = session.get("awaiting_skill_setup")
         assert setup is not None
-        assert setup["user_id"] == telegram_actor_key(100)
+        assert setup["actor_key"] == telegram_actor_key(100)
         out = " ".join(bot_texts(current_bot_instance())).lower()
         assert "wait" in out
 
@@ -567,7 +567,7 @@ async def test_cross_user_skills_remove_blocked():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -582,7 +582,7 @@ async def test_cross_user_skills_remove_blocked():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert "github-integration" in session.get("active_skills", [])
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
         alice_msg = FakeMessage(chat=chat, text="ghp_alice_real_token")
@@ -602,7 +602,7 @@ async def test_cross_user_skills_clear_blocked():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration", "testing"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -617,7 +617,7 @@ async def test_cross_user_skills_clear_blocked():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("active_skills") == ["github-integration", "testing"]
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
         alice_msg = FakeMessage(chat=chat, text="ghp_alice_real_token")
@@ -638,7 +638,7 @@ async def test_cross_user_new_blocked():
         session["active_skills"] = ["github-integration"]
         session["provider_state"]["started"] = True
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": time.time(),
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -652,7 +652,7 @@ async def test_cross_user_new_blocked():
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(100)
         assert session["provider_state"].get("started")
         assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
@@ -677,7 +677,7 @@ async def test_expired_foreign_setup_allows_recovery():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration"]
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": 0,
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -691,7 +691,7 @@ async def test_expired_foreign_setup_allows_recovery():
         assert "fresh" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": 0,
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -705,7 +705,7 @@ async def test_expired_foreign_setup_allows_recovery():
         assert session.get("awaiting_skill_setup") is None
 
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": 0,
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -717,7 +717,7 @@ async def test_expired_foreign_setup_allows_recovery():
         )
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is not None
-        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(200)
+        assert session["awaiting_skill_setup"]["actor_key"] == telegram_actor_key(200)
 
 
 async def test_expired_setup_persisted_on_noop_remove():
@@ -729,7 +729,7 @@ async def test_expired_setup_persisted_on_noop_remove():
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = []
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(100),
+            "actor_key": telegram_actor_key(100),
             "skill": "github-integration",
             "started_at": 0,
             "remaining": [{"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": None, "validate": None}],
@@ -1058,7 +1058,7 @@ async def test_cancel_setup():
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
             "started_at": time.time(),
             "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
@@ -1096,7 +1096,7 @@ async def test_cancel_admin_foreign_setup():
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
             "started_at": time.time(),
             "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
@@ -1120,7 +1120,7 @@ async def test_cancel_foreign_setup_shows_another_user_message():
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["awaiting_skill_setup"] = {
-            "user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "skill": "test-skill",
             "started_at": time.time(),
             "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
@@ -1220,7 +1220,7 @@ async def test_clear_credentials_confirm_flow():
 
             session = default_session(prov.name, prov.new_provider_state(), "off")
             session["awaiting_skill_setup"] = {
-                "user_id": telegram_actor_key(42),
+                "actor_key": telegram_actor_key(42),
                 "skill": "cred-test",
                 "started_at": time.time(),
                 "remaining": [{"key": "API_TOKEN", "prompt": "Enter token"}],

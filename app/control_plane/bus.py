@@ -11,6 +11,8 @@ from app.control_plane.models import ControlCommand, ControlReply
 
 
 class ControlPlaneBus:
+    default_timeout_seconds: float = 10.0
+
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
 
@@ -33,12 +35,13 @@ class ControlPlaneBus:
         self,
         command: ControlCommand,
         *,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float | None = None,
     ) -> ControlReply:
         if not command.correlation_id:
             command = command.model_copy(update={"correlation_id": command.command_id})
+        effective_timeout = timeout_seconds if timeout_seconds is not None else self.default_timeout_seconds
         command_id = self._store().submit(self._data_dir, command)
-        deadline = monotonic() + timeout_seconds
+        deadline = monotonic() + effective_timeout
         while True:
             reply = self._store().get_reply(self._data_dir, command_id)
             if reply is not None:

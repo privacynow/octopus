@@ -42,6 +42,9 @@ class NoOpEventSink:
     async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
         pass
 
+    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
+        pass
+
 
 _NOOP_SINK = NoOpEventSink()
 
@@ -126,6 +129,9 @@ class RegistryEventSink:
 
     async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
         await self._publish("delegation.submitted", metadata={"tasks": tasks})
+
+    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
+        await self._publish("delegation.completed", metadata={"tasks": tasks})
 
 
 def build_event_sink_for_context(

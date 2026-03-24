@@ -252,10 +252,11 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         _noop = NoOpEventSink()
         runtime = ExecutionRuntime(
             dispatch=current_execution_runtime().dispatch,
-            build_transport_identity=lambda _message, _chat_id: ExecutionChannelContext(
+            build_transport_identity=lambda _message, _chat_id, *, actor_key="": ExecutionChannelContext(
                 conversation_key=f"tg:{_chat_id}" if isinstance(_chat_id, int) else str(_chat_id),
                 origin_channel="telegram" if isinstance(_chat_id, int) else "registry",
                 external_conversation_ref=str(_chat_id),
+                actor=actor_key or "tg:42",
             ),
             build_event_sink=lambda _transport: _noop,
             render_provider_error=lambda text: text,

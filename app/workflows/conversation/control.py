@@ -33,6 +33,7 @@ class ConversationControlUseCases(ConversationControlPort):
         approval_mode_default: str,
         default_role: str,
         default_skills: tuple[str, ...],
+        conversation_key: str,
     ) -> ConversationResetOutcome:
         foreign = self._setup().foreign_setup(session, actor_key=actor_key)
         if foreign.setup is not None:
@@ -44,7 +45,7 @@ class ConversationControlUseCases(ConversationControlPort):
         replacement = session_from_dict(
             default_session(
                 provider_name,
-                provider_state_factory(),
+                provider_state_factory(conversation_key),
                 approval_mode,
                 default_role,
                 default_skills,

@@ -320,13 +320,13 @@ PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
     "standard": {
         "message.user", "message.bot", "task.status", "error",
         "approval.requested", "approval.decided",
-        "delegation.proposed", "delegation.submitted",
+        "delegation.proposed", "delegation.submitted", "delegation.completed",
         "provider.response",
     },
     "full": {
         "message.user", "message.bot", "task.status", "error",
         "approval.requested", "approval.decided",
-        "delegation.proposed", "delegation.submitted",
+        "delegation.proposed", "delegation.submitted", "delegation.completed",
         "provider.response", "provider.request",
         "tool.execution", "file.change",
     },

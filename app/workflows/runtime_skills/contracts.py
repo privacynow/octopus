@@ -146,7 +146,7 @@ class RuntimeSkillActivationPort(Protocol):
 class PromptWarningContext:
     data_dir: Path
     provider_name: str
-    provider_state_factory: Callable[[], dict[str, Any]]
+    provider_state_factory: Callable[[str], dict[str, Any]]
     approval_mode: str
 
 

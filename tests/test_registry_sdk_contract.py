@@ -200,3 +200,17 @@ def test_sdk_client_enroll_sends_body_not_header():
     }
     assert "X-Enrollment-Token" not in captured.get("headers", {})
     assert result["agent_id"] == "a1"
+
+
+def test_sdk_agent_card_contract_has_no_agent_id_field():
+    from registry_sdk.agents import AgentCard
+
+    card = AgentCard(
+        bot_key="bot:demo",
+        display_name="Bot",
+        slug="demo-bot",
+        registry_scope="full",
+    )
+
+    dumped = card.model_dump()
+    assert "agent_id" not in dumped

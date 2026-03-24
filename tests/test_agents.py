@@ -450,7 +450,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             }
 
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
-            calls.append(("register", card.agent_id, connectivity_state))
+            calls.append(("register", card.slug, connectivity_state))
             return {"ok": True}
 
         async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
@@ -480,7 +480,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
     assert state.agent_token == "secret-token"
     assert calls == [
         ("enroll", "Product Bot", "enroll-secret"),
-        ("register", "agent-123", "connected"),
+        ("register", "product-bot", "connected"),
         ("heartbeat", "connected", "0"),
     ]
 

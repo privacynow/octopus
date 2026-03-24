@@ -51,7 +51,6 @@ class ChannelEvent:
 
 @dataclass(frozen=True)
 class AgentCard:
-    agent_id: str = ""
     display_name: str = ""
     slug: str = ""
     role: str = ""

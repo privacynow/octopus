@@ -85,7 +85,6 @@ class AgentRuntime:
     def requested_card(self) -> AgentCard:
         capabilities = self._effective_capabilities()
         return AgentCard(
-            agent_id=self._state.agent_id,
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
@@ -182,7 +181,6 @@ class AgentRuntime:
 
             card = replace(
                 self.requested_card(),
-                agent_id=self._state.agent_id,
                 slug=self._state.registered_slug or self.config.agent_slug,
                 connectivity_state="connected",
             )

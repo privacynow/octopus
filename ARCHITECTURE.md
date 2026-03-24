@@ -30,6 +30,42 @@ flowchart LR
     UI --> Registry
 ```
 
+### Layering
+
+```mermaid
+flowchart TB
+    subgraph Ops["Operator Surfaces"]
+        CLI["./octopus"]
+        UI["Registry SPA"]
+    end
+
+    subgraph App["Bot Application (app/)"]
+        Main["Composition root<br/>app.main"]
+        Ch["Transport implementation<br/>telegram today, new transports later"]
+        Impl["Providers, workflows,<br/>control-plane adapters"]
+    end
+
+    subgraph SDK["octopus_sdk"]
+        RegSdk["registry client + models"]
+        CoreSdk["channels, egress, execution,<br/>runtime ports, identity, sessions"]
+    end
+
+    subgraph Registry["Registry Service"]
+        Api["HTTP + WS"]
+        Store["SQLite / Postgres store"]
+    end
+
+    CLI --> Main
+    Main --> Ch
+    Main --> Impl
+    Ch --> CoreSdk
+    Impl --> CoreSdk
+    CoreSdk <--> Api
+    RegSdk <--> Api
+    UI --> Api
+    Api --> Store
+```
+
 ## Deployment And Process Model
 
 `./octopus` is a thin shell entrypoint that delegates to the Python CLI in
@@ -143,6 +179,37 @@ applications and channel implementations provide the adapters and callbacks.
 The SDK owns these interfaces and models. Bus-backed, no-op, HTTP-backed, or
 transport-specific implementations live in the application layer.
 
+### Example: Adding A Slack Transport
+
+Slack is not implemented in this repo today, but the current SDK is structured
+so a new transport can be added without importing `app.main`.
+
+A realistic Slack implementation would use [Bolt for Python](https://docs.slack.dev/tools/bolt-python/)
+as the Slack-facing library. Slack documents Bolt as its Python framework for
+building Slack apps, supports framework adapters for production HTTP handling,
+and also supports [Socket Mode](https://docs.slack.dev/tools/bolt-python/concepts/socket-mode)
+when Slack should deliver events over a websocket instead of an inbound HTTP
+endpoint.
+
+The transport split would look like this:
+
+- Slack/Bolt owns Slack auth, event delivery, signatures or Socket Mode, and Slack API calls
+- `octopus_sdk.channels` owns the channel contract: ingress, descriptor, and egress shape
+- `octopus_sdk.execution` owns request orchestration once the inbound Slack event is normalized
+- `octopus_sdk.event_sink` provides registry publication through `RegistryEventSink` when registry mode is enabled
+
+In practice a Slack transport would:
+
+1. implement `ChannelBootstrap` / `ChannelIngress` around Bolt listeners
+2. implement `ChannelEgress` using Slack message APIs such as post/update and file send
+3. define a stable Slack ref family and build `TransportIdentity` from Slack conversation, thread, and actor ids
+4. supply runtime collaborator implementations for `ExecutionServices`
+5. call `build_execution_runtime(...)`, then `execute_request(...)` for normalized inbound work
+
+That keeps Slack-specific code in `app/channels/slack/` while reusing the SDK
+for execution, delegation, approvals, event publication, session state, and
+registry connectivity.
+
 ## Application Systems
 
 The repo's runnable application lives under `app/` and composes the SDK with
@@ -250,57 +317,53 @@ topics; conversation detail also renders progress updates.
 
 ```mermaid
 sequenceDiagram
-    participant User as Telegram user
-    participant TG as Telegram ingress
-    participant Disp as Dispatcher
-    participant Exec as SDK execution runtime
-    participant Prov as Provider
-    participant Sink as ExecutionEventSink
-    participant Egr as Telegram egress
+    participant U as User
+    participant T as Telegram
+    participant X as Runtime
+    participant P as Provider
+    participant S as Event sink
+    participant O as Outbound
 
-    User->>TG: inbound message
-    TG->>Disp: normalized work item
-    Disp->>Exec: execute_request(...)
-    Exec->>Prov: run / run_preflight
-    Exec->>Sink: publish lifecycle events
-    Exec->>Egr: send reply / actions / progress
+    U->>T: message
+    T->>X: normalized work
+    X->>P: run / preflight
+    X->>S: publish events
+    X->>O: reply / actions / progress
 ```
 
 ### Registry Projection
 
 ```mermaid
 sequenceDiagram
-    participant Exec as SDK execution runtime
-    participant Sink as RegistryEventSink
-    participant Port as ConversationProjectionPort
-    participant Bus as ControlPlaneBus
-    participant Proc as RegistryControlProcessor
-    participant Reg as Registry service
+    participant X as Runtime
+    participant S as Registry sink
+    participant P as Projection port
+    participant B as Bus
+    participant R as Registry
 
-    Exec->>Sink: publish execution lifecycle
-    Sink->>Port: create conversation if needed
-    Sink->>Port: publish events
-    Port->>Bus: submit control command
-    Proc->>Reg: apply projection
+    X->>S: publish lifecycle
+    S->>P: create / publish
+    P->>B: control command
+    B->>R: apply projection
 ```
 
 ### Delegation And Routed Tasks
 
 ```mermaid
 sequenceDiagram
-    participant Origin as Origin bot
-    participant Parser as DelegationIntentParser
-    participant Route as TaskRoutingPort
-    participant Reg as Registry
-    participant Target as Target bot
+    participant O as Origin bot
+    participant D as Delegation parser
+    participant T as Task router
+    participant R as Registry
+    participant G as Target bot
 
-    Origin->>Parser: parse provider output
-    Parser-->>Origin: delegated tasks
-    Origin->>Route: submit routed task
-    Route->>Reg: create routed task
-    Reg->>Target: routed_task delivery
-    Target->>Reg: status / result
-    Reg->>Origin: routed_result delivery
+    O->>D: parse output
+    D-->>O: task intents
+    O->>T: submit task
+    T->>R: create task
+    R->>G: deliver task
+    G->>R: status / result
+    R->>O: deliver result
 ```
 
 Parent conversations also receive mirrored `task.status` events so delegated

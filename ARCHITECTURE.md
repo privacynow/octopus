@@ -194,18 +194,25 @@ endpoint.
 ```mermaid
 flowchart LR
     Slack["Slack"]
-    Bolt["Bolt for Python"]
     Registry["Registry service"]
+    Provider["Claude / Codex"]
 
     subgraph Bot["Slack bot process"]
+        Bolt["Bolt for Python"]
         Transport["app/channels/slack<br/>ingress + egress + refs"]
-        Sdk["octopus_sdk<br/>execution + runtime + identity + event sink"]
+        Exec["octopus_sdk<br/>execution + runtime"]
+        RegSdk["octopus_sdk.registry<br/>client + event sink"]
     end
 
-    Slack <--> Bolt
-    Bolt --> Transport
-    Transport <--> Sdk
-    Sdk <--> Registry
+    Slack -->|events / commands| Bolt
+    Bolt -->|normalized inbound| Transport
+    Transport -->|identity + input| Exec
+    Exec -->|reply / actions / artifacts| Transport
+    Transport -->|messages / files / updates| Bolt
+    Bolt -->|Slack API calls| Slack
+    Exec -->|publish / search / route| RegSdk
+    RegSdk <--> Registry
+    Exec <--> Provider
 ```
 
 The transport split would look like this:

@@ -103,7 +103,7 @@ async def test_codex_retry_clears_thread():
         current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-xyz", "context_hash": current_hash}, "off")
         session["pending_retry"] = {
-            "request_user_id": 42,
+            "actor_key": 42,
             "prompt": "test",
             "image_paths": [],
             "context_hash": current_hash,

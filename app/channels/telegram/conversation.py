@@ -115,7 +115,7 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
         old_session = _session_io_load(runtime.state, chat_id)
         outcome = _flows().conversation.control.reset_session(
             old_session,
-            user_id=_actor_key(event.user.id),
+            actor_key=_actor_key(event.user.id),
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
             approval_mode_default=cfg.approval_mode,
@@ -206,7 +206,7 @@ async def cmd_cancel(event, update: Update, context, *, runtime: TelegramConvers
         event.chat_id,
         update.effective_message,
         runtime=runtime,
-        actor_user_id=event.user.id,
+        actor_user_id=_actor_key(event.user.id),
         allow_admin_override=_is_admin(runtime, event.user),
         update_id=update.update_id,
     )
@@ -631,7 +631,7 @@ async def handle_worker_conversation_action(
         old_session = _session_io_load(runtime.state, runtime_chat)
         outcome = _flows().conversation.control.reset_session(
             old_session,
-            user_id=_actor_key(event.user.id),
+            actor_key=_actor_key(event.user.id),
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
             approval_mode_default=cfg.approval_mode,

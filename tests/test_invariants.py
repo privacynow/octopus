@@ -607,7 +607,7 @@ async def test_contended_approval_callback_single_answer():
         from app.session_state import PendingApproval
         ctx_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
-            request_user_id=_actor(user.id), prompt="test", image_paths=[],
+            actor_key=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )

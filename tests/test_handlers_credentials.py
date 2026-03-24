@@ -454,7 +454,7 @@ async def test_cross_user_credential_isolation():
         assert len(prov.preflight_calls) == 1
 
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-        assert session["pending_approval"]["request_user_id"] == telegram_actor_key(100)
+        assert session["pending_approval"]["actor_key"] == telegram_actor_key(100)
         callback_token = session["pending_approval"]["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
@@ -1186,7 +1186,7 @@ async def test_delete_user_credentials():
 async def test_foreign_setup_message_info():
     from app.session_state import AwaitingSkillSetup
     from app.credential_flow import foreign_setup_message
-    msg = foreign_setup_message(AwaitingSkillSetup(user_id=42, skill="test", remaining=[], started_at=time.time() - 120))
+    msg = foreign_setup_message(AwaitingSkillSetup(actor_key=42, skill="test", remaining=[], started_at=time.time() - 120))
     assert "42" in msg
     assert "min ago" in msg
     assert "/cancel" in msg

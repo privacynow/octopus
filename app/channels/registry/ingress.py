@@ -276,7 +276,7 @@ def activate_conversation_skill(
     loaded = load_runtime_conversation(store, conversation_id)
     decision = _flows().runtime_skills.activation.begin_activate(
         loaded.session,
-        user_id=actor_key,
+        actor_key=actor_key,
         skill_name=skill_name,
         confirm=confirm,
     )
@@ -297,7 +297,7 @@ def deactivate_conversation_skill(
     loaded = load_runtime_conversation(store, conversation_id)
     decision = _flows().runtime_skills.activation.deactivate(
         loaded.session,
-        user_id=actor_key,
+        actor_key=actor_key,
         skill_name=skill_name,
     )
     if decision.status == "foreign_setup":
@@ -314,7 +314,7 @@ def clear_conversation_skills(
     actor_key: str,
 ) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    decision = _flows().runtime_skills.activation.clear(loaded.session, user_id=actor_key)
+    decision = _flows().runtime_skills.activation.clear(loaded.session, actor_key=actor_key)
     if decision.status == "foreign_setup":
         raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:

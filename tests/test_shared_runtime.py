@@ -232,7 +232,7 @@ async def test_shared_worker_executes_persisted_approve_action():
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_approval"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "Ship it",
             "image_paths": [],
             "attachment_dicts": [],

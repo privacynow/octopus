@@ -486,7 +486,7 @@ def test_session_round_trip_approval():
         project_id="frontend",
         file_policy="inspect",
         pending_approval=PendingApproval(
-            request_user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             prompt="deploy to prod",
             image_paths=["/tmp/img.png"],
             attachment_dicts=[{"path": "/tmp/f", "original_name": "f", "is_image": False}],
@@ -499,7 +499,7 @@ def test_session_round_trip_approval():
 
     assert restored.pending_approval is not None
     assert restored.pending_retry is None
-    assert restored.pending_approval.request_user_id == telegram_actor_key(42)
+    assert restored.pending_approval.actor_key == telegram_actor_key(42)
     assert restored.pending_approval.prompt == "deploy to prod"
     assert restored.pending_approval.context_hash == "abc123"
     assert restored.pending_approval.attachment_dicts == original.pending_approval.attachment_dicts
@@ -515,7 +515,7 @@ def test_session_round_trip_retry():
         provider_state={},
         approval_mode="off",
         pending_retry=PendingRetry(
-            request_user_id=telegram_actor_key(99),
+            actor_key=telegram_actor_key(99),
             prompt="edit config",
             image_paths=[],
             context_hash="def456",
@@ -528,7 +528,7 @@ def test_session_round_trip_retry():
 
     assert restored.pending_retry is not None
     assert restored.pending_approval is None
-    assert restored.pending_retry.request_user_id == telegram_actor_key(99)
+    assert restored.pending_retry.actor_key == telegram_actor_key(99)
     assert restored.pending_retry.denials == original.pending_retry.denials
     assert restored.pending_retry.context_hash == "def456"
 
@@ -778,7 +778,7 @@ def test_project_file_policy_approval_model_change_invalidates():
 
     ctx = resolve_execution_context(session, cfg, "claude")
     pending = PendingApproval(
-        request_user_id=42,
+        actor_key=42,
         prompt="do work",
         image_paths=[],
         attachment_dicts=[],

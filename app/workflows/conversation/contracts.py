@@ -32,7 +32,7 @@ class ConversationControlPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         provider_name: str,
         provider_state_factory: ProviderStateFactory,
         approval_mode_default: str,

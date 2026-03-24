@@ -467,7 +467,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
         msg = FakeMessage(chat=chat, text="hello")
         await execute_request(
             chat.id, "test prompt", [], msg,
-            request_user_id=telegram_actor_key(999), trust_tier="public",
+            actor_key=telegram_actor_key(999), trust_tier="public",
             runtime=current_execution_runtime(),
         )
 
@@ -505,7 +505,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         msg = FakeMessage(chat=chat, text="hello")
         await execute_request(
             chat.id, "test prompt", [], msg,
-            request_user_id=telegram_actor_key(42), trust_tier="trusted",
+            actor_key=telegram_actor_key(42), trust_tier="trusted",
             runtime=current_execution_runtime(),
         )
 
@@ -565,7 +565,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
     """PendingApproval stores trust_tier; approve_pending passes it to execute_request."""
     # Verify trust_tier round-trips through serialization
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -586,7 +586,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
 async def test_pending_retry_preserves_trust_tier():
     """PendingRetry stores trust_tier through serialization round-trip."""
     pending = PendingRetry(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         context_hash="abc123",
@@ -628,7 +628,7 @@ def test_validate_pending_respects_stored_trust_tier():
 
     # Create a pending approval with the public hash and trust_tier
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -649,7 +649,7 @@ def test_validate_pending_detects_real_context_change():
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")
 
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -672,7 +672,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # ok: fresh, matching context
     pending_ok = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -684,7 +684,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # expired: old created_at
     pending_expired = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -696,7 +696,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # context_changed: hash mismatch
     pending_stale = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -718,7 +718,7 @@ def test_classify_pending_validation_accepts_iso_created_at():
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
     ).isoformat()
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -749,7 +749,7 @@ def test_credential_check_uses_resolved_skills_not_session():
 
         result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
-            user_id=telegram_actor_key(999),
+            actor_key=telegram_actor_key(999),
             active_skills=[],  # resolved: public user gets no skills
         )
         assert result.status == "satisfied"
@@ -769,7 +769,7 @@ def test_credential_check_with_resolved_skills():
         # Use a fake skill name — check_credentials returns [] for unknown skills
         result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
-            user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             active_skills=["nonexistent-skill"],
         )
         # Unknown skills have no requirements, so satisfied

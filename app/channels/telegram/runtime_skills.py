@@ -199,7 +199,7 @@ async def skills_add(event, update: Update, name: str, *, runtime: TelegramRunti
         session = _session_io_load(runtime.state, chat_id)
         decision = lifecycle.begin_activate(
             session,
-            user_id=event.user.id,
+            actor_key=_actor_key(event.user.id),
             skill_name=name,
         )
         if decision.mutated:
@@ -235,7 +235,7 @@ async def skills_remove(event, update: Update, name: str, *, runtime: TelegramRu
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
         session = _session_io_load(runtime.state, chat_id)
-        decision = lifecycle.deactivate(session, user_id=event.user.id, skill_name=name)
+        decision = lifecycle.deactivate(session, actor_key=_actor_key(event.user.id), skill_name=name)
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -260,7 +260,7 @@ async def skills_setup(event, update: Update, name: str, *, runtime: TelegramRun
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
         session = _session_io_load(runtime.state, chat_id)
-        decision = lifecycle.begin_setup(session, user_id=event.user.id, skill_name=name)
+        decision = lifecycle.begin_setup(session, actor_key=_actor_key(event.user.id), skill_name=name)
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -291,7 +291,7 @@ async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsR
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
         session = _session_io_load(runtime.state, chat_id)
-        decision = lifecycle.clear(session, user_id=event.user.id)
+        decision = lifecycle.clear(session, actor_key=_actor_key(event.user.id))
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -662,7 +662,7 @@ async def maybe_handle_setup_message(
     data_dir = runtime.state.config.data_dir
     session = _session_io_load(runtime.state, chat_id)
     setup = session.awaiting_skill_setup
-    if not setup or setup.user_id != _actor_key(user_id):
+    if not setup or setup.actor_key != _actor_key(user_id):
         return False
     if not work_queue.record_update(
         data_dir,
@@ -676,7 +676,7 @@ async def maybe_handle_setup_message(
     async with runtime.chat_lock(chat_id, message=message, update_id=update.update_id, supersede_recovery=True):
         session = _session_io_load(runtime.state, chat_id)
         setup = session.awaiting_skill_setup
-        if not setup or setup.user_id != _actor_key(user_id):
+        if not setup or setup.actor_key != _actor_key(user_id):
             return True
         await message.chat.send_action(ChatAction.TYPING)
         raw_value = (message.text or "").strip()
@@ -686,7 +686,7 @@ async def maybe_handle_setup_message(
             return True
         outcome = await _flows().runtime_skills.setup.submit_credential_value(
             session,
-            user_id=_actor_key(user_id),
+            actor_key=_actor_key(user_id),
             raw_value=raw_value,
             validator=runtime.validate_credential,
         )

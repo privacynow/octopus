@@ -60,14 +60,14 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
         requirements: list[SkillRequirement | dict[str, object]],
     ) -> RuntimeSkillCredentialSatisfactionOutcome:
         decision = decide_setup_action(
             self._snapshot(session),
             StartSetupAction(
-                user_id=user_id,
+                actor_key=actor_key,
                 skill_name=skill_name,
                 requirements=tuple(requirements),
             ),
@@ -86,12 +86,12 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str | None = None,
     ) -> RuntimeSkillSetupState:
         decision = decide_setup_action(
             self._snapshot(session),
-            InspectForeignSetupAction(user_id=user_id, skill_name=skill_name),
+            InspectForeignSetupAction(actor_key=actor_key, skill_name=skill_name),
         )
         self._apply_machine_decision(session, decision)
         if decision.status != "foreign_setup":
@@ -102,13 +102,13 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         allow_override: bool = False,
     ) -> RuntimeSkillSetupCancellationOutcome:
         decision = decide_setup_action(
             self._snapshot(session),
             CancelSetupAction(
-                user_id=user_id,
+                actor_key=actor_key,
                 allow_override=allow_override,
             ),
         )
@@ -123,7 +123,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         active_skills: list[str],
     ) -> RuntimeSkillCredentialSatisfactionOutcome:
         if not active_skills:
@@ -132,7 +132,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 credential_env={},
             )
 
-        user_creds = self._credentials().load_for_skills(user_id, active_skills)
+        user_creds = self._credentials().load_for_skills(actor_key, active_skills)
         all_missing: list[tuple[str, list[SkillRequirement]]] = []
         for skill_name in active_skills:
             requirements = self._catalog().requirements(skill_name)
@@ -152,7 +152,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         skill_name, missing = all_missing[0]
         return self.begin_setup(
             session,
-            user_id=user_id,
+            actor_key=actor_key,
             skill_name=skill_name,
             requirements=list(missing),
         )
@@ -161,12 +161,12 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         raw_value: str,
         validator: CredentialValidator = validate_credential,
     ) -> RuntimeSkillSetupAdvanceOutcome:
         setup = session.awaiting_skill_setup
-        if not setup or setup.user_id != user_id or not setup.remaining:
+        if not setup or setup.actor_key != actor_key or not setup.remaining:
             return RuntimeSkillSetupAdvanceOutcome(status="no_setup")
 
         value = raw_value.strip()
@@ -195,14 +195,14 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 )
 
         self._credentials().save(
-            user_id,
+            actor_key,
             setup.skill,
             str(req["key"]),
             value,
         )
         decision = decide_setup_action(
             self._snapshot(session),
-            AdvanceSetupAction(user_id=user_id),
+            AdvanceSetupAction(actor_key=actor_key),
         )
         mutated = self._apply_machine_decision(session, decision)
         if decision.status == "next_requirement":
@@ -224,13 +224,13 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         removed_skills: list[str],
         skill_name: str | None,
     ) -> RuntimeSkillCredentialClearOutcome:
         decision = decide_setup_action(
             self._snapshot(session),
-            ClearSkillSetupAction(user_id=user_id, skill_name=skill_name),
+            ClearSkillSetupAction(actor_key=actor_key, skill_name=skill_name),
         )
         setup_cleared = self._apply_machine_decision(session, decision)
 

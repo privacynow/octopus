@@ -682,7 +682,7 @@ async def cmd_doctor(
         )
         session_context = SessionHealthContext(
             session=session_to_dict(session),
-            user_id=telegram_session_io.actor_key(event.user.id),
+            actor_key=telegram_session_io.actor_key(event.user.id),
             resolved_active_skills=tuple(resolved.active_skills),
         )
     report = await collect_runtime_health_report(

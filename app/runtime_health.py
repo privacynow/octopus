@@ -113,7 +113,7 @@ class SessionHealthContext:
     """Optional per-conversation context for session-aware checks."""
 
     session: dict[str, Any]
-    user_id: str
+    actor_key: str
     resolved_active_skills: tuple[str, ...] = ()
 
 
@@ -408,7 +408,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             credential_service = get_credential_service()
 
             user_credentials = credential_service.load_for_skills(
-                session_context.user_id,
+                session_context.actor_key,
                 list(session_context.resolved_active_skills),
             )
             for skill_name in session_context.resolved_active_skills:

@@ -230,7 +230,7 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
             "test prompt",
             [],
             message,
-            request_user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             runtime=runtime,
         )
 
@@ -288,7 +288,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
             [],
             [],
             message,
-            request_user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             runtime=runtime,
         )
 

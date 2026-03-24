@@ -25,6 +25,7 @@ from app.channels.telegram.execution import (
 from app.channels.telegram.pending import handle_worker_pending_action
 from app.channels.telegram.runtime_skills import handle_worker_skill_action
 from app.channels.telegram.session_io import (
+    actor_key as _actor_key,
     conversation_key,
     load as load_session,
     save as save_session,
@@ -391,7 +392,7 @@ async def worker_dispatch(
             )
 
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-        user_id = event.user.id
+        user_id = _actor_key(event.user.id)
         if not is_routed_task:
             await channel_egress.bind(title=title, config=runtime.config)
             await channel_egress.on_message_received(event.text)
@@ -419,7 +420,7 @@ async def worker_dispatch(
                         approval_mode=approval_mode,
                         routed_task_id=routed_task_id,
                         skip_approval=getattr(event, "skip_approval", False),
-                        request_user_id=user_id,
+                        actor_key=user_id,
                         trust_tier=admission.trust_tier,
                         cancel_event=cancel_event,
                         runtime=execution_runtime,

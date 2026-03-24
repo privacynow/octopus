@@ -24,7 +24,7 @@ def format_credential_prompt(req: dict) -> str:
 
 
 def foreign_setup_message(setup: AwaitingSkillSetup) -> str:
-    uid = setup.user_id
+    uid = setup.actor_key
     elapsed = int(age_seconds(setup.started_at, now=utc_now()) or 0)
     minutes = elapsed // 60
     time_str = f"{minutes} min ago" if minutes >= 1 else "just now"

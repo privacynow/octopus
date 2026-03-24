@@ -187,7 +187,7 @@ class TestCancelLiveExecution:
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
             session["pending_approval"] = {
-                "request_user_id": "tg:42",
+                "actor_key": "tg:42",
                 "prompt": "test",
                 "image_paths": [],
                 "attachment_dicts": [],

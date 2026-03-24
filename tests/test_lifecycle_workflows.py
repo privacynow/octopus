@@ -44,7 +44,7 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         assert created.detail.runtime_available is False
 
         session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
-        unavailable = activation.begin_activate(session, user_id=actor_key, skill_name="workflow-draft")
+        unavailable = activation.begin_activate(session, actor_key=actor_key, skill_name="workflow-draft")
         assert unavailable.status == "not_published"
 
         edited = authoring.edit_draft(
@@ -81,7 +81,7 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         assert any(item.action == "approved" for item in published.detail.approvals)
         assert any(item.is_published for item in published.detail.revisions)
 
-        activated = activation.begin_activate(session, user_id=actor_key, skill_name="workflow-draft")
+        activated = activation.begin_activate(session, actor_key=actor_key, skill_name="workflow-draft")
         assert activated.status == "activated"
         assert "workflow-draft" in session.active_skills
 
@@ -91,7 +91,7 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         assert archived.detail.runtime_available is False
 
         session.active_skills = []
-        unavailable_again = activation.begin_activate(session, user_id=actor_key, skill_name="workflow-draft")
+        unavailable_again = activation.begin_activate(session, actor_key=actor_key, skill_name="workflow-draft")
         assert unavailable_again.status == "not_published"
     finally:
         close_db(data_dir)

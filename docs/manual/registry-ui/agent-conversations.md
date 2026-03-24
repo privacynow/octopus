@@ -6,4 +6,4 @@
 
 **Click** a row → **conversation detail**.
 
-![Agent conversations](../../assets/registry/ui/03-agent-conversations-annotated.png)
+![Agent conversations](../../assets/registry/ui/04-agent-conversations-annotated.png)

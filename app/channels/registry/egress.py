@@ -277,7 +277,10 @@ class RegistryChannelEgress(ChannelEgress):
             kind="error",
             title="Recovery available",
             body=f"{preview}\n\n{prompt}".strip(),
-            metadata={"error_type": "recovery", "message": preview},
+            metadata={
+                "error_type": "recovery",
+                "message": "Execution paused. Choose how to continue.",
+            },
         )
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:

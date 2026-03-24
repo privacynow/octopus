@@ -6,6 +6,8 @@ The registry SPA works functionally (conversations, delegation, usage, skills, g
 
 This plan fixes the broken chat experience, adds visual polish, introduces a light theme, and cleans up the component architecture — all in vanilla HTML/CSS/JS (no framework).
 
+The plan is **UI target state constrained by the current registry backend contract**. It should not invent new client-side data shapes or assume legacy field names. Where the desired UX needs backend support that does not exist yet, that dependency is called out explicitly instead of being smuggled in as a UI detail.
+
 ## Problems
 
 ### Critical UX bugs
@@ -40,6 +42,165 @@ This plan fixes the broken chat experience, adds visual polish, introduces a lig
 6. **Shared render helpers.** `renderCard()`, `renderFilterBar()`, `renderStatCard()` — extracted from the 5 duplicated patterns. Not a component framework, just functions that return DOM elements.
 
 7. **Smooth transitions.** Route changes fade in (opacity 0→1, 0.15s). Card hover lifts (translateY -2px, 0.2s). Modal backdrop fades (0.2s). Event cards expand with height transition.
+
+8. **Contract-first UI work.** The redesign consumes the current resource API and SDK event contract as-is:
+   - Agent list/detail come from `/v1/agents`, `/v1/agents/{id}/status`, `/v1/agents/{id}/conversations`
+   - Conversations come from `/v1/conversations`, `/v1/conversations/{id}`, `/v1/conversations/{id}/events`
+   - Operator writes go through `/v1/conversations/{id}/messages` and `/v1/conversations/{id}/actions`
+   - Event rendering is driven by the stored event envelope and `registry_sdk/events.py`
+
+## Phase 0: Backend contract freeze
+
+Before the visual rewrite, freeze the backend contract the new SPA is allowed to depend on.
+
+### 0.1 Agent resources
+
+`GET /v1/agents` returns a paginated `agents` array plus `next_cursor` and `has_more`.
+
+Each agent item currently includes:
+- `agent_id`
+- `display_name`
+- `slug`
+- `role`
+- `registry_scope`
+- `capabilities`
+- `tags`
+- `description`
+- `provider`
+- `mode`
+- `connectivity_state`
+- `current_capacity`
+- `max_capacity`
+- `channel_capabilities`
+- `version`
+- `last_heartbeat_at`
+- `updated_at`
+- `runtime_health_summary`
+- `runtime_health_generated_at`
+
+`GET /v1/agents/{id}/status` returns the same base agent fields plus:
+- `workers`
+- `active_conversations`
+- `recent_errors`
+
+The redesign must not assume removed config concepts such as `allowed_user_ids`, `admin_user_ids`, or other operator-only config internals are present in these payloads.
+
+### 0.2 Conversation resources
+
+`GET /v1/conversations` returns paginated conversation cards:
+- `conversation_id`
+- `target_agent_id`
+- `target_display_name`
+- `title`
+- `origin_channel`
+- `status`
+- `created_at`
+- `updated_at`
+
+`GET /v1/conversations/{id}` returns the full conversation detail payload. The SPA should treat `conversation_id` as the canonical conversation identifier and should not rely on legacy `chat_id`-style concepts.
+
+`POST /v1/conversations` requires:
+- `target_agent_id`
+- `origin_channel`
+- `external_conversation_ref`
+- optional `title`
+
+For operator-created UI conversations, the SPA should continue to create registry-native threads with `origin_channel="registry"` and a non-empty minted `external_conversation_ref`.
+
+### 0.3 Event envelope
+
+`GET /v1/conversations/{id}/events` and live WebSocket event payloads share the same stored event envelope:
+
+```json
+{
+  "seq": 12,
+  "event_id": "evt-123",
+  "conversation_id": "conv-123",
+  "agent_id": "agent-123",
+  "kind": "message.user",
+  "actor": "Alice",
+  "content": "Hello",
+  "metadata": {},
+  "created_at": "2026-03-23T00:00:00+00:00"
+}
+```
+
+The redesign should render from top-level `actor`, `content`, `metadata`, and `created_at`. It should not expect old names such as `request_user_id`.
+
+### 0.4 Event kinds the UI should handle cleanly
+
+The plan should assume these current SDK-backed event kinds exist:
+- `message.user`
+- `message.bot`
+- `provider.request`
+- `provider.response`
+- `tool.execution`
+- `file.change`
+- `approval.requested` — **note: defined in SDK schema but no publisher currently emits this kind.** The existing SPA has dead Approve/Reject buttons for this kind in `conversation-detail.js`. The redesign should remove them until a publisher exists.
+- `approval.decided`
+- `delegation.proposed`
+- `delegation.submitted`
+- `delegation.completed`
+- `task.status`
+- `error`
+
+The plan should not assume every kind has a custom card on day one. Unknown or newly added kinds must fall back to a generic expandable event card that shows `content` plus pretty-printed `metadata`.
+
+**Stale SPA code to clean up during redesign:**
+- Remove Approve/Reject buttons for `approval.requested` events (no publisher exists)
+- Replace raw JSON metadata dumps with kind-specific renderers per the Phase 2.5 matrix
+
+### 0.5 Event metadata contract
+
+Known metadata shapes the redesigned UI may specialize:
+
+- `provider.response`
+  - `prompt_tokens`
+  - `completion_tokens`
+  - `cost_usd`
+  - `provider`
+  - `tool_calls`
+
+- `delegation.proposed` / `delegation.submitted` / `delegation.completed`
+  - `tasks[]` (required, non-empty)
+  - each task item has required fields: `title`, `target`, `status`
+  - validated by `DelegationTaskSummary` in `registry_sdk/events.py`
+
+- `approval.decided`
+  - `action`
+  - `decided_by`
+  - `decision`
+
+- `task.status`
+  - `status`
+  - optional `progress`
+  - optional `title`
+
+- `error`
+  - `error_type`
+  - `message`
+
+`message.user` and `message.bot` may have empty metadata and should render from top-level `actor` and `content`.
+
+### 0.6 Operator mutation contract
+
+The SPA is not an event publisher. Operator actions stay on the existing mutation endpoints:
+- `POST /v1/conversations/{id}/messages` with `{text}`
+- `POST /v1/conversations/{id}/actions` with `{action, payload?}`
+
+The redesigned conversation view should treat event cards as history and status, not as the primary mutation surface.
+
+### 0.7 History pagination constraint
+
+The current event API is forward-cursor only:
+- `GET /v1/conversations/{id}/events?cursor=<seq>&limit=<n>`
+- returns events with `seq > cursor` in ascending order
+
+That contract is good for live append and simple pagination, but it does **not** support a true chat-style "open at latest, scroll upward for older history" experience by itself.
+
+Target-state chat UX therefore has one explicit dependency:
+- either add reverse pagination support (`before_seq`, descending window, or equivalent) to `/events`
+- or keep the history UX scoped to the current forward-only contract and do not promise top-sentinel older-history loading
 
 ## Phase 1: Design tokens + theme system
 
@@ -166,10 +327,25 @@ JS toggle in sidebar footer: reads/writes `localStorage.getItem('theme')`, sets 
 
 ### 2.1 Full-height conversation layout
 
-The conversation detail becomes a flex column filling the viewport below the sidebar header:
+The conversation detail must be restructured as its own flex container — the CSS only works if the HTML wraps the conversation view in a dedicated element that owns the viewport height, separate from the page-level layout.
+
+**Required DOM structure:**
+```html
+<div class="page-layout">          <!-- page header + sidebar + main -->
+  <main id="content">
+    <div class="conversation-view">  <!-- NEW: owns height, not inherited -->
+      <div class="conversation-meta">...</div>
+      <div class="chat-timeline">...</div>   <!-- scrollable middle -->
+      <div class="compose-box">...</div>     <!-- pinned bottom -->
+    </div>
+  </main>
+</div>
+```
+
+The `.conversation-view` wrapper is the real prerequisite — without it, the timeline cannot be the independent scroller while metadata and compose stay pinned.
 
 ```css
-/* Conversation detail occupies remaining height */
+/* Conversation view is its own flex container with explicit height */
 .conversation-view {
     display: flex;
     flex-direction: column;
@@ -203,14 +379,22 @@ The conversation detail becomes a flex column filling the viewport below the sid
 
 ### 2.2 Auto-scroll behavior
 
-Now that timeline has `overflow-y: auto`, the existing `scrollTop` logic works:
+The near-bottom check must be captured **before** appending the new event to the DOM, not after. Checking after append will always see the user as "not near bottom" if the new content pushed the scroll position up.
+
 ```javascript
-// After appending new message:
-const isNearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 100;
-if (isNearBottom) {
+// BEFORE appending new message — capture scroll position first:
+const wasNearBottom = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 100;
+
+// Append the new message element
+timeline.appendChild(newEventEl);
+
+// AFTER append — scroll only if user was already near bottom:
+if (wasNearBottom) {
     timeline.scrollTop = timeline.scrollHeight;
 }
 ```
+
+This prevents the chat from jumping when the user has scrolled up to read history.
 
 ### 2.3 Mobile chat
 
@@ -231,11 +415,90 @@ if (isNearBottom) {
 }
 ```
 
-### 2.4 "Load older" as scroll sentinel
+### 2.4 History pagination
 
-Replace the "Load older" button with a scroll sentinel at the top of the timeline. When the user scrolls to the top, older messages load automatically.
+The visual redesign should not promise a top-of-timeline sentinel until the backend can actually supply older history windows. The current `/v1/conversations/{id}/events` contract is forward-cursor only, so true "open at latest and scroll upward for history" needs explicit backend support.
 
-**Exit gate**: Chat timeline scrolls independently. Compose box stays visible at bottom. New messages auto-scroll. Works on mobile.
+Target-state rule:
+- If reverse pagination lands, use an IntersectionObserver sentinel at the top of the timeline.
+- If reverse pagination does not land, keep an explicit history affordance and scope the redesign to layout, compose pinning, and correct live append behavior.
+
+When reverse pagination exists, two behaviors are still required to prevent UX bugs:
+
+1. **Scroll-anchor preservation**: Before prepending older events, record the current first visible element and its offset. After prepend, restore scroll position so the viewport doesn't jump. Use `scrollTop += (newScrollHeight - oldScrollHeight)`.
+
+2. **Single-flight guard**: While a fetch is in-flight, disable the observer (or set a `loading` flag) to prevent repeated/infinite fetches when the sentinel stays visible during the network round trip.
+
+```javascript
+const sentinel = document.createElement('div');
+sentinel.className = 'scroll-sentinel';
+timeline.prepend(sentinel);
+
+let loading = false;
+const observer = new IntersectionObserver(async ([entry]) => {
+    if (!entry.isIntersecting || loading) return;
+    loading = true;
+    const firstChild = timeline.children[1]; // first real event
+    const oldTop = firstChild?.offsetTop ?? 0;
+    await loadOlderEvents();
+    const newTop = firstChild?.offsetTop ?? 0;
+    timeline.scrollTop += (newTop - oldTop);
+    loading = false;
+}, { root: timeline, threshold: 0.1 });
+
+observer.observe(sentinel);
+```
+
+### 2.5 Event rendering matrix
+
+The redesigned conversation detail should be explicitly keyed to the current event contract:
+
+- `message.user`, `message.bot`
+  - render as chat bubbles
+  - use top-level `actor`, `content`, `created_at`
+
+- `provider.response`
+  - specialized compact card
+  - show provider name, prompt tokens, completion tokens, cost
+  - render `tool_calls` only when non-empty
+
+- `delegation.proposed`, `delegation.submitted`, `delegation.completed`
+  - specialized delegation cards
+  - render `metadata.tasks[]`
+  - each task row shows `title`, `target`, `status`
+
+- `task.status`
+  - compact status card
+  - show `metadata.status`
+  - show progress/title only when present
+
+- `approval.requested`
+  - **no publisher currently emits this kind** — render as generic card if it appears
+  - do NOT render inline Approve/Reject buttons (the existing SPA buttons are dead code)
+
+- `approval.decided`
+  - compact action card
+  - show action, decision, and decided_by
+
+- `error`
+  - error card
+  - show `metadata.error_type` and `metadata.message`
+
+- all other kinds
+  - generic expandable event card
+  - show rendered content plus pretty-printed metadata
+
+Do not hide unsupported kinds. The fallback card is part of the design, not a temporary dev-only behavior.
+
+### 2.6 Conversation actions stay on resource endpoints
+
+The redesign should keep operator actions on the current resource API:
+- send operator chat input through `POST /v1/conversations/{id}/messages`
+- send approve/reject/cancel through `POST /v1/conversations/{id}/actions`
+
+Do not make the event timeline responsible for writing raw events. The action bar remains the mutation surface; the timeline is the read model.
+
+**Exit gate**: Chat timeline scrolls independently. Compose box stays visible at bottom. New messages auto-scroll only when user was near bottom. Event rendering is keyed to the current SDK/backend contract. History UX does not promise unsupported reverse pagination behavior. Works on mobile.
 
 ## Phase 3: Visual polish (P4, P8)
 
@@ -289,7 +552,7 @@ Replace the "Load older" button with a scroll sentinel at the top of the timelin
 }
 ```
 
-Router applies `route-entering` class, then on next frame applies `route-visible`.
+The **router** (`ui/js/router.js`) applies `route-entering` class on navigation start, then on next frame applies `route-visible`. This must be in the router, not `app.js`, because route render/cleanup/error handling already live in the router and transitions must be synchronized with the navigation lifecycle.
 
 ### 3.4 Event card expand animation
 
@@ -441,9 +704,18 @@ Replace throughout JS components:
 ### 6.1 Agents page: dashboard summary
 
 Before the agent list, show a summary bar:
-- Total agents, connected count, degraded count
-- Total conversations, active conversations
-- Computed from the existing `listAgents` response
+- Agents on this page
+- Connected on this page
+- Degraded on this page
+- Stopped/offline on this page
+
+This plan should stay aligned with the current backend and avoid inventing a summary API. The summary bar is therefore **page-scoped**, not global.
+
+Rules:
+- Compute only from the current `/v1/agents` page payload.
+- Label it clearly as page-scoped if needed.
+- Do not show "total conversations" or other global cross-page aggregates on the landing page unless a separate backend plan adds a real aggregate endpoint.
+- Agent-specific operational metrics such as `active_conversations` and `recent_errors` belong on the agent detail page, where `/v1/agents/{id}/status` already provides them.
 
 ### 6.2 Capabilities + Skills: compact layout
 
@@ -472,7 +744,11 @@ Add a simple bar chart for daily usage using CSS (no charting library):
 }
 ```
 
-Relative widths computed from the max value across conversations.
+Use the current `/v1/usage` contract:
+- `daily_total`
+- `by_conversation[]`
+
+Relative widths are computed from the max value across `by_conversation`.
 
 ### 6.4 Guidance: live preview pane
 
@@ -516,7 +792,25 @@ Hidden link at the top of the page that becomes visible on focus:
 
 Ensure all text/background combinations meet WCAG AA (4.5:1 for normal text, 3:1 for large text). The dark theme's `--text-muted` (#6e7681) on `--bg` (#0d1117) is borderline — may need to lighten to #848d97.
 
-**Exit gate**: All expandable elements have `aria-expanded`. Modals have `role="dialog"` and focus trapping. Toggle switches have `role="switch"`.
+### 7.5 Keyboard navigation for custom interactive elements
+
+All custom clickable elements (cards, headers, drawer toggles) need:
+- `tabindex="0"` for focusability
+- Enter/Space activation via `keydown` handler
+- Explicit focus return when closing drawers/modals (back to the trigger element)
+
+### 7.6 Reduced motion
+
+```css
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+```
+
+**Exit gate**: All expandable elements have `aria-expanded`. Modals have `role="dialog"` and focus trapping. Toggle switches have `role="switch"`. Custom clickable elements are keyboard-focusable with Enter/Space activation. `prefers-reduced-motion` disables animations.
 
 ## Implementation sequence
 
@@ -538,9 +832,11 @@ Phase 1 is the foundation — everything else uses the tokens. Phase 2 is the hi
 |------|---------|
 | `ui/css/main.css` | Full rewrite: tokens, themes, glass, mobile-first, transitions, chat layout |
 | `ui/index.html` | Add theme toggle in sidebar footer, skip-link, meta theme-color |
-| `ui/js/app.js` | Theme toggle logic, route transition classes, shared render helpers |
-| `ui/js/components/conversation-detail.js` | Conversation view flex layout, fixed compose box, working scroll |
-| `ui/js/components/agent-list.js` | Use renderCard helper, add dashboard summary |
+| `ui/js/app.js` | Theme bootstrap and shared render helpers |
+| `ui/js/router.js` | Route transition lifecycle classes |
+| `ui/js/components/conversation-detail.js` | Conversation view flex layout, fixed compose box, correct live scroll behavior, contract-driven event cards |
+| `ui/js/components/agent-list.js` | Use renderCard helper, add page-scoped dashboard summary |
+| `ui/js/components/agent-detail.js` | Surface existing agent status metrics (`active_conversations`, `recent_errors`) more clearly |
 | `ui/js/components/conversation-list.js` | Use renderCard helper, fix new-conversation dialog inline styles |
 | `ui/js/components/task-list.js` | Use renderCard helper |
 | `ui/js/components/capability-list.js` | Compact grid layout |
@@ -555,4 +851,5 @@ Phase 1 is the foundation — everything else uses the tokens. Phase 2 is the hi
 - No build step (webpack, vite) — direct script tags stay
 - No charting library — CSS bars only
 - No full WCAG AAA compliance (AA foundations only)
-- No redesign of the data model or API layer
+- No intentional redesign of registry data models, database tables, SDK event schemas, or resource routes as part of this UI plan
+- No UI-only invented payload fields; the redesign consumes the current backend contract and calls out any true backend dependency explicitly

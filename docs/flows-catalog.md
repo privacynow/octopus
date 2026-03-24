@@ -67,19 +67,21 @@ Implementation: [`ui/`](../ui/) (SPA), entry [`ui/js/app.js`](../ui/js/app.js), 
 |------|----------------|---------------|
 | Sign in | `/ui/login` → session cookie | [docs/registry-guide.md](registry-guide.md) §Browser, `00-login-annotated.png` |
 | Sign out | Sidebar **Logout** → `/ui/logout` | registry-guide sidebar table |
-| Agents list | `/ui`, `/ui/` | `01-agents-annotated.png` |
-| Agent detail | `/ui/agents/:id` | `02-agent-detail-annotated.png`, `10-agent-detail-deep-link-annotated.png` |
-| Agent-scoped conversations | `/ui/agents/:id/conversations` | `03-agent-conversations-annotated.png` |
-| All conversations + search + status + pagination | `/ui/conversations` | `04`, `04b` |
-| Conversation detail (timeline, compose, cancel, export, load older, WS) | `/ui/conversations/:id` | `05-conversation-detail-annotated.png` |
-| Routed tasks → open parent conversation | `/ui/tasks` + row click | `06-tasks-annotated.png` |
-| Global capability toggles | `/ui/capabilities` | `07-capabilities-annotated.png` |
-| Skill catalog | `/ui/skills` | `08-skills-annotated.png` |
-| Usage aggregates | `/ui/usage` | `09-usage-annotated.png` |
+| Dashboard summary | `/ui`, `/ui/` | `01-dashboard-annotated.png` |
+| Agents list | `/ui/agents` | `02-agents-annotated.png` |
+| Agent detail | `/ui/agents/:id` | `03-agent-detail-annotated.png`, `12-agent-detail-deep-link-annotated.png` |
+| Agent-scoped conversations | `/ui/agents/:id/conversations` | `04-agent-conversations-annotated.png` |
+| All conversations + search + status + pagination | `/ui/conversations` | `05`, `05b` |
+| Conversation detail (timeline, compose, cancel, export, scroll-up history, WS) | `/ui/conversations/:id` | `06-conversation-detail-annotated.png` |
+| Routed tasks → open parent conversation | `/ui/tasks` | `07-tasks-annotated.png` |
+| Global capability toggles | `/ui/capabilities` | `08-capabilities-annotated.png` |
+| Skill catalog | `/ui/skills` | `09-skills-annotated.png` |
+| Usage aggregates | `/ui/usage` | `10-usage-annotated.png` |
+| Provider guidance editor | `/ui/guidance` | `11-guidance-annotated.png` |
 
 **Not a separate screen:** bookmarking **`/ui/conversations/:id`** loads the same conversation detail as clicking a row (parity with agent deep links).
 
-**API-first (not full Registry UI):** skill draft/submit/approve/publish lifecycle, provider guidance editor, conversation-bound skill activation — see [registry-guide](registry-guide.md) §“What the UI does *not* do yet”.
+**API-first (not full Registry UI):** skill draft/submit/approve/publish lifecycle beyond install/uninstall, and conversation-bound skill activation — see [registry-guide](registry-guide.md) §“What the UI does *not* do yet”.
 
 ---
 
@@ -98,7 +100,7 @@ Grouped by **concern** (each endpoint is a **machine flow**; only a subset is mi
 | **Usage** | `GET /v1/usage` | Usage view |
 | **Skill catalog (full lifecycle)** | `GET` search/detail/lifecycle/diff; `PUT` draft; `POST` submit/approve/reject/publish/archive/install/uninstall/update | Skills view = **catalog only** (not full lifecycle UI) |
 | **Conversation-bound skills** | `GET/POST` …/skills, activate/deactivate/clear | Not dedicated top-level UI |
-| **Provider guidance** | `GET/PUT` draft; `POST` preview/submit/approve/reject/publish/archive | **No** top-level nav (see registry-guide limitations) |
+| **Provider guidance** | `GET/PUT` draft; `POST` preview/submit/approve/reject/publish/archive | Guidance editor at `/ui/guidance` |
 | **Realtime** | `GET` CSRF; `WS /v1/ws` | Optional live updates |
 
 ---

@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 274,
+      "y": 150.55677795410156,
+      "width": 1060,
+      "height": 58,
+      "label": "Current-page filters for name and state",
+      "color": "#ff9800"
+    },
+    {
+      "x": 274,
+      "y": 214.31625366210938,
+      "width": 1060,
+      "height": 130.796875,
+      "label": "Agent card → detail",
+      "color": "#2196f3"
+    },
+    {
+      "x": 274,
+      "y": 345.1131286621094,
+      "width": 1060,
+      "height": 130.796875,
+      "label": "Additional enrolled registry member",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

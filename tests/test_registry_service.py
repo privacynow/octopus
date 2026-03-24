@@ -1056,6 +1056,73 @@ def test_publish_events_stores_events(monkeypatch, tmp_path: Path):
     assert contents == ["Hello bot", "Hello alice"]
 
 
+def test_list_events_supports_latest_window_and_bidirectional_sequence_paging(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Timeline Bot", "timeline-bot")
+    conv = _create_conversation(client, token, agent_id, "conv-page-1", title="Paging conversation")
+    conversation_id = conv["conversation_id"]
+
+    publish = client.post(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": f"evt-{idx}",
+                    "kind": "message.bot" if idx % 2 == 0 else "message.user",
+                    "actor": "bot" if idx % 2 == 0 else "operator",
+                    "content": f"event {idx}",
+                    "created_at": f"2026-03-15T00:00:0{idx}+00:00",
+                    "metadata": {},
+                }
+                for idx in range(1, 6)
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    latest = client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"limit": 2},
+    )
+    assert latest.status_code == 200
+    latest_payload = latest.json()
+    assert [item["event_id"] for item in latest_payload["events"]] == ["evt-4", "evt-5"]
+    assert latest_payload["has_more_before"] is True
+    assert latest_payload["next_before_seq"] == latest_payload["events"][0]["seq"]
+    assert latest_payload["next_after_seq"] == latest_payload["events"][-1]["seq"]
+
+    older = client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"limit": 2, "before_seq": latest_payload["next_before_seq"]},
+    )
+    assert older.status_code == 200
+    older_payload = older.json()
+    assert [item["event_id"] for item in older_payload["events"]] == ["evt-2", "evt-3"]
+    assert older_payload["has_more_before"] is True
+
+    newer = client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"limit": 5, "after_seq": older_payload["next_after_seq"]},
+    )
+    assert newer.status_code == 200
+    newer_payload = newer.json()
+    assert [item["event_id"] for item in newer_payload["events"]] == ["evt-4", "evt-5"]
+    assert newer_payload["has_more_before"] is False
+
+    invalid = client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"before_seq": 2, "after_seq": 3},
+    )
+    assert invalid.status_code == 422
+
+
 def test_publish_events_requires_event_id(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1078,6 +1145,120 @@ def test_publish_events_requires_event_id(monkeypatch, tmp_path: Path):
     )
 
     assert publish.status_code == 422
+
+
+def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-summary")
+    target_id, target_token = _enroll_and_register(client, "Target Bot", "target-summary")
+    conv = _create_conversation(client, origin_token, origin_id, "conv-summary-1", title="Summary conversation")
+    conversation_id = conv["conversation_id"]
+
+    publish = client.post(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-summary-provider",
+                    "kind": "provider.response",
+                    "actor": "codex",
+                    "content": "",
+                    "created_at": now_iso,
+                    "metadata": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "cost_usd": 0.25,
+                        "provider": "codex",
+                    },
+                },
+                {
+                    "event_id": "evt-summary-approval",
+                    "kind": "approval.requested",
+                    "actor": "operator",
+                    "content": "Need approval",
+                    "created_at": now_iso,
+                    "metadata": {
+                        "request_kind": "preflight",
+                        "actor_key": "telegram:123",
+                        "trust_tier": "trusted",
+                        "expires_at": "2026-03-15T00:05:00+00:00",
+                    },
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    pending_task = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-summary-pending",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Pending review",
+            "instructions": "Queue this work.",
+            "created_at": now_iso,
+        },
+    )
+    assert pending_task.status_code == 200
+
+    running_task = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-summary-running",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Running review",
+            "instructions": "Start this work.",
+            "created_at": now_iso,
+        },
+    )
+    assert running_task.status_code == 200
+
+    status = client.post(
+        "/v1/agents/routed-tasks/task-summary-running/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "running",
+            "summary": "In progress",
+            "timeline_events": [],
+        },
+    )
+    assert status.status_code == 200
+
+    _login_ui(client)
+    summary = client.get("/v1/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["agents"] == {
+        "total": 2,
+        "connected": 2,
+        "degraded": 0,
+        "disconnected": 0,
+    }
+    assert payload["conversations"] == {
+        "total": 1,
+        "active": 1,
+        "pending_approvals": 1,
+    }
+    assert payload["tasks"] == {
+        "running": 1,
+        "pending": 1,
+        "failed_24h": 0,
+    }
+    assert payload["usage_24h"] == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "cost_usd": 0.25,
+    }
 
 
 def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_reopen(monkeypatch, tmp_path: Path):

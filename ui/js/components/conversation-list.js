@@ -13,7 +13,7 @@ function renderConversationList(container) {
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Conversations</h2><p>All conversations across agents</p>';
+    header.innerHTML = '<h2>Conversations</h2><p>Browse live threads, approvals, and outcomes across the registry</p>';
     container.appendChild(header);
 
     // New conversation button
@@ -95,7 +95,7 @@ function renderConversationList(container) {
             convos.forEach(c => {
                 const card = document.createElement('div');
                 card.className = 'card clickable';
-                card.addEventListener('click', () => Router.navigate('/ui/conversations/' + c.conversation_id));
+                _makePressable(card, () => Router.navigate('/ui/conversations/' + c.conversation_id));
 
                 const row = document.createElement('div');
                 row.className = 'card-row';

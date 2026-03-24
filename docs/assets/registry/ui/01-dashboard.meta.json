@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 872,
+      "label": "Primary navigation",
+      "color": "#ff9800"
+    },
+    {
+      "x": 272,
+      "y": 156.140625,
+      "width": 1064,
+      "height": 339.21875,
+      "label": "Canonical summary cards from /v1/summary",
+      "color": "#2196f3"
+    },
+    {
+      "x": 1007.65625,
+      "y": 617.15625,
+      "width": 303.34375,
+      "height": 429.375,
+      "label": "Jump straight to the operational routes",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

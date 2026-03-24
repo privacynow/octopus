@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import secrets
 import time
 from pathlib import Path
@@ -41,6 +42,32 @@ from uuid import uuid4
 _log = logging.getLogger(__name__)
 
 _DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
+
+
+def _provider_request_content(prompt: str, system_prompt: str) -> str:
+    parts: list[str] = []
+    if system_prompt:
+        parts.append(f"System prompt:\n{system_prompt}")
+    parts.append(f"User prompt:\n{prompt}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _approval_expires_at(timeout_seconds: int) -> str:
+    ttl_seconds = max(3600, timeout_seconds)
+    return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+
+
+def _approval_event_id(conversation_key: str, callback_token: str) -> str:
+    return f"approval:{conversation_key}:{callback_token}"
+
+
+def _retry_approval_content(denials: list[dict[str, object]]) -> str:
+    lines = ["Execution needs approval to continue after blocked actions."]
+    for denial in denials:
+        tool_name = str(denial.get("tool_name") or denial.get("tool") or "tool").strip() or "tool"
+        reason = str(denial.get("message") or denial.get("detail") or "blocked").strip() or "blocked"
+        lines.append(f"- {tool_name}: {reason}")
+    return "\n".join(lines)
 
 
 async def _discover_available_agents(
@@ -268,6 +295,17 @@ async def execute_request(
         _save(runtime, conversation_key, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
+    provider_request_content = _provider_request_content(prompt, context.system_prompt)
+    await event_sink.on_provider_request(
+        provider_request_content,
+        provider=prov.name,
+        model=resolved.effective_model or cfg.model or prov.name,
+        execution_mode="resume" if is_resume else "run",
+        working_dir=str(resolved.working_dir or cfg.working_dir),
+        file_policy=resolved.file_policy or "edit",
+        image_count=len(image_paths),
+        prompt_char_count=len(provider_request_content),
+    )
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
 
     dispatched = await run_provider_request(
@@ -312,6 +350,8 @@ async def execute_request(
         cost_usd=result.cost_usd,
         provider=prov.name,
     )
+    for index, record in enumerate(result.tool_executions):
+        await event_sink.on_tool_execution(record, index=index)
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
@@ -340,6 +380,14 @@ async def execute_request(
             created_at=time.time(),
         )
         _save(runtime, conversation_key, session)
+        await event_sink.on_approval_requested(
+            _retry_approval_content(result.denials),
+            request_kind="retry",
+            actor_key=transport.actor,
+            trust_tier=trust_tier,
+            expires_at=_approval_expires_at(cfg.timeout_seconds),
+            request_id=_approval_event_id(conversation_key, session.pending_retry.callback_token),
+        )
         await runtime.send_retry_prompt(
             message,
             tuple(result.denials),
@@ -451,6 +499,7 @@ async def request_approval(
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
     conversation_key = transport.conversation_key
+    event_sink = runtime.build_event_sink(transport)
     session = _load(runtime, conversation_key)
 
     if session.has_pending:
@@ -530,10 +579,18 @@ async def request_approval(
         trust_tier=trust_tier,
         created_at=time.time(),
     )
+    plan_text = plan_result.text or "[empty plan]"
     _save(runtime, conversation_key, session)
+    await event_sink.on_approval_requested(
+        plan_text,
+        request_kind="preflight",
+        actor_key=transport.actor,
+        trust_tier=trust_tier,
+        expires_at=_approval_expires_at(cfg.timeout_seconds),
+        request_id=_approval_event_id(conversation_key, session.pending_approval.callback_token),
+    )
 
     await progress.update(_msg.approval_required(), force=True)
-    plan_text = plan_result.text or "[empty plan]"
     save_raw(runtime.dispatch.config.data_dir, conversation_key, prompt, plan_text, kind="approval")
     await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
     await runtime.send_approval_prompt(message, session.pending_approval.callback_token)

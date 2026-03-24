@@ -10,12 +10,12 @@ For a **complete inventory** of operator and product flows (including Octopus me
 2. [Concepts (read this once)](#concepts-read-this-once)
 3. [CLI: lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
 4. [Browser: sign in](#browser-sign-in)
-5. [Browser: every screen](#browser-every-screen) — agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, **deep-linked agent & conversation URLs**
+5. [Browser: every screen](#browser-every-screen) — dashboard, agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, guidance, **deep-linked agent & conversation URLs**
 6. [What the UI does *not* do yet](#what-the-ui-does-not-do-yet)
 7. [Verification & troubleshooting](#verification--troubleshooting)
 8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
-**Image set (under `docs/assets/registry/ui/`):** `00-login` … `09-usage`, plus `04b-conversations-filtered`, `10-agent-detail-deep-link`, and `11-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
+**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, and `13-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
 
 ---
 
@@ -84,104 +84,124 @@ After startup, note:
 
 The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conversations` load the same shell and are safe to **bookmark or refresh** (the server serves `index.html` for those paths when you are logged in).
 
-**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which **seeds synthetic data** so lists look realistic: **eight** enrolled bots (varied display names, tags, capabilities), **three conversations per bot** (mixed `origin_channel`: registry-ui / telegram / slack), **multi-kind timelines** (distinct user/bot copy per thread, plus provider response, approval, task status, error), **seven routed tasks** across different origin/target pairs (mix of **queued**, **running**, **completed**, **failed**), **heartbeat + worker rows** for every bot (rotating worker stories), **usage rows** for **all** conversations via `seed_usage_sqlite.py` (not exposed through the public event POST schema), and **highlight rectangles** from **DOM-measured coordinates** saved as `*.meta.json` next to each PNG, then rendered by `annotate.py` into **outlines plus a bottom legend strip** (no labels over the UI).
+**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which seeds the **current** registry contract: **six** enrolled bots, mixed scopes and connectivity, **ten** conversations with the current event taxonomy (`provider.request`, `provider.response`, `tool.execution`, `approval.*`, `delegation.*`, `task.status`, `error`, `message.*`), **four** routed tasks with varied statuses, heartbeat + worker rows, usage derived only from **provider response** events, and a seeded **provider guidance** draft. Highlight rectangles come from DOM-measured coordinates saved as `*.meta.json` next to each PNG, then rendered by `annotate.py` into **outlines plus a bottom legend strip** (no labels over the UI).
 
 ### Sidebar (applies to all pages)
 
 | Item | Route | Purpose |
 |------|-------|---------|
-| **Agents** | `/ui` | Paginated agent cards; entry to detail. |
+| **Dashboard** | `/ui`, `/ui/` | Global summary from `/v1/summary`. |
+| **Agents** | `/ui/agents` | Paginated agent cards; entry to detail. |
 | **Conversations** | `/ui/conversations` | Paginated list; **search** (≥3 chars, server-side `q`); **status** filter. |
-| **Tasks** | `/ui/tasks` | Paginated routed tasks; **status** filter; row → **parent conversation**. |
+| **Tasks** | `/ui/tasks` | Routed task cards; **status** filter; expand → **parent conversation**. |
 | **Capabilities** | `/ui/capabilities` | Global toggles (confirm); CSRF on POST. |
-| **Skills** | `/ui/skills` | Skill catalog; client-side search. |
+| **Skills** | `/ui/skills` | Skill catalog; client-side search; install / uninstall. |
 | **Usage** | `/ui/usage` | Ranges: Today / 7d / 30d (`since` / `until`). |
+| **Guidance** | `/ui/guidance` | Provider guidance selector and draft editor. |
 | **Logout** | `/ui/logout` | Ends operator session. |
 
 On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** width it **collapses** to icons; **desktop** shows full labels. WebSocket **connection status** appears in the sidebar footer when `/v1/ws` is available.
 
-### 1. Agents (home)
+### 1. Dashboard
 
-![Agents](assets/registry/ui/01-agents-annotated.png)
+![Dashboard](assets/registry/ui/01-dashboard-annotated.png)
 
-- Each **card** is one enrolled agent; **connectivity** badge reflects last heartbeat path.
+- The hero cards come directly from **`GET /v1/summary`**.
+- Use this screen for the fastest read on **agents**, **active conversations**, **pending approvals**, **running tasks**, and **24h usage**.
+
+### 2. Agents list
+
+![Agents](assets/registry/ui/02-agents-annotated.png)
+
+- Each **card** is one enrolled agent; **connectivity** reflects the current heartbeat state.
+- The filters are **current-page** filters over the current result set.
 - **Click** a card → **Agent detail**.
 
-### 2. Agent detail
+### 3. Agent detail
 
-![Agent detail](assets/registry/ui/02-agent-detail-annotated.png)
+![Agent detail](assets/registry/ui/03-agent-detail-annotated.png)
 
 - Shows **identity**, **registry scope**, **capabilities/tags**, **heartbeat**, and optional **worker** rows when reported.
-- **Conversations** for this agent appear **inline** below (paginated). The dedicated route **`/ui/agents/{id}/conversations`** shows the same scoped list in a full-page view (see §3).
+- **Conversations** for this agent appear **inline** below (paginated). The dedicated route **`/ui/agents/{id}/conversations`** shows the same scoped list in a full-page view (see §4).
 
-### 3. Agent conversations
+### 4. Agent conversations
 
-![Agent conversations](assets/registry/ui/03-agent-conversations-annotated.png)
+![Agent conversations](assets/registry/ui/04-agent-conversations-annotated.png)
 
 - Lists conversations involving this agent. **Click** a row → **Conversation detail**.
 
-### 4. All conversations
+### 5. All conversations
 
-![Conversations](assets/registry/ui/04-conversations-annotated.png)
+![Conversations](assets/registry/ui/05-conversations-annotated.png)
 
 - **Pagination** — Previous / Next using cursor + `has_more`.
 - **Search** — type **three or more** characters (debounced); server-side `q`.
 - **Status** — dropdown filter.
+- **New Conversation** starts an operator-created registry conversation.
 - Click a **row** → **Conversation detail**.
 
-### 4b. Search filter (same route)
+### 5b. Search filter (same route)
 
-![Conversations filtered](assets/registry/ui/04b-conversations-filtered-annotated.png)
+![Conversations filtered](assets/registry/ui/05b-conversations-filtered-annotated.png)
 
-- With **3+ characters** in the search field, the list narrows (FTS-backed). The capture run uses the query **`Acme`** to match the synthetic “Acme — …” bot titles.
+- With **3+ characters** in the search field, the list narrows (FTS-backed). The capture run uses the query **`Release`** to match synthetic conversation titles.
 
-### 5. Conversation detail (timeline)
+### 6. Conversation detail (timeline)
 
-![Conversation detail](assets/registry/ui/05-conversation-detail-annotated.png)
+![Conversation detail](assets/registry/ui/06-conversation-detail-annotated.png)
 
 - **Header**: title, target display name, `origin_channel`, status badge.
 - **Actions**: **Messages only** toggle vs all events; **Cancel** conversation; **Export** markdown.
 - **Compose**: operator message (**Enter** to send); uses session cookie + CSRF.
-- **Timeline**: `message.user` / `message.bot` as **bubbles**; other kinds as **collapsible cards**; **Load older** for paginated history.
+- **Timeline**: `message.user` / `message.bot` as **bubbles**; structured kinds such as **provider request/response**, **tool execution**, **approval**, **delegation**, **task status**, and **error** render as event cards.
+- **History**: older activity loads automatically when you **scroll up** to the top sentinel.
 - **Live updates**: WebSocket (`/v1/ws`) with reconnect backoff when the ASGI stack supports upgrades.
 
-### 6. Tasks (routed tasks)
+### 7. Tasks (routed tasks)
 
-![Tasks](assets/registry/ui/06-tasks-annotated.png)
+![Tasks](assets/registry/ui/07-tasks-annotated.png)
 
-- **Pagination** and **status** filter; table shows origin, target, status, updated time.
-- **Clicking a row** navigates to the **parent conversation** (delegation context).
-- Task rows can **refresh** when `task.status` events arrive over the WebSocket (wildcard subscription).
+- **Pagination** and **status** filter keep task cards focused on one slice of routed work.
+- Expanding a card shows instructions, result summary, and the link back to the **parent conversation**.
+- Task cards refresh when routed-task updates land over the WebSocket.
 
-### 7. Capabilities
+### 8. Capabilities
 
-![Capabilities](assets/registry/ui/07-capabilities-annotated.png)
+![Capabilities](assets/registry/ui/08-capabilities-annotated.png)
 
 - Operator-only **global toggles** for coordination features.
 - Mutations use **POST** with **CSRF** when using cookie sessions (`/v1/auth/csrf`).
 
-### 8. Skills
+### 9. Skills
 
-![Skills](assets/registry/ui/08-skills-annotated.png)
+![Skills](assets/registry/ui/09-skills-annotated.png)
 
-- High-level **catalog** view (installed/custom skills as returned by `/v1/catalog/skills`).
+- Searchable **catalog** view backed by `/v1/catalog/skills`.
+- Install / uninstall actions are available from the browser; the broader lifecycle remains API-first.
 
-### 9. Usage
+### 10. Usage
 
-![Usage](assets/registry/ui/09-usage-annotated.png)
+![Usage](assets/registry/ui/10-usage-annotated.png)
 
 - **Today / 7 days / 30 days** buttons set `since` / `until` on `GET /v1/usage` (calendar-day boundaries for “Today”).
-- Aggregated **prompt/completion tokens and cost** when the store has usage rows (doc captures may use seeded `usage` events).
+- Aggregated **prompt/completion tokens and cost** come from **provider response** events only.
 
-### 10. Direct URL to agent detail
+### 11. Guidance
 
-![Agent detail via URL](assets/registry/ui/10-agent-detail-deep-link-annotated.png)
+![Guidance](assets/registry/ui/11-guidance-annotated.png)
+
+- **Provider selector** swaps between guidance surfaces such as Claude and Codex.
+- The page shows **lifecycle status**, the **draft system prompt body**, and the available preview / lifecycle actions.
+
+### 12. Direct URL to agent detail
+
+![Agent detail via URL](assets/registry/ui/12-agent-detail-deep-link-annotated.png)
 
 - Loading **`/ui/agents/{agent_id}`** directly (bookmark or paste) renders the same agent detail view as clicking from the list — useful when sharing links from logs or API responses.
 
-### 11. Direct URL to conversation detail
+### 13. Direct URL to conversation detail
 
-![Conversation detail via URL](assets/registry/ui/11-conversation-deep-link-annotated.png)
+![Conversation detail via URL](assets/registry/ui/13-conversation-deep-link-annotated.png)
 
 - Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** conversation detail (timeline, compose, cancel, export) as choosing a row from the list — shareable from API responses or task links.
 
@@ -192,7 +212,8 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 | Area | Notes |
 |------|--------|
 | **Full skill lifecycle** | Catalog view only. Draft → submit → approve → publish flows are **API-first** (`/v1/catalog/skills/...`). |
-| **Provider guidance editor** | No top-level nav; use `/v1/provider-guidance/...` or future tooling. |
+| **Conversation-bound skill activation** | Still API-first; there is no dedicated top-level browser screen for activating or clearing skills on one conversation. |
+| **Standalone approvals inbox** | Approval requests appear inside conversation timelines; there is no separate queue screen yet. |
 | **WebSocket without upgrade** | Live updates need a WebSocket-capable ASGI stack. If `/v1/ws` cannot upgrade, the UI still works via **`GET …/events`** polling on navigation and manual refresh patterns. |
 | **Automatic retry on 5xx** from the browser API client | Single `fetch` with timeout; optional future polish. |
 
@@ -238,7 +259,7 @@ npm run capture                   # registry UI → docs/assets/registry/ui/*.pn
 npm run annotate                  # *-annotated.png (uses repo-root .venv)
 ```
 
-The harness uses isolated tokens and a throwaway DB under `docs/registry-ui-screenshots/`. **`seed_usage_sqlite.py`** may seed usage rows for screenshots. **Outlines** in annotated images follow DOM positions from capture time — re-capture when layout shifts.
+The harness uses isolated tokens and a fresh throwaway DB under `docs/registry-ui-screenshots/` on every run. Usage screenshots now derive from the seeded **`provider.response`** events in the capture data; there is no separate legacy usage seeding path. **Outlines** in annotated images follow DOM positions from capture time — re-capture when layout shifts.
 
 **Other diagrams**
 

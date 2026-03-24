@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from app.config import BotConfig, should_publish_event
 from app.ports.conversation_projection import ConversationProjectionPort
+from app.providers.base import ToolExecutionRecord
 from app.workflows.execution.contracts import TransportIdentity
 
 log = logging.getLogger(__name__)
@@ -32,8 +33,37 @@ class NoOpEventSink:
     async def on_user_message(self, content: str, *, actor: str = "") -> None:
         pass
 
+    async def on_provider_request(
+        self,
+        content: str,
+        *,
+        provider: str,
+        model: str,
+        execution_mode: str,
+        working_dir: str,
+        file_policy: str,
+        image_count: int,
+        prompt_char_count: int,
+    ) -> None:
+        pass
+
     async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None:
         pass
+
+    async def on_tool_execution(self, record: ToolExecutionRecord, *, index: int = 0) -> None:
+        del record, index
+
+    async def on_approval_requested(
+        self,
+        content: str,
+        *,
+        request_kind: str,
+        actor_key: str,
+        trust_tier: str,
+        expires_at: str = "",
+        request_id: str = "",
+    ) -> None:
+        del content, request_kind, actor_key, trust_tier, expires_at, request_id
 
     async def on_bot_reply(self, content: str) -> None:
         pass
@@ -71,6 +101,7 @@ class RegistryEventSink:
         self._transport = transport
         self._config = config
         self._conversation_id: str | None = None
+        self._execution_event_prefix = uuid4().hex
 
     async def _ensure_conversation(self) -> str | None:
         if self._conversation_id is not None:
@@ -87,7 +118,15 @@ class RegistryEventSink:
             log.warning("registry publish: create_conversation failed", exc_info=True)
             return None
 
-    async def _publish(self, kind: str, *, actor: str = "", content: str = "", metadata: dict | None = None) -> None:
+    async def _publish(
+        self,
+        kind: str,
+        *,
+        event_id: str,
+        actor: str = "",
+        content: str = "",
+        metadata: dict | None = None,
+    ) -> None:
         if not should_publish_event(self._config, kind):
             return
         conversation_id = await self._ensure_conversation()
@@ -96,7 +135,7 @@ class RegistryEventSink:
         try:
             from registry_sdk.events import ConversationEvent
             event = ConversationEvent(
-                event_id=uuid4().hex,
+                event_id=event_id,
                 kind=kind,
                 actor=actor,
                 content=content,
@@ -111,39 +150,141 @@ class RegistryEventSink:
             log.warning("registry publish: publish_events failed for %s", kind, exc_info=True)
 
     async def on_user_message(self, content: str, *, actor: str = "") -> None:
-        await self._publish("message.user", actor=actor, content=content)
+        await self._publish(
+            "message.user",
+            event_id=f"exec:{self._execution_event_prefix}:user",
+            actor=actor,
+            content=content,
+        )
+
+    async def on_provider_request(
+        self,
+        content: str,
+        *,
+        provider: str,
+        model: str,
+        execution_mode: str,
+        working_dir: str,
+        file_policy: str,
+        image_count: int,
+        prompt_char_count: int,
+    ) -> None:
+        await self._publish(
+            "provider.request",
+            event_id=f"exec:{self._execution_event_prefix}:request",
+            content=content,
+            metadata={
+                "provider": provider,
+                "model": model,
+                "execution_mode": execution_mode,
+                "working_dir": working_dir,
+                "file_policy": file_policy,
+                "image_count": image_count,
+                "prompt_char_count": prompt_char_count,
+            },
+        )
 
     async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None:
-        await self._publish("provider.response", metadata={
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cost_usd": cost_usd,
-            "provider": provider,
-        })
+        await self._publish(
+            "provider.response",
+            event_id=f"exec:{self._execution_event_prefix}:response",
+            metadata={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": cost_usd,
+                "provider": provider,
+            },
+        )
+
+    async def on_tool_execution(self, record: ToolExecutionRecord, *, index: int = 0) -> None:
+        await self._publish(
+            "tool.execution",
+            event_id=f"exec:{self._execution_event_prefix}:tool:{index}",
+            content=f"{record.tool_name} {record.status}",
+            metadata={
+                "tool_name": record.tool_name,
+                "call_id": record.call_id,
+                "status": record.status,
+                "input_summary": record.input_summary,
+                "output_summary": record.output_summary,
+                "duration_ms": record.duration_ms,
+                "file_changes": [
+                    {
+                        "path": item.path,
+                        "change_type": item.change_type,
+                        "summary": item.summary,
+                    }
+                    for item in record.file_changes
+                ],
+            },
+        )
+
+    async def on_approval_requested(
+        self,
+        content: str,
+        *,
+        request_kind: str,
+        actor_key: str,
+        trust_tier: str,
+        expires_at: str = "",
+        request_id: str = "",
+    ) -> None:
+        await self._publish(
+            "approval.requested",
+            event_id=request_id or f"approval:{self._execution_event_prefix}",
+            content=content,
+            metadata={
+                "request_kind": request_kind,
+                "actor_key": actor_key,
+                "trust_tier": trust_tier,
+                "expires_at": expires_at or None,
+            },
+        )
 
     async def on_bot_reply(self, content: str) -> None:
-        await self._publish("message.bot", content=content)
+        await self._publish(
+            "message.bot",
+            event_id=f"exec:{self._execution_event_prefix}:bot",
+            content=content,
+        )
 
     async def on_error(self, content: str, *, error_type: str = "execution", message: str = "") -> None:
-        await self._publish("error", content=content[:500], metadata={
-            "error_type": error_type,
-            "message": message[:500] if message else content[:500],
-        })
+        await self._publish(
+            "error",
+            event_id=f"exec:{self._execution_event_prefix}:error",
+            content=content[:500],
+            metadata={
+                "error_type": error_type,
+                "message": message[:500] if message else content[:500],
+            },
+        )
 
     async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None:
         if not tasks:
             return
-        await self._publish("delegation.proposed", metadata={"tasks": tasks})
+        await self._publish(
+            "delegation.proposed",
+            event_id=f"exec:{self._execution_event_prefix}:delegation:proposed",
+            metadata={"tasks": tasks},
+        )
 
     async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
         if not tasks:
             return
-        await self._publish("delegation.submitted", metadata={"tasks": tasks})
+        await self._publish(
+            "delegation.submitted",
+            event_id=f"exec:{self._execution_event_prefix}:delegation:submitted",
+            metadata={"tasks": tasks},
+        )
 
     async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
         if not tasks:
             return
-        await self._publish("delegation.completed", metadata={"tasks": tasks})
+        await self._publish(
+            "delegation.completed",
+            event_id=f"exec:{self._execution_event_prefix}:delegation:completed",
+            metadata={"tasks": tasks},
+        )
 
 
 def build_event_sink_for_context(
@@ -158,7 +299,5 @@ def build_event_sink_for_context(
     Returns NoOpEventSink if transport or projection is unavailable.
     """
     if transport is None or projection is None:
-        return _NOOP_SINK
-    if not should_publish_event(config, "message.user"):
         return _NOOP_SINK
     return RegistryEventSink(projection=projection, transport=transport, config=config)

@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,13 @@ from app.progress import (
     CommandFinish, ContentDelta, Denial, ToolFinish, ToolStart,
     Thinking, render as render_progress,
 )
-from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
+from app.providers.base import (
+    PreflightContext,
+    ProgressSink,
+    RunContext,
+    RunResult,
+    ToolExecutionRecord,
+)
 from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
@@ -197,6 +204,9 @@ class ClaudeProvider:
         accumulated_text = ""
         tool_activity: list[str] = []
         current_tool: str = ""
+        current_tool_started_at: float | None = None
+        tool_counter = 0
+        tool_records: list[ToolExecutionRecord] = []
         result_data: dict = {}
 
         async def _emit(evt, *, force: bool = False) -> None:
@@ -217,7 +227,7 @@ class ClaudeProvider:
                 if cancel.is_set():
                     proc.kill()
                     await proc.wait()
-                    return accumulated_text, {}, tool_activity
+                    return accumulated_text, {"_tool_executions": tool_records}, tool_activity
                 line = done.pop().result()
             else:
                 line = await read_coro
@@ -259,12 +269,28 @@ class ClaudeProvider:
                     if cb.get("type") == "tool_use":
                         tool_name = cb.get("name", "?")
                         current_tool = tool_name
+                        current_tool_started_at = time.monotonic()
                         tool_activity.append(f"\u2699 {tool_name}")
                         await _emit(ToolStart(name=tool_name), force=True)
                 elif itype == "content_block_stop":
                     if current_tool:
+                        duration_ms: int | None = None
+                        if current_tool_started_at is not None:
+                            duration_ms = max(0, int((time.monotonic() - current_tool_started_at) * 1000))
+                        tool_records.append(
+                            ToolExecutionRecord(
+                                tool_name=current_tool,
+                                call_id=f"claude-tool-{tool_counter}",
+                                status="completed",
+                                input_summary=current_tool,
+                                output_summary="completed",
+                                duration_ms=duration_ms,
+                            )
+                        )
+                        tool_counter += 1
                         await _emit(ToolFinish(name=current_tool))
                         current_tool = ""
+                        current_tool_started_at = None
 
             elif etype == "assistant":
                 msg = event.get("message", {})
@@ -277,11 +303,29 @@ class ClaudeProvider:
                     if block.get("is_error") and "permission" in str(
                         block.get("content", "")
                     ).lower():
+                        if current_tool:
+                            duration_ms: int | None = None
+                            if current_tool_started_at is not None:
+                                duration_ms = max(0, int((time.monotonic() - current_tool_started_at) * 1000))
+                            tool_records.append(
+                                ToolExecutionRecord(
+                                    tool_name=current_tool,
+                                    call_id=f"claude-tool-{tool_counter}",
+                                    status="denied",
+                                    input_summary=current_tool,
+                                    output_summary=trim_text(str(block.get("content", "") or "Permission denied"), 300),
+                                    duration_ms=duration_ms,
+                                )
+                            )
+                            tool_counter += 1
                         tool_activity.append("\u26d4 denied")
                         await _emit(Denial(detail=current_tool or ""), force=True)
+                        current_tool = ""
+                        current_tool_started_at = None
 
             elif etype == "result":
                 result_data = event
+                result_data["_tool_executions"] = tool_records
                 break
 
         # Drain remaining stdout so the process can exit cleanly
@@ -301,8 +345,8 @@ class ClaudeProvider:
         extra_env: dict[str, str] | None = None,
         working_dir: str = "",
         cancel: asyncio.Event | None = None,
-    ) -> tuple[str, dict, int, str]:
-        """Spawn claude, consume output, return (accumulated_text, result_data, returncode, stderr)."""
+    ) -> tuple[str, dict, int, str, list[ToolExecutionRecord]]:
+        """Spawn claude, consume output, return (accumulated_text, result_data, returncode, stderr, tool_executions)."""
         log.info("claude: %s", " ".join(cmd[:-1] + ["<prompt>"]))
 
         env = self._clean_env()
@@ -332,12 +376,13 @@ class ClaudeProvider:
             proc.kill()
             await proc.wait()
             await stderr_task
-            return "", {}, -1, ""  # sentinel for timeout
+            return "", {}, -1, "", []  # sentinel for timeout
 
         if proc.returncode and proc.returncode != 0:
             log.error("claude error (rc=%d): %s", proc.returncode, stderr[:300])
 
-        return accumulated, result_data, proc.returncode or 0, stderr
+        tool_executions = list(result_data.pop("_tool_executions", []) or [])
+        return accumulated, result_data, proc.returncode or 0, stderr, tool_executions
 
     @staticmethod
     def _is_resume_failure(stderr: str) -> bool:
@@ -425,7 +470,7 @@ class ClaudeProvider:
 
             working_dir = context.working_dir if context else ""
             is_resume = provider_state.get("started", False)
-            accumulated, result_data, rc, stderr = await self._run_process(
+            accumulated, result_data, rc, stderr, tool_executions = await self._run_process(
                 cmd, progress, extra_env=extra_env, working_dir=working_dir,
                 cancel=cancel,
             )
@@ -439,7 +484,8 @@ class ClaudeProvider:
         # User-initiated cancel: _consume_stream killed the process.
         if cancel is not None and cancel.is_set():
             return RunResult(text=accumulated, cancelled=True,
-                             provider_state_updates={"started": True} if provider_state.get("started") else {})
+                             provider_state_updates={"started": True} if provider_state.get("started") else {},
+                             tool_executions=tool_executions)
 
         if rc == -1:
             # A timeout during a resumed session is strong evidence the session
@@ -448,6 +494,7 @@ class ClaudeProvider:
             return RunResult(
                 text="", timed_out=True, returncode=124,
                 resume_failed=is_resume,
+                tool_executions=tool_executions,
             )
 
         if rc != 0:
@@ -459,6 +506,7 @@ class ClaudeProvider:
                 text=f"[Claude error (rc={rc})]",
                 returncode=rc,
                 resume_failed=is_resume and self._is_resume_failure(error_text),
+                tool_executions=tool_executions,
             )
 
         final_text = result_data.get("result", accumulated) or accumulated
@@ -472,6 +520,7 @@ class ClaudeProvider:
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
             cost_usd=float(result_data.get("total_cost_usd") or 0.0),
+            tool_executions=tool_executions,
         )
 
     async def run_preflight(
@@ -497,7 +546,7 @@ class ClaudeProvider:
             cmd[idx:idx] = ["--append-system-prompt", system_prompt]
 
         working_dir = context.working_dir if context else ""
-        accumulated, result_data, rc, _stderr = await self._run_process(
+        accumulated, result_data, rc, _stderr, _tool_executions = await self._run_process(
             cmd, progress, timeout=120, working_dir=working_dir,
             cancel=cancel,
         )

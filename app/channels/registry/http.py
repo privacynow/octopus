@@ -566,18 +566,27 @@ async def resource_publish_events(
 def resource_list_events(
     conversation_id: str,
     kind: str = Query(default=""),
-    cursor: int = Query(default=0, ge=0),
+    before_seq: int = Query(default=0, ge=0),
+    after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     conversation_id = normalize_conversation_id(conversation_id)
+    if before_seq and after_seq:
+        raise HTTPException(status_code=422, detail="before_seq and after_seq cannot both be set")
     try:
         conv = store.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_id}") from exc
     _require_own_resource(auth, conv.get("target_agent_id", ""))
-    return store.list_events(conversation_id, kind=kind, cursor=cursor, limit=limit)
+    return store.list_events(
+        conversation_id,
+        kind=kind,
+        before_seq=before_seq,
+        after_seq=after_seq,
+        limit=limit,
+    )
 
 
 @app.get("/v1/conversations/{conversation_id}/messages")
@@ -773,6 +782,15 @@ def resource_usage(
             ),
         ),
     }
+
+
+@app.get("/v1/summary")
+def resource_summary(
+    auth: AuthContext = Depends(require_operator_session),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return store.get_summary(now_iso=now_iso)
 
 
 @app.get("/v1/catalog/skills")

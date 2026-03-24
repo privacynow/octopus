@@ -10,6 +10,43 @@ function esc(str) {
     return div.innerHTML;
 }
 
+function _makePressable(el, onActivate) {
+    if (!el) return;
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.addEventListener('click', onActivate);
+    el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onActivate(e);
+        }
+    });
+}
+
+function _createStatCard(value, label, detail = '') {
+    const card = document.createElement('div');
+    card.className = 'stat-card';
+
+    const valueEl = document.createElement('div');
+    valueEl.className = 'stat-card-value';
+    valueEl.textContent = value;
+    card.appendChild(valueEl);
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'stat-card-label';
+    labelEl.textContent = label;
+    card.appendChild(labelEl);
+
+    if (detail) {
+        const detailEl = document.createElement('div');
+        detailEl.className = 'stat-card-detail';
+        detailEl.textContent = detail;
+        card.appendChild(detailEl);
+    }
+
+    return card;
+}
+
 // ── Utility: render markdown content safely ──
 function _renderContent(text) {
     if (!text) return '';
@@ -105,6 +142,7 @@ function _renderError(container, message, retryFn) {
 
 // ── Utility: confirmation dialog ──
 function _showConfirm(title, message, onConfirm) {
+    const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
     overlay.innerHTML = '';
@@ -142,12 +180,35 @@ function _showConfirm(title, message, onConfirm) {
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
+    const focusables = [cancelBtn, confirmBtn];
+    confirmBtn.focus();
+
     // Close on overlay click or Escape
     overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.remove();
+        if (e.target === overlay) {
+            overlay.remove();
+            if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        }
     });
     const escHandler = (e) => {
-        if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
+        if (e.key === 'Escape') {
+            overlay.remove();
+            document.removeEventListener('keydown', escHandler);
+            if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+            return;
+        }
+        if (e.key === 'Tab') {
+            const currentIndex = focusables.indexOf(document.activeElement);
+            if (e.shiftKey) {
+                if (currentIndex <= 0) {
+                    e.preventDefault();
+                    focusables[focusables.length - 1].focus();
+                }
+            } else if (currentIndex === focusables.length - 1) {
+                e.preventDefault();
+                focusables[0].focus();
+            }
+        }
     };
     document.addEventListener('keydown', escHandler);
 }
@@ -243,9 +304,41 @@ function _isInputFocused() {
     return tag === 'input' || tag === 'textarea' || tag === 'select' || active.isContentEditable;
 }
 
+function _setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+        localStorage.setItem('octopus-theme', theme);
+    } catch (e) {
+        console.warn('Failed to persist theme', e);
+    }
+    const label = document.getElementById('theme-toggle-label');
+    if (label) {
+        label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+    }
+}
+
+function _initTheme() {
+    const toggle = document.getElementById('theme-toggle');
+    const stored = (() => {
+        try {
+            return localStorage.getItem('octopus-theme');
+        } catch {
+            return '';
+        }
+    })();
+    const preferredDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    _setTheme(stored || (preferredDark ? 'dark' : 'light'));
+    if (!toggle) return;
+    toggle.addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-theme') || 'light';
+        _setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+}
+
 // ── Register routes ──
-Router.register('/ui', renderAgentList);
-Router.register('/ui/', renderAgentList);
+Router.register('/ui', renderDashboard);
+Router.register('/ui/', renderDashboard);
+Router.register('/ui/agents', renderAgentList);
 Router.register('/ui/agents/:id', renderAgentDetail);
 Router.register('/ui/agents/:id/conversations', renderAgentConversations);
 Router.register('/ui/conversations', renderConversationList);
@@ -259,6 +352,7 @@ Router.register('/ui/login', renderLoginForm);
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', async () => {
+    _initTheme();
     _initSidebar();
     _initKeyboard();
     _startTimestampRefresh();

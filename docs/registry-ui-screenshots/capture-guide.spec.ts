@@ -1,233 +1,492 @@
 /**
- * Captures the Registry UI for docs. Seeds SQLite via HTTP (+ usage rows via sqlite),
- * then screenshots every route with Playwright-generated overlay metadata for annotate.py.
+ * Captures the current Registry UI for docs.
+ *
+ * The capture flow seeds the live registry over HTTP using the current SDK/API
+ * contract, then screenshots each SPA route and writes sibling *.meta.json
+ * files for annotate.py.
  */
-import { test, expect } from "@playwright/test";
-import { execFileSync } from "child_process";
+import { expect, test } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
 
 const OUT = path.join(__dirname, "..", "assets", "registry", "ui");
 const BASE = "http://127.0.0.1:19987";
-
-/** DOM hooks for the vanilla SPA (no capture-only ids on list views). */
-const UI = {
-  /** All conversations + tasks: header, `.filter-bar`, list pane, pagination. */
-  filterListPane: "#content .filter-bar + div",
-  convoSearch: "#content .filter-bar input.search-input",
-  /** Skills: no filter-bar — search input sits directly under `.page-header`. */
-  skillListPane: "#content .page-header + input.search-input + div",
-};
 const ENROLL = "guide-capture-enroll-token-2026";
-const REPO = path.join(__dirname, "..", "..");
-const PY = path.join(REPO, ".venv", "bin", "python");
-const DB_SQLITE = path.join(__dirname, ".capture-registry.sqlite3");
-const SEED_USAGE = path.join(__dirname, "seed_usage_sqlite.py");
+const UI_TOKEN = "guide-capture-ui-token-2026";
 
-type Bot = { slug: string; display: string; caps: string[]; role: string; tags?: string[] };
+type Bot = {
+  slug: string;
+  display: string;
+  role: string;
+  provider: string;
+  scope: "full" | "channel" | "coordination";
+  capabilities: string[];
+  tags: string[];
+  state: "connected" | "degraded";
+};
 
-/** Rich synthetic fleet for documentation screenshots (lists, badges, search). */
+type SeedAgent = {
+  id: string;
+  token: string;
+  slug: string;
+  display: string;
+};
+
+type SeedConversation = {
+  id: string;
+  title: string;
+  agentId: string;
+};
+
 const BOTS: Bot[] = [
   {
-    slug: "acme-analytics",
-    display: "Acme — Analytics & BI",
-    caps: ["python", "sql", "reviewer"],
+    slug: "release-coordinator",
+    display: "Release Coordinator",
     role: "developer",
-    tags: ["acme", "warehouse", "docs-seed"],
+    provider: "codex",
+    scope: "full",
+    capabilities: ["python", "reviewer", "registry"],
+    tags: ["release", "ops", "docs"],
+    state: "connected",
   },
   {
-    slug: "acme-reviewer",
-    display: "Acme — Code Review",
-    caps: ["python", "reviewer", "security"],
+    slug: "risk-reviewer",
+    display: "Risk Reviewer",
     role: "developer",
-    tags: ["acme", "quality", "docs-seed"],
+    provider: "claude",
+    scope: "full",
+    capabilities: ["reviewer", "security", "policy"],
+    tags: ["risk", "compliance", "docs"],
+    state: "connected",
   },
   {
-    slug: "north-support",
-    display: "Northwind — L2 Support",
-    caps: ["python", "support", "crm"],
+    slug: "support-triage",
+    display: "Support Triage",
     role: "support",
-    tags: ["northwind", "customer", "docs-seed"],
+    provider: "codex",
+    scope: "channel",
+    capabilities: ["support", "crm", "python"],
+    tags: ["support", "tickets", "docs"],
+    state: "connected",
   },
   {
-    slug: "gamma-lead",
-    display: "Gamma — Platform Lead",
-    caps: ["python", "coordination", "terraform"],
+    slug: "platform-sre",
+    display: "Platform SRE",
     role: "developer",
-    tags: ["gamma", "sre", "docs-seed"],
+    provider: "claude",
+    scope: "coordination",
+    capabilities: ["terraform", "kubernetes", "devops"],
+    tags: ["sre", "infra", "docs"],
+    state: "degraded",
   },
   {
-    slug: "contoso-research",
-    display: "Contoso — Research Assistant",
-    caps: ["python", "retrieval", "reviewer"],
+    slug: "retrieval-lab",
+    display: "Retrieval Lab",
     role: "developer",
-    tags: ["contoso", "rag", "docs-seed"],
+    provider: "codex",
+    scope: "full",
+    capabilities: ["retrieval", "python", "analysis"],
+    tags: ["rag", "research", "docs"],
+    state: "connected",
   },
   {
-    slug: "fabrikam-devops",
-    display: "Fabrikam — Release Bot",
-    caps: ["python", "devops", "kubernetes"],
+    slug: "audit-lead",
+    display: "Audit Lead",
     role: "developer",
-    tags: ["fabrikam", "cicd", "docs-seed"],
-  },
-  {
-    slug: "tailspin-oncall",
-    display: "Tailspin — On-call Triage",
-    caps: ["python", "support", "pager"],
-    role: "support",
-    tags: ["tailspin", "incident", "docs-seed"],
-  },
-  {
-    slug: "wingtip-compliance",
-    display: "Wingtip — Compliance Review",
-    caps: ["python", "reviewer", "policy"],
-    role: "developer",
-    tags: ["wingtip", "audit", "docs-seed"],
+    provider: "claude",
+    scope: "full",
+    capabilities: ["policy", "reviewer", "security"],
+    tags: ["audit", "controls", "docs"],
+    state: "connected",
   },
 ];
 
 const seed: {
-  agents: { id: string; token: string; slug: string }[];
-  conversations: string[];
-} = { agents: [], conversations: [] };
+  agents: SeedAgent[];
+  conversations: SeedConversation[];
+  focusAgentId: string;
+  focusConversationId: string;
+  focusConversationTitle: string;
+} = {
+  agents: [],
+  conversations: [],
+  focusAgentId: "",
+  focusConversationId: "",
+  focusConversationTitle: "",
+};
 
-function card(b: Bot) {
+function iso(offsetMinutes: number): string {
+  return new Date(Date.now() + offsetMinutes * 60_000).toISOString();
+}
+
+function card(bot: Bot) {
   return {
-    display_name: b.display,
-    slug: b.slug,
-    role: b.role,
-    registry_scope: "full",
-    capabilities: b.caps,
-    tags: b.tags ?? ["demo", "docs-seed"],
-    description: `Docs capture seed — ${b.display} (${b.slug})`,
-    provider: "demo",
+    bot_key: `bot:${bot.slug}`,
+    display_name: bot.display,
+    slug: bot.slug,
+    role: bot.role,
+    registry_scope: bot.scope,
+    capabilities: bot.capabilities,
+    tags: bot.tags,
+    description: `Docs capture seed — ${bot.display}`,
+    provider: bot.provider,
     mode: "registry",
     channel_capabilities: ["registry"],
-    version: "2.4.0",
+    version: "3.0.0-docs",
   };
 }
 
-async function enrollAgent(b: Bot): Promise<{ agent_id: string; token: string }> {
-  const r = await fetch(`${BASE}/v1/agents/enroll`, {
+async function enrollAgent(bot: Bot): Promise<SeedAgent> {
+  const enrollResp = await fetch(`${BASE}/v1/agents/enroll`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enrollment_token: ENROLL, agent_card: card(b) }),
-  });
-  expect(r.ok).toBeTruthy();
-  const j = await r.json();
-  const token = j.agent_token as string;
-  const reg = await fetch(`${BASE}/v1/agents/register`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      agent_card: card(b),
-      connectivity_state: "connected",
-      current_capacity: 1,
-      max_capacity: 8,
+      enrollment_token: ENROLL,
+      agent_card: card(bot),
     }),
   });
-  expect(reg.ok).toBeTruthy();
-  return { agent_id: j.agent_id as string, token };
-}
+  const enrollText = await enrollResp.text();
+  expect(enrollResp.ok, enrollText).toBeTruthy();
+  const enrolled = JSON.parse(enrollText);
+  const token = enrolled.agent_token as string;
 
-async function publishEvents(token: string, convId: string, events: Record<string, unknown>[]) {
-  const ev = await fetch(`${BASE}/v1/conversations/${convId}/events`, {
+  const registerResp = await fetch(`${BASE}/v1/agents/register`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ events }),
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      agent_card: card(bot),
+      connectivity_state: bot.state,
+      current_capacity: bot.state === "degraded" ? 1 : 0,
+      max_capacity: 6,
+    }),
   });
-  expect(ev.ok).toBeTruthy();
+  expect(registerResp.ok, await registerResp.text()).toBeTruthy();
+  return {
+    id: enrolled.agent_id as string,
+    token,
+    slug: bot.slug,
+    display: bot.display,
+  };
 }
 
-/** Varied chat copy so timelines look distinct in screenshots. */
-function buildTimeline(slug: string, convId: string, variant: number): Record<string, unknown>[] {
-  const themes = [
-    {
-      u: "Delta risk for tomorrow's cutover — are we green?",
-      b: "**Risk:** low. Redis failover exercised on staging; rollback tested.",
+async function heartbeatAgent(agent: SeedAgent, state: "connected" | "degraded", workerId: string, currentItem: string) {
+  const now = new Date().toISOString();
+  const resp = await fetch(`${BASE}/v1/agents/heartbeat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${agent.token}`,
+      "Content-Type": "application/json",
     },
-    {
-      u: "Customer asked for SLA proof on ticket #4412.",
-      b: "**SLA:** 99.2% last 30d. P99 latency 412ms. Attached runbook link in thread.",
+    body: JSON.stringify({
+      connectivity_state: state,
+      current_capacity: state === "degraded" ? 2 : 1,
+      max_capacity: 6,
+      runtime_health: {
+        snapshot: {
+          workers: [
+            {
+              worker_id: workerId,
+              process_role: "worker",
+              started_at: now,
+              last_seen_at: now,
+              current_item_id: currentItem,
+              current_conversation_key: `registry:${agent.slug}`,
+              current_kind: "message",
+              items_processed: 100 + workerId.length,
+              stale_recoveries_seen: state === "degraded" ? 1 : 0,
+              last_error: state === "degraded" ? "slow upstream response" : "",
+            },
+          ],
+        },
+      },
+    }),
+  });
+  expect(resp.ok, await resp.text()).toBeTruthy();
+}
+
+async function createConversation(agent: SeedAgent, title: string, externalRef: string): Promise<string> {
+  const resp = await fetch(`${BASE}/v1/conversations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${agent.token}`,
+      "Content-Type": "application/json",
     },
-    {
-      u: "Run the security checklist before we tag v2.4.0.",
-      b: "**Checklist:** 12/12 pass. Container scan clean; SBOM attached to release.",
-    },
-    {
-      u: "Handoff: anything queued for the weekend on-call?",
-      b: "**Queue:** 2 low-priority items; paging policy unchanged. Runbook `/runbooks/weekend`.",
-    },
-    {
-      u: "Compare embedding providers for the RAG pilot (cost vs latency).",
-      b: "**Summary:** Provider A wins on cost; B wins p95. Recommend A for batch, B for interactive.",
-    },
-    {
-      u: "Pipeline failed after the helm chart bump — root cause?",
-      b: "**RC:** invalid `imagePullSecret` in values.yaml line 88. Patch drafted in branch `fix/pull-441`.",
-    },
-    {
-      u: "Page fired: checkout errors spiking in eu-west.",
-      b: "**Triage:** CDN misroute 7% traffic; mitigation applied 14:02 UTC. Monitoring stable.",
-    },
-    {
-      u: "Need sign-off on data retention policy draft §4.2.",
-      b: "**Review:** compliant with SOC2 sample; suggest redacting vendor names in appendix.",
-    },
+    body: JSON.stringify({
+      target_agent_id: agent.id,
+      origin_channel: "registry",
+      external_conversation_ref: externalRef,
+      title,
+    }),
+  });
+  const responseText = await resp.text();
+  expect(resp.ok, responseText).toBeTruthy();
+  const json = JSON.parse(responseText);
+  return json.conversation_id as string;
+}
+
+function eventId(conversationId: string, suffix: string): string {
+  return `${conversationId}-${suffix}`;
+}
+
+function buildTimeline(conversationId: string, actor: string, focus = false, pendingApproval = false) {
+  const tasks = [
+    { title: "Check rollout checklist", target: "risk-reviewer", status: pendingApproval ? "proposed" : "submitted" },
+    { title: "Validate change window", target: "audit-lead", status: pendingApproval ? "proposed" : "submitted" },
   ];
-  const th = themes[variant % themes.length]!;
-  return [
+
+  const events: Array<Record<string, unknown>> = [
     {
-      event_id: `e-${convId}-u`,
+      event_id: eventId(conversationId, "message-user"),
       kind: "message.user",
       actor: "operator",
-      content: th.u,
-      metadata: { attachments: [] },
+      content: focus
+        ? "Kick off a release readiness review and call out any blocking risks."
+        : `Review ${actor} status and summarize next actions.`,
+      created_at: iso(-90),
+      metadata: {},
     },
     {
-      event_id: `e-${convId}-b`,
-      kind: "message.bot",
-      actor: slug,
-      content: th.b,
-      metadata: { attachments: [] },
+      event_id: eventId(conversationId, "provider-request"),
+      kind: "provider.request",
+      actor: "",
+      content: "Inspect the current state, propose next steps, and surface the most urgent blockers.",
+      created_at: iso(-82),
+      metadata: {
+        provider: focus ? "codex" : "claude",
+        model: focus ? "gpt-5.4" : "claude-sonnet-4-5",
+        execution_mode: "run",
+        working_dir: "/workspace/repo",
+        file_policy: "edit",
+        image_count: 0,
+        prompt_char_count: focus ? 742 : 598,
+      },
     },
     {
-      event_id: `e-${convId}-p`,
+      event_id: eventId(conversationId, "provider-response"),
       kind: "provider.response",
       actor: "",
       content: "",
-      metadata: { prompt_tokens: 900 + variant * 50, completion_tokens: 140 + variant * 10, cost_usd: 0.002 + variant * 0.0002, tool_calls: [] },
+      created_at: iso(-74),
+      metadata: {
+        prompt_tokens: focus ? 1480 : 920,
+        completion_tokens: focus ? 312 : 181,
+        cost_usd: focus ? 0.0384 : 0.0187,
+        provider: focus ? "codex" : "claude",
+      },
     },
     {
-      event_id: `e-${convId}-a`,
-      kind: "approval.decided",
-      actor: "operator",
-      content: "",
-      metadata: { action: "approve_change", decided_by: "operator", decision: "approved" },
-    },
-    {
-      event_id: `e-${convId}-t`,
-      kind: "task.status",
+      event_id: eventId(conversationId, "tool-execution"),
+      kind: "tool.execution",
       actor: "",
-      content: "",
-      metadata: { status: variant % 2 === 0 ? "running" : "queued", progress: 35 + variant },
-    },
-    {
-      event_id: `e-${convId}-e`,
-      kind: "error",
-      actor: "",
-      content: variant % 3 === 0 ? "Rate limit from upstream API (429) — backing off" : "Transient timeout talking to tool server",
-      metadata: { error_type: "execution", message: "retryable" },
+      content: "exec_command completed",
+      created_at: iso(-66),
+      metadata: {
+        tool_name: "exec_command",
+        call_id: eventId(conversationId, "tool-call"),
+        status: "completed",
+        input_summary: focus ? "git diff --stat" : "rg release docs/",
+        output_summary: focus ? "2 files changed, 34 insertions" : "3 matching guide references",
+        duration_ms: focus ? 142 : 96,
+        file_changes: focus
+          ? [
+              {
+                path: "docs/manual/03-operator-registry.md",
+                change_type: "modified",
+                summary: "Updated dashboard and conversation notes",
+              },
+            ]
+          : [],
+      },
     },
   ];
+
+  if (pendingApproval) {
+    events.push({
+      event_id: eventId(conversationId, "approval-requested"),
+      kind: "approval.requested",
+      actor: "operator",
+      content: "Approve the final rollout checklist before continuing?",
+      created_at: iso(-58),
+      metadata: {
+        request_kind: "retry",
+        actor_key: "telegram:42",
+        trust_tier: "trusted",
+        expires_at: iso(45),
+      },
+    });
+    events.push({
+      event_id: eventId(conversationId, "delegation-proposed"),
+      kind: "delegation.proposed",
+      actor: "",
+      content: "",
+      created_at: iso(-49),
+      metadata: { tasks },
+    });
+  } else {
+    events.push(
+      {
+        event_id: eventId(conversationId, "approval-requested"),
+        kind: "approval.requested",
+        actor: "operator",
+        content: "Approve a final release checklist pass?",
+        created_at: iso(-58),
+        metadata: {
+          request_kind: "preflight",
+          actor_key: "telegram:42",
+          trust_tier: "trusted",
+          expires_at: iso(45),
+        },
+      },
+      {
+        event_id: eventId(conversationId, "approval-decided"),
+        kind: "approval.decided",
+        actor: "operator",
+        content: "",
+        created_at: iso(-54),
+        metadata: {
+          action: "approve",
+          decided_by: "operator",
+          decision: "approved",
+        },
+      },
+      {
+        event_id: eventId(conversationId, "delegation-submitted"),
+        kind: "delegation.submitted",
+        actor: "",
+        content: "",
+        created_at: iso(-47),
+        metadata: { tasks },
+      },
+      {
+        event_id: eventId(conversationId, "delegation-completed"),
+        kind: "delegation.completed",
+        actor: "",
+        content: "",
+        created_at: iso(-39),
+        metadata: {
+          tasks: tasks.map((task) => ({ ...task, status: "completed" })),
+        },
+      },
+    );
+  }
+
+  events.push(
+    {
+      event_id: eventId(conversationId, "task-status"),
+      kind: "task.status",
+      actor: "",
+      content: pendingApproval
+        ? "Waiting for operator approval before continuing."
+        : "Checklist verification is still running.",
+      created_at: iso(-28),
+      metadata: {
+        status: pendingApproval ? "queued" : "running",
+        progress: pendingApproval ? 12 : 68,
+      },
+    },
+    {
+      event_id: eventId(conversationId, "error"),
+      kind: "error",
+      actor: "",
+      content: pendingApproval
+        ? "Blocked on an operator decision."
+        : "One dependency check needs a second verification pass.",
+      created_at: iso(-18),
+      metadata: {
+        error_type: pendingApproval ? "approval" : "execution",
+        message: pendingApproval
+          ? "approval is still pending"
+          : "one dependency check needs a second verification pass",
+      },
+    },
+    {
+      event_id: eventId(conversationId, "message-bot"),
+      kind: "message.bot",
+      actor,
+      content: pendingApproval
+        ? "Approval is pending. I will continue once the operator decides."
+        : "Release review is mostly green. One dependency needs a final follow-up before launch.",
+      created_at: iso(-8),
+      metadata: {},
+    },
+  );
+
+  return events;
+}
+
+async function publishEvents(agent: SeedAgent, conversationId: string, focus = false, pendingApproval = false) {
+  const events = buildTimeline(conversationId, agent.slug, focus, pendingApproval);
+  const resp = await fetch(`${BASE}/v1/conversations/${conversationId}/events`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${agent.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ events }),
+  });
+  const text = await resp.text();
+  expect(resp.ok, text).toBeTruthy();
+  const payload = JSON.parse(text);
+  expect(payload.inserted).toBe(events.length);
+  expect(payload.skipped).toBe(0);
+}
+
+async function createRoutedTask(
+  origin: SeedAgent,
+  target: SeedAgent,
+  parentConversationId: string,
+  routedTaskId: string,
+  title: string,
+  instructions: string,
+  requestedCapabilities: string[],
+) {
+  const resp = await fetch(`${BASE}/v1/agents/routed-tasks`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${origin.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      routed_task_id: routedTaskId,
+      parent_conversation_id: parentConversationId,
+      origin_agent_id: origin.id,
+      target_agent_id: target.id,
+      title,
+      instructions,
+      requested_capabilities: requestedCapabilities,
+      priority: "high",
+      created_at: new Date().toISOString(),
+    }),
+  });
+  expect(resp.ok, await resp.text()).toBeTruthy();
+}
+
+async function updateTaskStatus(agentToken: string, routedTaskId: string, payload: Record<string, unknown>) {
+  const resp = await fetch(`${BASE}/v1/agents/routed-tasks/${routedTaskId}/status`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${agentToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  expect(resp.ok, await resp.text()).toBeTruthy();
 }
 
 async function absRect(page: import("@playwright/test").Page, selector: string) {
-  const n = await page.locator(selector).first().count();
-  if (n === 0) return null;
+  const count = await page.locator(selector).first().count();
+  if (count === 0) return null;
   return page.locator(selector).first().evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
+    const rect = el.getBoundingClientRect();
+    return {
+      x: rect.left + window.scrollX,
+      y: rect.top + window.scrollY,
+      width: rect.width,
+      height: rect.height,
+    };
   });
 }
 
@@ -238,463 +497,304 @@ async function writeOverlayMeta(
   arrows: Array<{ fromSel: string; toSel: string }> = [],
 ) {
   const metaPath = pngPath.replace(/\.png$/i, ".meta.json");
-  const outRects: Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    label?: string;
-    color?: string;
-  }> = [];
-  for (const r of rects) {
-    const box = await absRect(page, r.selector);
+  const outRects: Array<{ x: number; y: number; width: number; height: number; label?: string; color?: string }> = [];
+  for (const rect of rects) {
+    const box = await absRect(page, rect.selector);
     if (!box) continue;
-    const pad = r.pad ?? 6;
+    const pad = rect.pad ?? 6;
     outRects.push({
       x: Math.max(0, box.x - pad),
       y: Math.max(0, box.y - pad),
       width: box.width + 2 * pad,
       height: box.height + 2 * pad,
-      label: r.label,
-      color: r.color ?? "#ff9800",
+      label: rect.label,
+      color: rect.color ?? "#ff9800",
     });
   }
-  const arrowPixels: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-  for (const a of arrows) {
-    const ra = await absRect(page, a.fromSel);
-    const rb = await absRect(page, a.toSel);
-    if (!ra || !rb) continue;
-    const x1 = ra.x + ra.width / 2;
-    const y1 = ra.y + ra.height;
-    const x2 = rb.x + rb.width / 2;
-    const y2 = rb.y;
-    arrowPixels.push({ x1, y1, x2, y2 });
+  const outArrows: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  for (const arrow of arrows) {
+    const from = await absRect(page, arrow.fromSel);
+    const to = await absRect(page, arrow.toSel);
+    if (!from || !to) continue;
+    outArrows.push({
+      x1: from.x + from.width / 2,
+      y1: from.y + from.height,
+      x2: to.x + to.width / 2,
+      y2: to.y,
+    });
   }
-  await fs.promises.writeFile(metaPath, JSON.stringify({ rects: outRects, arrows: arrowPixels }, null, 2), "utf-8");
+  await fs.promises.writeFile(metaPath, JSON.stringify({ rects: outRects, arrows: outArrows }, null, 2), "utf-8");
+}
+
+async function seedGuidanceDraft(page: import("@playwright/test").Page) {
+  const result = await page.evaluate(async () => {
+    const csrfResp = await fetch("/v1/auth/csrf", { credentials: "same-origin" });
+    const csrf = await csrfResp.json();
+    const token = csrf.token || csrf.csrf_token || "";
+    const draftResp = await fetch("/v1/provider-guidance/claude/draft", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": token,
+      },
+      body: JSON.stringify({
+        actor_key: "ui:docs-capture",
+        body: [
+          "Prefer direct operational guidance over long rationale.",
+          "Call out risks before implementation steps.",
+          "Keep release checklists ordered by blast radius.",
+        ].join("\n"),
+        scope_kind: "system",
+        scope_key: "",
+      }),
+    });
+    return {
+      ok: draftResp.ok,
+      status: draftResp.status,
+      text: await draftResp.text(),
+    };
+  });
+  expect(result.ok, `${result.status}: ${result.text}`).toBeTruthy();
 }
 
 test.beforeAll(async () => {
   fs.mkdirSync(OUT, { recursive: true });
 
-  for (const b of BOTS) {
-    const { agent_id, token } = await enrollAgent(b);
-    seed.agents.push({ id: agent_id, token, slug: b.slug });
+  for (const bot of BOTS) {
+    const agent = await enrollAgent(bot);
+    seed.agents.push(agent);
   }
 
-  const target = seed.agents[1]!;
+  seed.focusAgentId = seed.agents[0]!.id;
 
-  // Each bot: three conversations with distinct titles and timeline variants
-  const blueprints: [string, string][] = [
-    ["Sprint planning — Q1 roadmap", "plan-q1"],
-    ["Customer ticket #4412 — checkout timeout", "nw-4412"],
-    ["Security review — container hardening", "sec-harden"],
-    ["On-call handoff — weekend queue", "handoff-wknd"],
-    ["RAG pilot — embedding evaluation", "rag-pilot"],
-    ["Release train — helm chart rollback drill", "rel-helm"],
-    ["Incident — eu-west latency spike", "inc-euw"],
-    ["Compliance — data retention §4.2", "comp-42"],
-    ["Postmortem — cache stampede", "pm-stampede"],
-    ["Cost review — LLM spend by team", "cost-llm"],
-    ["DR exercise — regional failover", "dr-failover"],
-    ["Design doc — workflow engine v3", "wf-v3"],
-    ["Backlog grooming — bot capabilities", "bl-cap"],
-    ["Partner API — webhook signatures", "api-wh"],
-    ["Migration — Postgres cutover window", "pg-cut"],
-    ["Metrics — SLO burn rate alerts", "slo-burn"],
-    ["Docs — operator manual screenshots", "docs-cap"],
-    ["Experiment — tool-use sandbox", "exp-sbx"],
-    ["ChatOps — /deploy dry-run", "chatops-dry"],
-    ["Audit trail — privileged commands", "audit-priv"],
-    ["Training set — red-team prompts", "train-red"],
-    ["Staging — synthetic load profile", "stg-load"],
-    ["Prod freeze — holiday checklist", "freeze-hol"],
-    ["Retro — registry adoption", "retro-reg"],
-    ["Weekly report — agent utilization", "wk-util"],
+  for (let i = 0; i < seed.agents.length; i += 1) {
+    const agent = seed.agents[i]!;
+    await heartbeatAgent(
+      agent,
+      BOTS[i]!.state,
+      `worker-${agent.slug}`,
+      i === 0 ? "release-checklist" : `queue-${i + 1}`,
+    );
+  }
+
+  const conversationSeeds = [
+    { agentIndex: 0, title: "Release readiness review", ref: "release-review", focus: true, pending: false },
+    { agentIndex: 0, title: "Release approval queue", ref: "release-approval", focus: false, pending: true },
+    { agentIndex: 1, title: "Policy sign-off for launch", ref: "policy-launch", focus: false, pending: false },
+    { agentIndex: 2, title: "Customer escalation summary", ref: "customer-escalation", focus: false, pending: true },
+    { agentIndex: 3, title: "Platform maintenance window", ref: "platform-window", focus: false, pending: false },
+    { agentIndex: 4, title: "Retrieval benchmark follow-up", ref: "retrieval-benchmark", focus: false, pending: false },
+    { agentIndex: 5, title: "Audit evidence bundle", ref: "audit-evidence", focus: false, pending: false },
+    { agentIndex: 1, title: "Release dry run checklist", ref: "release-dry-run", focus: false, pending: false },
+    { agentIndex: 4, title: "Release rollback rehearsal", ref: "release-rollback", focus: false, pending: true },
+    { agentIndex: 2, title: "Support playbook refresh", ref: "support-playbook", focus: false, pending: false },
   ];
 
-  let bp = 0;
-  for (let i = 0; i < seed.agents.length; i++) {
-    const ag = seed.agents[i]!;
-    for (let j = 0; j < 3; j++) {
-      const [title, ref] = blueprints[bp % blueprints.length]!;
-      bp++;
-      const channels = ["registry-ui", "telegram", "slack"] as const;
-      const cr = await fetch(`${BASE}/v1/conversations`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${ag.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          target_agent_id: ag.id,
-          title: `${title} · ${ag.slug}`,
-          origin_channel: channels[j % channels.length],
-          external_conversation_ref: `${ref}-${i}-${j}-${Date.now()}`,
-        }),
-      });
-      expect(cr.ok).toBeTruthy();
-      const conv = await cr.json();
-      const cid = conv.conversation_id as string;
-      seed.conversations.push(cid);
-      await publishEvents(ag.token, cid, buildTimeline(ag.slug, cid, bp + i + j));
+  for (const item of conversationSeeds) {
+    const agent = seed.agents[item.agentIndex]!;
+    const conversationId = await createConversation(agent, item.title, item.ref);
+    await publishEvents(agent, conversationId, item.focus, item.pending);
+    seed.conversations.push({
+      id: conversationId,
+      title: item.title,
+      agentId: agent.id,
+    });
+    if (item.focus) {
+      seed.focusConversationId = conversationId;
+      seed.focusConversationTitle = item.title;
     }
   }
 
-  type TaskSeed = {
-    id: string;
-    title: string;
-    instructions: string;
-    parentIdx: number;
-    originIdx: number;
-    targetIdx: number;
-    caps: string[];
-  };
+  await createRoutedTask(
+    seed.agents[0]!,
+    seed.agents[1]!,
+    seed.conversations[0]!.id,
+    "docs-risk-review",
+    "Review launch checklist and call out blockers",
+    "Summarize blockers and confirm whether the deployment window is safe.",
+    ["reviewer", "security"],
+  );
+  await createRoutedTask(
+    seed.agents[0]!,
+    seed.agents[3]!,
+    seed.conversations[1]!.id,
+    "docs-release-window",
+    "Validate the maintenance window",
+    "Check regional overlap, pager coverage, and rollback timing.",
+    ["kubernetes", "devops"],
+  );
+  await createRoutedTask(
+    seed.agents[4]!,
+    seed.agents[5]!,
+    seed.conversations[4]!.id,
+    "docs-audit-pass",
+    "Review control evidence bundle",
+    "Confirm the evidence packet is ready for the operator archive.",
+    ["policy", "reviewer"],
+  );
+  await createRoutedTask(
+    seed.agents[0]!,
+    seed.agents[2]!,
+    seed.conversations[3]!.id,
+    "docs-customer-escalation",
+    "Prepare customer escalation summary",
+    "Summarize timeline, impact, and the next operator-visible step.",
+    ["support", "python"],
+  );
 
-  const tasks: TaskSeed[] = [
-    {
-      id: "rt-spec-review",
-      title: "Review OpenAPI specification (checkout service)",
-      instructions: "List blocking issues; note breaking changes.",
-      parentIdx: 0,
-      originIdx: 0,
-      targetIdx: 1,
-      caps: ["reviewer", "python"],
-    },
-    {
-      id: "rt-load-test",
-      title: "Run k6 load test on staging (checkout)",
-      instructions: "Capture p95/p99; attach Grafana snapshot.",
-      parentIdx: 1,
-      originIdx: 0,
-      targetIdx: 1,
-      caps: ["devops", "python"],
-    },
-    {
-      id: "rt-docs-sync",
-      title: "Sync public docs with release v2.4.0",
-      instructions: "Verify changelog links and version strings.",
-      parentIdx: 2,
-      originIdx: 1,
-      targetIdx: 0,
-      caps: ["reviewer"],
-    },
-    {
-      id: "rt-incident-triage",
-      title: "Triage P1 — payment webhook failures",
-      instructions: "Correlate with deploy window T-45m.",
-      parentIdx: 3,
-      originIdx: 2,
-      targetIdx: 3,
-      caps: ["support", "python"],
-    },
-    {
-      id: "rt-compliance-audit",
-      title: "SOC2 evidence — access log sample",
-      instructions: "Export last 30d admin actions (redacted).",
-      parentIdx: 4,
-      originIdx: 4,
-      targetIdx: 7,
-      caps: ["policy", "reviewer"],
-    },
-    {
-      id: "rt-helm-diff",
-      title: "Helm diff — redis chart 18.x → 19.x",
-      instructions: "Flag securityContext changes.",
-      parentIdx: 5,
-      originIdx: 5,
-      targetIdx: 3,
-      caps: ["kubernetes", "reviewer"],
-    },
-    {
-      id: "rt-rag-eval",
-      title: "Benchmark retrieval — legal corpus subset",
-      instructions: "nDCG@10 vs baseline; cost per query.",
-      parentIdx: 6,
-      originIdx: 4,
-      targetIdx: 4,
-      caps: ["retrieval", "python"],
-    },
-  ];
-
-  for (const tk of tasks) {
-    const o = seed.agents[tk.originIdx]!;
-    const t = seed.agents[tk.targetIdx]!;
-    const parent = seed.conversations[tk.parentIdx]!;
-    const rt = await fetch(`${BASE}/v1/agents/routed-tasks`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${o.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        routed_task_id: tk.id,
-        parent_conversation_id: parent,
-        origin_agent_id: o.id,
-        target_agent_id: t.id,
-        title: tk.title,
-        instructions: tk.instructions,
-        requested_capabilities: tk.caps,
-        priority: "high",
-        created_at: new Date().toISOString(),
-      }),
-    });
-    expect(rt.ok).toBeTruthy();
-  }
-
-  const postStatus = (taskId: string, token: string, body: Record<string, unknown>) =>
-    fetch(`${BASE}/v1/agents/routed-tasks/${taskId}/status`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-  await postStatus("rt-load-test", target.token, {
-    status: "running",
-    summary: "k6: 1.2k RPS sustained; collecting p95 …",
-    timeline_events: [],
-  });
-  await postStatus("rt-spec-review", target.token, {
+  await updateTaskStatus(seed.agents[1]!.token, "docs-risk-review", {
     status: "completed",
-    summary: "Approved — no blocking issues; nits in comments.",
+    summary: "No blocking risks. One deployment note added to the runbook.",
     timeline_events: [],
   });
-  await postStatus("rt-incident-triage", seed.agents[3]!.token, {
+  await updateTaskStatus(seed.agents[3]!.token, "docs-release-window", {
+    status: "running",
+    summary: "Validating regional overlap and pager coverage.",
+    progress: 54,
+    timeline_events: [],
+  });
+  await updateTaskStatus(seed.agents[5]!.token, "docs-audit-pass", {
     status: "failed",
-    summary: "Root cause inconclusive — need DB slow-query log.",
+    summary: "One evidence attachment is still missing from the package.",
     timeline_events: [],
-  });
-  await postStatus("rt-helm-diff", seed.agents[3]!.token, {
-    status: "running",
-    summary: "Rendering manifests for redis 19.1.2 …",
-    timeline_events: [],
-  });
-  await postStatus("rt-compliance-audit", seed.agents[7]!.token, {
-    status: "completed",
-    summary: "Evidence bundle uploaded to secure share.",
-    timeline_events: [],
-  });
-
-  const iso = new Date().toISOString();
-  const workerStories = [
-    [
-      {
-        worker_id: "worker-ledger",
-        process_role: "worker",
-        started_at: iso,
-        last_seen_at: iso,
-        current_item_id: "queue-checkout-42",
-        current_conversation_key: "tg:acme-prod",
-        current_kind: "message",
-        items_processed: 1840,
-        stale_recoveries_seen: 0,
-        last_error: "",
-      },
-      {
-        worker_id: "worker-batch",
-        process_role: "worker",
-        started_at: iso,
-        last_seen_at: iso,
-        current_item_id: "idle",
-        current_conversation_key: "",
-        current_kind: "",
-        items_processed: 622,
-        stale_recoveries_seen: 2,
-        last_error: "",
-      },
-    ],
-    [
-      {
-        worker_id: "reviewer-1",
-        process_role: "worker",
-        started_at: iso,
-        last_seen_at: iso,
-        current_item_id: "pr-8841-diff",
-        current_conversation_key: "registry-ui:review",
-        current_kind: "tool",
-        items_processed: 412,
-        stale_recoveries_seen: 0,
-        last_error: "",
-      },
-    ],
-    [
-      {
-        worker_id: "support-router",
-        process_role: "worker",
-        started_at: iso,
-        last_seen_at: iso,
-        current_item_id: "ticket-4412",
-        current_conversation_key: "slack:northwind",
-        current_kind: "message",
-        items_processed: 901,
-        stale_recoveries_seen: 0,
-        last_error: "",
-      },
-    ],
-  ];
-
-  for (let idx = 0; idx < seed.agents.length; idx++) {
-    const ag = seed.agents[idx]!;
-    const workers = workerStories[idx % workerStories.length]!;
-    await fetch(`${BASE}/v1/agents/heartbeat`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${ag.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        connectivity_state: "connected",
-        current_capacity: idx === 0 ? 2 : 1,
-        max_capacity: 8,
-        runtime_health: { snapshot: { workers } },
-      }),
-    });
-  }
-
-  // Usage rows (kind=usage) — not in SDK publish path; one per conversation for a full table
-  execFileSync(PY, [SEED_USAGE, DB_SQLITE, ...seed.conversations], {
-    stdio: "inherit",
   });
 });
 
 test("capture all registry UI surfaces", async ({ page }) => {
-  const uiToken = "guide-capture-ui-token-2026";
-  const firstAgentId = seed.agents[0]!.id;
-
   await page.goto("/ui/login");
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   await page.screenshot({ path: path.join(OUT, "00-login.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "00-login.png"), [
-    { selector: "form", label: "Password = REGISTRY_UI_TOKEN", color: "#2196f3", pad: 10 },
-    { selector: 'input[type="password"]', label: "Operator credential", color: "#ff9800", pad: 8 },
+    { selector: ".login-container", label: "Operator sign-in for the registry UI", color: "#2196f3", pad: 10 },
+    { selector: "#login-password", label: "Password = REGISTRY_UI_TOKEN", color: "#ff9800", pad: 8 },
+    { selector: "button[type='submit']", label: "Creates an operator session cookie", color: "#4caf50", pad: 8 },
   ]);
 
-  await page.locator('input[type="password"]').fill(uiToken);
-  await page.locator('button[type="submit"]').click();
-  await page.waitForURL("**/ui**", { timeout: 15000 });
+  await page.getByLabel("Password").fill(UI_TOKEN);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/ui");
+  await expect(page.getByRole("heading", { name: "Registry Dashboard" })).toBeVisible();
 
-  await page.goto(BASE + "/ui");
-  await page.waitForSelector("#agent-list-content .card", { timeout: 20000 });
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(OUT, "01-agents.png"), fullPage: true });
-  await writeOverlayMeta(
-    page,
-    path.join(OUT, "01-agents.png"),
-    [
-      { selector: "#sidebar", label: "Primary navigation (7 areas)", color: "#ff9800", pad: 4 },
-      { selector: "#agent-list-content .card:nth-child(1)", label: "Agent row → detail", color: "#2196f3", pad: 6 },
-      { selector: "#agent-list-content .card:nth-child(2)", label: "Another enrolled bot", color: "#4caf50", pad: 6 },
-    ],
-    [{ fromSel: ".page-header h2", toSel: "#agent-list-content .card:nth-child(1)" }],
-  );
-
-  await page.locator("#agent-list-content .card").first().click();
-  await page.waitForSelector("#agent-detail-content .data-table", { timeout: 20000 });
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(OUT, "02-agent-detail.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "02-agent-detail.png"), [
-    { selector: ".page-header", label: "Display name & connectivity badge", color: "#ff9800", pad: 6 },
-    { selector: "#agent-detail-content .card:first-of-type .data-table", label: "Identity, scope, capabilities", color: "#2196f3", pad: 6 },
-    { selector: "#agent-detail-content .card:nth-of-type(2) .data-table", label: "Worker processes (heartbeat)", color: "#9c27b0", pad: 4 },
-    { selector: "#agent-convos-section", label: "Conversations (inline, paginated)", color: "#4caf50", pad: 6 },
+  await page.screenshot({ path: path.join(OUT, "01-dashboard.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "01-dashboard.png"), [
+    { selector: "#sidebar", label: "Primary navigation", color: "#ff9800", pad: 6 },
+    { selector: ".stat-grid-hero", label: "Canonical summary cards from /v1/summary", color: "#2196f3", pad: 8 },
+    { selector: ".quick-links", label: "Jump straight to the operational routes", color: "#4caf50", pad: 8 },
   ]);
 
-  await page.goto(`${BASE}/ui/agents/${firstAgentId}/conversations`);
-  await page.waitForSelector("#agent-convos .card, #agent-convos .empty-state", { timeout: 20000 });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "03-agent-conversations.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "03-agent-conversations.png"), [
-    { selector: "#agent-convos", label: "Conversations where this agent is involved", color: "#2196f3", pad: 6 },
+  await page.goto("/ui/agents");
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await page.waitForSelector("#agent-list-content .card.clickable");
+  await page.screenshot({ path: path.join(OUT, "02-agents.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "02-agents.png"), [
+    { selector: ".filter-bar", label: "Current-page filters for name and state", color: "#ff9800", pad: 6 },
+    { selector: "#agent-list-content .card.clickable:nth-child(1)", label: "Agent card → detail", color: "#2196f3", pad: 6 },
+    { selector: "#agent-list-content .card.clickable:nth-child(2)", label: "Additional enrolled registry member", color: "#4caf50", pad: 6 },
   ]);
 
-  await page.goto(BASE + "/ui/conversations");
-  await page.waitForSelector(`${UI.filterListPane} .card.clickable, ${UI.filterListPane} .empty-state`, {
-    timeout: 20000,
-  });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "04-conversations.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "04-conversations.png"), [
-    { selector: UI.convoSearch, label: "Type 3+ chars to search (FTS)", color: "#ff9800", pad: 4 },
-    { selector: UI.filterListPane, label: "All conversations across agents", color: "#2196f3", pad: 6 },
+  await page.goto(`/ui/agents/${seed.focusAgentId}`);
+  await page.waitForSelector("#agent-detail-content .card");
+  await page.screenshot({ path: path.join(OUT, "03-agent-detail.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "03-agent-detail.png"), [
+    { selector: ".page-header", label: "Identity, role, provider, and connectivity", color: "#ff9800", pad: 6 },
+    { selector: "#agent-detail-content .card:first-of-type", label: "Registry identity, scope, heartbeat, capabilities, and tags", color: "#2196f3", pad: 8 },
+    { selector: "#agent-detail-content .card:nth-of-type(2)", label: "Worker state from runtime heartbeat", color: "#9c27b0", pad: 8 },
+    { selector: "#agent-convos-section", label: "Inline conversations for this agent", color: "#4caf50", pad: 8 },
   ]);
 
-  await page.locator(UI.convoSearch).fill("Acme");
-  await page.waitForTimeout(600);
-  await page.screenshot({ path: path.join(OUT, "04b-conversations-filtered.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "04b-conversations-filtered.png"), [
-    { selector: UI.convoSearch, label: "Filtered list (search debounced)", color: "#ff9800", pad: 4 },
-    { selector: UI.filterListPane, label: "Matches title / FTS snippet", color: "#2196f3", pad: 6 },
+  await page.goto(`/ui/agents/${seed.focusAgentId}/conversations`);
+  await page.waitForSelector("#agent-convos .card, #agent-convos .empty-state");
+  await page.screenshot({ path: path.join(OUT, "04-agent-conversations.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "04-agent-conversations.png"), [
+    { selector: "#agent-convos", label: "All conversations scoped to the selected agent", color: "#2196f3", pad: 8 },
   ]);
 
-  await page.locator(UI.convoSearch).fill("");
-  await page.waitForTimeout(400);
-  await page.locator(`${UI.filterListPane} .card.clickable`).first().click();
-  await page.waitForSelector("#convo-timeline", { timeout: 20000 });
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(OUT, "05-conversation-detail.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "05-conversation-detail.png"), [
-    { selector: "#convo-meta", label: "Title · channel · status", color: "#ff9800", pad: 6 },
-    { selector: "#convo-timeline", label: "Timeline: bubbles + event cards", color: "#2196f3", pad: 6 },
+  await page.goto("/ui/conversations");
+  await page.waitForSelector(".filter-bar");
+  await page.waitForSelector(".card.clickable");
+  await page.screenshot({ path: path.join(OUT, "05-conversations.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "05-conversations.png"), [
+    { selector: ".btn.btn-primary.btn-sm", label: "Create a new operator conversation", color: "#4caf50", pad: 6 },
+    { selector: ".filter-bar", label: "Server-backed search and status filter", color: "#ff9800", pad: 6 },
+    { selector: ".card.clickable:nth-of-type(1)", label: "Conversation row → timeline detail", color: "#2196f3", pad: 6 },
   ]);
 
-  await page.goto(BASE + "/ui/tasks");
-  await page.waitForSelector(`${UI.filterListPane} table.data-table, ${UI.filterListPane} .empty-state`, {
-    timeout: 20000,
-  });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "06-tasks.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "06-tasks.png"), [
-    {
-      selector: `${UI.filterListPane} table.data-table`,
-      label: "Routed tasks — click row → parent conversation",
-      color: "#2196f3",
-      pad: 8,
-    },
+  await page.locator(".search-input").first().fill("Release");
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: path.join(OUT, "05b-conversations-filtered.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "05b-conversations-filtered.png"), [
+    { selector: ".search-input", label: "Search activates after 3+ characters", color: "#ff9800", pad: 6 },
+    { selector: ".card.clickable:nth-of-type(1)", label: "Filtered results from registry search", color: "#2196f3", pad: 6 },
   ]);
 
-  await page.goto(BASE + "/ui/capabilities");
-  await page.waitForSelector("#cap-list .card, #cap-list .empty-state", { timeout: 20000 });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "07-capabilities.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "07-capabilities.png"), [
-    { selector: "#cap-list", label: "Declared by agents + optional overrides", color: "#2196f3", pad: 8 },
+  await page.goto(`/ui/conversations/${seed.focusConversationId}`);
+  await page.waitForSelector(".conversation-page");
+  await page.waitForSelector(".timeline-events .event-card, .timeline-events .chat-bubble");
+  await page.screenshot({ path: path.join(OUT, "06-conversation-detail.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "06-conversation-detail.png"), [
+    { selector: ".conversation-meta", label: "Title, target agent, origin, and current status", color: "#ff9800", pad: 6 },
+    { selector: ".conversation-toolbar", label: "Filter, export, and cancel actions", color: "#4caf50", pad: 6 },
+    { selector: ".chat-timeline", label: "Mixed message bubbles and structured event cards", color: "#2196f3", pad: 8 },
+    { selector: ".compose-box", label: "Operator compose box for /messages", color: "#9c27b0", pad: 6 },
   ]);
 
-  await page.goto(BASE + "/ui/skills");
-  await page.waitForSelector(`${UI.skillListPane} .card, ${UI.skillListPane} .empty-state`, { timeout: 20000 });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "08-skills.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "08-skills.png"), [
-    { selector: UI.skillListPane, label: "Catalog entries from registry store", color: "#ff9800", pad: 8 },
+  await page.goto("/ui/tasks");
+  await page.waitForSelector(".task-card");
+  await page.screenshot({ path: path.join(OUT, "07-tasks.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "07-tasks.png"), [
+    { selector: ".filter-bar", label: "Status filter for routed work", color: "#ff9800", pad: 6 },
+    { selector: ".task-card:nth-of-type(1)", label: "Task cards expand inline and link to parent conversation", color: "#2196f3", pad: 8 },
   ]);
 
-  await page.goto(BASE + "/ui/usage");
-  await page.waitForFunction(
-    () => {
-      const summary = document.querySelector("#usage-summary .summary-card");
-      const table = document.querySelector("#usage-table table");
-      const empty = document.querySelector("#usage-table .empty-state");
-      return !!(summary && (table || empty));
-    },
-    null,
-    { timeout: 20000 },
-  );
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "09-usage.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "09-usage.png"), [
-    {
-      selector: "#usage-table table, #usage-table .empty-state",
-      label: "Aggregated from usage events (seeded in capture)",
-      color: "#2196f3",
-      pad: 8,
-    },
+  await page.goto("/ui/capabilities");
+  await page.waitForSelector("#cap-list .card, #cap-list .empty-state");
+  await page.screenshot({ path: path.join(OUT, "08-capabilities.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "08-capabilities.png"), [
+    { selector: "#cap-list", label: "Global capability overrides declared by active agents", color: "#2196f3", pad: 8 },
   ]);
 
-  // Deep-link sanity: second agent by URL
-  await page.goto(`${BASE}/ui/agents/${firstAgentId}`);
-  await page.waitForSelector("#agent-detail-content", { timeout: 20000 });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "10-agent-detail-deep-link.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "10-agent-detail-deep-link.png"), [
-    { selector: "#content", label: "Same view via /ui/agents/{id} (bookmarkable)", color: "#4caf50", pad: 6 },
+  await page.goto("/ui/skills");
+  await page.waitForSelector(".search-input");
+  await page.waitForSelector(".card, .empty-state");
+  await page.screenshot({ path: path.join(OUT, "09-skills.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "09-skills.png"), [
+    { selector: ".search-input", label: "Client-side search across the skill catalog", color: "#ff9800", pad: 6 },
+    { selector: ".card:nth-of-type(1)", label: "Catalog row with install or uninstall action", color: "#2196f3", pad: 6 },
   ]);
 
-  const firstConvId = seed.conversations[0]!;
-  await page.goto(`${BASE}/ui/conversations/${firstConvId}`);
-  await page.waitForSelector("#convo-timeline, #convo-meta", { timeout: 20000 });
-  await page.waitForTimeout(400);
-  await page.screenshot({ path: path.join(OUT, "11-conversation-deep-link.png"), fullPage: true });
-  await writeOverlayMeta(page, path.join(OUT, "11-conversation-deep-link.png"), [
-    { selector: "#convo-meta", label: "Loaded by URL /ui/conversations/{id}", color: "#4caf50", pad: 6 },
-    { selector: "#convo-timeline", label: "Same timeline as row navigation", color: "#2196f3", pad: 6 },
+  await page.goto("/ui/usage");
+  await page.waitForSelector("#usage-summary .summary-card, #usage-summary .stat-card");
+  await page.waitForSelector("#usage-table table, #usage-table .empty-state");
+  await page.screenshot({ path: path.join(OUT, "10-usage.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "10-usage.png"), [
+    { selector: ".date-range-bar", label: "Date-range shortcuts map to /v1/usage", color: "#ff9800", pad: 6 },
+    { selector: "#usage-summary", label: "Prompt, completion, and cost summary", color: "#2196f3", pad: 6 },
+    { selector: "#usage-table", label: "Per-conversation usage rollups from provider.response events", color: "#4caf50", pad: 6 },
+  ]);
+
+  await seedGuidanceDraft(page);
+  await page.goto("/ui/guidance");
+  await page.waitForSelector(".guidance-textarea");
+  await page.screenshot({ path: path.join(OUT, "11-guidance.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "11-guidance.png"), [
+    { selector: ".filter-bar", label: "Provider selector", color: "#ff9800", pad: 6 },
+    { selector: ".card:first-of-type", label: "Lifecycle status for the selected provider guidance", color: "#2196f3", pad: 8 },
+    { selector: ".guidance-textarea", label: "Draft system prompt body", color: "#4caf50", pad: 8 },
+    { selector: ".card-actions", label: "Preview and lifecycle actions", color: "#9c27b0", pad: 8 },
+  ]);
+
+  await page.goto(`/ui/agents/${seed.focusAgentId}`);
+  await page.waitForSelector("#agent-detail-content");
+  await page.screenshot({ path: path.join(OUT, "12-agent-detail-deep-link.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "12-agent-detail-deep-link.png"), [
+    { selector: "#content", label: "Direct deep link to /ui/agents/{agent_id}", color: "#4caf50", pad: 6 },
+  ]);
+
+  await page.goto(`/ui/conversations/${seed.focusConversationId}`);
+  await page.waitForSelector(".conversation-page");
+  await page.screenshot({ path: path.join(OUT, "13-conversation-deep-link.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "13-conversation-deep-link.png"), [
+    { selector: ".conversation-page", label: "Direct deep link to /ui/conversations/{conversation_id}", color: "#4caf50", pad: 6 },
   ]);
 });

@@ -1194,6 +1194,98 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for row in rows
         ]
 
+    def get_summary(self, *, now_iso: str) -> dict[str, Any]:
+        window_start = (
+            datetime.fromisoformat(now_iso) - timedelta(hours=24)
+        ).isoformat()
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT connectivity_state, last_heartbeat_at FROM {_SCHEMA}.agents"
+                )
+                agent_rows = cur.fetchall()
+                cur.execute(
+                    f"""
+                    SELECT
+                        COUNT(*) AS total,
+                        SUM(CASE WHEN status IN ('open', 'running', 'cancelling') THEN 1 ELSE 0 END) AS active
+                    FROM {_SCHEMA}.conversations
+                    """
+                )
+                conversation_totals = cur.fetchone()
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS cnt
+                    FROM {_SCHEMA}.conversations c
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM {_SCHEMA}.events e
+                        WHERE e.conversation_id = c.conversation_id
+                          AND e.kind = 'approval.requested'
+                          AND e.seq = (
+                              SELECT MAX(e2.seq)
+                              FROM {_SCHEMA}.events e2
+                              WHERE e2.conversation_id = c.conversation_id
+                                AND e2.kind IN ('approval.requested', 'approval.decided')
+                          )
+                    )
+                    """
+                )
+                pending_approvals_row = cur.fetchone()
+                cur.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                        SUM(CASE WHEN status IN ('queued', 'leased', 'submitted') THEN 1 ELSE 0 END) AS pending,
+                        SUM(CASE WHEN status = 'failed' AND updated_at >= %s THEN 1 ELSE 0 END) AS failed_24h
+                    FROM {_SCHEMA}.routed_tasks
+                    """,
+                    (window_start,),
+                )
+                task_totals = cur.fetchone()
+        connected = 0
+        degraded = 0
+        disconnected = 0
+        for row in agent_rows:
+            state = effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
+            if state == "connected":
+                connected += 1
+            elif state == "degraded":
+                degraded += 1
+            else:
+                disconnected += 1
+        usage_rows = self.get_usage_summary(window_start, until_iso=now_iso)
+        usage_total = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost_usd": 0.0,
+        }
+        for row in usage_rows:
+            metadata = row.get("metadata") or {}
+            usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
+            usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
+            usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
+        return {
+            "generated_at": now_iso,
+            "agents": {
+                "total": len(agent_rows),
+                "connected": connected,
+                "degraded": degraded,
+                "disconnected": disconnected,
+            },
+            "conversations": {
+                "total": int(conversation_totals["total"] or 0),
+                "active": int(conversation_totals["active"] or 0),
+                "pending_approvals": int(pending_approvals_row["cnt"] or 0),
+            },
+            "tasks": {
+                "running": int(task_totals["running"] or 0),
+                "pending": int(task_totals["pending"] or 0),
+                "failed_24h": int(task_totals["failed_24h"] or 0),
+            },
+            "usage_24h": usage_total,
+        }
+
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
@@ -1512,30 +1604,55 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         skipped += 1
         return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids), "inserted_events": inserted_events}
 
-    def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+    def list_events(
+        self,
+        conversation_id: str,
+        *,
+        kind: str = "",
+        before_seq: int = 0,
+        after_seq: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        if before_seq and after_seq:
+            raise ValueError("before_seq and after_seq cannot both be set")
+        kinds = [item.strip() for item in kind.split(",") if item.strip()]
+        clauses = ["conversation_id = %s"]
+        params: list[Any] = [conversation_id]
+        if kinds:
+            placeholders = ", ".join(["%s"] * len(kinds))
+            clauses.append(f"kind IN ({placeholders})")
+            params.extend(kinds)
+        if before_seq:
+            clauses.append("seq < %s")
+            params.append(before_seq)
+            order_sql = "ORDER BY seq DESC"
+        elif after_seq:
+            clauses.append("seq > %s")
+            params.append(after_seq)
+            order_sql = "ORDER BY seq ASC"
+        else:
+            order_sql = "ORDER BY seq DESC"
         with self._connect() as conn:
             with _cur(conn) as cur:
-                if kind:
-                    cur.execute(
-                        f"""
-                        SELECT * FROM {_SCHEMA}.events
-                        WHERE conversation_id = %s AND kind = %s AND seq > %s
-                        ORDER BY seq ASC
-                        LIMIT %s
-                        """,
-                        (conversation_id, kind, cursor, limit),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        SELECT * FROM {_SCHEMA}.events
-                        WHERE conversation_id = %s AND seq > %s
-                        ORDER BY seq ASC
-                        LIMIT %s
-                        """,
-                        (conversation_id, cursor, limit),
-                    )
+                cur.execute(
+                    f"""
+                    SELECT * FROM {_SCHEMA}.events
+                    WHERE {' AND '.join(clauses)}
+                    {order_sql}
+                    LIMIT %s
+                    """,
+                    (*params, limit + 1),
+                )
                 rows = cur.fetchall()
+        has_more_before = False
+        if before_seq or not after_seq:
+            has_more_before = len(rows) > limit
+            if has_more_before:
+                rows = rows[:limit]
+            rows = list(reversed(rows))
+        else:
+            if len(rows) > limit:
+                rows = rows[:limit]
         events_list = [
             {
                 "seq": row["seq"],
@@ -1550,8 +1667,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             }
             for row in rows
         ]
-        next_cursor = events_list[-1]["seq"] if events_list else 0
-        return {"events": events_list, "next_cursor": next_cursor}
+        return {
+            "events": events_list,
+            "has_more_before": has_more_before,
+            "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
+            "next_after_seq": events_list[-1]["seq"] if events_list else None,
+        }
 
     def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         with self._connect() as conn:

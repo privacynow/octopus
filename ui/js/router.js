@@ -67,11 +67,13 @@ const Router = (() => {
     function _render(renderFn, params) {
         _cleanup();
         if (!contentEl) contentEl = document.getElementById('content');
-        // Transition: dim during load
         contentEl.classList.add('loading-route');
         contentEl.textContent = '';
+        const inner = document.createElement('div');
+        inner.className = 'content-inner route-enter';
+        contentEl.appendChild(inner);
         try {
-            const result = renderFn(contentEl, params);
+            const result = renderFn(inner, params);
             if (typeof result === 'function') {
                 currentCleanup = result;
             }
@@ -87,12 +89,14 @@ const Router = (() => {
             retryBtn.textContent = 'Retry';
             retryBtn.addEventListener('click', () => resolve());
             errCard.appendChild(retryBtn);
-            contentEl.textContent = '';
-            contentEl.appendChild(errCard);
+            inner.textContent = '';
+            inner.appendChild(errCard);
         }
-        // Remove dim after a microtask (allows DOM to paint skeleton first)
         requestAnimationFrame(() => {
             contentEl.classList.remove('loading-route');
+            inner.classList.add('route-enter-active');
+            const main = document.getElementById('content');
+            if (main) main.focus();
         });
     }
 

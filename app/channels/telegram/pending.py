@@ -14,11 +14,14 @@ from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.normalization import normalize_user
 from app.channels.telegram.state import TelegramRuntime
-from app.identity import telegram_conversation_key, telegram_event_id
+from app.channels.telegram.session_io import (
+    conversation_key as _conversation_key,
+    event_key as _event_key,
+    load as _session_io_load,
+    save as _session_io_save,
+)
 from app.runtime import composition
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.session_state import SessionState
-from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 
 log = logging.getLogger(__name__)
@@ -39,33 +42,6 @@ def _flows():
     return composition.workflows()
 
 
-def _conversation_key(chat_id: int | str) -> str:
-    return telegram_conversation_key(chat_id)
-
-
-def _event_key(update_id: int | str) -> str:
-    return telegram_event_id(update_id)
-
-
-def _load(runtime: TelegramPendingRuntime, chat_id: int | str) -> SessionState:
-    cfg = runtime.state.config
-    provider = runtime.state.provider
-    session = load_runtime_session(
-        cfg.data_dir,
-        _conversation_key(chat_id),
-        provider_name=provider.name,
-        provider_state_factory=provider.new_provider_state,
-        approval_mode=cfg.approval_mode,
-        default_role=cfg.role,
-        default_skills=cfg.default_skills,
-    )
-    if get_skill_activation_service().normalize(session):
-        _save(runtime, chat_id, session)
-    return session
-
-
-def _save(runtime: TelegramPendingRuntime, chat_id: int | str, session: SessionState) -> None:
-    save_runtime_session(runtime.state.config.data_dir, _conversation_key(chat_id), session)
 
 
 def _is_allowed(runtime: TelegramPendingRuntime, user) -> bool:
@@ -93,7 +69,7 @@ async def approve_pending(
     cancel_event: asyncio.Event | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
-    session = _load(runtime, chat_id)
+    session = _session_io_load(runtime.state, chat_id)
     if not _pending_callback_matches(session.pending_approval or session.pending_retry, callback_token):
         rendered = telegram_presenters.pending_plain_outcome_message(
             _msg.approval_request_no_longer_valid()
@@ -106,7 +82,7 @@ async def approve_pending(
         provider_name=runtime.state.provider.name,
     )
     if outcome.mutated:
-        _save(runtime, chat_id, session)
+        _session_io_save(runtime.state, chat_id, session)
     if outcome.execution_plan is None:
         rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
         await message.reply_text(rendered.text, **rendered.kwargs())
@@ -132,7 +108,7 @@ async def reject_pending(
     callback_token: str | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
-    session = _load(runtime, chat_id)
+    session = _session_io_load(runtime.state, chat_id)
     if not _pending_callback_matches(session.pending_approval or session.pending_retry, callback_token):
         rendered = telegram_presenters.pending_plain_outcome_message(
             _msg.approval_request_no_longer_valid()
@@ -141,7 +117,7 @@ async def reject_pending(
         return
     outcome = _flows().pending.requests.reject(session)
     if outcome.mutated:
-        _save(runtime, chat_id, session)
+        _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
     await message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -153,7 +129,7 @@ async def retry_skip_pending(
     callback_token: str | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
-    session = _load(runtime, chat_id)
+    session = _session_io_load(runtime.state, chat_id)
     if not _pending_callback_matches(session.pending_retry, callback_token):
         rendered = telegram_presenters.pending_plain_outcome_message(
             _msg.approval_request_no_longer_valid()
@@ -162,7 +138,7 @@ async def retry_skip_pending(
         return
     outcome = _flows().pending.requests.retry_skip(session)
     if outcome.mutated:
-        _save(runtime, chat_id, session)
+        _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
     await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
 
@@ -175,7 +151,7 @@ async def retry_allow_pending(
     cancel_event: asyncio.Event | None = None,
     runtime: TelegramPendingRuntime,
 ) -> None:
-    session = _load(runtime, chat_id)
+    session = _session_io_load(runtime.state, chat_id)
     if not _pending_callback_matches(session.pending_retry, callback_token):
         rendered = telegram_presenters.pending_plain_outcome_message(
             _msg.approval_request_no_longer_valid()
@@ -188,7 +164,7 @@ async def retry_allow_pending(
         provider_name=runtime.state.provider.name,
     )
     if outcome.mutated:
-        _save(runtime, chat_id, session)
+        _session_io_save(runtime.state, chat_id, session)
     if outcome.execution_plan is None:
         rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
         await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
@@ -339,7 +315,7 @@ async def handle_recovery_action(
     )
     try:
         async with runtime.chat_lock(chat_id, message=message, worker_item={"id": outcome.replay_plan.item_id}):
-            session = _load(runtime, chat_id)
+            session = _session_io_load(runtime.state, chat_id)
             if not getattr(outcome.replay_plan.event, "routed_task_id", "") and session.approval_mode == "on":
                 await runtime.request_approval(
                     chat_id,

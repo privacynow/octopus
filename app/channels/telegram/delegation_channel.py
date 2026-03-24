@@ -61,35 +61,6 @@ class _AutoSubmitEgress:
         return DelegationCallbackHandle()
 
 
-async def publish_delegation_proposed_event(
-    runtime: TelegramRuntime,
-    message,
-    delegation: PendingDelegation,
-) -> None:
-    """Publish a delegation-proposed event via the event sink.
-
-    Best-effort notification; failures silently ignored since the
-    delegation flow does not depend on timeline persistence.
-    """
-    from app.workflows.execution.event_sink import build_event_sink_for_context
-    from app.workflows.execution.contracts import TransportIdentity
-
-    config = runtime.config
-    chat_id = str(getattr(message, "chat_id", "") or getattr(getattr(message, "chat", None), "id", ""))
-
-    transport = TransportIdentity(
-        origin_channel="telegram",
-        external_conversation_ref=chat_id,
-        target_agent_id=config.agent_id_for_registry("local"),
-    )
-    sink = build_event_sink_for_context(
-        transport,
-        runtime.services.control_plane.conversation_projection,
-        config,
-    )
-    tasks_summary = [{"title": getattr(t, "title", ""), "target": getattr(t, "target_agent_id", "")} for t in (delegation.tasks or [])]
-    await sink.on_delegation_proposed(tasks_summary)
-
 
 async def propose_delegation_plan(
     runtime: TelegramRuntime,
@@ -113,7 +84,7 @@ async def propose_delegation_plan(
     )
     session.pending_delegation = delegation
     save_session(runtime, chat_id, session)
-    await publish_delegation_proposed_event(runtime, message, delegation)
+    # delegation.proposed event is published by execute_request via the event sink
 
     # Autonomous mode: auto-submit delegation without buttons.
     if runtime.config.autonomous and session.approval_mode != "on":

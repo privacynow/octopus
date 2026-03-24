@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 150.93215942382812,
+      "y": 154.39141845703125,
       "width": 1060,
       "height": 58,
       "label": "Provider selector",
@@ -10,7 +10,7 @@
     },
     {
       "x": 272,
-      "y": 212.93215942382812,
+      "y": 216.39141845703125,
       "width": 1064,
       "height": 116.796875,
       "label": "Lifecycle status for the selected provider guidance",
@@ -18,15 +18,15 @@
     },
     {
       "x": 289,
-      "y": 363.2290344238281,
+      "y": 366.68829345703125,
       "width": 1030,
-      "height": 268.0000305175781,
+      "height": 268,
       "label": "Draft system prompt body",
       "color": "#4caf50"
     },
     {
       "x": 289,
-      "y": 632.8532104492188,
+      "y": 636.6882934570312,
       "width": 1030,
       "height": 44,
       "label": "Preview and lifecycle actions",

@@ -10,19 +10,27 @@
     },
     {
       "x": 272,
-      "y": 156.140625,
+      "y": 159.0369415283203,
       "width": 1064,
-      "height": 339.21875,
-      "label": "Canonical summary cards from /v1/summary",
+      "height": 215.81248474121094,
+      "label": "Start with the next decision, not the raw telemetry",
       "color": "#2196f3"
     },
     {
-      "x": 1007.65625,
-      "y": 617.15625,
-      "width": 303.34375,
-      "height": 429.375,
-      "label": "Jump straight to the operational routes",
+      "x": 272,
+      "y": 394.84942626953125,
+      "width": 1064,
+      "height": 259.09375,
+      "label": "Action-first panels for approvals, health, and failed work",
       "color": "#4caf50"
+    },
+    {
+      "x": 272,
+      "y": 1009.1619262695312,
+      "width": 1064,
+      "height": 590.5313110351562,
+      "label": "Preview lists for review work, conversations, and failures",
+      "color": "#9c27b0"
     }
   ],
   "arrows": []

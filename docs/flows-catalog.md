@@ -68,11 +68,12 @@ Implementation: [`ui/`](../ui/) (SPA), entry [`ui/js/app.js`](../ui/js/app.js), 
 | Sign in | `/ui/login` → session cookie | [docs/registry-guide.md](registry-guide.md) §Browser, `00-login-annotated.png` |
 | Sign out | Sidebar **Logout** → `/ui/logout` | registry-guide sidebar table |
 | Dashboard summary | `/ui`, `/ui/` | `01-dashboard-annotated.png` |
+| Pending approvals queue | `/ui/approvals` | `01b-approvals-annotated.png` |
 | Agents list | `/ui/agents` | `02-agents-annotated.png` |
 | Agent detail | `/ui/agents/:id` | `03-agent-detail-annotated.png`, `12-agent-detail-deep-link-annotated.png` |
 | Agent-scoped conversations | `/ui/agents/:id/conversations` | `04-agent-conversations-annotated.png` |
 | All conversations + search + status + pagination | `/ui/conversations` | `05`, `05b` |
-| Conversation detail (timeline, compose, cancel, export, scroll-up history, WS) | `/ui/conversations/:id` | `06-conversation-detail-annotated.png` |
+| Conversation detail (human-first timeline, compose, cancel, export, scroll-up history, WS) | `/ui/conversations/:id` | `06-conversation-detail-annotated.png` |
 | Routed tasks → open parent conversation | `/ui/tasks` | `07-tasks-annotated.png` |
 | Global capability toggles | `/ui/capabilities` | `08-capabilities-annotated.png` |
 | Skill catalog | `/ui/skills` | `09-skills-annotated.png` |

@@ -77,6 +77,8 @@ const API = (() => {
         // Agents
         getSummary: () =>
             request('GET', '/v1/summary'),
+        listApprovals: (opts = {}) =>
+            request('GET', '/v1/approvals', { params: opts }),
         listAgents: (opts = {}) =>
             request('GET', '/v1/agents', { params: opts }),
         getAgentStatus: (id) =>

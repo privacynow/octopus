@@ -1286,6 +1286,59 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "usage_24h": usage_total,
         }
 
+    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+        fetch_limit = limit + 1
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                sql = f"""
+                    SELECT
+                        e.event_id,
+                        e.conversation_id,
+                        e.actor,
+                        e.content,
+                        e.metadata_json,
+                        e.created_at,
+                        c.title,
+                        c.status AS conversation_status,
+                        c.updated_at AS conversation_updated_at,
+                        c.target_agent_id,
+                        a.display_name AS target_name
+                    FROM {_SCHEMA}.events e
+                    JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
+                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
+                    WHERE e.kind = 'approval.requested'
+                      AND e.seq = (
+                          SELECT MAX(e2.seq)
+                          FROM {_SCHEMA}.events e2
+                          WHERE e2.conversation_id = e.conversation_id
+                            AND e2.kind IN ('approval.requested', 'approval.decided')
+                      )
+                """
+                params: list[Any] = []
+                if for_agent_id is not None:
+                    sql += " AND c.target_agent_id = %s"
+                    params.append(for_agent_id)
+                sql += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
+                params.extend([fetch_limit, cursor])
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        return [
+            {
+                "request_id": row["event_id"],
+                "conversation_id": row["conversation_id"],
+                "conversation_title": row["title"],
+                "conversation_status": row["conversation_status"],
+                "conversation_updated_at": row["conversation_updated_at"],
+                "target_agent_id": row["target_agent_id"],
+                "target_display_name": row["target_name"] or "",
+                "actor": row["actor"],
+                "content": row["content"],
+                "created_at": row["created_at"],
+                **(json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else (row["metadata_json"] or {})),
+            }
+            for row in rows
+        ]
+
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:

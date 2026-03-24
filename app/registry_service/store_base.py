@@ -646,6 +646,9 @@ class AbstractRegistryStore(Protocol):
     def get_summary(self, *, now_iso: str) -> dict[str, Any]:
         """Return global dashboard aggregates for the registry UI."""
 
+    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+        """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
+
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
         """Queue a follow-up channel_input for an existing conversation."""
 

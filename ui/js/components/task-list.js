@@ -10,7 +10,7 @@ function renderTaskList(container) {
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Tasks</h2><p>Delegated work and routed execution across agents</p>';
+    header.innerHTML = '<h2>Tasks</h2><p>Track delegated work, see what is stalled, and open the parent conversation when you need context.</p>';
     container.appendChild(header);
 
     // Filter bar

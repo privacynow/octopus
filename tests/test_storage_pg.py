@@ -2,9 +2,9 @@
 
 import threading
 
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 from app import storage_postgres
-from app.identity import telegram_conversation_key
+from octopus_sdk.identity import telegram_conversation_key
 from app.session_defaults import default_session
 
 

@@ -23,10 +23,10 @@ from app.credential_service import get_credential_service
 from app.credential_store import derive_credential_encryption_key
 from app.credential_store_sqlite import SQLiteCredentialStore
 from app.credential_validation import validate_credential
-from app.identity import filesystem_component_for_key, parse_actor_key
+from octopus_sdk.identity import filesystem_component_for_key, parse_actor_key
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
-from app.providers.base import PreflightContext, RunContext
+from octopus_sdk.providers import PreflightContext, RunContext
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
 from app.skill_types import SkillMeta, SkillRequirement
 

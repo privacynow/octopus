@@ -9,7 +9,7 @@ import sys
 from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
 
 from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_config_provider_health
-from app.providers.base import Provider
+from octopus_sdk.providers import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.control_plane.bus import ControlPlaneBus

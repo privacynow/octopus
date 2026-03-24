@@ -13,8 +13,8 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.identity import conversation_key_for_ref
-from app.runtime.inbound_types import (
+from octopus_sdk.identity import conversation_key_for_ref
+from octopus_sdk.inbound_types import (
     InboundAction,
     InboundEnvelope,
     InboundMessage,
@@ -169,7 +169,7 @@ async def admit_registry_delivery(
             text = f"{request['title']}\n\n{text}".strip()
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
-        from app.identity import delegation_session_key
+        from octopus_sdk.identity import delegation_session_key
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
         # Use delegation_session_key so multiple tasks from the same parent share one provider session
         origin_agent_id = request.get("origin_agent_id", "")

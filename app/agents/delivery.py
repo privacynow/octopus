@@ -15,10 +15,10 @@ from app.agents.bridge import (
     build_registry_message_delivery,
     qualify_registry_parent_ref,
 )
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 from app.agents.state import runtime_registry_agent_id
 from app.config import BotConfig
-from app.identity import conversation_key_for_ref
+from octopus_sdk.identity import conversation_key_for_ref
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices
@@ -276,8 +276,8 @@ async def handle_registry_delivery(
                     exc_info=True,
                 )
             # Publish delegation.completed lifecycle event
-            from app.workflows.execution.event_sink import build_event_sink_for_context
-            from app.workflows.execution.contracts import TransportIdentity
+            from octopus_sdk.event_sink import build_event_sink_for_context
+            from octopus_sdk.execution import TransportIdentity
             transport = TransportIdentity(
                 conversation_key=conversation_key,
                 origin_channel="registry",

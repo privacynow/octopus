@@ -13,16 +13,16 @@ from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from app.identity import (
+from octopus_sdk.identity import (
     parse_actor_key,
     parse_conversation_key,
     telegram_numeric_id,
 )
-from app.session_state import (
+from octopus_sdk.sessions import (
     SessionState,
     session_to_dict,
 )
-from app.agents.types import AgentDiscoveryQuery
+from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
     handle_delegation_cancel,
@@ -83,12 +83,10 @@ from app.channels.telegram.pending import (
     reject_pending as pending_reject_pending,
 )
 from app.channels.telegram.inbound_context import event_trust_tier
+from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
-from app.runtime.inbound_types import InboundUser
-from app.workflows.execution.requests import (
-    prompt_weight as execution_prompt_weight,
-)
-from app.runtime.inbound_types import (
+from octopus_sdk.inbound_types import InboundUser
+from octopus_sdk.inbound_types import (
     InboundEnvelope,
     serialize_inbound,
 )
@@ -538,7 +536,10 @@ async def cmd_session(
     compact_display = "on" if compact else "off"
     # Note: excludes agent discovery context (requires async bus call, not available in /settings).
     # Execution path includes agents via build_run_context; this is a best-effort UI estimate.
-    prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
+    prompt_weight_count = get_provider_guidance_service().prompt_weight(
+        resolved.role,
+        resolved.active_skills,
+    )
     prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
     session_cmds = ["/settings"]
     if trust != "public" and cfg.projects:
@@ -704,7 +705,10 @@ async def cmd_doctor(
                 event=event,
             ),
         )
-        prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
+        prompt_weight_count = get_provider_guidance_service().prompt_weight(
+            resolved.role,
+            resolved.active_skills,
+        ) or None
     rendered = telegram_presenters.doctor_report_message(
         format_runtime_health_for_doctor(report),
         prompt_weight_count,

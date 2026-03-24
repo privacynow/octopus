@@ -17,7 +17,7 @@ from app.progress import (
     ToolFinish, ToolStart, render as render_progress,
 )
 from app.progress import ProgressEvent
-from app.providers.base import (
+from octopus_sdk.providers import (
     FileChangeRecord,
     PreflightContext,
     ProgressSink,

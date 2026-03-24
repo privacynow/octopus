@@ -16,27 +16,22 @@ from app.agents.registry_capabilities import (
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.registry_runtime import RegistryRuntime
-from app.agents.state import save_registry_connection_state
-from app.agents.types import (
-    RegistryConnectionConfig,
-    RegistryConnectionState,
-    RoutedTaskResult,
-    RoutedTaskUpdate,
-    to_wire,
-)
+from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.state import build_telegram_runtime
 from app.config import BotConfig
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.control_plane.processor_runner import ProcessorRunner
-from app.ports.health_publication import HealthReport
-from app.ports.task_routing import TaskResultReport
+from octopus_sdk.health_publication import HealthReport
+from octopus_sdk.task_routing import TaskResultReport
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices, build_bus_bot_services
 from app.storage import ensure_data_dirs
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.execution import RequestExecutionOutcome
+from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
@@ -95,11 +90,11 @@ class _StoreBackedRegistryClient:
         store = self._store()
         store.assert_agent_scope(self.agent_token, {"coordination", "full"})
         store.heartbeat(self.agent_token, {"connectivity_state": "connected"})
-        return store.create_routed_task(to_wire(request))
+        return store.create_routed_task(request.model_dump(mode="json"))
 
     async def routed_task_status(self, routed_task_id: str, update) -> dict[str, object]:
         self._maybe_fail("routed_task_status")
-        payload = dict(to_wire(update))
+        payload = update.model_dump(mode="json")
         payload.pop("routed_task_id", None)
         return self._store().update_routed_task_status(
             self.agent_token,
@@ -109,7 +104,7 @@ class _StoreBackedRegistryClient:
 
     async def routed_task_result(self, routed_task_id: str, result) -> dict[str, object]:
         self._maybe_fail("routed_task_result")
-        payload = dict(to_wire(result))
+        payload = result.model_dump(mode="json")
         payload.pop("routed_task_id", None)
         return self._store().update_routed_task_result(
             self.agent_token,

@@ -4,11 +4,11 @@ from pathlib import Path
 
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.skill_catalog_service import get_skill_catalog_service
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
-from app.identity import telegram_conversation_key
+from octopus_sdk.identity import telegram_conversation_key
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,

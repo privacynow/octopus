@@ -8,8 +8,8 @@ from app.channels.telegram.runtime_skills import (
     skills_install,
     skills_show,
 )
-from app.identity import telegram_actor_key, telegram_conversation_key
-from app.runtime.inbound_types import InboundCommand, InboundUser
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.inbound_types import InboundCommand, InboundUser
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,

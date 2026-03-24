@@ -15,20 +15,25 @@ from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
-from app.agents.state import bot_identity
-from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
+from app.agents.state import RegistryConnectionState
+from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.channel import _services_for_registry
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.agents.registry_capabilities import registry_authority_ref
 from app.control_plane.bus import ControlPlaneBus
 from app.config import derive_agent_slug
-from app.identity import conversation_key_for_ref, telegram_conversation_ref
-from app.runtime.inbound_types import deserialize_inbound
+import octopus_sdk.identity as identity_module
+from octopus_sdk.identity import (
+    bot_identity,
+    conversation_key_for_ref,
+    load_bot_identity_state,
+    telegram_conversation_ref,
+)
+from octopus_sdk.inbound_types import deserialize_inbound
 from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from app.workflows.delegation.contracts import DelegationUpdateOutcome
 from app.agents.state import (
-    load_bot_identity_state,
     load_registry_connection_state,
     load_runtime_registry_connection_state,
     save_registry_connection_state,
@@ -56,7 +61,7 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
 
     card = AgentRuntime(config).requested_card()
 
-    assert card.capabilities == ()
+    assert card.capabilities == []
 
 
 def test_requested_card_uses_neutral_version_when_no_product_version_is_defined(tmp_path: Path):
@@ -171,12 +176,12 @@ def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(
     def fail_replace(src: Path, dst: Path) -> None:
         raise OSError("rename failed")
 
-    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+    monkeypatch.setattr(identity_module.os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="rename failed"):
-        agent_state_module._save_bot_identity_state(
+        identity_module._save_bot_identity_state(
             identity_path,
-            agent_state_module.BotIdentityState(
+            identity_module.BotIdentityState(
                 bot_id="new-bot-id",
                 created_at="2026-02-01T00:00:00Z",
             ),

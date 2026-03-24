@@ -1,13 +1,13 @@
-from app.identity import telegram_conversation_ref
+from octopus_sdk.identity import telegram_conversation_ref
 from app.agents.delegation import (
     build_delegation_runtime,
     handle_delegation_approve,
     handle_delegation_cancel,
     preview_delegation_targets,
 )
-from app.ports.agent_directory import AuthorityResolution
-from app.ports.task_routing import TaskSubmissionResult
-from app.session_state import DelegatedTask, PendingDelegation
+from octopus_sdk.agent_directory import AuthorityResolution
+from octopus_sdk.task_routing import TaskSubmissionResult
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.storage import default_session, save_session
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env, load_session_disk

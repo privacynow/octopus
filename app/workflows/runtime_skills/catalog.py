@@ -91,6 +91,12 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
     def has_skill(self, skill_name: str) -> bool:
         return self._summary(skill_name) is not None
 
+    def has_runtime_skill(self, skill_name: str) -> bool:
+        return self._catalog().has_runtime_skill(skill_name)
+
+    def resolve_runtime_track(self, skill_name: str):
+        return self._catalog().resolve_runtime_track(skill_name)
+
     def filter_resolvable(self, names: list[str]) -> list[str]:
         return self._catalog().filter_resolvable(names)
 

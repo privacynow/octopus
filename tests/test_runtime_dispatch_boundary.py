@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_conversation_ref
-from app.ports.channel import ChannelDescriptor
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_conversation_ref
+from octopus_sdk.channels import ChannelDescriptor
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (
     TelegramExecutionCollaborators,
@@ -14,19 +14,19 @@ from app.channels.telegram.execution import (
     send_directed_artifacts,
 )
 from app.summarize import format_provider_error
-from app.runtime.dispatch import (
+from octopus_sdk.runtime_dispatch import (
     RuntimeDispatchRuntime,
     run_provider_preflight,
     run_provider_request,
 )
-from app.workflows.execution.contracts import (
+from octopus_sdk.execution import (
     ExecutionRuntime,
     TransportIdentity,
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
 )
-from app.workflows.execution.context import build_transport_identity_from_metadata
-from app.workflows.execution.requests import execute_request, request_approval
+from octopus_sdk.execution import build_transport_identity_from_metadata
+from octopus_sdk.execution import execute_request, request_approval
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,
@@ -251,10 +251,13 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
     with fresh_env() as (data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
-        from app.workflows.execution.event_sink import NoOpEventSink
+        from octopus_sdk.event_sink import NoOpEventSink
         _noop = NoOpEventSink()
+        base_runtime = current_execution_runtime()
         runtime = ExecutionRuntime(
-            dispatch=current_execution_runtime().dispatch,
+            dispatch=base_runtime.dispatch,
+            services=base_runtime.services,
+            interrupted_exc=base_runtime.interrupted_exc,
             build_transport_identity=lambda _message, _chat_id, *, actor_key="": TransportIdentity(
                 conversation_key=f"tg:{_chat_id}" if isinstance(_chat_id, int) else str(_chat_id),
                 origin_channel="telegram" if isinstance(_chat_id, int) else "registry",

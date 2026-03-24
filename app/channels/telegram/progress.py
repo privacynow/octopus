@@ -11,7 +11,7 @@ import time
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, TimedOut
 
-from app.agents.types import RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskUpdate
 from app.formatting import trim_text
 from app import user_messages as _msg
 from app.config import BotConfig

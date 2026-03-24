@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
 from app.storage import close_db, ensure_data_dirs
 from app import work_queue as _work_queue
-from app.identity import telegram_conversation_key
+from octopus_sdk.identity import telegram_conversation_key
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,

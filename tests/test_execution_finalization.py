@@ -4,9 +4,9 @@ import logging
 import pytest
 
 from app.agents.registry_capabilities import registry_authority_ref
-from app.session_state import DelegatedTask, PendingDelegation, SessionState
-from app.ports.task_routing import TaskResultReport
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
+from octopus_sdk.task_routing import TaskResultReport
+from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 
 

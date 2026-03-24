@@ -22,7 +22,7 @@ import pytest
 from app.control_plane.adapters.conversation_projection import BusConversationProjection
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand, ControlReply
-from app.identity import conversation_key_for_ref
+from octopus_sdk.identity import conversation_key_for_ref
 from app.registry_service.store import RegistrySQLiteStore
 
 

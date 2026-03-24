@@ -12,12 +12,16 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
-from registry_sdk.agents import AgentCard
-from registry_sdk.conversations import ConversationCreate
-from registry_sdk.discovery import AgentDiscoveryQuery
-from registry_sdk.events import ConversationEvent, validate_event_metadata
-from registry_sdk.realtime import ConversationProgressUpdate
-from registry_sdk.tasks import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.events import ConversationEvent, validate_event_metadata
+from octopus_sdk.registry.models import (
+    AgentCard,
+    AgentDiscoveryQuery,
+    ConversationCreate,
+    ConversationProgressUpdate,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+)
 
 
 class RegistryClientError(RuntimeError):

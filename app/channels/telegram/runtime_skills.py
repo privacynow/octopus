@@ -15,7 +15,7 @@ from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.state import TelegramRuntime
-from app.execution_context import ResolvedExecutionContext
+from octopus_sdk.execution_context import ResolvedExecutionContext
 from app.channels.telegram.session_io import (
     conversation_key as _conversation_key,
     actor_key as _actor_key,
@@ -23,10 +23,10 @@ from app.channels.telegram.session_io import (
     load as _session_io_load,
     save as _session_io_save,
 )
-from app.identity import telegram_numeric_id
+from octopus_sdk.identity import telegram_numeric_id
 from app.runtime import composition
 from app.runtime.session_runtime import resolve_session_context
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app import work_queue
 
 log = logging.getLogger(__name__)

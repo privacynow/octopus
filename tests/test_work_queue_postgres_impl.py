@@ -3,7 +3,7 @@
 import threading
 
 from app import work_queue_postgres_impl
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
 def test_record_and_admit_message_concurrent_two_connections_one_admitted_one_queued(postgres_truncated):

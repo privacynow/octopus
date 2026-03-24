@@ -12,13 +12,6 @@ from app.agents.registry_capabilities import (
     registry_id_from_authority_ref,
 )
 from app.agents.registry_runtime import RegistryRuntime
-from app.agents.types import (
-    AgentDiscoveryQuery,
-    DiscoveredAgentRef,
-    RoutedTaskRequest,
-    RoutedTaskResult,
-    RoutedTaskUpdate,
-)
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
 from app.control_plane.requests import (
@@ -30,8 +23,15 @@ from app.control_plane.requests import (
     TimelineEventPayload,
     UpdateRoutedTaskStatusPayload,
 )
-from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
-from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
+from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.registry.models import (
+    AgentDiscoveryQuery,
+    DiscoveredAgentRef,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+)
+from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 
 
 class RegistryControlProcessor(ControlProcessor):
@@ -102,7 +102,7 @@ class RegistryControlProcessor(ControlProcessor):
         if command.operation == "publish_events":
             payload = json.loads(command.payload_json)
             conversation_id = payload["conversation_id"]
-            from registry_sdk.events import ConversationEvent as SdkConversationEvent
+            from octopus_sdk.events import ConversationEvent as SdkConversationEvent
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
@@ -129,7 +129,7 @@ class RegistryControlProcessor(ControlProcessor):
         if command.operation == "publish_events":
             payload = json.loads(command.payload_json)
             conversation_id = payload["conversation_id"]
-            from registry_sdk.events import ConversationEvent as SdkConversationEvent
+            from octopus_sdk.events import ConversationEvent as SdkConversationEvent
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
@@ -151,7 +151,7 @@ class RegistryControlProcessor(ControlProcessor):
                 instructions=payload.instructions,
                 context=dict(payload.context),
                 constraints=dict(payload.constraints),
-                requested_capabilities=tuple(payload.requested_capabilities),
+                requested_capabilities=list(payload.requested_capabilities),
                 priority=payload.priority,
                 created_at=payload.created_at,
             )
@@ -172,8 +172,8 @@ class RegistryControlProcessor(ControlProcessor):
                 status=payload.status,
                 summary=payload.summary,
                 full_text=payload.full_text,
-                artifacts=tuple(dict(item) for item in payload.artifacts),
-                follow_up_questions=tuple(payload.follow_up_questions),
+                artifacts=[dict(item) for item in payload.artifacts],
+                follow_up_questions=list(payload.follow_up_questions),
                 completed_at=payload.completed_at,
             )
             response = await client.routed_task_result(payload.routed_task_id, result)
@@ -191,7 +191,7 @@ class RegistryControlProcessor(ControlProcessor):
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
                 summary=payload.summary,
-                timeline_events=tuple(event.model_dump() for event in payload.timeline_events),
+                timeline_events=[event.model_dump() for event in payload.timeline_events],
                 progress=payload.progress,
                 updated_at=payload.updated_at,
             )
@@ -208,10 +208,10 @@ class RegistryControlProcessor(ControlProcessor):
             request = SearchAgentsRequest.model_validate_json(command.payload_json)
             query = AgentDiscoveryQuery(
                 role=request.role,
-                capabilities=tuple(request.capabilities),
-                tags=tuple(request.tags),
+                capabilities=list(request.capabilities),
+                tags=list(request.tags),
                 free_text=request.free_text,
-                exclude_agent_ids=tuple(request.exclude_agent_ids),
+                exclude_agent_ids=list(request.exclude_agent_ids),
                 required_state=request.required_state,
             )
             rows = await client.search(query)
@@ -222,12 +222,12 @@ class RegistryControlProcessor(ControlProcessor):
                     display_name=str(row.get("display_name", "")),
                     slug=str(row.get("slug", "")),
                     role=str(row.get("role", "")),
-                    capabilities=tuple(
+                    capabilities=[
                         str(item)
                         for item in row.get("capabilities", [])
                         if item
-                    ),
-                    tags=tuple(str(item) for item in row.get("tags", []) if item),
+                    ],
+                    tags=[str(item) for item in row.get("tags", []) if item],
                     description=str(row.get("description", "")),
                     connectivity_state=str(row.get("connectivity_state", "")),
                     current_capacity=int(row.get("current_capacity", 0) or 0),
@@ -245,7 +245,7 @@ class RegistryControlProcessor(ControlProcessor):
             local_agent_id = self._runtime.origin_agent_id(registry_id)
             query = AgentDiscoveryQuery(
                 required_state="connected",
-                exclude_agent_ids=(local_agent_id,) if local_agent_id else (),
+                exclude_agent_ids=[local_agent_id] if local_agent_id else [],
             )
             rows = await client.search(query)
             for row in rows:

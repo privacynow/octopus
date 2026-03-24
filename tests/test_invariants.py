@@ -31,7 +31,7 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.providers.base import (
+from octopus_sdk.providers import (
     RunResult,
 )
 from app.progress import render as render_progress
@@ -40,7 +40,7 @@ from app.storage import close_db, default_session, ensure_data_dirs, save_sessio
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import current_bot_instance, current_execution_runtime, current_runtime
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -143,7 +143,7 @@ async def test_registry_search_does_not_block_event_loop():
 
         import app.channels.telegram.runtime_skills as sc
         from app.credential_validation import validate_credential
-        from app.runtime.inbound_types import InboundCommand, InboundUser
+        from octopus_sdk.inbound_types import InboundCommand, InboundUser
 
         # Track whether another coroutine can run during the registry fetch
         other_ran = False
@@ -604,7 +604,7 @@ async def test_contended_approval_callback_single_answer():
         chat = FakeChat(chat_id)
         user = FakeUser(42)
         session = telegram_load_session(current_runtime(), chat_id)
-        from app.session_state import PendingApproval
+        from octopus_sdk.sessions import PendingApproval
         ctx_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
             actor_key=_actor(user.id), prompt="test", image_paths=[],
@@ -613,7 +613,7 @@ async def test_contended_approval_callback_single_answer():
         )
         telegram_save_session(current_runtime(), chat_id, session)
 
-        from app.providers.base import RunResult
+        from octopus_sdk.providers import RunResult
         prov.run_results.append(RunResult(text="done"))
 
         lock = current_runtime().chat_locks[chat_id]
@@ -782,7 +782,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     provider.  The item transitions to pending_recovery and PendingRecovery
     is raised so worker_loop skips completion."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import InboundMessage, InboundUser
     from app.work_queue import PendingRecovery, record_and_enqueue
 
     with fresh_env(config_overrides={
@@ -1762,7 +1762,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
     """worker_dispatch for a disallowed user returns normally without
     sending a recovery notice — the item completes silently."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_actor_keys": frozenset({"tg:99"}),  # user 42 is not allowed
@@ -1805,7 +1805,7 @@ async def test_worker_dispatch_command_still_notifies():
     """worker_dispatch for InboundCommand still sends a notification
     that the command was lost (commands are not replay-safe)."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import InboundCommand, InboundUser
+    from octopus_sdk.inbound_types import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_actor_keys": frozenset({"tg:42"}),

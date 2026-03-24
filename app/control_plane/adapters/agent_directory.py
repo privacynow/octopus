@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.agents.types import AgentDiscoveryQuery
+from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand
 from app.control_plane.requests import ResolveTargetAuthorityRequest, SearchAgentsRequest
-from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
 
 
 class BusAgentDirectory:

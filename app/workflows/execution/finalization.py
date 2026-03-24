@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from app.agents.types import RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from app.formatting import summarize_text
-from app.ports.task_routing import TaskRoutingPort
-from app.session_state import SessionState
+from octopus_sdk.task_routing import TaskRoutingPort
+from octopus_sdk.sessions import SessionState
 from app.workflows.delegation.coordination import finalize_resumed_delegation
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.execution import RequestExecutionOutcome
 
 log = logging.getLogger(__name__)
 

@@ -20,9 +20,9 @@ import tempfile
 
 from pathlib import Path
 from app.config import load_dotenv_file, validate_config
-from app.execution_context import ResolvedExecutionContext
-from app.providers.base import PreflightContext, RunContext
-from app.session_state import PendingApproval, PendingRetry
+from octopus_sdk.execution_context import ResolvedExecutionContext
+from octopus_sdk.providers import PreflightContext, RunContext
+from octopus_sdk.sessions import PendingApproval, PendingRetry
 from tests.support.skill_test_helpers import (
     SkillRequirement,
     _encrypt, _decrypt, _parse_requires_yaml, _skill_dir,
@@ -35,7 +35,7 @@ from tests.support.skill_test_helpers import (
 )
 from app.storage import default_session, load_session, save_session
 from tests.support.config_support import make_config
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
 def _hash(**kwargs):

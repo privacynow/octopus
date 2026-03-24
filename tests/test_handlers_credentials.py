@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 
 from app.credential_validation import validate_credential
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.skill_types import SkillRequirement
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
@@ -18,7 +18,7 @@ from tests.support.skill_test_helpers import (
 from app.storage import default_session, ensure_data_dirs, save_session
 import app.channels.telegram.ingress as _th
 from app import work_queue
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
     FakeCallbackQuery,
@@ -1184,7 +1184,7 @@ async def test_delete_user_credentials():
 
 
 async def test_foreign_setup_message_info():
-    from app.session_state import AwaitingSkillSetup
+    from octopus_sdk.sessions import AwaitingSkillSetup
     from app.credential_flow import foreign_setup_message
     msg = foreign_setup_message(AwaitingSkillSetup(actor_key=42, skill="test", remaining=[], started_at=time.time() - 120))
     assert "42" in msg

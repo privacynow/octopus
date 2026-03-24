@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from app.providers.base import RunContext
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunContext
+from octopus_sdk.providers import RunResult
 from app.providers.claude import ClaudeProvider
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProgress

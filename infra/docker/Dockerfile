@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application and schema (migrations live in app/db/migrations/postgres)
 COPY app ./app
-COPY registry_sdk ./registry_sdk
+COPY octopus_sdk ./octopus_sdk
 COPY skills ./skills
 COPY scripts ./scripts
 COPY ui ./ui

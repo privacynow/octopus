@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import InvalidToken, NetworkError
 
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 from app.config import PUBLISH_LEVEL_KINDS, _parse_projects, load_config, load_dotenv_file, parse_allowed_users, should_publish_event, validate_config
 from app.runtime.services import BotServices
-from app.session_state import ProjectBinding
+from octopus_sdk.sessions import ProjectBinding
 from tests.support.config_support import make_config, make_registry_connection
 
 

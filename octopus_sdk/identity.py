@@ -7,15 +7,26 @@ without Telegram-specific integer assumptions. Telegram keys keep a stable
 
 from __future__ import annotations
 
+import json
+import logging
 import hashlib
+import os
 import re
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from app.agents.state import bot_identity
+from uuid import uuid4
 
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BotIdentityState:
+    bot_id: str
+    created_at: str
 
 
 def _prefixed(prefix: str, value: int | str) -> str:
@@ -90,6 +101,60 @@ def telegram_chat_id_from_ref(conversation_ref: str) -> int | None:
     if not chat_id.isdigit():
         return None
     return int(chat_id)
+
+
+def bot_identity_path(data_dir: Path) -> Path:
+    return data_dir / "agent" / "bot_identity.json"
+
+
+def _new_bot_identity() -> BotIdentityState:
+    return BotIdentityState(
+        bot_id=uuid4().hex,
+        created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
+
+
+def _atomic_write_private_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _save_bot_identity_state(path: Path, state: BotIdentityState) -> None:
+    _atomic_write_private_json(path, asdict(state))
+
+
+def load_bot_identity_state(data_dir: Path) -> BotIdentityState:
+    path = bot_identity_path(data_dir)
+    if not path.exists():
+        state = _new_bot_identity()
+        _save_bot_identity_state(path, state)
+        return state
+    try:
+        raw = json.loads(path.read_text())
+        bot_id = str(raw.get("bot_id", "")).strip()
+        created_at = str(raw.get("created_at", "")).strip()
+        if bot_id and created_at:
+            return BotIdentityState(bot_id=bot_id, created_at=created_at)
+        raise ValueError("missing required bot identity fields")
+    except Exception:
+        log.warning("Bot identity load failed, regenerating", exc_info=True)
+        state = _new_bot_identity()
+        _save_bot_identity_state(path, state)
+        return state
+
+
+def bot_identity(data_dir: Path) -> str:
+    return load_bot_identity_state(data_dir).bot_id
 
 
 def telegram_conversation_ref(config: Any, chat_id: int | str) -> str:

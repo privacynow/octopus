@@ -9,8 +9,8 @@ from pathlib import Path
 
 from app.content_models import ProviderGuidanceTrackRecord, RuntimeSkillTrackRecord
 from app.content_seed import default_provider_guidance_tracks
-from app.identity import filesystem_component_for_key
-from app.providers.base import PreflightContext, RunContext
+from octopus_sdk.identity import filesystem_component_for_key
+from octopus_sdk.providers import PreflightContext, RunContext
 from app.skill_catalog_service import get_skill_catalog_service
 
 _COMPACT_RESPONSE_SUFFIX = (

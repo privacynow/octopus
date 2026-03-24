@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.channels.registry import presenters
-from app.identity import conversation_key_for_ref
+from octopus_sdk.identity import conversation_key_for_ref
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
@@ -26,7 +26,7 @@ from app.runtime.session_runtime import (
     save_runtime_session,
 )
 from app.workflows.runtime_skills.contracts import PromptWarningContext
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 
 ProviderStateFactory = Callable[[str], dict[str, Any]]
 

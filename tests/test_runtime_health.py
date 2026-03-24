@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import runtime_backend, work_queue
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime_health import (
     CanonicalRuntimeHealthProvider,
     QueueSnapshot,

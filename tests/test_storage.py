@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.types import RoutedTaskResult
-from app.identity import telegram_conversation_key
+from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.identity import telegram_conversation_key
 from app.storage_sqlite import SQLiteSessionStore
 from app.storage import (
     build_upload_path,

@@ -4,18 +4,34 @@ from __future__ import annotations
 
 from app import user_messages as _msg
 from app.config import BotConfig
+from app.runtime import composition
 from app.workflows.conversation.contracts import (
     ModelProfileState,
     SettingMutationOutcome,
     ConversationSettingsPort,
     ProviderStateFactory,
 )
-from app.execution_context import resolve_execution_context
-from app.session_state import SessionState
+from octopus_sdk.execution_context import resolve_execution_context
+from octopus_sdk.sessions import SessionState
 
 
 class ConversationSettingsUseCases(ConversationSettingsPort):
     """Canonical conversation settings flows shared across channel entrypoints."""
+
+    def _resolve_context(
+        self,
+        session: SessionState,
+        cfg: BotConfig,
+        provider_name: str,
+        trust_tier: str,
+    ):
+        return resolve_execution_context(
+            session,
+            cfg,
+            provider_name,
+            trust_tier=trust_tier,
+            catalog=composition.workflows().runtime_skills.catalog,
+        )
 
     def model_profile_state(
         self,
@@ -115,7 +131,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
                     message="Model profile is already inherited.",
                 )
             session.model_profile = ""
-            resolved = resolve_execution_context(session, cfg, provider_name, trust_tier=trust_tier)
+            resolved = self._resolve_context(session, cfg, provider_name, trust_tier)
             effective = resolved.effective_model or cfg.model
             state = self.model_profile_state(session, cfg, trust_tier, effective or "")
             if effective and state.current_profile != "(default)":
@@ -142,7 +158,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
                     ),
                 )
             return SettingMutationOutcome(status="no_profiles", message=_msg.trust_no_model_profiles())
-        resolved = resolve_execution_context(session, cfg, provider_name, trust_tier=trust_tier)
+        resolved = self._resolve_context(session, cfg, provider_name, trust_tier)
         effective = resolved.effective_model or ""
         state = self.model_profile_state(session, cfg, trust_tier, effective)
         available = set(state.available_profiles)
@@ -228,7 +244,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
             session.file_policy = ""
             session.provider_state = provider_state_factory(conversation_key)
             session.clear_pending()
-            resolved = resolve_execution_context(session, cfg, provider_name, trust_tier=trust_tier)
+            resolved = self._resolve_context(session, cfg, provider_name, trust_tier)
             effective = resolved.file_policy or "edit"
             return SettingMutationOutcome(
                 status="cleared",
@@ -238,7 +254,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
             )
         if value not in {"inspect", "edit"}:
             return SettingMutationOutcome(status="invalid", message="")
-        resolved = resolve_execution_context(session, cfg, provider_name, trust_tier=trust_tier)
+        resolved = self._resolve_context(session, cfg, provider_name, trust_tier)
         effective = resolved.file_policy or "edit"
         if effective == value:
             return SettingMutationOutcome(

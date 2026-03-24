@@ -12,9 +12,9 @@ from app import work_queue
 from app.channels.telegram.bootstrap import build_bootstrap
 from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram.session_io import event_key
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
-from app.runtime.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
+from octopus_sdk.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
 from app.runtime.work_admission import record_inbound_envelope
 from tests.support.handler_support import (
     current_boot_id,

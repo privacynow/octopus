@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.runtime.inbound_types import InboundMessage
+from octopus_sdk.inbound_types import InboundMessage
 
 
 @dataclass(frozen=True)

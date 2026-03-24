@@ -28,7 +28,7 @@ from app.runtime_health import (
     report_to_dict,
 )
 from app.storage import default_session, ensure_data_dirs, save_session
-from app.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -550,7 +550,7 @@ def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monke
     conv = _create_conversation(client, token, agent_id, "telegram:dev-bot:12346", title="Telegram chat 12346", origin_channel="telegram")
     conversation_id = conv["conversation_id"]
     # Save session using the conversation_key derived from the new conversation_id
-    from app.identity import conversation_key_for_ref
+    from octopus_sdk.identity import conversation_key_for_ref
     conversation_key = conversation_key_for_ref(conversation_id)
     session = default_session("claude", {"session_id": "test", "started": False}, "on")
     session["active_skills"] = ["code-review", "missing-skill"]

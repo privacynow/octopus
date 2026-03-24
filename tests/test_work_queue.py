@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import app.work_queue_sqlite_impl as work_queue_sqlite_impl
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.workflows.recovery.results import TransportStateCorruption
 from app.work_queue import (
     DiscardResult,
@@ -45,7 +45,7 @@ from app.work_queue_sqlite_impl import (
     _validate_work_item_row,
     _write_tx,
 )
-from app.runtime.inbound_types import (
+from octopus_sdk.inbound_types import (
     InboundCallback,
     InboundCommand,
     InboundMessage,

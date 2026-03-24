@@ -33,8 +33,8 @@ from app.channels.telegram.session_io import (
 )
 from app.channels.telegram.state import TelegramRuntime
 from app.formatting import summarize_text
-from app.identity import telegram_conversation_ref, telegram_numeric_id
-from app.runtime.inbound_types import (
+from octopus_sdk.identity import telegram_conversation_ref, telegram_numeric_id
+from octopus_sdk.inbound_types import (
     InboundAction,
     InboundCallback,
     InboundCommand,
@@ -42,10 +42,10 @@ from app.runtime.inbound_types import (
     InboundUser,
 )
 from app.runtime.work_admission import admit_worker_message, trust_tier_for_ref
-from app.workflows.execution.contracts import ExecutionRuntime
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.execution import ExecutionRuntime
+from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
-from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
+from octopus_sdk.execution import dispatch_message_request, load_approval_mode
 from app.workflows.delegation.coordination import expire_stale_delegations
 from app.workflows.recovery.replay import get_recovery_use_cases
 from app.worker import poll_interval_for_runtime
@@ -281,8 +281,8 @@ async def _execute_worker_action(
     action_conversation_key = _item_conversation_key(item)
 
     if action == "delegation_approve":
-        from app.workflows.execution.event_sink import build_event_sink_for_context
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.event_sink import build_event_sink_for_context
+        from octopus_sdk.execution import TransportIdentity
         from app.agents.registry_capabilities import registry_id_from_authority_ref
         target_key = action_conversation_key
         if params.get("target_conversation_key"):

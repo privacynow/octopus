@@ -5,10 +5,12 @@ import pytest
 from app.agents.registry_runtime import RegistryRuntime
 from app.agents.runtime import AgentRuntime
 from app.agents.state import (
+    RegistryConnectionState,
     load_registry_connection_state,
     save_registry_connection_state,
 )
-from app.agents.types import AgentDiscoveryQuery, RegistryConnectionConfig, RegistryConnectionState
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.channel import register_registry_channels
 from app.channels.registry.refs import registry_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
@@ -202,7 +204,7 @@ async def test_registry_runtime_discover_fans_out_with_registry_provenance(monke
 
         async def search(self, query):
             if self.base_url.endswith("prod"):
-                assert query.exclude_agent_ids == ("prod-self",)
+                assert query.exclude_agent_ids == ["prod-self"]
                 return [
                     {
                         "agent_id": "agent-prod-1",
@@ -213,7 +215,7 @@ async def test_registry_runtime_discover_fans_out_with_registry_provenance(monke
                         "connectivity_state": "connected",
                     }
                 ]
-            assert query.exclude_agent_ids == ("ops-self",)
+            assert query.exclude_agent_ids == ["ops-self"]
             return [
                 {
                     "agent_id": "agent-ops-1",

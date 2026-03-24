@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.identity import resolve_event_conversation_ref
+from octopus_sdk.identity import resolve_event_conversation_ref
 from app.runtime.work_admission import trust_tier_for_ref
 
 

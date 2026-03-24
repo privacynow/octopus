@@ -3,7 +3,7 @@
 The sink is NOT a second registry client. It composes:
   - ConversationProjectionPort (the capability)
   - TransportIdentity (who/where)
-  - BotConfig (publish level gating)
+  - BotConfigBase (publish level gating)
 
 into typed methods that execute_request and delegation handlers call.
 All failures are logged as warnings and swallowed — never blocks execution.
@@ -15,10 +15,10 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.config import BotConfig, should_publish_event
-from app.ports.conversation_projection import ConversationProjectionPort
-from app.providers.base import ToolExecutionRecord
-from app.workflows.execution.contracts import TransportIdentity
+from octopus_sdk.config import BotConfigBase, should_publish_event
+from octopus_sdk.conversation_projection import ConversationProjectionPort
+from octopus_sdk.providers import ToolExecutionRecord
+from octopus_sdk.execution import TransportIdentity
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class RegistryEventSink:
         self,
         projection: ConversationProjectionPort,
         transport: TransportIdentity,
-        config: BotConfig,
+        config: BotConfigBase,
     ) -> None:
         self._projection = projection
         self._transport = transport
@@ -133,7 +133,7 @@ class RegistryEventSink:
         if conversation_id is None:
             return
         try:
-            from registry_sdk.events import ConversationEvent
+            from octopus_sdk.events import ConversationEvent
             event = ConversationEvent(
                 event_id=event_id,
                 kind=kind,
@@ -290,7 +290,7 @@ class RegistryEventSink:
 def build_event_sink_for_context(
     transport: TransportIdentity | None,
     projection: ConversationProjectionPort | None,
-    config: BotConfig,
+    config: BotConfigBase,
 ) -> NoOpEventSink | RegistryEventSink:
     """Build an event sink from available context.
 

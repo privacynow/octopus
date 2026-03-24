@@ -22,7 +22,7 @@ from app.channels.telegram.session_io import (
     save as _session_io_save,
 )
 from app.runtime import composition
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app import work_queue
 
 log = logging.getLogger(__name__)

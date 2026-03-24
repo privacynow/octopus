@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.config import BotConfig
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 
 
 @dataclass(frozen=True)

@@ -11,13 +11,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlparse
 
-from app.session_state import ProjectBinding, field
+from octopus_sdk.sessions import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 from app.agents.state import load_registry_connection_state
-from app.identity import parse_actor_key, telegram_numeric_id
+from octopus_sdk.identity import parse_actor_key, telegram_numeric_id
 from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
 

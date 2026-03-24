@@ -13,11 +13,11 @@ from typing import Any
 
 from app.agents.client import AgentRegistryClient
 from app.agents.state import load_runtime_registry_connection_state
-from app.agents.types import RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskUpdate
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
-from app.ports.egress import (
+from octopus_sdk.egress import (
     ChannelCapabilities,
     ChannelEgress,
     EditableHandle,
@@ -126,7 +126,7 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
-        from registry_sdk.events import ConversationEvent
+        from octopus_sdk.events import ConversationEvent
 
         resolved_event_id = event_id or uuid.uuid4().hex
         merged_metadata: dict[str, Any] = dict(metadata or {})

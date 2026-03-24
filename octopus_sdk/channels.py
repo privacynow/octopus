@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.ports.egress import ChannelEgress
+from octopus_sdk.egress import ChannelEgress
 
 
 @dataclass(frozen=True)

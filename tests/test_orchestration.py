@@ -9,7 +9,7 @@ from app.workflows.delegation.coordination import (
     expire_stale_delegations,
     mark_task_submitted,
 )
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 
 
 def test_build_delegation_plan_sets_proposed_status():

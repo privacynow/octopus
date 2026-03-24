@@ -27,17 +27,17 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.execution_context import (
+from octopus_sdk.execution_context import (
     ResolvedExecutionContext,
     _compute_execution_config_digest,
     resolve_execution_context,
 )
-from app.providers.base import (
+from octopus_sdk.providers import (
     RunContext,
     RunResult,
 )
 from app.providers.codex import CodexProvider
-from app.session_state import (
+from octopus_sdk.sessions import (
     PendingApproval,
     PendingRetry,
     SessionState,
@@ -47,7 +47,7 @@ from app.session_state import (
 from tests.support.skill_test_helpers import get_provider_config_digest, get_skill_digests
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -410,7 +410,7 @@ async def test_resolve_context_matches_all_paths():
         direct_hash = resolve_execution_context(session, cfg, prov.name).context_hash
 
         # Path 3: request_flow.current_context_hash helper
-        from app.request_flow import current_context_hash
+        from octopus_sdk.request_flow import current_context_hash
         helper_hash = current_context_hash(session, cfg, prov.name)
 
         assert handler_hash == direct_hash, (
@@ -671,7 +671,7 @@ _MODEL_PROFILES = {"fast": "haiku", "balanced": "sonnet", "best": "opus"}
 
 def test_model_profile_session_override():
     """Session model_profile overrides config default_model_profile."""
-    from app.execution_context import resolve_effective_model
+    from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
         provider="claude", provider_state={}, approval_mode="off",
@@ -683,7 +683,7 @@ def test_model_profile_session_override():
 
 def test_model_profile_config_default():
     """Config default_model_profile is used when session has no override."""
-    from app.execution_context import resolve_effective_model
+    from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
         provider="claude", provider_state={}, approval_mode="off",
@@ -694,7 +694,7 @@ def test_model_profile_config_default():
 
 def test_model_profile_fallback_to_raw_model():
     """Falls back to config.model when no profiles configured."""
-    from app.execution_context import resolve_effective_model
+    from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
         provider="claude", provider_state={}, approval_mode="off",
@@ -762,7 +762,7 @@ def test_project_plus_model_change_invalidates_context_hash():
 
 def test_project_file_policy_approval_model_change_invalidates():
     """Pending approval with project+file_policy is invalidated by model change."""
-    from app.request_flow import validate_pending
+    from octopus_sdk.request_flow import validate_pending
 
     cfg = _make_config(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
@@ -834,7 +834,7 @@ def test_project_extra_dirs_folded_into_resolved_context():
 
 def test_file_policy_inherits_from_project():
     """Empty session file_policy inherits project default."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(projects=(
         ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
     ))
@@ -848,7 +848,7 @@ def test_file_policy_inherits_from_project():
 
 def test_file_policy_session_overrides_project():
     """Explicit session file_policy wins over project default."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(projects=(
         ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
     ))
@@ -872,7 +872,7 @@ def test_file_policy_no_project_no_session():
 
 def test_file_policy_project_default_empty_falls_through():
     """Project with empty file_policy does not override session empty."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(projects=(
         ProjectBinding(name="fe", root_dir="/tmp", file_policy=""),
     ))
@@ -886,7 +886,7 @@ def test_file_policy_project_default_empty_falls_through():
 
 def test_model_profile_inherits_from_project():
     """Empty session model_profile inherits project default."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
         model_profiles=_MODEL_PROFILES,
@@ -901,7 +901,7 @@ def test_model_profile_inherits_from_project():
 
 def test_model_profile_session_overrides_project():
     """Session model_profile wins over project default."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
         model_profiles=_MODEL_PROFILES,
@@ -916,7 +916,7 @@ def test_model_profile_session_overrides_project():
 
 def test_model_profile_project_falls_through_to_global_default():
     """Project with empty model_profile falls through to config.default_model_profile."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile=""),),
         model_profiles=_MODEL_PROFILES,
@@ -932,7 +932,7 @@ def test_model_profile_project_falls_through_to_global_default():
 
 def test_project_defaults_change_context_hash():
     """Switching to a project with different defaults must change the context hash."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(
             ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),
@@ -955,7 +955,7 @@ def test_project_defaults_change_context_hash():
 
 def test_public_trust_ignores_project_file_policy():
     """Public users are always forced to inspect, regardless of project default."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", file_policy="edit"),),
         public_working_dir="/tmp",
@@ -972,7 +972,7 @@ def test_public_trust_ignores_project_file_policy():
 
 def test_public_trust_ignores_project_model_profile():
     """Public users don't get project binding, so project model_profile is ignored."""
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="best"),),
         model_profiles=_MODEL_PROFILES,
@@ -995,7 +995,7 @@ def test_phantom_profile_not_displayed_when_no_profiles_configured():
     This is a display-level guard: even if a project somehow has a model_profile
     set without any model_profiles configured, the UI must not show a phantom name.
     """
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
     # Note: this config would fail validation, but we test display resilience
     cfg = _make_config(
         projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),

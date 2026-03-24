@@ -15,7 +15,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app import runtime_backend
 from app.storage import (
     close_db,
@@ -29,7 +29,7 @@ from app.storage import (
     save_session,
     session_exists,
 )
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -303,7 +303,7 @@ async def test_prompt_size_cross_chat_reads_sqlite():
     """Verify telegram execution prompt-size warnings iterate sessions from SQLite,
     not from JSON files."""
     import app.channels.telegram.execution as telegram_execution
-    from app.workflows.execution.requests import check_prompt_size_cross_chat
+    from octopus_sdk.execution import check_prompt_size_cross_chat
 
     with fresh_env(config_overrides={
         "admin_actor_keys": frozenset({"tg:100"}),

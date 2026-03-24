@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 from app.config import BotConfig
-from app.execution_context import ResolvedExecutionContext, resolve_execution_context
-from app.session_state import SessionState, session_from_dict, session_to_dict
+from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
+from octopus_sdk.sessions import SessionState, session_from_dict, session_to_dict
+from app.runtime import composition
 from app.storage import (
     apply_delegation_result_atomically,
     default_session,
@@ -25,7 +26,13 @@ def resolve_session_context(
     provider_name: str,
     trust_tier: str = "trusted",
 ) -> ResolvedExecutionContext:
-    return resolve_execution_context(session, config, provider_name, trust_tier=trust_tier)
+    return resolve_execution_context(
+        session,
+        config,
+        provider_name,
+        trust_tier=trust_tier,
+        catalog=composition.workflows().runtime_skills.catalog,
+    )
 
 
 def load_runtime_session(

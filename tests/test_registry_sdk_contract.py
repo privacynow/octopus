@@ -1,7 +1,7 @@
-"""Contract tests for registry_sdk types and client wire format."""
+"""Contract tests for octopus_sdk registry models and client wire format."""
 
-from registry_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
-from registry_sdk.conversations import ConversationCreate
+from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
+from octopus_sdk.registry.models import ConversationCreate
 
 
 def test_conversation_event_uses_created_at_not_timestamp():
@@ -124,7 +124,7 @@ def test_sdk_client_publish_events_wraps_in_events_key():
     import asyncio
     import json
     from unittest.mock import AsyncMock, patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "test-token")
     event = ConversationEvent(
@@ -163,7 +163,7 @@ def test_sdk_client_enroll_sends_body_not_header():
     """Verify enroll sends enrollment_token in JSON body, not X-Enrollment-Token header."""
     import asyncio
     from unittest.mock import patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "")
     captured = {}
@@ -205,7 +205,7 @@ def test_sdk_client_enroll_sends_body_not_header():
 def test_sdk_client_publish_progress_uses_progress_endpoint():
     import asyncio
     from unittest.mock import patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "test-token")
     captured = {}
@@ -248,7 +248,7 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
 
 
 def test_sdk_agent_card_contract_has_no_agent_id_field():
-    from registry_sdk.agents import AgentCard
+    from octopus_sdk.registry.models import AgentCard
 
     card = AgentCard(
         bot_key="bot:demo",

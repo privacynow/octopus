@@ -7,7 +7,7 @@ from uuid import uuid4
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand
-from app.ports.health_publication import AuthorityStatus, ConnectionSummary, HealthReport
+from octopus_sdk.health_publication import AuthorityStatus, ConnectionSummary, HealthReport
 
 class BusHealthPublication:
     def __init__(self, bus: ControlPlaneBus, directory: ControlPlaneDirectory) -> None:

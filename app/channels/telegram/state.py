@@ -13,7 +13,7 @@ from typing import Any
 
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
-from app.providers.base import Provider
+from octopus_sdk.providers import Provider
 from app.ratelimit import RateLimiter
 from app.runtime.services import BotServices, build_noop_bot_services
 

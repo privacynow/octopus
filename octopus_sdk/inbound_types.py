@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.identity import telegram_numeric_id
+from octopus_sdk.identity import telegram_numeric_id
 
 
 _SOURCE_MISSING = object()

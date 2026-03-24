@@ -3,9 +3,9 @@
 from pathlib import Path
 
 from app.config import BotConfig
-from app.agents.types import RegistryConnectionConfig
-from app.identity import telegram_actor_key
-from app.session_state import ProjectBinding
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.identity import telegram_actor_key
+from octopus_sdk.sessions import ProjectBinding
 
 
 def make_registry_connection(

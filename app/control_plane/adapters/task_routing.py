@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.agents.types import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand
@@ -14,7 +14,7 @@ from app.control_plane.requests import (
     TimelineEventPayload,
     UpdateRoutedTaskStatusPayload,
 )
-from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
+from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 
 
 def _timeline_payload(event) -> TimelineEventPayload:

@@ -8,8 +8,8 @@ import app.content_store as content_store_mod
 from app.content_store import get_content_store, init_content_store_for_config
 from app.content_store_postgres import PostgresContentStore
 from app.credential_store import init_credential_store_for_config
-from app.identity import telegram_actor_key
-from app.session_state import session_from_dict
+from octopus_sdk.identity import telegram_actor_key
+from octopus_sdk.sessions import session_from_dict
 from app.storage import close_db, default_session, ensure_data_dirs
 from app.workflows.provider_guidance.management import get_provider_guidance_management_use_cases
 from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases

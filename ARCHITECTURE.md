@@ -12,7 +12,7 @@ Octopus is four cooperating systems:
 | `./octopus` CLI | local deployment state, lifecycle, provider auth, workspaces, local registry operations |
 | Bot runtime | Telegram ingress, workflow execution, provider orchestration, registry runtime loops, shared-runtime process roles |
 | Registry service | agent API, resource API, websocket realtime API, operator SPA, registry store/query model |
-| `registry_sdk/` | shared contracts for events, agents, conversations, tasks, discovery, realtime, and the registry client |
+| `octopus_sdk/` | shared SDK contracts for channels, execution, identity, registry models/client, events, realtime, sessions, and runtime composition |
 
 ```mermaid
 flowchart LR
@@ -113,7 +113,7 @@ Current startup sequence:
 
 ### Channel Model
 
-Core channel interfaces live in `app/ports/channel.py`:
+Core channel interfaces live in `octopus_sdk/channels.py`:
 
 - `Channel`
 - `ChannelBootstrap`
@@ -131,7 +131,7 @@ Refs are channel-owned; unknown or malformed refs fail fast.
 
 ### Egress Model
 
-Core outbound interfaces live in `app/ports/egress.py`:
+Core outbound interfaces live in `octopus_sdk/egress.py`:
 
 - `ConversationEgress`
 - `ChannelEgress`
@@ -143,7 +143,7 @@ transport behavior.
 
 ## 3. Shared Ports / Interfaces
 
-Shared infrastructure-level interfaces live under `app/ports/`.
+Shared infrastructure-level interfaces live under `octopus_sdk/`.
 
 ### Control-Plane Ports
 
@@ -158,7 +158,7 @@ These are grouped into `BotServices` in `app/runtime/services.py`.
 
 ### Execution Event Port
 
-`ExecutionEventSink` in `app/ports/execution_events.py` is the shared protocol
+`ExecutionEventSink` in `octopus_sdk/execution_events.py` is the shared protocol
 for publishing execution lifecycle events.
 
 Current implementations:
@@ -178,36 +178,38 @@ Current published lifecycle kinds include:
 
 ### Delegation Parser Port
 
-`DelegationIntentParser` in `app/ports/delegation.py` is the pluggable parser
+`DelegationIntentParser` in `octopus_sdk/delegation.py` is the pluggable parser
 for delegation intent extracted from provider output.
 
 Default implementation:
 
 - `XmlTagDelegationParser`
 
-## 4. Registry SDK
+## 4. Unified SDK
 
-`registry_sdk/` is the shared contract package. Import direction is one-way:
+`octopus_sdk/` is the shared contract and runtime package. Import direction is
+one-way:
 
-- `app/` may import `registry_sdk/`
-- `registry_sdk/` must not import `app/`
+- `app/` may import `octopus_sdk/`
+- `octopus_sdk/` must not import `app/`
 
 ### SDK Modules
 
 | Module | Owns |
 |---|---|
-| `registry_sdk.events` | stored conversation event contracts |
-| `registry_sdk.agents` | `AgentCard` and agent-facing payloads |
-| `registry_sdk.conversations` | conversation create payloads |
-| `registry_sdk.tasks` | routed-task request/update/result contracts |
-| `registry_sdk.discovery` | discovery/search contracts |
-| `registry_sdk.realtime` | websocket/progress envelope contracts |
-| `registry_sdk.client` | async registry HTTP client |
+| `octopus_sdk.events` | stored conversation event contracts |
+| `octopus_sdk.realtime` | websocket/progress envelope contracts |
+| `octopus_sdk.registry.models` | agent, conversation, discovery, and routed-task wire models |
+| `octopus_sdk.registry.client` | async registry HTTP client |
+| `octopus_sdk.channels` / `octopus_sdk.egress` | channel bootstrap, ingress, egress, and transport capabilities |
+| `octopus_sdk.execution` / `octopus_sdk.runtime` | execution contracts, request orchestration, and bot runtime composition |
+| `octopus_sdk.sessions` / `octopus_sdk.identity` | durable session state, conversation/user identity, stable bot identity |
+| `octopus_sdk.providers` / `octopus_sdk.delegation` | provider protocol, execution sink contracts, and default delegation parsing |
 
 ### Event Contract
 
 Stored registry conversation event kinds are defined in
-`registry_sdk/events.py`:
+`octopus_sdk/events.py`:
 
 - `message.user`
 - `message.bot`
@@ -226,7 +228,7 @@ These are validated through `EVENT_METADATA_SCHEMAS`.
 
 ### Realtime Contract
 
-Realtime contracts live in `registry_sdk/realtime.py`.
+Realtime contracts live in `octopus_sdk/realtime.py`.
 
 Envelope types:
 
@@ -418,7 +420,7 @@ Current hardening includes:
 2. Channels own refs and egress construction.
 3. Workflows own business logic; channels own protocol/rendering.
 4. Projection, routing, discovery, and health publication go through control-plane ports.
-5. Stored registry events use contracts from `registry_sdk.events`.
-6. Realtime websocket messages use contracts from `registry_sdk.realtime`.
+5. Stored registry events use contracts from `octopus_sdk.events`.
+6. Realtime websocket messages use contracts from `octopus_sdk.realtime`.
 7. Live per-registry agent identity comes from runtime registry state, not from the startup-only `BotConfig.registry_agent_ids` snapshot.
 8. SQLite and Postgres backends must remain behaviorally aligned.

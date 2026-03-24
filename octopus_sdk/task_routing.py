@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from app.agents.types import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
 
 
 class TaskSubmissionResult(BaseModel):

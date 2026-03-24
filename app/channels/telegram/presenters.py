@@ -16,7 +16,7 @@ from app.approvals import format_denials_html
 from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
 from app.registry_errors import registry_error_summary
-from app.session_state import PendingDelegation
+from octopus_sdk.sessions import PendingDelegation
 from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
@@ -1230,6 +1230,8 @@ def discover_failed_message(error_code: str) -> TelegramRenderedMessage:
 def _agent_view(agent: Any) -> dict[str, Any]:
     if is_dataclass(agent):
         return asdict(agent)
+    if hasattr(agent, "model_dump"):
+        return agent.model_dump()
     if isinstance(agent, dict):
         return agent
     return {}

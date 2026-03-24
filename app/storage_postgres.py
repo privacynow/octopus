@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from app.agents.types import RoutedTaskResult
-from app.session_state import session_from_dict, session_to_dict
+from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.sessions import session_from_dict, session_to_dict
 from app.session_defaults import default_session
 from app.workflows.delegation.contracts import DelegationUpdateOutcome
 from app.workflows.delegation.coordination import apply_routed_result

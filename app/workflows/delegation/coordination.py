@@ -6,9 +6,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 from app.formatting import trim_text
-from app.session_state import DelegatedTask, PendingDelegation
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.time_utils import age_seconds, utc_now
 from app.workflows.delegation.contracts import (
     DelegationApprovalPreparation,

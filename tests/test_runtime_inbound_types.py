@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.runtime.inbound_types import (
+from octopus_sdk.inbound_types import (
     InboundAction,
     InboundEnvelope,
     InboundMessage,

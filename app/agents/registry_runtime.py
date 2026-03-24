@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_runtime_registry_connection_state
-from app.agents.types import AgentDiscoveryQuery, DiscoveredAgentRef, RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
 from app.config import BotConfig
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime_health import RuntimeHealthProjector, RuntimeHealthProvider
@@ -157,12 +158,12 @@ class RegistryRuntime:
         for connection in self._connected_registries(scopes={"coordination", "full"}):
             scoped_query = query
             if connection.local_agent_id:
-                excludes = tuple(
+                excludes = list(
                     dict.fromkeys(
-                        (*query.exclude_agent_ids, connection.local_agent_id)
+                        [*query.exclude_agent_ids, connection.local_agent_id]
                     )
                 )
-                scoped_query = replace(query, exclude_agent_ids=excludes)
+                scoped_query = query.model_copy(update={"exclude_agent_ids": excludes})
             try:
                 rows = await connection.client.search(scoped_query)
             except RegistryClientError as exc:
@@ -177,8 +178,8 @@ class RegistryRuntime:
                     display_name=str(row.get("display_name", "")),
                     slug=str(row.get("slug", "")),
                     role=str(row.get("role", "")),
-                    capabilities=tuple(str(item) for item in row.get("capabilities", []) if item),
-                    tags=tuple(str(item) for item in row.get("tags", []) if item),
+                    capabilities=[str(item) for item in row.get("capabilities", []) if item],
+                    tags=[str(item) for item in row.get("tags", []) if item],
                     description=str(row.get("description", "")),
                     connectivity_state=str(row.get("connectivity_state", "")),
                     current_capacity=int(row.get("current_capacity", 0) or 0),

@@ -6,14 +6,14 @@ from app import work_queue
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref
 from app.channels.telegram.inbound_context import event_conversation_ref
-from app.identity import (
+from octopus_sdk.identity import (
     resolve_event_conversation_ref,
     telegram_actor_key,
     telegram_conversation_key,
     telegram_conversation_ref,
     telegram_event_id,
 )
-from app.runtime.inbound_types import InboundMessage, InboundUser, serialize_inbound
+from octopus_sdk.inbound_types import InboundMessage, InboundUser, serialize_inbound
 from app.runtime.work_admission import admit_worker_message
 from app.workflows.recovery.replay import get_recovery_use_cases
 import app.channels.telegram.worker as telegram_worker

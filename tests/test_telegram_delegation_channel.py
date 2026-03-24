@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 import app.channels.telegram.delegation_channel as delegation_channel
-from app.ports.agent_directory import AuthorityResolution
+from octopus_sdk.agent_directory import AuthorityResolution
 from app.channels.telegram.state import build_telegram_runtime
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from tests.support.handler_support import FakeChat, FakeMessage, FakeProvider, make_config
 
 

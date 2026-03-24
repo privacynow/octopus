@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from app.content_models import LifecycleApprovalRecord, SkillRevisionRecord
+from app.content_models import LifecycleApprovalRecord, RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.credential_types import CredentialValidator
-from app.session_state import AwaitingSkillSetup, SessionState
+from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
 from app.skill_types import SkillRequirement
 
 
@@ -55,6 +55,10 @@ class RuntimeSkillCatalogPort(Protocol):
     def get_skill(self, skill_name: str) -> RuntimeSkillDetail | None: ...
 
     def has_skill(self, skill_name: str) -> bool: ...
+
+    def has_runtime_skill(self, skill_name: str) -> bool: ...
+
+    def resolve_runtime_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None: ...
 
     def filter_resolvable(self, names: list[str]) -> list[str]: ...
 

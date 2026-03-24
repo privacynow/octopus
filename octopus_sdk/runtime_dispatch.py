@@ -6,8 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, MutableMapping
 
-from app.config import BotConfig
-from app.providers.base import Provider
+from octopus_sdk.config import BotConfigBase
+from octopus_sdk.providers import Provider
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class RuntimeDispatchRuntime:
     - provider invocation
     """
 
-    config: BotConfig
+    config: BotConfigBase
     provider: Provider
     boot_id: str
     cancellations: MutableMapping[int | str, asyncio.Event]

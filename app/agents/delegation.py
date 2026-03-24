@@ -8,14 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.registry_errors import registry_error_summary
-from app.agents.types import RoutedTaskRequest
 from app.agents.registry_capabilities import registry_id_from_authority_ref
 from app.agents.state import runtime_registry_agent_id
-
-
 from app.config import BotConfig
-from app.ports.agent_directory import AgentDirectoryPort
-from app.ports.task_routing import TaskRoutingPort
+from octopus_sdk.agent_directory import AgentDirectoryPort
+from octopus_sdk.registry.models import RoutedTaskRequest
+from octopus_sdk.task_routing import TaskRoutingPort
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.workflows.delegation.coordination import (
     cancel_delegation,

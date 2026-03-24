@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime_health import WorkerHeartbeat
 from app.storage import ensure_data_dirs
 from app.workflows.recovery.transport_contract import CancelRequestResult, DiscardResult

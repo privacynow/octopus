@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 
-from app.session_state import DelegatedTask, PendingDelegation
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.workflows.delegation.contracts import DelegationTaskDraft
 
 CHILD_ACTIVE_STATUSES = frozenset({"pending", "proposed", "queued", "leased", "running", "submitted"})

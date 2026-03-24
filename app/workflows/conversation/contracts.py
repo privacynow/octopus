@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from app.config import BotConfig
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 
 ProviderStateFactory = Callable[[str], dict]
 

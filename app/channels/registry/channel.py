@@ -9,15 +9,15 @@ from app.agents.registry_capabilities import (
     registry_authority_ref,
     registry_id_from_authority_ref,
 )
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 from app.agents.state import runtime_registry_agent_id
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
-from app.ports.channel import Channel, ChannelDescriptor
-from app.ports.egress import ChannelEgress
+from octopus_sdk.channels import Channel, ChannelDescriptor
+from octopus_sdk.egress import ChannelEgress
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import BotServices, build_bus_bot_services, build_noop_bot_services
 

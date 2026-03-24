@@ -6,7 +6,7 @@ channels a shared seam instead of mutating ``session.active_skills`` directly.
 
 from __future__ import annotations
 
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app.skill_catalog_service import get_skill_catalog_service
 
 

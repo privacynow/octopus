@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.formatting import summarize_text
-from app.identity import telegram_conversation_ref, telegram_numeric_id
+from octopus_sdk.identity import telegram_conversation_ref, telegram_numeric_id
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
@@ -15,10 +15,10 @@ from app.agents.delegation import (
     handle_delegation_cancel as handle_channel_delegation_cancel,
     preview_delegation_targets,
 )
-from app.session_state import PendingDelegation, SessionState
+from octopus_sdk.sessions import PendingDelegation, SessionState
 from app.workflows.delegation.coordination import build_delegation_plan
 from app.channels.telegram.session_io import load as load_session
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.execution import RequestExecutionOutcome
 
 
 def delegation_reply_markup(chat_id: int):
@@ -96,8 +96,8 @@ async def propose_delegation_plan(
             task_routing=runtime.services.control_plane.task_routing,
             agent_directory=runtime.services.control_plane.agent_directory,
         )
-        from app.workflows.execution.event_sink import build_event_sink_for_context
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.event_sink import build_event_sink_for_context
+        from octopus_sdk.execution import TransportIdentity
         transport = TransportIdentity(
             conversation_key=conversation_key_value,
             origin_channel="telegram",
@@ -160,8 +160,8 @@ async def handle_delegation_approve(
     delegation_runtime: DelegationRuntime,
 ) -> None:
     from app.channels.telegram.session_io import conversation_key as _conversation_key
-    from app.workflows.execution.event_sink import build_event_sink_for_context
-    from app.workflows.execution.contracts import TransportIdentity
+    from octopus_sdk.event_sink import build_event_sink_for_context
+    from octopus_sdk.execution import TransportIdentity
     conv_key = _conversation_key(chat_id)
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
     transport = TransportIdentity(

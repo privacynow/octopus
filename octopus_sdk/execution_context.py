@@ -17,11 +17,17 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import Any, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.config import BotConfig
-    from app.session_state import ProjectBinding, SessionState
+    from octopus_sdk.config import BotConfigBase
+    from octopus_sdk.sessions import ProjectBinding, SessionState
+
+
+class SkillCatalogView(Protocol):
+    def has_runtime_skill(self, name: str) -> bool: ...
+
+    def resolve_runtime_track(self, name: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,7 @@ class ResolvedExecutionContext:
 
 def resolve_effective_model(
     session: "SessionState",
-    config: "BotConfig",
+    config: "BotConfigBase",
     trust_tier: str = "trusted",
     project_binding: "ProjectBinding | None" = None,
 ) -> str:
@@ -98,7 +104,7 @@ def resolve_effective_model(
     return config.model
 
 
-def _compute_execution_config_digest(config: "BotConfig", effective_model: str = "") -> str:
+def _compute_execution_config_digest(config: "BotConfigBase", effective_model: str = "") -> str:
     """Hash the BotConfig fields that affect CLI command construction.
 
     Covers model selection and all codex execution flags.  If any of
@@ -115,10 +121,9 @@ def _compute_execution_config_digest(config: "BotConfig", effective_model: str =
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _resolved_skill_digests(skill_names: list[str]) -> dict[str, str]:
-    from app.skill_catalog_service import get_skill_catalog_service
-
-    catalog = get_skill_catalog_service()
+def _resolved_skill_digests(skill_names: list[str], catalog: SkillCatalogView | None) -> dict[str, str]:
+    if catalog is None:
+        return {}
     digests: dict[str, str] = {}
     for name in skill_names:
         if (record := catalog.resolve_runtime_track(name)) is not None:
@@ -126,10 +131,14 @@ def _resolved_skill_digests(skill_names: list[str]) -> dict[str, str]:
     return digests
 
 
-def _resolved_provider_config_digest(skill_names: list[str], provider_name: str = "") -> str:
-    from app.skill_catalog_service import get_skill_catalog_service
-
-    catalog = get_skill_catalog_service()
+def _resolved_provider_config_digest(
+    skill_names: list[str],
+    *,
+    provider_name: str = "",
+    catalog: SkillCatalogView | None,
+) -> str:
+    if catalog is None:
+        return ""
     providers = (provider_name,) if provider_name else ("claude", "codex")
     parts: list[str] = []
     for name in sorted(skill_names):
@@ -148,28 +157,29 @@ def _resolved_provider_config_digest(skill_names: list[str], provider_name: str 
 def _resolved_active_skills(
     session: "SessionState",
     trust_tier: str = "trusted",
+    *,
+    catalog: SkillCatalogView | None,
 ) -> list[str]:
     if trust_tier == "public":
         return []
-    from app.skill_catalog_service import get_skill_catalog_service
-
-    catalog = get_skill_catalog_service()
     seen: set[str] = set()
     active: list[str] = []
     for name in session.active_skills:
         if name in seen:
             continue
         seen.add(name)
-        if catalog.has_runtime_skill(name):
+        if catalog is None or catalog.has_runtime_skill(name):
             active.append(name)
     return active
 
 
 def resolve_execution_context(
     session: "SessionState",
-    config: "BotConfig",
+    config: "BotConfigBase",
     provider_name: str,
     trust_tier: str = "trusted",
+    *,
+    catalog: SkillCatalogView | None = None,
 ) -> ResolvedExecutionContext:
     """Build the authoritative execution context from session + config.
 
@@ -180,7 +190,7 @@ def resolve_execution_context(
     Public trust enforcement happens here so it flows into context hash,
     approval validation, and provider context automatically.
     """
-    from app.session_state import ProjectBinding
+    from octopus_sdk.sessions import ProjectBinding
 
     # Resolve project binding first (needed for model and policy inheritance).
     # Disabled for public users.
@@ -224,15 +234,16 @@ def resolve_execution_context(
         base_extra_dirs = dirs
 
     # Skills: trust shaping and resolvable filtering happen here.
-    active_skills = _resolved_active_skills(session, trust_tier=trust_tier)
+    active_skills = _resolved_active_skills(session, trust_tier=trust_tier, catalog=catalog)
 
     return ResolvedExecutionContext(
         role=session.role,
         active_skills=active_skills,
-        skill_digests=_resolved_skill_digests(active_skills),
+        skill_digests=_resolved_skill_digests(active_skills, catalog),
         provider_config_digest=_resolved_provider_config_digest(
             active_skills,
             provider_name=provider_name,
+            catalog=catalog,
         ),
         execution_config_digest=_compute_execution_config_digest(config, effective_model),
         base_extra_dirs=base_extra_dirs,

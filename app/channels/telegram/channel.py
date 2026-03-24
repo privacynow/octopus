@@ -10,10 +10,10 @@ from telegram.error import TelegramError
 from app.channels.telegram.bootstrap import TelegramBootstrap, build_bootstrap
 from app.channels.telegram.egress import TelegramChannelEgress
 from app.config import BotMode, BotConfig, ProcessRole
-from app.identity import telegram_numeric_id
-from app.ports.channel import ChannelBootstrap, ChannelDescriptor, ChannelIngress
-from app.ports.egress import ChannelEgress
-from app.providers.base import Provider
+from octopus_sdk.identity import telegram_numeric_id
+from octopus_sdk.channels import ChannelBootstrap, ChannelDescriptor, ChannelIngress
+from octopus_sdk.egress import ChannelEgress
+from octopus_sdk.providers import Provider
 from app.runtime.services import BotServices, build_noop_bot_services
 
 

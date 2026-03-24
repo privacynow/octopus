@@ -6,31 +6,34 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.agents.types import RegistryConnectionState
 from app.registry_errors import normalize_registry_error_state
 
 log = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class BotIdentityState:
-    bot_id: str
-    created_at: str
+@dataclass
+class RegistryConnectionState:
+    registry_id: str
+    registry_scope: str = "full"
+    agent_id: str = ""
+    agent_token: str = ""
+    poll_cursor: str = "0"
+    registered_slug: str = ""
+    last_successful_contact_at: str = ""
+    connectivity_state: str = "standalone"
+    last_error: str = ""
+    last_error_detail: str = ""
 
 
-def bot_identity_path(data_dir: Path) -> Path:
-    return data_dir / "agent" / "bot_identity.json"
+def registry_state_dir(data_dir: Path) -> Path:
+    return data_dir / "agent" / "registries"
 
 
-def _new_bot_identity() -> BotIdentityState:
-    return BotIdentityState(
-        bot_id=uuid4().hex,
-        created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-    )
+def registry_connection_state_path(data_dir: Path, registry_id: str) -> Path:
+    return registry_state_dir(data_dir) / f"{registry_id}.json"
 
 
 def _atomic_write_private_json(path: Path, payload: object) -> None:
@@ -46,42 +49,6 @@ def _atomic_write_private_json(path: Path, payload: object) -> None:
         except FileNotFoundError:
             pass
         raise
-
-
-def _save_bot_identity_state(path: Path, state: BotIdentityState) -> None:
-    _atomic_write_private_json(path, asdict(state))
-
-
-def load_bot_identity_state(data_dir: Path) -> BotIdentityState:
-    path = bot_identity_path(data_dir)
-    if not path.exists():
-        state = _new_bot_identity()
-        _save_bot_identity_state(path, state)
-        return state
-    try:
-        raw = json.loads(path.read_text())
-        bot_id = str(raw.get("bot_id", "")).strip()
-        created_at = str(raw.get("created_at", "")).strip()
-        if bot_id and created_at:
-            return BotIdentityState(bot_id=bot_id, created_at=created_at)
-        raise ValueError("missing required bot identity fields")
-    except Exception:
-        log.warning("Bot identity load failed, regenerating", exc_info=True)
-        state = _new_bot_identity()
-        _save_bot_identity_state(path, state)
-        return state
-
-
-def bot_identity(data_dir: Path) -> str:
-    return load_bot_identity_state(data_dir).bot_id
-
-
-def registry_state_dir(data_dir: Path) -> Path:
-    return data_dir / "agent" / "registries"
-
-
-def registry_connection_state_path(data_dir: Path, registry_id: str) -> Path:
-    return registry_state_dir(data_dir) / f"{registry_id}.json"
 
 
 def load_registry_connection_state(

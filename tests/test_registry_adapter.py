@@ -14,7 +14,7 @@ from app.channels.registry.channel import (
 )
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import (
     BotServices,
@@ -22,7 +22,7 @@ from app.runtime.services import (
     build_noop_control_plane_services,
 )
 from tests.support.config_support import make_config, make_registry_connection
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 
 
 @dataclass

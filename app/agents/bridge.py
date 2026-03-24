@@ -38,10 +38,11 @@ def build_registry_message_delivery(
     routed_task_id: str = "",
     registry_id: str,
     skip_approval: bool = False,
+    conversation_key_override: str = "",
 ) -> tuple[str, str, str, str]:
     if not registry_id:
         raise ValueError("Registry message delivery requires an explicit registry_id")
-    conversation_key = conversation_key_for_ref(conversation_ref)
+    conversation_key = conversation_key_override or conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
     payload = serialize_inbound(
@@ -168,9 +169,18 @@ async def admit_registry_delivery(
             text = f"{request['title']}\n\n{text}".strip()
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
+        from app.identity import delegation_session_key
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
+        # Use delegation_session_key so multiple tasks from the same parent share one provider session
+        origin_agent_id = request.get("origin_agent_id", "")
+        parent_conversation_id = request.get("parent_conversation_id", "")
+        if origin_agent_id and parent_conversation_id:
+            shared_key = delegation_session_key(origin_agent_id, parent_conversation_id)
+        else:
+            shared_key = ""
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
+            conversation_key_override=shared_key,
             text=text,
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
             delivery_id=delivery_id,

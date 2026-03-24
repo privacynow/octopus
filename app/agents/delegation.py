@@ -9,10 +9,9 @@ from typing import Any
 
 from app.registry_errors import registry_error_summary
 from app.agents.types import RoutedTaskRequest
-from pathlib import Path
+
 
 from app.config import BotConfig
-from app.identity import parse_conversation_key
 from app.ports.agent_directory import AgentDirectoryPort
 from app.ports.task_routing import TaskRoutingPort
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
@@ -37,18 +36,19 @@ class DelegationRuntime:
     origin_agent_id: str = ""
 
 
-def resolve_origin_agent_id(config: BotConfig) -> str:
-    """Resolve the bot's registry-assigned agent_id from persisted state.
+def resolve_origin_agent_id(config: BotConfig, registry_id: str = "") -> str:
+    """Resolve the bot's registry-assigned agent_id.
 
-    Channel-agnostic: works for any channel that participates in delegation.
-    Falls back to config.instance if no registry enrollment exists.
+    When registry_id is provided, returns the agent_id for that specific registry.
+    Otherwise falls back to first available or config.instance.
     """
-    from app.agents.state import load_registry_connection_state
-
-    for reg in config.agent_registries:
-        state = load_registry_connection_state(Path(config.data_dir), reg.registry_id)
-        if state.agent_id:
-            return state.agent_id
+    if registry_id:
+        agent_id = config.agent_id_for_registry(registry_id)
+        if agent_id:
+            return agent_id
+    for agent_id in config.registry_agent_ids.values():
+        if agent_id:
+            return agent_id
     return config.instance
 
 
@@ -72,10 +72,10 @@ def build_delegation_runtime(
     )
 
 
-def _load_session(runtime: DelegationRuntime, chat_id: int | str):
+def _load_session(runtime: DelegationRuntime, conversation_key: str):
     return load_runtime_session(
         runtime.config.data_dir,
-        parse_conversation_key(chat_id),
+        conversation_key,
         provider_name=runtime.provider_name,
         provider_state_factory=runtime.provider_state_factory,
         approval_mode=runtime.config.approval_mode,
@@ -84,8 +84,8 @@ def _load_session(runtime: DelegationRuntime, chat_id: int | str):
     )
 
 
-def _save_session(runtime: DelegationRuntime, chat_id: int | str, session) -> None:
-    save_runtime_session(runtime.config.data_dir, parse_conversation_key(chat_id), session)
+def _save_session(runtime: DelegationRuntime, conversation_key: str, session) -> None:
+    save_runtime_session(runtime.config.data_dir, conversation_key, session)
 
 
 def _coordination_unavailable_message(*, error: str = "") -> str:
@@ -149,23 +149,24 @@ def _partial_submission_message(
 
 
 async def handle_delegation_approve(
-    chat_id: int | str,
+    conversation_key: str,
     conversation_ref: str,
     channel_egress: Any,
     *,
     runtime: DelegationRuntime,
     retry_markup: Any = None,
+    event_sink: Any = None,
 ) -> None:
     """Approve a pending delegation plan on any conversation channel."""
 
-    session = _load_session(runtime, chat_id)
+    session = _load_session(runtime, conversation_key)
     expiration = expire_stale_delegations(
         session.pending_delegation,
         timeout_seconds=runtime.config.delegation_timeout_seconds,
     )
     if expiration.expired:
         session.pending_delegation = expiration.pending
-        _save_session(runtime, chat_id, session)
+        _save_session(runtime, conversation_key, session)
         await channel_egress.send_text(_expired_delegation_message(expiration.expired_kind))
         return
     approval = prepare_delegation_approval(
@@ -184,7 +185,7 @@ async def handle_delegation_approve(
                 target_agent_id=task.target_agent_id,
             )
             if resolution.status != "resolved" or not resolution.authority_ref:
-                _save_session(runtime, chat_id, session)
+                _save_session(runtime, conversation_key, session)
                 if resolution.status == "unavailable":
                     if submitted_ids:
                         await channel_egress.send_text(
@@ -231,7 +232,7 @@ async def handle_delegation_approve(
                 authority_ref=resolution.authority_ref,
             )
             if submission.status != "accepted":
-                _save_session(runtime, chat_id, session)
+                _save_session(runtime, conversation_key, session)
                 if submitted_ids:
                     await channel_egress.send_text(
                         _partial_submission_message(
@@ -262,7 +263,7 @@ async def handle_delegation_approve(
             )
             session.pending_delegation = submission.pending
     except Exception:
-        _save_session(runtime, chat_id, session)
+        _save_session(runtime, conversation_key, session)
         log.exception(
             "Delegation submission failed after %s request(s) due to an unexpected error",
             len(submitted_ids),
@@ -284,7 +285,10 @@ async def handle_delegation_approve(
         )
         return
 
-    _save_session(runtime, chat_id, session)
+    _save_session(runtime, conversation_key, session)
+    if event_sink is not None:
+        tasks_summary = [{"title": t.title, "target": t.target_agent_id} for t in session.pending_delegation.tasks]
+        await event_sink.on_delegation_submitted(tasks_summary)
     await channel_egress.send_text(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
         " I'll continue when results arrive."
@@ -363,14 +367,14 @@ async def preview_delegation_targets(
 
 
 async def handle_delegation_cancel(
-    chat_id: int | str,
+    conversation_key: str,
     conversation_ref: str,
     channel_egress: Any,
     *,
     runtime: DelegationRuntime,
 ) -> None:
     """Cancel a pending delegation plan on any conversation channel."""
-    session = _load_session(runtime, chat_id)
+    session = _load_session(runtime, conversation_key)
     outcome = cancel_delegation(
         session.pending_delegation,
         conversation_ref=conversation_ref,
@@ -379,5 +383,5 @@ async def handle_delegation_cancel(
         await channel_egress.send_text("Nothing to cancel.")
         return
     session.pending_delegation = None
-    _save_session(runtime, chat_id, session)
+    _save_session(runtime, conversation_key, session)
     await channel_egress.send_text("Delegation cancelled. No requests were sent.")

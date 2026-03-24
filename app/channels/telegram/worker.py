@@ -263,14 +263,9 @@ async def _execute_worker_action(
         return
 
     if action == "delegation_approve":
-        target = params.get("target_conversation_key") or runtime_chat
-        target_runtime = target
-        if isinstance(target, str):
-            numeric = telegram_numeric_id(target)
-            if numeric is not None:
-                target_runtime = numeric
+        target_key = params.get("target_conversation_key") or message_conversation_key
         await handle_channel_delegation_approve(
-            target_runtime,
+            target_key,
             conversation_ref,
             channel_egress,
             runtime=build_delegation_channel_runtime(runtime),
@@ -278,14 +273,9 @@ async def _execute_worker_action(
         return
 
     if action == "delegation_cancel":
-        target = params.get("target_conversation_key") or runtime_chat
-        target_runtime = target
-        if isinstance(target, str):
-            numeric = telegram_numeric_id(target)
-            if numeric is not None:
-                target_runtime = numeric
+        target_key = params.get("target_conversation_key") or message_conversation_key
         await handle_channel_delegation_cancel(
-            target_runtime,
+            target_key,
             conversation_ref,
             channel_egress,
             runtime=build_delegation_channel_runtime(runtime),
@@ -416,7 +406,7 @@ async def worker_dispatch(
                 if expiration.expired:
                     session.pending_delegation = expiration.pending
                     save_session(runtime, runtime_chat, session)
-                approval_mode = load_approval_mode(runtime_chat, runtime=execution_runtime)
+                approval_mode = load_approval_mode(message_conversation_key, runtime=execution_runtime)
 
                 async def _run_message(cancel_event: asyncio.Event | None):
                     nonlocal outcome

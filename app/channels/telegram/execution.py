@@ -315,12 +315,41 @@ def execution_channel_metadata(
         )
     if dispatcher is not None and resolved_ref:
         descriptor = dispatcher.descriptor_for_ref(resolved_ref)
+    from app.identity import telegram_conversation_key, parse_conversation_key, telegram_actor_key
+
+    if isinstance(chat_id, int):
+        conv_key = telegram_conversation_key(chat_id)
+        origin = "telegram"
+    else:
+        conv_key = parse_conversation_key(chat_id)
+        origin = "registry"
+
+    # Resolve target_agent_id scoped by authority when available
+    authority_ref = getattr(message, "authority_ref", "")
+    target_agent_id = ""
+    if authority_ref:
+        # Extract registry_id from authority_ref (e.g. "registry:local" → "local")
+        parts = authority_ref.split(":", 1)
+        if len(parts) == 2 and parts[0] == "registry":
+            target_agent_id = runtime.config.agent_id_for_registry(parts[1])
+    if not target_agent_id:
+        # Fallback: first available registry agent_id (Telegram-originated messages)
+        for aid in runtime.config.registry_agent_ids.values():
+            if aid:
+                target_agent_id = aid
+                break
+
     return ExecutionChannelMetadata(
         descriptor=descriptor,
         message_conversation_ref=conversation_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
         authority_ref=getattr(message, "authority_ref", ""),
         chat_id=chat_id,
+        conversation_key=conv_key,
+        origin_channel=origin,
+        external_conversation_ref=str(chat_id),
+        target_agent_id=target_agent_id,
+        actor=telegram_actor_key(getattr(getattr(message, "from_user", None), "id", 0)) if getattr(message, "from_user", None) else "",
     )
 
 
@@ -329,9 +358,13 @@ def build_execution_runtime(
     *,
     collaborators: TelegramExecutionCollaborators,
 ) -> ExecutionRuntime:
+    from app.workflows.execution.event_sink import build_event_sink_for_context, NoOpEventSink
+    _noop_sink = NoOpEventSink()
+    projection = runtime.services.control_plane.conversation_projection
+
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
-        build_channel_context=lambda message, chat_id: build_execution_channel_context(
+        build_transport_identity=lambda message, chat_id: build_execution_channel_context(
             execution_channel_metadata(runtime, message, chat_id),
             build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
                 runtime.config,
@@ -339,6 +372,11 @@ def build_execution_runtime(
             ),
             conversation_callback_factory=collaborators.build_conversation_progress_callback,
             routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
+        ),
+        build_event_sink=(
+            (lambda transport: build_event_sink_for_context(transport, projection, runtime.config))
+            if projection
+            else (lambda _transport: _noop_sink)
         ),
         render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,
@@ -355,7 +393,6 @@ def build_execution_runtime(
         ),
         send_compact_reply=send_compact_reply,
         propose_delegation_plan=collaborators.propose_delegation_plan,
-        conversation_projection=runtime.services.control_plane.conversation_projection,
         agent_directory=runtime.services.control_plane.agent_directory,
     )
 

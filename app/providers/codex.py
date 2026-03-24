@@ -33,7 +33,7 @@ class CodexProvider:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
 
-    def new_provider_state(self) -> dict[str, Any]:
+    def new_provider_state(self, conversation_key: str = "") -> dict[str, Any]:
         return {"thread_id": None}
 
     @staticmethod

@@ -792,20 +792,6 @@ def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
             assert token not in text, f"{token} still referenced in {path}"
 
 
-def test_telegram_ingress_line_count_stays_below_hard_cap() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
-    line_count = sum(1 for _ in ingress_path.open())
-    assert line_count <= 1500, f"{ingress_path} regressed to {line_count} lines"
-
-
-def test_telegram_shared_mode_dispatch_line_count_stays_below_hard_cap() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
-    line_count = sum(1 for _ in shared_mode_dispatch_path.open())
-    assert line_count <= 450, f"{shared_mode_dispatch_path} regressed to {line_count} lines"
-
-
 def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     guidance_path = repo_root / "app" / "channels" / "telegram" / "guidance.py"

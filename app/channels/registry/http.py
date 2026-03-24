@@ -118,17 +118,7 @@ class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
     scope_key: str = Field(default="", description="Guidance scope key")
 
 
-def _normalize_conversation_id(raw: str) -> str:
-    """Extract bare conversation_id from a full ref if needed.
-
-    Handles both bare IDs ('453f80ff...') and full refs
-    ('registry:local:conversation:453f80ff...').
-    """
-    # Pattern: registry:<id>:conversation:<cid>
-    parts = raw.split(":")
-    if len(parts) >= 4 and parts[-2] == "conversation":
-        return parts[-1]
-    return raw
+from app.identity import normalize_conversation_id as _normalize_conversation_id
 
 
 def _int_value(value: Any) -> int:

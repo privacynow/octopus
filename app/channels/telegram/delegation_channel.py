@@ -66,39 +66,29 @@ async def publish_delegation_proposed_event(
     message,
     delegation: PendingDelegation,
 ) -> None:
-    """Publish a delegation-proposed event via the new publish_events API.
+    """Publish a delegation-proposed event via the event sink.
 
-    This is a best-effort notification; failures are silently ignored since the
+    Best-effort notification; failures silently ignored since the
     delegation flow does not depend on timeline persistence.
     """
-    from app.config import should_publish_event
-    from app.workflows.execution.registry_publish import _publish_to_registry
+    from app.workflows.execution.event_sink import build_event_sink_for_context
+    from app.workflows.execution.contracts import TransportIdentity
 
     config = runtime.config
-    if not should_publish_event(config, "delegation.proposed"):
-        return
-
     chat_id = str(getattr(message, "chat_id", "") or getattr(getattr(message, "chat", None), "id", ""))
 
-    try:
-        projection = runtime.services.control_plane.conversation_projection
-        await _publish_to_registry(
-            projection,
-            config,
-            "delegation.proposed",
-            origin_channel="telegram",
-            external_conversation_ref=chat_id,
-            target_agent_id="",
-            title=delegation.title or "Delegation",
-            actor=config.agent_display_name or config.instance,
-            content=delegation.title or "",
-            metadata={
-                "task_count": len(delegation.tasks),
-                "target_agents": [],
-            },
-        )
-    except Exception:
-        pass  # Best-effort; delegation flow doesn't depend on this
+    transport = TransportIdentity(
+        origin_channel="telegram",
+        external_conversation_ref=chat_id,
+        target_agent_id=config.agent_id_for_registry("local"),
+    )
+    sink = build_event_sink_for_context(
+        transport,
+        runtime.services.control_plane.conversation_projection,
+        config,
+    )
+    tasks_summary = [{"title": getattr(t, "title", ""), "target": getattr(t, "target_agent_id", "")} for t in (delegation.tasks or [])]
+    await sink.on_delegation_proposed(tasks_summary)
 
 
 async def propose_delegation_plan(
@@ -134,9 +124,10 @@ async def propose_delegation_plan(
             task_routing=runtime.services.control_plane.task_routing,
             agent_directory=runtime.services.control_plane.agent_directory,
         )
+        from app.channels.telegram.session_io import conversation_key as _conversation_key
         try:
             await handle_channel_delegation_approve(
-                chat_id,
+                _conversation_key(chat_id),
                 conversation_ref,
                 _AutoSubmitEgress(message),
                 runtime=delegation_rt,
@@ -184,9 +175,10 @@ async def handle_delegation_approve(
     *,
     delegation_runtime: DelegationRuntime,
 ) -> None:
+    from app.channels.telegram.session_io import conversation_key as _conversation_key
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
     await handle_channel_delegation_approve(
-        chat_id,
+        _conversation_key(chat_id),
         conversation_ref,
         DelegationCallbackChannel(query),
         runtime=delegation_runtime,
@@ -201,9 +193,10 @@ async def handle_delegation_cancel(
     *,
     delegation_runtime: DelegationRuntime,
 ) -> None:
+    from app.channels.telegram.session_io import conversation_key as _conversation_key
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
     await handle_channel_delegation_cancel(
-        chat_id,
+        _conversation_key(chat_id),
         conversation_ref,
         DelegationCallbackChannel(query),
         runtime=delegation_runtime,

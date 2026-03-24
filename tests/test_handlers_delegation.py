@@ -25,6 +25,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
             "approval_mode": "off",
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -89,6 +90,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -140,7 +142,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         assert len(submitted) == 1
         request, authority_ref = submitted[0]
         assert request.routed_task_id == "task-1"
-        assert request.origin_agent_id == ""
+        assert request.origin_agent_id == "test"  # falls back to config.instance when no registries
         assert request.target_agent_id == "developer-1"
         assert request.instructions == "Build the feature end to end."
         assert authority_ref == "registry:default"
@@ -435,6 +437,7 @@ async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_a
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
             "delegation_timeout_seconds": 3600,
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th

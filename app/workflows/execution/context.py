@@ -7,7 +7,19 @@ from typing import Awaitable, Callable
 from app.workflows.execution.contracts import (
     ExecutionChannelContext,
     ExecutionChannelMetadata,
+    TransportIdentity,
 )
+
+
+def _transport_fields(metadata: ExecutionChannelMetadata) -> dict:
+    """Extract transport identity fields from metadata."""
+    return dict(
+        conversation_key=metadata.conversation_key,
+        origin_channel=metadata.origin_channel,
+        external_conversation_ref=metadata.external_conversation_ref,
+        target_agent_id=metadata.target_agent_id,
+        actor=metadata.actor,
+    )
 
 
 def build_execution_channel_context(
@@ -16,12 +28,13 @@ def build_execution_channel_context(
     build_conversation_ref: Callable[[int], str],
     conversation_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
     routed_task_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
-) -> ExecutionChannelContext:
+) -> TransportIdentity:
     conversation_ref = metadata.message_conversation_ref
     if not conversation_ref and isinstance(metadata.chat_id, int):
         conversation_ref = build_conversation_ref(metadata.chat_id)
+    transport = _transport_fields(metadata)
     if metadata.routed_task_id and metadata.authority_ref:
-        return ExecutionChannelContext(
+        return TransportIdentity(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -29,6 +42,7 @@ def build_execution_channel_context(
                 metadata.routed_task_id,
                 metadata.authority_ref,
             ),
+            **transport,
         )
     descriptor = metadata.descriptor
     if (
@@ -37,7 +51,7 @@ def build_execution_channel_context(
         and descriptor.supports_conversation_binding
         and descriptor.supports_timeline
     ):
-        return ExecutionChannelContext(
+        return TransportIdentity(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -45,10 +59,12 @@ def build_execution_channel_context(
                 conversation_ref,
                 metadata.routed_task_id,
             ),
+            **transport,
         )
-    return ExecutionChannelContext(
+    return TransportIdentity(
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
         authority_ref=metadata.authority_ref,
         timeline_callback=None,
+        **transport,
     )

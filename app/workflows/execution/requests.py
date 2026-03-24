@@ -376,6 +376,8 @@ async def execute_request(
     if result.delegation_tasks:
         _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
         await progress.update("Delegation plan ready.", force=True)
+        tasks_summary = [{"title": t.get("title", ""), "target": t.get("target_agent_id", "")} for t in result.delegation_tasks]
+        await event_sink.on_delegation_proposed(tasks_summary)
         session = _load(runtime, conversation_key)
         _log.info("Session reloaded for delegation: session_id=%s started=%s",
                   session.provider_state.get("session_id", "")[:12],

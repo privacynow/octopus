@@ -18,10 +18,10 @@ from tests.support.config_support import make_config
 from tests.support.handler_support import FakeMessage, FakeProvider
 
 
-def _services(*, publish=None, task_routing=None) -> BotServices:
+def _services(*, task_routing=None) -> BotServices:
     projection = SimpleNamespace(
-        bind_external_conversation=AsyncMock(),
-        publish_external_timeline=publish or AsyncMock(),
+        create_conversation=AsyncMock(return_value="conv-1"),
+        publish_events=AsyncMock(),
     )
     return BotServices(
         control_plane=ControlPlaneServices(
@@ -57,53 +57,19 @@ async def test_keep_typing_uses_explicit_runtime_until_cancelled():
 
 
 @pytest.mark.asyncio
-async def test_progress_timeline_callback_publishes_progress_event(monkeypatch):
-    publish = AsyncMock()
+async def test_progress_timeline_callback_is_noop():
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-progress-timeline")),
         FakeProvider("codex"),
-        services=_services(publish=publish),
+        services=_services(),
     )
 
+    # progress_timeline_callback is now a no-op (legacy timeline removed)
     await telegram_progress.progress_timeline_callback(
         runtime,
         "telegram:12345",
         "task-1",
         "<i>Working</i>",
-    )
-
-    publish.assert_awaited_once_with(
-        conversation_ref="telegram:12345",
-        kind="progress",
-        title="Progress",
-        body="<i>Working</i>",
-        metadata={"routed_task_id": "task-1"},
-    )
-
-
-@pytest.mark.asyncio
-async def test_progress_timeline_callback_uses_port_without_registry_runtime(monkeypatch):
-    del monkeypatch
-    publish = AsyncMock()
-    runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress-fanout")),
-        FakeProvider("codex"),
-        services=_services(publish=publish),
-    )
-
-    await telegram_progress.progress_timeline_callback(
-        runtime,
-        "telegram:12345",
-        "task-1",
-        "<i>Working</i>",
-    )
-
-    publish.assert_awaited_once_with(
-        conversation_ref="telegram:12345",
-        kind="progress",
-        title="Progress",
-        body="<i>Working</i>",
-        metadata={"routed_task_id": "task-1"},
     )
 
 

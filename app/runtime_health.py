@@ -113,7 +113,7 @@ class SessionHealthContext:
     """Optional per-conversation context for session-aware checks."""
 
     session: dict[str, Any]
-    user_id: str
+    actor_key: str
     resolved_active_skills: tuple[str, ...] = ()
 
 
@@ -256,7 +256,7 @@ def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | No
                     started_at=str(worker.get("started_at", "")),
                     last_seen_at=str(worker.get("last_seen_at", "")),
                     current_item_id=str(worker.get("current_item_id", "")),
-                    current_conversation_key=str(worker.get("current_conversation_key", "")),
+                    current_conversation_key=worker.get("current_conversation_key"),
                     current_kind=str(worker.get("current_kind", "")),
                     items_processed=int(worker.get("items_processed", 0) or 0),
                     stale_recoveries_seen=int(worker.get("stale_recoveries_seen", 0) or 0),
@@ -408,7 +408,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             credential_service = get_credential_service()
 
             user_credentials = credential_service.load_for_skills(
-                session_context.user_id,
+                session_context.actor_key,
                 list(session_context.resolved_active_skills),
             )
             for skill_name in session_context.resolved_active_skills:

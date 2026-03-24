@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import secrets
 import time
 from pathlib import Path
@@ -11,12 +12,6 @@ from app import user_messages as _msg
 from app.approvals import build_preflight_prompt
 from app.execution_context import ResolvedExecutionContext
 from app.formatting import extract_send_directives
-from app.identity import (
-    parse_actor_key,
-    parse_conversation_key,
-    telegram_actor_key,
-    telegram_conversation_key,
-)
 from app.provider_guidance_service import get_provider_guidance_service
 from app.request_flow import extra_dirs_from_denials
 from app.runtime import composition
@@ -35,27 +30,98 @@ from app.runtime.inbound_types import InboundAttachment
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
     RequestExecutionOutcome,
+    TransportIdentity,
 )
+from app.ports.delegation import DelegationIntentParser
+from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+
+import json
+import logging
+from uuid import uuid4
+
+_log = logging.getLogger(__name__)
+
+_DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
 
 
-def _conversation_key(chat_id: int | str) -> str:
-    if isinstance(chat_id, str):
-        return parse_conversation_key(chat_id)
-    return telegram_conversation_key(chat_id)
+def _provider_request_content(prompt: str, system_prompt: str) -> str:
+    parts: list[str] = []
+    if system_prompt:
+        parts.append(f"System prompt:\n{system_prompt}")
+    parts.append(f"User prompt:\n{prompt}")
+    return "\n\n---\n\n".join(parts)
 
 
-def _actor_key(user_id: int | str) -> str:
-    if isinstance(user_id, str):
-        return parse_actor_key(user_id)
-    return telegram_actor_key(user_id)
+def _approval_expires_at(timeout_seconds: int) -> str:
+    ttl_seconds = max(3600, timeout_seconds)
+    return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
 
 
-def _load(runtime: ExecutionRuntime, chat_id: int | str) -> SessionState:
+def _approval_event_id(conversation_key: str, callback_token: str) -> str:
+    return f"approval:{conversation_key}:{callback_token}"
+
+
+def _retry_approval_content(denials: list[dict[str, object]]) -> str:
+    lines = ["Execution needs approval to continue after blocked actions."]
+    for denial in denials:
+        tool_name = str(denial.get("tool_name") or denial.get("tool") or "tool").strip() or "tool"
+        reason = str(denial.get("message") or denial.get("detail") or "blocked").strip() or "blocked"
+        lines.append(f"- {tool_name}: {reason}")
+    return "\n".join(lines)
+
+
+async def _discover_available_agents(
+    runtime: ExecutionRuntime,
+    cfg,
+) -> list[dict[str, str]] | None:
+    """Query agent directory for available agents, returns None if unavailable."""
+    if runtime.agent_directory is None:
+        return None
+    try:
+        from app.agents.types import AgentDiscoveryQuery
+        result = await runtime.agent_directory.search_agents(
+            query=AgentDiscoveryQuery(),
+        )
+        if not result.agents:
+            return None
+        # Exclude self by slug (cfg.instance matches the bot's slug)
+        own_slug = cfg.agent_slug or cfg.instance
+        return [
+            {
+                "display_name": a.display_name,
+                "slug": a.slug,
+                "role": a.role,
+                "capabilities": ", ".join(a.capabilities) if a.capabilities else "",
+                "connectivity_state": a.connectivity_state,
+                "agent_id": a.agent_id,
+            }
+            for a in result.agents
+            if a.slug != own_slug
+        ]
+    except Exception:
+        _log.debug("Agent discovery failed, proceeding without agent context", exc_info=True)
+        return None
+
+
+def _parse_delegation_from_response(
+    text: str,
+    available_agents: list[dict[str, str]] | None,
+    parser: DelegationIntentParser | None = None,
+) -> list[dict[str, str]]:
+    """Parse delegation intent using the provided or default parser."""
+    if not available_agents:
+        return []
+    effective_parser = parser or _DEFAULT_DELEGATION_PARSER
+    return effective_parser.parse(text, available_agents)
+
+
+
+def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
     cfg = runtime.dispatch.config
     provider = runtime.dispatch.provider
     session = load_runtime_session(
         cfg.data_dir,
-        _conversation_key(chat_id),
+        conversation_key,
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         approval_mode=cfg.approval_mode,
@@ -63,12 +129,12 @@ def _load(runtime: ExecutionRuntime, chat_id: int | str) -> SessionState:
         default_skills=cfg.default_skills,
     )
     if get_skill_activation_service().normalize(session):
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
     return session
 
 
-def _save(runtime: ExecutionRuntime, chat_id: int | str, session: SessionState) -> None:
-    save_runtime_session(runtime.dispatch.config.data_dir, _conversation_key(chat_id), session)
+def _save(runtime: ExecutionRuntime, conversation_key: str, session: SessionState) -> None:
+    save_runtime_session(runtime.dispatch.config.data_dir, conversation_key, session)
 
 
 def _resolve_context(
@@ -102,20 +168,20 @@ def check_prompt_size_cross_chat(
 
 
 def load_approval_mode(
-    chat_id: int | str,
+    conversation_key: str,
     *,
     runtime: ExecutionRuntime,
 ) -> str:
-    return _load(runtime, chat_id).approval_mode
+    return _load(runtime, conversation_key).approval_mode
 
 
-def prompt_weight(role: str, active_skills: list[str]) -> int:
-    return get_provider_guidance_service().prompt_weight(role, active_skills)
+def prompt_weight(role: str, active_skills: list[str], available_agents: list[dict[str, str]] | None = None) -> int:
+    return get_provider_guidance_service().prompt_weight(role, active_skills, available_agents=available_agents)
 
 
 async def check_credential_satisfaction(
-    chat_id: int | str,
-    user_id: int | str,
+    conversation_key: str,
+    actor_key: str,
     session: SessionState,
     message,
     *,
@@ -124,7 +190,7 @@ async def check_credential_satisfaction(
 ) -> dict[str, str] | None:
     outcome = composition.workflows().runtime_skills.setup.check_satisfaction(
         session,
-        user_id=_actor_key(user_id),
+        actor_key=actor_key,
         active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
@@ -138,7 +204,7 @@ async def check_credential_satisfaction(
         or outcome.first_requirement is None
     ):
         return None
-    _save(runtime, chat_id, session)
+    _save(runtime, conversation_key, session)
     await runtime.show_setup_prompt(
         message,
         outcome.missing_skill,
@@ -148,12 +214,11 @@ async def check_credential_satisfaction(
 
 
 async def execute_request(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     message,
     extra_dirs: list[str] | None = None,
-    request_user_id: int | str = "",
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
@@ -163,12 +228,16 @@ async def execute_request(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    session = _load(runtime, chat_id)
+
+    conversation_key = transport.conversation_key
+    event_sink = runtime.build_event_sink(transport)
+
+    session = _load(runtime, conversation_key)
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
 
     credential_env = await check_credential_satisfaction(
-        chat_id,
-        request_user_id,
+        conversation_key,
+        transport.actor,
         session,
         message,
         resolved=resolved,
@@ -177,17 +246,22 @@ async def execute_request(
     if credential_env is None:
         return None
 
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
+    await event_sink.on_user_message(prompt, actor=transport.actor)
+
+    upload_dir = str(chat_upload_dir(cfg.data_dir, conversation_key))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
     if prov.name == "codex":
         scripts_dir = guidance.stage_codex_scripts(
             cfg.data_dir,
-            _conversation_key(chat_id),
+            conversation_key,
             resolved.active_skills,
         )
         if scripts_dir:
             all_extra_dirs.append(str(scripts_dir))
+
+    # Discover available agents for delegation context in system prompt
+    available_agents = await _discover_available_agents(runtime, cfg)
 
     context = guidance.build_run_context(
         resolved.role,
@@ -198,6 +272,7 @@ async def execute_request(
         working_dir=resolved.working_dir,
         file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
+        available_agents=available_agents,
     )
     autonomous_grant = cfg.autonomous and session.approval_mode != "on"
     context.skip_permissions = skip_permissions or autonomous_grant
@@ -217,14 +292,24 @@ async def execute_request(
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
         session.provider_state["boot_id"] = runtime.dispatch.boot_id
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
+    provider_request_content = _provider_request_content(prompt, context.system_prompt)
+    await event_sink.on_provider_request(
+        provider_request_content,
+        provider=prov.name,
+        model=resolved.effective_model or cfg.model or prov.name,
+        execution_mode="resume" if is_resume else "run",
+        working_dir=str(resolved.working_dir or cfg.working_dir),
+        file_policy=resolved.file_policy or "edit",
+        image_count=len(image_paths),
+        prompt_char_count=len(provider_request_content),
+    )
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
-    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_request(
-        chat_id,
+        conversation_key,
         prompt=prompt,
         image_paths=image_paths,
         message=message,
@@ -233,33 +318,40 @@ async def execute_request(
         cancel_event=cancel_event,
         label=label,
         runtime=runtime.dispatch,
-        timeline_callback=channel_context.timeline_callback,
+        timeline_callback=transport.timeline_callback,
     )
     progress = dispatched.progress
     result = dispatched.result
 
     if result.cancelled:
-        session = _load(runtime, chat_id)
         session.provider_state.update(result.provider_state_updates)
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
         await progress.update(_msg.cancel_live_completed(), force=True)
         return RequestExecutionOutcome(status="cancelled")
 
     if runtime.dispatch.run_result_was_interrupted(result.returncode):
         raise work_queue.LeaveClaimed()
 
-    session = _load(runtime, chat_id)
     session.provider_state.update(result.provider_state_updates)
 
     if result.resume_failed:
         if prov.name == "codex":
             session.provider_state["thread_id"] = None
         else:
-            session.provider_state.update(prov.new_provider_state())
+            session.provider_state.update(prov.new_provider_state(conversation_key))
     elif prov.name == "codex" and is_resume and not result.timed_out and result.returncode and result.returncode != 0:
         session.provider_state["thread_id"] = None
 
-    _save(runtime, chat_id, session)
+    _save(runtime, conversation_key, session)
+
+    await event_sink.on_provider_response(
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        cost_usd=result.cost_usd,
+        provider=prov.name,
+    )
+    for index, record in enumerate(result.tool_executions):
+        await event_sink.on_tool_execution(record, index=index)
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
@@ -271,13 +363,14 @@ async def execute_request(
         if result.resume_failed:
             error_text += runtime.render_provider_error(_msg.progress_session_not_resumed())
         await progress.update(error_text, force=True)
+        await event_sink.on_error(error_text, error_type="provider_error", message=error_text[:500])
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
         await progress.update(_msg.progress_completed_with_blocked(), force=True)
-        session = _load(runtime, chat_id)
+        session = _load(runtime, conversation_key)
         session.pending_retry = PendingRetry(
-            request_user_id=request_user_id,
+            actor_key=transport.actor,
             prompt=prompt,
             image_paths=image_paths,
             context_hash=context_hash,
@@ -286,7 +379,15 @@ async def execute_request(
             trust_tier=trust_tier,
             created_at=time.time(),
         )
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
+        await event_sink.on_approval_requested(
+            _retry_approval_content(result.denials),
+            request_kind="retry",
+            actor_key=transport.actor,
+            trust_tier=trust_tier,
+            expires_at=_approval_expires_at(cfg.timeout_seconds),
+            request_id=_approval_event_id(conversation_key, session.pending_retry.callback_token),
+        )
         await runtime.send_retry_prompt(
             message,
             tuple(result.denials),
@@ -295,7 +396,7 @@ async def execute_request(
         cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
             await runtime.send_formatted_reply(message, cleaned_reply)
-            await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+            await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
         return RequestExecutionOutcome(
             status="completed_with_denials",
             reply_text=cleaned_reply,
@@ -305,27 +406,38 @@ async def execute_request(
             cost_usd=result.cost_usd,
         )
 
+    # Parse delegation intent from provider response if not already populated
+    if not result.delegation_tasks and available_agents:
+        parsed_tasks = _parse_delegation_from_response(result.text, available_agents, parser=runtime.delegation_parser)
+        if parsed_tasks:
+            _log.info("Parsed %d delegation tasks from provider response", len(parsed_tasks))
+            result.delegation_tasks.extend(parsed_tasks)
+
     if result.delegation_tasks:
+        _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
         await progress.update("Delegation plan ready.", force=True)
-        session = _load(runtime, chat_id)
+        tasks_summary = [{"title": t.get("title", ""), "target": t.get("target_agent_id", ""), "status": "proposed"} for t in result.delegation_tasks]
+        await event_sink.on_delegation_proposed(tasks_summary)
+        session = _load(runtime, conversation_key)
         return await runtime.propose_delegation_plan(
-            chat_id,
+            conversation_key,
             message,
             session,
-            conversation_ref=channel_context.conversation_ref,
+            conversation_ref=transport.conversation_ref,
             result=result,
         )
 
     await progress.update(_msg.progress_completed(), force=True)
     cleaned_reply, directives = extract_send_directives(result.text)
-    slot = save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, cleaned_reply)
+    slot = save_raw(cfg.data_dir, conversation_key, prompt, cleaned_reply)
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    if compact and len(cleaned_reply) > 800 and isinstance(chat_id, int):
-        await runtime.send_compact_reply(message, cleaned_reply, chat_id, slot)
+    if compact and len(cleaned_reply) > 800 and transport.origin_channel == "telegram":
+        await runtime.send_compact_reply(message, cleaned_reply, conversation_key, slot)
     else:
         await runtime.send_formatted_reply(message, cleaned_reply)
-    await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
+    await event_sink.on_bot_reply(cleaned_reply[:2000] if cleaned_reply else "")
     return RequestExecutionOutcome(
         status="completed",
         reply_text=cleaned_reply,
@@ -336,7 +448,7 @@ async def execute_request(
 
 
 async def dispatch_message_request(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     attachments: list[InboundAttachment],
@@ -345,30 +457,27 @@ async def dispatch_message_request(
     approval_mode: str,
     routed_task_id: str = "",
     skip_approval: bool = False,
-    request_user_id: int | str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     runtime: ExecutionRuntime,
 ) -> RequestExecutionOutcome | None:
     if not routed_task_id and not skip_approval and approval_mode == "on":
         await request_approval(
-            chat_id,
+            transport,
             prompt,
             image_paths,
             attachments,
             message,
-            request_user_id=request_user_id,
             trust_tier=trust_tier,
             cancel_event=cancel_event,
             runtime=runtime,
         )
         return None
     return await execute_request(
-        chat_id,
+        transport,
         prompt,
         image_paths,
         message,
-        request_user_id=request_user_id,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
         runtime=runtime,
@@ -376,12 +485,11 @@ async def dispatch_message_request(
 
 
 async def request_approval(
-    chat_id: int | str,
+    transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
     attachments,
     message,
-    request_user_id: int | str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     *,
@@ -390,7 +498,9 @@ async def request_approval(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    session = _load(runtime, chat_id)
+    conversation_key = transport.conversation_key
+    event_sink = runtime.build_event_sink(transport)
+    session = _load(runtime, conversation_key)
 
     if session.has_pending:
         await message.reply_text(_msg.approval_already_waiting())
@@ -398,8 +508,8 @@ async def request_approval(
 
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
     credential_env = await check_credential_satisfaction(
-        chat_id,
-        request_user_id,
+        conversation_key,
+        transport.actor,
         session,
         message,
         resolved=resolved,
@@ -409,7 +519,7 @@ async def request_approval(
         return
     del credential_env
 
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, conversation_key))
     preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
     preflight_context = guidance.build_preflight_context(
         resolved.role,
@@ -421,10 +531,9 @@ async def request_approval(
         effective_model=resolved.effective_model,
     )
     context_hash = resolved.context_hash
-    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_preflight(
-        chat_id,
+        conversation_key,
         prompt=build_preflight_prompt(prompt, prov.name),
         image_paths=image_paths,
         message=message,
@@ -432,7 +541,7 @@ async def request_approval(
         cancel_event=cancel_event,
         label=_msg.approval_preparing(),
         runtime=runtime.dispatch,
-        timeline_callback=channel_context.timeline_callback,
+        timeline_callback=transport.timeline_callback,
     )
     progress = dispatched.progress
     plan_result = dispatched.result
@@ -461,7 +570,7 @@ async def request_approval(
         for a in attachments
     ]
     session.pending_approval = PendingApproval(
-        request_user_id=request_user_id,
+        actor_key=transport.actor,
         prompt=prompt,
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
@@ -470,10 +579,18 @@ async def request_approval(
         trust_tier=trust_tier,
         created_at=time.time(),
     )
-    _save(runtime, chat_id, session)
+    plan_text = plan_result.text or "[empty plan]"
+    _save(runtime, conversation_key, session)
+    await event_sink.on_approval_requested(
+        plan_text,
+        request_kind="preflight",
+        actor_key=transport.actor,
+        trust_tier=trust_tier,
+        expires_at=_approval_expires_at(cfg.timeout_seconds),
+        request_id=_approval_event_id(conversation_key, session.pending_approval.callback_token),
+    )
 
     await progress.update(_msg.approval_required(), force=True)
-    plan_text = plan_result.text or "[empty plan]"
-    save_raw(runtime.dispatch.config.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
+    save_raw(runtime.dispatch.config.data_dir, conversation_key, prompt, plan_text, kind="approval")
     await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
     await runtime.send_approval_prompt(message, session.pending_approval.callback_token)

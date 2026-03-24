@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 272,
+      "y": 148.140625,
+      "width": 1064,
+      "height": 229.59375,
+      "label": "All conversations scoped to the selected agent",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

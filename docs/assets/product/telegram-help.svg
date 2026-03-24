@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-labelledby="title desc">
+  <title id="title">Telegram: /help and chat</title>
+  <desc id="desc">Help shows commands; plain text messages go to the agent.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6c9ee4"/>
+      <stop offset="45%" stop-color="#8e9eab"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="480" fill="url(#bg)"/>
+  <g transform="translate(400 32)">
+    <rect x="0" y="0" width="400" height="416" rx="12" fill="#fff" stroke="#000" stroke-opacity="0.12"/>
+    <path d="M0 12 Q0 0 12 0 H388 Q400 0 400 12 V48 H0 Z" fill="#5288c1"/>
+    <text x="16" y="31" fill="#fff" style="font-size:15px;font-weight:600;font-family:system-ui,-apple-system,sans-serif">Your bot</text>
+    <rect x="0" y="48" width="400" height="368" fill="#e5ddd5"/>
+    <rect x="20" y="72" width="80" height="44" rx="10" fill="#dcf8c6"/>
+    <text x="32" y="100" fill="#222" style="font-size:14px;font-family:system-ui,sans-serif">/help</text>
+    <rect x="20" y="132" width="340" height="120" rx="10" fill="#fff" stroke="#000" stroke-opacity="0.06"/>
+    <text x="32" y="158" fill="#333" style="font-size:13px;font-family:system-ui,sans-serif">Commands: /start /session /settings ...</text>
+    <text x="32" y="182" fill="#333" style="font-size:13px;font-family:system-ui,sans-serif">/doctor - health  |  /skills - skills</text>
+    <text x="32" y="218" fill="#555" style="font-size:12px;font-family:system-ui,sans-serif">Send normal text to talk to the agent.</text>
+    <rect x="120" y="268" width="260" height="44" rx="10" fill="#dcf8c6"/>
+    <text x="132" y="296" fill="#222" style="font-size:14px;font-family:system-ui,sans-serif">What files are in my working directory?</text>
+  </g>
+</svg>

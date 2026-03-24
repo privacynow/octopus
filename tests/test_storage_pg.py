@@ -8,12 +8,12 @@ from app.identity import telegram_conversation_key
 from app.session_defaults import default_session
 
 
-def _provider_state_factory():
+def _provider_state_factory(conversation_key: str):
     return {}
 
 
 def _delegation_session() -> dict:
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     session["pending_delegation"] = {
         "conversation_ref": "telegram:agent:12345",
         "title": "Delegation plan",
@@ -54,7 +54,7 @@ def test_save_and_load_session_roundtrip(postgres_truncated):
 
     conversation_key = telegram_conversation_key(999)
     session = default_session(
-        "claude", _provider_state_factory(), "on", "Engineer", ("debugging",)
+        "claude", _provider_state_factory("tg:test"), "on", "Engineer", ("debugging",)
     )
     session["active_skills"] = ["debugging", "testing"]
     session["project_id"] = "myproj"
@@ -77,7 +77,7 @@ def test_save_session_then_exists(postgres_truncated):
         storage_postgres.save_session(
             conn,
             conversation_key,
-            default_session("codex", _provider_state_factory(), "off"),
+            default_session("codex", _provider_state_factory("tg:test"), "off"),
         )
         assert storage_postgres.session_exists(conn, conversation_key) is True
 
@@ -90,7 +90,7 @@ def test_delete_session(postgres_truncated):
         storage_postgres.save_session(
             conn,
             conversation_key,
-            default_session("claude", _provider_state_factory(), "off"),
+            default_session("claude", _provider_state_factory("tg:test"), "off"),
         )
         assert storage_postgres.session_exists(conn, conversation_key) is True
         storage_postgres.delete_session(conn, conversation_key)
@@ -111,12 +111,12 @@ def test_list_sessions_after_save(postgres_truncated):
         storage_postgres.save_session(
             conn,
             telegram_conversation_key(111),
-            default_session("claude", _provider_state_factory(), "on"),
+            default_session("claude", _provider_state_factory("tg:test"), "on"),
         )
         storage_postgres.save_session(
             conn,
             telegram_conversation_key(222),
-            default_session("codex", _provider_state_factory(), "off"),
+            default_session("codex", _provider_state_factory("tg:test"), "off"),
         )
         listed = storage_postgres.list_sessions(conn)
     assert len(listed) == 2
@@ -219,7 +219,7 @@ def test_created_at_preserved_on_resave(postgres_truncated):
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60001)
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     original_created = session["created_at"]
     with get_connection(postgres_truncated) as conn:
         storage_postgres.save_session(conn, conversation_key, session)
@@ -239,7 +239,7 @@ def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60002)
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     with get_connection(postgres_truncated) as conn:
         storage_postgres.save_session(conn, conversation_key, session)
         with conn.cursor() as cur:
@@ -249,7 +249,7 @@ def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
             )
         conn.commit()
         loaded = storage_postgres.load_session(
-            conn, conversation_key, "claude", lambda: {"session_id": "new"}, "on"
+            conn, conversation_key, "claude", lambda _ck="": {"session_id": "new"}, "on"
         )
     assert isinstance(loaded["provider_state"], dict)
     assert loaded["provider_state"]["session_id"] == "new"
@@ -261,7 +261,7 @@ def test_falsy_created_at_normalized_on_save(postgres_truncated):
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60003)
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     session["created_at"] = ""
     with get_connection(postgres_truncated) as conn:
         storage_postgres.save_session(conn, conversation_key, session)
@@ -277,7 +277,7 @@ def test_load_session_non_object_json_falls_back_to_defaults(postgres_truncated)
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60004)
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     with get_connection(postgres_truncated) as conn:
         storage_postgres.save_session(conn, conversation_key, session)
         with conn.cursor() as cur:

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
-from app.agents.registry_capabilities import registry_authority_capabilities
+from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
 import app.channels.telegram.execution as _telegram_execution
 import app.channels.telegram.ingress as _th
 import app.channels.telegram.progress as _telegram_progress
@@ -122,11 +122,11 @@ def fresh_data_dir():
 def public_user_config_overrides(**extra):
     """Default config overrides for tests that need a public (non-trusted) user.
 
-    Returns allow_open=True and allowed_user_ids=frozenset({42}) so that
+    Returns allow_open=True and allowed_actor_keys=frozenset({"tg:42"}) so that
     uid 42 is trusted and any other uid (e.g. 999) is public. Merge with
     test-specific overrides, e.g. public_model_profiles=frozenset({\"fast\"}).
     """
-    return {"allow_open": True, "allowed_user_ids": frozenset({42}), **extra}
+    return {"allow_open": True, "allowed_actor_keys": frozenset({"tg:42"}), **extra}
 
 
 @contextlib.contextmanager
@@ -213,6 +213,7 @@ class FakeMessage:
         self.replies = []
         self.deleted = False
         self._user = user
+        self.from_user = user
 
     async def reply_text(self, text, **kwargs):
         self.replies.append({"text": text, **kwargs})
@@ -321,10 +322,13 @@ class FakeProvider:
         self.preflight_results = []
         self._health_errors = []
 
-    def new_provider_state(self):
+    def new_provider_state(self, conversation_key: str):
         if self.name == "codex":
+            del conversation_key
             return {"thread_id": None}
-        return {"session_id": "test-session-id", "started": False}
+        import uuid
+        sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
+        return {"session_id": sid, "started": False}
 
     async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
         self.run_calls.append({
@@ -368,7 +372,7 @@ def make_config(data_dir, **overrides):
         typing_interval_seconds=60.0,
         # Default test users are trusted — covers UIDs commonly used in tests.
         # Excludes 999 (test-stranger used for unauthorized user tests).
-        allowed_user_ids=frozenset({1, 2, 3, 42, 50, 99, 100, 200}),
+        allowed_actor_keys=frozenset({"tg:1", "tg:2", "tg:3", "tg:42", "tg:50", "tg:99", "tg:100", "tg:200"}),
     )
     defaults.update(overrides)
     return _make_config(**defaults)
@@ -495,6 +499,11 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     or a narrower seam in isolation.
     """
     reset_handler_test_runtime()
+    # Reduce bus/projection timeout so tests with unprocessed bus commands fail fast
+    from app.control_plane.bus import ControlPlaneBus
+    from app.control_plane.adapters.conversation_projection import BusConversationProjection
+    ControlPlaneBus.default_timeout_seconds = 0.1
+    BusConversationProjection.bus_timeout_seconds = 0.1
     global _TEST_RUNTIME, _TEST_APPLICATION
     import app.content_store as _cs
     import app.credential_store as _creds
@@ -527,8 +536,21 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         else {}
     )
     directory = build_control_plane_directory(authority_capabilities)
+
+    def _agent_id_for_authority(authority_ref: str) -> str:
+        from app.agents.state import load_registry_connection_state
+
+        try:
+            rid = registry_id_from_authority_ref(authority_ref)
+        except ValueError:
+            return ""
+        return load_registry_connection_state(config.data_dir, rid).agent_id
+
     services = (
-        build_bus_bot_services(ControlPlaneBus(config.data_dir), directory)
+        build_bus_bot_services(
+            ControlPlaneBus(config.data_dir), directory,
+            agent_id_for_authority=_agent_id_for_authority,
+        )
         if authority_capabilities
         else build_noop_bot_services()
     )

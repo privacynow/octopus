@@ -2,28 +2,48 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from app.ports.agent_directory import AgentDirectoryPort
 from app.ports.channel import ChannelDescriptor
+from app.ports.delegation import DelegationIntentParser
+from app.ports.execution_events import ExecutionEventSink
 from app.runtime.dispatch import RuntimeDispatchRuntime
 
 
 @dataclass(frozen=True)
-class ExecutionChannelContext:
+class TransportIdentity:
+    """Channel-supplied bundle for durable side effects (registry, session, logging).
+
+    Every channel must supply this per execution. It describes how this
+    conversation maps to registry projection, session storage, and UI.
+    Replaces the former ExecutionChannelContext.
+    """
+    conversation_key: str
+    origin_channel: str = ""
+    external_conversation_ref: str = ""
+    target_agent_id: str = ""
     conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
+    actor: str = ""
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
+
 
 
 @dataclass(frozen=True)
 class ExecutionChannelMetadata:
+    conversation_key: str
     descriptor: ChannelDescriptor | None = None
     message_conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
-    chat_id: int | str = ""
+    origin_channel: str = ""
+    external_conversation_ref: str = ""
+    target_agent_id: str = ""
+    actor: str = ""
+
 
 
 @dataclass(frozen=True)
@@ -40,7 +60,8 @@ class RequestExecutionOutcome:
 @dataclass(frozen=True)
 class ExecutionRuntime:
     dispatch: RuntimeDispatchRuntime
-    build_channel_context: Callable[[Any, int | str], ExecutionChannelContext]
+    build_transport_identity: Callable[..., TransportIdentity]  # (message, chat_id, *, actor_key="")
+    build_event_sink: Callable[[TransportIdentity], ExecutionEventSink]
     render_provider_error: Callable[[str], str]
     show_foreign_setup: Callable[[Any, Any], Awaitable[None]]
     show_setup_prompt: Callable[[Any, str, dict[str, object]], Awaitable[None]]
@@ -50,3 +71,5 @@ class ExecutionRuntime:
     send_directed_artifacts: Callable[..., Awaitable[None]]
     send_compact_reply: Callable[..., Awaitable[None]]
     propose_delegation_plan: Callable[..., Awaitable[RequestExecutionOutcome]]
+    delegation_parser: DelegationIntentParser | None = field(default=None)
+    agent_directory: AgentDirectoryPort | None = field(default=None)

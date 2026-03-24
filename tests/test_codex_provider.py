@@ -17,7 +17,7 @@ from tests.support.handler_support import FakeProgress
 
 def test_new_provider_state():
     p = CodexProvider(make_config())
-    state = p.new_provider_state()
+    state = p.new_provider_state("tg:test")
     assert state["thread_id"] is None
 
 

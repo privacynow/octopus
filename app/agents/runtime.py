@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
 from app.agents.state import (
+    load_bot_identity_state,
     load_runtime_registry_connection_state,
     save_registry_connection_state,
 )
@@ -82,13 +83,14 @@ class AgentRuntime:
         return self._registry.enroll_token
 
     def requested_card(self) -> AgentCard:
+        capabilities = self._effective_capabilities()
         return AgentCard(
             agent_id=self._state.agent_id,
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
             registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
-            capabilities=self.config.agent_capabilities,
+            capabilities=capabilities,
             tags=self.config.agent_tags,
             description=self.config.agent_description,
             provider=self.config.provider_name,
@@ -98,7 +100,16 @@ class AgentRuntime:
             max_capacity=1,
             channel_capabilities=self._channel_capabilities(),
             version="",
+            bot_key=load_bot_identity_state(self.config.data_dir).bot_id,
         )
+
+    def _effective_capabilities(self) -> tuple[str, ...]:
+        """Return explicitly configured capabilities only.
+
+        No auto-detection from provider/skills — capabilities advertised to
+        the registry should be intentional, not inferred.
+        """
+        return self.config.agent_capabilities
 
     def _client(self) -> AgentRegistryClient:
         return AgentRegistryClient(
@@ -106,18 +117,16 @@ class AgentRuntime:
             agent_token=self._state.agent_token,
         )
 
-    async def _runtime_health_payload(self) -> tuple[dict[str, Any] | None, int]:
+    async def _runtime_health_payload(self) -> dict[str, Any] | None:
         if self._runtime_health_provider is None or self._provider is None:
-            return None, 0
+            return None
         report = await self._runtime_health_provider.collect(
             self.config,
             self._provider,
             caller_is_bot=True,
             session_context=None,
         )
-        payload = self._runtime_health_projector.project(report)
-        active_work_count = report.summary.claimed_count
-        return payload, active_work_count
+        return self._runtime_health_projector.project(report)
 
     def _save_state(self) -> None:
         if self._registry is None:
@@ -185,9 +194,8 @@ class AgentRuntime:
                 max_capacity=1,
             )
             runtime_health_payload = None
-            active_work_count = 0
             try:
-                runtime_health_payload, active_work_count = await self._runtime_health_payload()
+                runtime_health_payload = await self._runtime_health_payload()
             except Exception:
                 log.exception(
                     "Runtime health collection failed for %s; continuing without mirrored health",
@@ -197,7 +205,6 @@ class AgentRuntime:
                 "connectivity_state": "connected",
                 "current_capacity": 0,
                 "max_capacity": 1,
-                "active_work_count": active_work_count,
             }
             if runtime_health_payload is not None:
                 heartbeat_kwargs["runtime_health"] = runtime_health_payload

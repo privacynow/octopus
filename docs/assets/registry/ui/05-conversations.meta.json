@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 274,
+      "y": 150.140625,
+      "width": 1060,
+      "height": 49.5,
+      "label": "Start a conversation or jump to the approvals queue",
+      "color": "#4caf50"
+    },
+    {
+      "x": 274,
+      "y": 203.640625,
+      "width": 1060,
+      "height": 58,
+      "label": "Server-backed search and status filter",
+      "color": "#ff9800"
+    },
+    {
+      "x": 274,
+      "y": 267.640625,
+      "width": 1060,
+      "height": 112.796875,
+      "label": "Conversation row → timeline detail",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Telegram — settings</title>
+  <style>
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:linear-gradient(180deg,#6c9ee4 0%,#8e9eab 40%); min-height:100vh; padding:24px; }
+    .phone { max-width:400px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 12px 48px rgba(0,0,0,.25); }
+    .head { background:#5288c1; color:#fff; padding:12px 16px; font-weight:600; }
+    .chat { padding:16px; background:#e5ddd5; min-height:420px; }
+    .bubble-out { background:#dcf8c6; border-radius:10px 10px 0 10px; padding:8px 12px; margin:8px 0 8px 60px; font-size:14px; }
+    .panel { background:#fff; border-radius:8px; padding:12px; margin-top:8px; font-size:13px; }
+    .row { padding:8px 0; border-bottom:1px solid #eee; color:#333; }
+    .kbd { display:inline-block; background:#eef; padding:4px 8px; border-radius:6px; margin:4px 4px 0 0; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <div class="head">Settings</div>
+    <div class="chat">
+      <div class="bubble-out">/settings</div>
+      <div class="panel" data-doc="panel">
+        <div class="row">Chat-specific options (tap a button)</div>
+        <div><span class="kbd">setting_compact</span><span class="kbd">setting_model</span></div>
+        <div><span class="kbd">setting_approval</span><span class="kbd">setting_project</span></div>
+        <div class="row" style="border:0;font-size:12px;color:#666;">Callbacks use prefix <code>setting_*</code></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

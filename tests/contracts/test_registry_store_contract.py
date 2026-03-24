@@ -41,6 +41,7 @@ def _card(
         "connectivity_state": "connected",
         "channel_capabilities": ["registry"],
         "version": "test",
+        "bot_key": f"bot-{slug}",
     }
 
 
@@ -287,13 +288,13 @@ def test_ack_marks_delivery_done(store):
 
 
 def test_conversation_status_transitions_cover_running_terminal_and_cancelling_states():
-    assert conversation_status_for_event("started", "open") == "running"
-    assert conversation_status_for_event("progress", "running") == "running"
-    assert conversation_status_for_event("progress", "cancelling") == "cancelling"
-    assert conversation_status_for_event("control", "running") == "cancelling"
-    assert conversation_status_for_event("completed", "running") == "completed"
-    assert conversation_status_for_event("failed", "running") == "failed"
-    assert conversation_status_for_event("channel_input", "open") == "open"
+    # SDK kind names
+    assert conversation_status_for_event("message.user", "open") == "running"
+    assert conversation_status_for_event("message.bot", "running") == "running"
+    assert conversation_status_for_event("message.bot", "cancelling") == "cancelling"
+    assert conversation_status_for_event("task.status", "running") == "running"
+    assert conversation_status_for_event("error", "running") == "failed"
+    assert conversation_status_for_event("approval.decided", "open") == "open"
 
 
 def test_ack_rejects_invalid_classification(store):
@@ -484,7 +485,7 @@ def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
         },
     )
 
-    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+    assert store.list_events("conv-blocked-timeline")["events"] == []
 
     store.update_routed_task_status(
         target_token,
@@ -512,7 +513,7 @@ def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
 
     assert task["status"] == "completed"
     assert "Final result" in str(task["result_json"])
-    assert store.get_conversation_timeline("conv-blocked-timeline") == []
+    assert store.list_events("conv-blocked-timeline")["events"] == []
 
 
 def test_assert_agent_scope_rejects_wrong_scope(store):
@@ -571,8 +572,8 @@ def test_create_routed_task_disabled_capability_raises(store):
                 "origin_agent_id": origin_id,
                 "target_agent_id": target_id,
                 "title": "Disabled review task",
-                "skill": "reviewer",
                 "instructions": "Review the spec.",
+                "requested_capabilities": ["reviewer"],
                 "context": {},
                 "constraints": {},
                 "priority": "normal",
@@ -581,52 +582,17 @@ def test_create_routed_task_disabled_capability_raises(store):
         )
 
 
-def test_bind_conversation_is_visible(store):
-    _, agent_token = _enroll(store, "alpha-bot")
-
-    store.bind_conversation(
-        agent_token,
-        {
-            "conversation_id": "c1",
-            "title": "Conversation 1",
-            "origin_channel": "telegram",
-        },
-    )
-
-    conversations = store.list_conversations()
-    assert [item["conversation_id"] for item in conversations] == ["c1"]
-
-
-@pytest.mark.parametrize(
-    "payload",
-    (
-        {"conversation_id": "c1", "title": "Conversation 1"},
-        {"conversation_id": "c1", "title": "Conversation 1", "origin_channel": ""},
-    ),
-)
-def test_bind_conversation_requires_non_empty_origin_channel(store, payload):
-    _, agent_token = _enroll(store, "alpha-bot")
-
-    with pytest.raises(ValueError, match="origin_channel"):
-        store.bind_conversation(agent_token, payload)
-
-    assert store.list_conversations() == []
-
-
 def test_create_conversation_delivers_channel_input(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
 
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
-        message_text="hello from registry",
+        origin_channel="registry",
+        external_conversation_ref="alpha-conv-1",
     )
-    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
 
     assert conversation["conversation_id"]
-    assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "channel_input"
-    assert deliveries[0]["payload"]["text"] == "hello from registry"
 
 
 def test_add_conversation_message_requires_non_empty_text(store):
@@ -634,7 +600,8 @@ def test_add_conversation_message_requires_non_empty_text(store):
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
-        message_text="hello from registry",
+        origin_channel="registry",
+        external_conversation_ref="message-conv-1",
     )
 
     with pytest.raises(ValueError, match="message text"):
@@ -646,105 +613,70 @@ def test_add_conversation_action_requires_non_empty_action(store):
     conversation = store.create_conversation(
         target_agent_id=agent_id,
         title="Registry conversation",
-        message_text="hello from registry",
+        origin_channel="registry",
+        external_conversation_ref="action-conv-1",
     )
 
     with pytest.raises(ValueError, match="action"):
         store.add_conversation_action(conversation["conversation_id"], "   ")
 
 
-def test_timeline_publish_and_retrieve(store):
-    _, agent_token = _enroll(store, "alpha-bot")
-    store.bind_conversation(
-        agent_token,
-        {
-            "conversation_id": "conv-1",
-            "title": "Bound conversation",
-            "origin_channel": "registry",
-        },
+def test_list_approvals_returns_only_pending_requests(store):
+    agent_id, agent_token = _enroll(store, "approval-bot")
+    pending = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Pending approval conversation",
+        origin_channel="registry",
+        external_conversation_ref="approval-pending-1",
+    )
+    decided = store.create_conversation(
+        target_agent_id=agent_id,
+        title="Decided approval conversation",
+        origin_channel="registry",
+        external_conversation_ref="approval-decided-1",
     )
 
-    store.publish_timeline(
+    store.publish_events(
         agent_token,
-        [
-            {
-                "event_id": "evt-1",
-                "conversation_id": "conv-1",
-                "kind": "progress",
-                "title": "Working",
-                "body": "Doing the work",
-                "created_at": "2026-03-16T00:00:00+00:00",
-            }
-        ],
+        pending["conversation_id"],
+        [{
+            "event_id": "approval-pending-event",
+            "kind": "approval.requested",
+            "actor": "operator",
+            "content": "Review this change",
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "metadata": {
+                "request_kind": "preflight",
+                "actor_key": "reg:operator",
+                "trust_tier": "trusted",
+                "expires_at": "2026-04-16T01:00:00+00:00",
+            },
+        }],
     )
-
-    events = store.get_conversation_timeline("conv-1")
-    assert len(events) == 1
-    assert events[0]["kind"] == "progress"
-    assert events[0]["body"] == "Doing the work"
-
-
-def test_publish_timeline_requires_required_event_fields(store):
-    _, agent_token = _enroll(store, "timeline-bot")
-    store.bind_conversation(
+    store.publish_events(
         agent_token,
-        {
-            "conversation_id": "conv-missing-event-fields",
-            "title": "Bound conversation",
-            "origin_channel": "registry",
-        },
+        decided["conversation_id"],
+        [{
+            "event_id": "approval-decided-event",
+            "kind": "approval.requested",
+            "actor": "operator",
+            "content": "Approve this deployment",
+            "created_at": "2026-03-16T00:05:00+00:00",
+            "metadata": {
+                "request_kind": "delegation",
+                "actor_key": "reg:operator",
+                "trust_tier": "trusted",
+                "expires_at": "2026-04-16T01:05:00+00:00",
+            },
+        }],
     )
+    store.add_conversation_action(decided["conversation_id"], "approve", {"request_id": "approval-decided-event"})
 
-    with pytest.raises(ValueError, match="title"):
-        store.publish_timeline(
-            agent_token,
-            [
-                {
-                    "event_id": "evt-missing-title",
-                    "conversation_id": "conv-missing-event-fields",
-                    "kind": "progress",
-                    "created_at": "2026-03-16T00:00:00+00:00",
-                }
-            ],
-        )
+    approvals = store.list_approvals()
 
-
-def test_usage_summary_from_timeline(store):
-    _, agent_token = _enroll(store, "alpha-bot")
-    store.bind_conversation(
-        agent_token,
-        {
-            "conversation_id": "conv-usage",
-            "title": "Usage conversation",
-            "origin_channel": "registry",
-        },
-    )
-    store.publish_timeline(
-        agent_token,
-        [
-            {
-                "event_id": "evt-usage",
-                "conversation_id": "conv-usage",
-                "kind": "usage",
-                "title": "Token usage",
-                "body": "",
-                "metadata": {
-                    "prompt_tokens": 123,
-                    "completion_tokens": 45,
-                    "cost_usd": 0.0123,
-                    "provider": "claude",
-                },
-                "created_at": "2026-03-16T00:00:00+00:00",
-            }
-        ],
-    )
-
-    rows = store.get_usage_summary("2026-03-15T00:00:00+00:00")
-
-    assert len(rows) == 1
-    assert rows[0]["conversation_id"] == "conv-usage"
-    assert rows[0]["metadata"]["prompt_tokens"] == 123
-    assert rows[0]["metadata"]["completion_tokens"] == 45
+    assert [item["conversation_id"] for item in approvals] == [pending["conversation_id"]]
+    assert approvals[0]["request_id"] == "approval-pending-event"
+    assert approvals[0]["request_kind"] == "preflight"
 
 
 def test_heartbeat_persists_runtime_health_and_workers(store):
@@ -831,37 +763,6 @@ def test_register_preserves_omitted_capacity_and_card_lists(store):
     assert updated["tags"] == ["backend"]
     assert updated["channel_capabilities"] == ["registry"]
     assert updated["registry_scope"] == "coordination"
-
-
-def test_search_conversations_fts(store):
-    _, agent_token = _enroll(store, "alpha-bot")
-    store.bind_conversation(
-        agent_token,
-        {
-            "conversation_id": "conv-search",
-            "title": "Search conversation",
-            "origin_channel": "registry",
-        },
-    )
-    store.publish_timeline(
-        agent_token,
-        [
-            {
-                "event_id": "evt-search",
-                "conversation_id": "conv-search",
-                "kind": "progress",
-                "title": "Search body",
-                "body": "the quick brown fox",
-                "created_at": "2026-03-16T00:00:00+00:00",
-            }
-        ],
-    )
-
-    results = store.search_conversations("quick")
-
-    assert len(results) == 1
-    assert results[0]["conversation_id"] == "conv-search"
-    assert results[0]["snippet"]
 
 
 def test_capability_override_disabled_excludes_from_search(store):

@@ -7,6 +7,7 @@ from typing import Any
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
+    registry_id_from_authority_ref,
 )
 from app.agents.types import RegistryConnectionConfig
 from app.channels.registry.egress import RegistryChannelEgress
@@ -25,13 +26,24 @@ def _services_for_registry(
     *,
     registry: RegistryConnectionConfig,
     authority_capabilities: dict[str, set[str]],
+    config: BotConfig,
 ) -> BotServices:
     authority_ref = registry_authority_ref(registry.registry_id)
     capabilities = authority_capabilities.get(authority_ref, set())
     if not capabilities:
         return build_noop_bot_services()
     directory = build_control_plane_directory({authority_ref: set(capabilities)})
-    return build_bus_bot_services(bus, directory)
+
+    def _agent_id_for_authority(ref: str) -> str:
+        try:
+            rid = registry_id_from_authority_ref(ref)
+        except ValueError:
+            return ""
+        return config.agent_id_for_registry(rid)
+
+    return build_bus_bot_services(
+        bus, directory, agent_id_for_authority=_agent_id_for_authority,
+    )
 
 
 class _RegistryChannel(Channel):
@@ -149,6 +161,7 @@ def register_registry_channels(
             bus,
             registry=registry,
             authority_capabilities=authority_capabilities,
+            config=config,
         )
         if registry.registry_scope in {"channel", "full"}:
             dispatcher.register(

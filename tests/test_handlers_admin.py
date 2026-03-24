@@ -24,7 +24,7 @@ async def test_admin_requires_admin():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({99}),
+            admin_actor_keys=frozenset({"tg:99"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -41,7 +41,7 @@ async def test_admin_sessions_summary():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -72,7 +72,7 @@ async def test_admin_sessions_detail():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -102,7 +102,7 @@ async def test_admin_sessions_detail_not_found():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -125,7 +125,7 @@ async def test_admin_no_sessions():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -142,7 +142,7 @@ async def test_admin_usage():
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
-            admin_user_ids=frozenset({42}),
+            admin_actor_keys=frozenset({"tg:42"}),
             admin_usernames=frozenset(),
             admin_users_explicit=True,
         )
@@ -160,8 +160,8 @@ async def test_admin_not_allowed():
         cfg = make_config(
             data_dir,
             allow_open=False,
-            allowed_user_ids=frozenset({99}),
-            admin_user_ids=frozenset({99}),
+            allowed_actor_keys=frozenset({"tg:99"}),
+            admin_actor_keys=frozenset({"tg:99"}),
             admin_users_explicit=True,
         )
         setup_globals(cfg, FakeProvider())

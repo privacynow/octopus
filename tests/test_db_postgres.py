@@ -15,45 +15,19 @@ def test_current_schema_version():
     assert current_schema_version() >= 1
 
 
-def test_run_update_renames_legacy_registry_columns_and_delivery_kinds(postgres_base_url, request):
-    """Postgres update applies registry channel-vocabulary migrations in-place."""
+def test_run_update_applies_all_migrations(postgres_base_url, request):
+    """Postgres update applies all migration files without errors."""
     from app.db.postgres import get_connection
     from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
 
     worker_id = get_worker_id(request.config)
-    db_name = f"test_bot_registry_v8_{worker_id}".replace("-", "_")
+    db_name = f"test_bot_registry_update_{worker_id}".replace("-", "_")
     db_url = _replace_db_in_url(postgres_base_url, db_name)
     create_test_database(postgres_base_url, db_name)
-    sql_dir = Path(__file__).resolve().parents[1] / "app" / "db" / "migrations" / "postgres"
 
     with get_connection(db_url) as conn:
-        for version in range(1, 9):
-            matching = sorted(sql_dir.glob(f"{version:04d}_*.sql"))
-            assert matching, f"missing migration file for version {version}"
-            sql = matching[0].read_text()
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                cur.execute(
-                    """
-                    INSERT INTO bot_runtime.schema_migrations (version, applied_at)
-                    VALUES (%s, (NOW() AT TIME ZONE 'utc'))
-                    ON CONFLICT (version) DO NOTHING
-                    """,
-                    (version,),
-                )
-            conn.commit()
-
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO agent_registry.deliveries (
-                    delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
-                ) VALUES
-                    ('legacy-input', 'agent-1', 'surface_input', '{}'::jsonb, 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'),
-                    ('legacy-action', 'agent-1', 'surface_action', '{}'::jsonb, 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00')
-                """
-            )
-        conn.commit()
+        errors = run_bootstrap(conn)
+        assert errors == []
 
         errors = run_update(conn)
         assert errors == []
@@ -69,29 +43,10 @@ def test_run_update_renames_legacy_registry_columns_and_delivery_kinds(postgres_
                 """
             )
             agent_columns = {row[0] for row in cur.fetchall()}
-            cur.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'agent_registry'
-                  AND table_name = 'conversations'
-                ORDER BY ordinal_position
-                """
-            )
-            conversation_columns = {row[0] for row in cur.fetchall()}
-            cur.execute(
-                "SELECT delivery_id, kind FROM agent_registry.deliveries ORDER BY delivery_id"
-            )
-            rows = cur.fetchall()
 
     assert "channel_capabilities_json" in agent_columns
-    assert "surface_capabilities_json" not in agent_columns
-    assert "origin_channel" in conversation_columns
-    assert "origin_surface" not in conversation_columns
-    assert rows == [
-        ("legacy-action", "channel_action"),
-        ("legacy-input", "channel_input"),
-    ]
+    assert "registry_scope" in agent_columns
+    assert "runtime_health_json" in agent_columns
 
 
 def test_doctor_passes_after_bootstrap(postgres_truncated):
@@ -119,6 +74,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
         "agents": {
             "agent_id",
             "agent_token",
+            "bot_key",
             "display_name",
             "slug",
             "role",
@@ -169,9 +125,96 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "target_agent_id",
             "title",
             "origin_channel",
+            "external_conversation_ref",
             "status",
             "created_at",
             "updated_at",
+        },
+        "events": {
+            "seq",
+            "event_id",
+            "conversation_id",
+            "agent_id",
+            "kind",
+            "actor",
+            "content",
+            "metadata_json",
+            "created_at",
+        },
+        "guidance_approvals": {
+            "record_id",
+            "provider",
+            "scope_kind",
+            "scope_key",
+            "revision_id",
+            "action",
+            "actor",
+            "note",
+            "created_at",
+        },
+        "guidance_revisions": {
+            "revision_id",
+            "provider",
+            "scope_kind",
+            "scope_key",
+            "content",
+            "format",
+            "status",
+            "created_by",
+            "created_at",
+        },
+        "provider_guidance": {
+            "provider",
+            "scope_kind",
+            "scope_key",
+            "content",
+            "format",
+            "is_mutable",
+            "active_revision_id",
+            "published_revision_id",
+            "created_at",
+            "updated_at",
+        },
+        "runtime_skills": {
+            "slug",
+            "display_name",
+            "description",
+            "source_kind",
+            "source_uri",
+            "owner_actor",
+            "visibility",
+            "is_mutable",
+            "archived",
+            "instruction_body",
+            "requirements_json",
+            "provider_config_json",
+            "files_json",
+            "active_revision_id",
+            "published_revision_id",
+            "created_at",
+            "updated_at",
+        },
+        "skill_approvals": {
+            "record_id",
+            "slug",
+            "revision_id",
+            "action",
+            "actor",
+            "note",
+            "created_at",
+        },
+        "skill_revisions": {
+            "revision_id",
+            "slug",
+            "instruction_body",
+            "requirements_json",
+            "provider_config_json",
+            "files_json",
+            "version_label",
+            "changelog",
+            "status",
+            "created_by",
+            "created_at",
         },
         "routed_tasks": {
             "routed_task_id",
@@ -186,20 +229,16 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "created_at",
             "updated_at",
         },
-        "timeline_events": {
+        "events": {
             "seq",
             "event_id",
             "conversation_id",
-            "routed_task_id",
             "agent_id",
             "kind",
-            "title",
-            "body",
-            "status",
-            "progress",
+            "actor",
+            "content",
             "metadata_json",
             "created_at",
-            "body_tsv",
         },
         "skills_override": {"skill_name", "enabled", "set_by", "set_at"},
         "meta": {"key", "value"},
@@ -228,7 +267,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
     assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")
-    assert "jsonb" in defaults[("timeline_events", "metadata_json")]
+    assert "jsonb" in defaults[("events", "metadata_json")]
 
 
 def test_cli_doctor_exits_when_no_database_url(monkeypatch):

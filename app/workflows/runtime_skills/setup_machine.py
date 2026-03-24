@@ -13,7 +13,7 @@ SETUP_TIMEOUT_SECONDS = 300
 
 
 def build_setup_state(
-    user_id: str,
+    actor_key: str,
     skill_name: str,
     missing: list[SkillRequirement | dict[str, object]],
 ) -> AwaitingSkillSetup:
@@ -41,7 +41,7 @@ def build_setup_state(
             }
         )
     return AwaitingSkillSetup(
-        user_id=user_id,
+        actor_key=actor_key,
         skill=skill_name,
         started_at=utc_now_timestamp(),
         remaining=remaining,
@@ -73,31 +73,31 @@ class SetupDecision:
 
 @dataclass(frozen=True)
 class InspectForeignSetupAction:
-    user_id: str
+    actor_key: str
     skill_name: str | None = None
 
 
 @dataclass(frozen=True)
 class StartSetupAction:
-    user_id: str
+    actor_key: str
     skill_name: str
     requirements: tuple[SkillRequirement | dict[str, object], ...]
 
 
 @dataclass(frozen=True)
 class CancelSetupAction:
-    user_id: str
+    actor_key: str
     allow_override: bool = False
 
 
 @dataclass(frozen=True)
 class AdvanceSetupAction:
-    user_id: str
+    actor_key: str
 
 
 @dataclass(frozen=True)
 class ClearSkillSetupAction:
-    user_id: str
+    actor_key: str
     skill_name: str | None = None
 
 
@@ -110,8 +110,8 @@ SetupAction = (
 )
 
 
-def _is_stale_foreign(setup: AwaitingSkillSetup, user_id: str) -> bool:
-    if setup.user_id == user_id:
+def _is_stale_foreign(setup: AwaitingSkillSetup, actor_key: str) -> bool:
+    if setup.actor_key == actor_key:
         return False
     age = age_seconds(setup.started_at, now=utc_now())
     return age is not None and age > SETUP_TIMEOUT_SECONDS
@@ -121,20 +121,20 @@ def decide_setup_action(snapshot: SetupSnapshot, action: SetupAction) -> SetupDe
     setup = snapshot.setup
 
     if isinstance(action, InspectForeignSetupAction):
-        if setup is None or setup.user_id == action.user_id:
+        if setup is None or setup.actor_key == action.actor_key:
             return SetupDecision(status="none", ok=True)
         if action.skill_name is not None and setup.skill != action.skill_name:
             return SetupDecision(status="none", ok=True)
-        if _is_stale_foreign(setup, action.user_id):
+        if _is_stale_foreign(setup, action.actor_key):
             return SetupDecision(status="none", ok=True, effects=SetupEffects(clear_setup=True))
         return SetupDecision(status="foreign_setup", ok=True, foreign_setup=setup)
 
     if isinstance(action, StartSetupAction):
         if not action.requirements:
             return SetupDecision(status="no_requirements", ok=True)
-        if setup is not None and setup.user_id != action.user_id:
-            if _is_stale_foreign(setup, action.user_id):
-                new_setup = build_setup_state(action.user_id, action.skill_name, list(action.requirements))
+        if setup is not None and setup.actor_key != action.actor_key:
+            if _is_stale_foreign(setup, action.actor_key):
+                new_setup = build_setup_state(action.actor_key, action.skill_name, list(action.requirements))
                 return SetupDecision(
                     status="started",
                     ok=True,
@@ -144,7 +144,7 @@ def decide_setup_action(snapshot: SetupSnapshot, action: SetupAction) -> SetupDe
                     skill_name=action.skill_name,
                 )
             return SetupDecision(status="foreign_setup", ok=True, foreign_setup=setup)
-        new_setup = build_setup_state(action.user_id, action.skill_name, list(action.requirements))
+        new_setup = build_setup_state(action.actor_key, action.skill_name, list(action.requirements))
         return SetupDecision(
             status="started",
             ok=True,
@@ -157,12 +157,12 @@ def decide_setup_action(snapshot: SetupSnapshot, action: SetupAction) -> SetupDe
     if isinstance(action, CancelSetupAction):
         if setup is None:
             return SetupDecision(status="no_setup", ok=True)
-        if setup.user_id != action.user_id and not action.allow_override:
+        if setup.actor_key != action.actor_key and not action.allow_override:
             return SetupDecision(status="foreign_setup", ok=True, foreign_setup=setup)
         return SetupDecision(status="cancelled", ok=True, effects=SetupEffects(clear_setup=True))
 
     if isinstance(action, AdvanceSetupAction):
-        if setup is None or setup.user_id != action.user_id or not setup.remaining:
+        if setup is None or setup.actor_key != action.actor_key or not setup.remaining:
             return SetupDecision(status="no_setup", ok=True)
         if len(setup.remaining) == 1:
             return SetupDecision(
@@ -172,7 +172,7 @@ def decide_setup_action(snapshot: SetupSnapshot, action: SetupAction) -> SetupDe
                 skill_name=setup.skill,
             )
         next_setup = AwaitingSkillSetup(
-            user_id=setup.user_id,
+            actor_key=setup.actor_key,
             skill=setup.skill,
             started_at=setup.started_at,
             remaining=list(setup.remaining[1:]),
@@ -189,10 +189,10 @@ def decide_setup_action(snapshot: SetupSnapshot, action: SetupAction) -> SetupDe
     if isinstance(action, ClearSkillSetupAction):
         if setup is None:
             return SetupDecision(status="unchanged", ok=True)
-        if setup.user_id != action.user_id:
+        if setup.actor_key != action.actor_key:
             if action.skill_name is not None and setup.skill != action.skill_name:
                 return SetupDecision(status="unchanged", ok=True)
-            if _is_stale_foreign(setup, action.user_id):
+            if _is_stale_foreign(setup, action.actor_key):
                 return SetupDecision(status="cleared", ok=True, effects=SetupEffects(clear_setup=True))
             return SetupDecision(status="foreign_setup", ok=True, foreign_setup=setup)
         if action.skill_name is not None and setup.skill != action.skill_name:

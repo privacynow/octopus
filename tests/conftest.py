@@ -17,6 +17,7 @@ import pytest
 _POSTGRES_RUN_ID_FILE_ENV = "TELEGRAM_BOT_TEST_RUN_ID_FILE"
 
 
+
 def pytest_configure(config):
     """Write run-scoped id to a unique file and set env so workers read the same id (no shared global file)."""
     if not hasattr(config, "workerinput"):

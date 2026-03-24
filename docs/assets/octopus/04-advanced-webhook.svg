@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Octopus advanced and webhook</title>
+  <desc id="desc">Advanced menu: full add-bot; webhook URL and listen port prompts.</desc>
+  <style>
+    .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
+    .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
+    .dot { fill: #5a665a; }
+    .label { fill: #cfd8c9; font: 600 16px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.2px; }
+    .line { fill: #98ff64; font: 19px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.05px; }
+    .glow-copy { opacity: 0.52; filter: url(#crt-glow); }
+    .prompt { fill: #f1ffe6; }
+  </style>
+  <defs>
+    <filter id="crt-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.85" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.55 0 0 0 0 1 0 0 0 0 0.35 0 0 0 0.45 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(28 24)">
+    <rect class="panel" x="0" y="0" width="1144" height="228" rx="10"/>
+    <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
+    <text class="label" x="102" y="34">advanced menu</text>
+    <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
+    <g id="copy-adv">
+      <text class="line" xml:space="preserve">
+        <tspan x="34" y="94">  1. Add a bot with full setup</tspan>
+        <tspan x="34" dy="29">  2. Configure webhook mode</tspan>
+        <tspan x="34" dy="29">  3. Back</tspan>
+      </text>
+    </g>
+    <use href="#copy-adv" class="glow-copy"/>
+    <use href="#copy-adv"/>
+
+    <rect class="panel" x="0" y="250" width="1144" height="238" rx="10"/>
+    <circle class="dot" cx="26" cy="278" r="6.5"/><circle class="dot" cx="48" cy="278" r="6.5"/><circle class="dot" cx="70" cy="278" r="6.5"/>
+    <text class="label" x="102" y="284">webhook mode (excerpt)</text>
+    <line class="rule" x1="0" y1="308" x2="1144" y2="308"/>
+    <g id="copy-wh">
+      <text class="line" xml:space="preserve">
+        <tspan class="prompt" x="34" y="344">Webhook URL (https://...):</tspan>
+        <tspan x="34" dy="29">https://bot.example.com/webhook/abc</tspan>
+        <tspan x="34" dy="29">Webhook port [8443]:</tspan>
+        <tspan x="34" dy="29">Webhook mode settings saved. Restart to apply.</tspan>
+      </text>
+    </g>
+    <use href="#copy-wh" class="glow-copy"/>
+    <use href="#copy-wh"/>
+  </g>
+</svg>

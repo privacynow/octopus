@@ -18,6 +18,8 @@ from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
 
 
 def _timeline_payload(event) -> TimelineEventPayload:
+    if isinstance(event, dict):
+        return TimelineEventPayload.model_validate(dict(event))
     return TimelineEventPayload(
         event_id=event.event_id,
         conversation_id=event.conversation_id,

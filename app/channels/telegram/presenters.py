@@ -1255,7 +1255,7 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
         )
         if authority_ref:
             lines.append(f"Authority: <code>{authority_ref}</code>")
-        capabilities = [str(value) for value in agent.get("capabilities", agent.get("skills", [])) if value]
+        capabilities = [str(value) for value in agent.get("capabilities", []) if value]
         if capabilities:
             lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")
         tags = [str(value) for value in agent.get("tags", []) if value]

@@ -2,57 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
 class ConversationProjectionPort(Protocol):
-    async def bind_external_conversation(
+    async def create_conversation(
         self,
         *,
-        conversation_ref: str,
-        title: str,
+        target_agent_id: str,
         origin_channel: str,
-        external_id: str,
-    ) -> None: ...
+        external_conversation_ref: str,
+        title: str,
+    ) -> str:
+        """Idempotent get-or-create. Returns conversation_id."""
+        ...
 
-    async def publish_external_timeline(
+    async def publish_events(
         self,
         *,
-        conversation_ref: str,
-        kind: str,
-        title: str,
-        body: str = "",
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, Any] | None = None,
-        event_id: str | None = None,
-    ) -> None: ...
+        conversation_id: str,
+        events: list,  # list of ConversationEvent
+    ) -> None:
+        """Publish events to a registry conversation. Idempotent on event_id."""
+        ...
 
 
 class NoOpConversationProjection:
-    async def bind_external_conversation(
+    async def create_conversation(
         self,
         *,
-        conversation_ref: str,
-        title: str,
+        target_agent_id: str,
         origin_channel: str,
-        external_id: str,
-    ) -> None:
-        del conversation_ref, title, origin_channel, external_id
-        return None
+        external_conversation_ref: str,
+        title: str,
+    ) -> str:
+        del target_agent_id, origin_channel, external_conversation_ref, title
+        return ""
 
-    async def publish_external_timeline(
+    async def publish_events(
         self,
         *,
-        conversation_ref: str,
-        kind: str,
-        title: str,
-        body: str = "",
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, Any] | None = None,
-        event_id: str | None = None,
+        conversation_id: str,
+        events: list,
     ) -> None:
-        del conversation_ref, kind, title, body, status, progress, metadata, event_id
-        return None
+        del conversation_id, events

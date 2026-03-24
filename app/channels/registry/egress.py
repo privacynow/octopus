@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,20 +25,14 @@ log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
-def _binding_field(binding: Any, key: str, default: str = "") -> str:
-    if isinstance(binding, dict):
-        value = binding.get(key, default)
-    else:
-        value = getattr(binding, key, default)
-    return str(value or default)
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class RegistryEditableHandle(EditableHandle):
-    def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str, kind: str, title: str) -> None:
+    def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str) -> None:
         self._conversation = conversation
         self._event_id = event_id
-        self._kind = kind
-        self._title = title
 
     async def edit_text(self, text: str, **kwargs: Any) -> None:
         del kwargs
@@ -105,9 +100,6 @@ class RegistryChannelEgress(ChannelEgress):
     def _is_task_ref(self) -> bool:
         return self._ref_kind == "task"
 
-    def _metadata(self) -> dict[str, Any]:
-        return {"routed_task_id": self.routed_task_id} if self.routed_task_id else {}
-
     def _append_output(self, kind: str, text: str) -> None:
         if self._output_log is None:
             return
@@ -131,40 +123,42 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
+        from registry_sdk.events import ConversationEvent
+
+        resolved_event_id = event_id or uuid.uuid4().hex
+        merged_metadata: dict[str, Any] = dict(metadata or {})
+        if status:
+            merged_metadata["status"] = status
+        if progress is not None:
+            merged_metadata["progress"] = progress
+        event = ConversationEvent(
+            event_id=resolved_event_id,
+            kind=kind,
+            content=body or title,
+            created_at=_utcnow_iso(),
+            metadata=merged_metadata,
+        )
+        # Extract conversation_id from the qualified registry ref
+        parsed = parse_registry_ref(self.conversation_ref)
+        conversation_id = parsed[2] if parsed else self.conversation_ref
         try:
-            await self._services.control_plane.conversation_projection.publish_external_timeline(
-                conversation_ref=self.conversation_ref,
-                kind=kind,
-                title=title,
-                body=body,
-                status=status,
-                progress=progress,
-                metadata={**self._metadata(), **(metadata or {})},
-                event_id=event_id,
+            await self._services.control_plane.conversation_projection.publish_events(
+                conversation_id=conversation_id,
+                events=[event],
             )
         except Exception:
             log.warning(
-                "Timeline publish failed for %s (non-fatal)",
+                "Event publish failed for %s (non-fatal)",
                 self.conversation_ref,
                 exc_info=True,
             )
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
-        if self._is_task_ref():
-            return
-        snippet = self._plain_text_snippet(html_text)
-        if not snippet:
-            return
-        now = time.monotonic()
-        if now - self._last_progress_published_at < self._PROGRESS_MIN_INTERVAL:
-            return
-        self._last_progress_published_at = now
-        await self._publish_event(
-            kind="progress",
-            title="Working…",
-            body=snippet,
-            event_id=event_id,
-        )
+        # Progress updates are ephemeral — not persisted as events.
+        # The progress-bar edit mechanism still works via RegistryEditableHandle,
+        # but we don't write a permanent event to the store.
+        del html_text, event_id
+        return
 
     async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         del kwargs
@@ -173,12 +167,12 @@ class RegistryChannelEgress(ChannelEgress):
         self._append_output("send", text)
         if not self._is_task_ref():
             await self._publish_event(
-                kind="bot_message",
+                kind="message.bot",
                 title="Bot reply",
                 body=text,
                 event_id=event_id,
             )
-        return RegistryEditableHandle(self, event_id=event_id, kind="bot_message", title="Bot reply")
+        return RegistryEditableHandle(self, event_id=event_id)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
         if self._is_task_ref():
@@ -186,9 +180,10 @@ class RegistryChannelEgress(ChannelEgress):
         caption = kwargs.get("caption", "[photo]")
         self._append_output("send", caption)
         await self._publish_event(
-            kind="attachment",
+            kind="message.bot",
             title="Photo",
             body=f"{caption}\n{photo if isinstance(photo, (str, Path)) else '[binary]'}",
+            metadata={"attachments": [str(photo) if isinstance(photo, (str, Path)) else "[binary]"]},
         )
 
     async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
@@ -197,73 +192,35 @@ class RegistryChannelEgress(ChannelEgress):
         caption = kwargs.get("caption", "[document]")
         self._append_output("send", caption)
         await self._publish_event(
-            kind="attachment",
+            kind="message.bot",
             title="Document",
             body=f"{caption}\n{document if isinstance(document, (str, Path)) else '[binary]'}",
+            metadata={"attachments": [str(document) if isinstance(document, (str, Path)) else "[binary]"]},
         )
 
     async def send_action(self, action: str) -> None:
         if self._is_task_ref():
             return
-        await self._publish_event(kind="channel_action", title="Bot action", body=action)
+        # Bot actions are internal transport signals — not persisted as conversation events.
+        return
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         if self._is_task_ref():
             return
         detail = text or ("alert" if show_alert else "ack")
         self._append_output("answer", detail)
-        await self._publish_event(kind="action_answer", title="Action handled", body=detail)
-
-    async def publish_timeline(self, event: Any) -> None:
-        if self._is_task_ref():
-            return
-        body = getattr(event, "body", "") or getattr(event, "text", "") or ""
-        await self._publish_event(
-            kind=getattr(event, "kind", "timeline"),
-            title=getattr(event, "title", "Update"),
-            body=body,
-            status=getattr(event, "status", ""),
-            progress=getattr(event, "progress", None),
-            metadata=getattr(event, "metadata", None),
-        )
+        # Action answers are internal transport signals — not persisted.
+        return
 
     async def sync_binding(self, binding: Any) -> None:
-        if self._is_task_ref():
-            return
-        try:
-            await self._services.control_plane.conversation_projection.bind_external_conversation(
-                conversation_ref=_binding_field(binding, "conversation_ref", self.conversation_ref),
-                title=_binding_field(binding, "title", self.title),
-                origin_channel=_binding_field(binding, "origin_channel", "registry"),
-                external_id=_binding_field(binding, "external_id", self.external_id),
-            )
-        except Exception:
-            log.warning(
-                "Conversation sync failed for %s (non-fatal)",
-                self.conversation_ref,
-                exc_info=True,
-            )
+        del binding
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config
-        if self._is_task_ref():
-            self.title = title or self.title
-            return
         self.title = title or self.title
-        try:
-            await self._services.control_plane.conversation_projection.bind_external_conversation(
-                conversation_ref=self.conversation_ref,
-                title=self.title,
-                origin_channel="registry",
-                external_id=self.external_id,
-            )
-        except Exception:
-            log.warning(
-                "Conversation bind failed for %s (non-fatal)",
-                self.conversation_ref,
-                exc_info=True,
-            )
-        await self._publish_event(kind="started", title="Conversation started")
+        if self._is_task_ref():
+            return
+        await self._publish_event(kind="task.status", title="Conversation started", metadata={"status": "started"})
 
     async def on_message_received(self, text: str) -> None:
         del text
@@ -279,31 +236,30 @@ class RegistryChannelEgress(ChannelEgress):
         if hasattr(outcome, "returncode"):
             if returncode == 0 and not timed_out:
                 await self._publish_event(
-                    kind="completed",
+                    kind="task.status",
                     title="Done",
                     body=trim_text(getattr(outcome, "text", "") or "", 400),
+                    metadata={"status": "completed"},
                 )
                 return None
             reason = "Timed out" if timed_out else f"Exited {returncode}"
-            await self._publish_event(kind="failed", title="Failed", body=reason)
+            await self._publish_event(kind="error", title="Failed", body=reason, metadata={"error_type": "execution", "message": reason})
             return None
 
         status = str(getattr(outcome, "status", "") or "")
-        if status == "delegation_proposed":
-            return None
         if status.startswith("completed"):
             body = getattr(outcome, "reply_text", "") or self._plain_text_snippet(self.last_status_text, limit=400)
-            await self._publish_event(kind="completed", title="Done", body=trim_text(body, 400))
+            await self._publish_event(kind="task.status", title="Done", body=trim_text(body, 400), metadata={"status": "completed"})
             return None
         if status == "timed_out":
-            await self._publish_event(kind="failed", title="Failed", body="Timed out")
+            await self._publish_event(kind="error", title="Failed", body="Timed out", metadata={"error_type": "execution", "message": "Timed out"})
             return None
         if status == "cancelled":
-            await self._publish_event(kind="cancelled", title="Cancelled", body="Cancelled")
+            await self._publish_event(kind="task.status", title="Cancelled", body="Cancelled", metadata={"status": "cancelled"})
             return None
         if status:
             body = getattr(outcome, "error_text", "") or status
-            await self._publish_event(kind="failed", title="Failed", body=trim_text(body, 400))
+            await self._publish_event(kind="error", title="Failed", body=trim_text(body, 400), metadata={"error_type": "execution", "message": trim_text(body, 400)})
 
     async def send_recovery_notice(
         self,
@@ -316,12 +272,15 @@ class RegistryChannelEgress(ChannelEgress):
     ) -> None:
         if self._is_task_ref():
             return
-        del run_again_label, skip_label
+        del run_again_label, skip_label, update_id
         await self._publish_event(
-            kind="recovery_notice",
+            kind="error",
             title="Recovery available",
             body=f"{preview}\n\n{prompt}".strip(),
-            metadata={"update_id": update_id},
+            metadata={
+                "error_type": "recovery",
+                "message": "Execution paused. Choose how to continue.",
+            },
         )
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:

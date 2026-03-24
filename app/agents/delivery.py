@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RegistryDeliveryRuntime:
     provider_name: str
-    provider_state_factory: Callable[[], dict[str, Any]]
+    provider_state_factory: Callable[[str], dict[str, Any]]
     services: BotServices
     bot: Any | None = None
     dispatcher: ChannelDispatcher | None = None
@@ -44,7 +44,7 @@ class RegistryDeliveryRuntime:
 def build_registry_delivery_runtime(
     *,
     provider_name: str,
-    provider_state_factory: Callable[[], dict[str, Any]],
+    provider_state_factory: Callable[[str], dict[str, Any]],
     services: BotServices,
     bot: Any | None = None,
     dispatcher: ChannelDispatcher | None = None,
@@ -124,30 +124,6 @@ def _registry_semantic_action(
     )
 
 
-async def _publish_timeline(
-    *,
-    services: BotServices,
-    conversation_ref: str,
-    kind: str,
-    title: str,
-    body: str = "",
-    status: str = "",
-    progress: int | None = None,
-    metadata: dict[str, object] | None = None,
-    event_id: str | None = None,
-) -> None:
-    await services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=conversation_ref,
-        kind=kind,
-        title=title,
-        body=body,
-        status=status,
-        progress=progress,
-        metadata=metadata,
-        event_id=event_id,
-    )
-
-
 async def handle_registry_delivery(
     config: BotConfig,
     delivery: dict[str, object],
@@ -181,11 +157,14 @@ async def handle_registry_delivery(
         if action in {"recovery_discard", "recovery_replay"} and "update_id" not in action_payload:
             action_payload = dict(action_payload)
             action_payload["update_id"] = payload.get("update_id")
+        # Use stable_event_id from the delivery payload for cross-registry dedup
+        stable_event_id = str(payload.get("stable_event_id", "") or "")
+        effective_delivery_id = stable_event_id if stable_event_id else delivery_id
         envelope = _registry_semantic_action(
             conversation_ref=conversation_ref,
             action=action,
             payload=action_payload,
-            delivery_id=delivery_id,
+            delivery_id=effective_delivery_id,
             registry_id=registry_id,
         )
         if envelope is None:
@@ -255,16 +234,6 @@ async def handle_registry_delivery(
                 registry_authority_ref(registry_id),
             )
             return "accepted"
-        await _publish_timeline(
-            services=runtime.services,
-            conversation_ref=parent_conversation_id,
-            kind="delegated_result",
-            title="Delegated result received",
-            body=routed_result.full_text or routed_result.summary,
-            status=routed_result.status,
-            metadata={"routed_task_id": routed_task_id},
-            event_id=f"delegated-result:{routed_task_id}",
-        )
         if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
         continuation_text = applied.resume_prompt
@@ -305,25 +274,22 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
-            await _publish_timeline(
-                services=runtime.services,
-                conversation_ref=parent_conversation_id,
-                kind="delegation_ready",
-                title="All delegated results received",
-                body=continuation_text,
-                metadata={"routed_task_id": routed_task_id},
-                event_id=f"delegation-ready:{parent_conversation_id}",
+            # Publish delegation.completed lifecycle event
+            from app.workflows.execution.event_sink import build_event_sink_for_context
+            from app.workflows.execution.contracts import TransportIdentity
+            transport = TransportIdentity(
+                conversation_key=conversation_key,
+                origin_channel="registry",
+                external_conversation_ref=parent_conversation_id,
+                target_agent_id=config.agent_id_for_registry(registry_id),
             )
-        elif admit_status == "duplicate":
-            await _publish_timeline(
-                services=runtime.services,
-                conversation_ref=parent_conversation_id,
-                kind="delegation_ready",
-                title="All delegated results received",
-                body=continuation_text,
-                metadata={"routed_task_id": routed_task_id},
-                event_id=f"delegation-ready:{parent_conversation_id}",
+            sink = build_event_sink_for_context(
+                transport,
+                runtime.services.control_plane.conversation_projection,
+                config,
             )
+            tasks_summary = [{"title": t.title, "target": t.target_agent_id, "status": t.status} for t in (applied.pending.tasks or [])]
+            await sink.on_delegation_completed(tasks_summary)
         return "accepted"
 
     return "rejected"

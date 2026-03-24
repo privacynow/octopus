@@ -10,8 +10,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY registry_sdk ./registry_sdk
 COPY skills ./skills
 COPY scripts ./scripts
+COPY ui ./ui
 
 # Stub providers: satisfy config validation and doctor/startup so the container
 # can start. For real use, replace with an image that includes claude/codex CLI.

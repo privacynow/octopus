@@ -18,7 +18,7 @@ from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.credential_validation import validate_credential
 from app.execution_context import ResolvedExecutionContext
-from app.identity import telegram_conversation_ref
+from app.identity import telegram_conversation_ref, telegram_numeric_id
 from app.runtime.dispatch import RuntimeDispatchRuntime
 from app.runtime.inbound_types import InboundAttachment
 from app.runtime.session_runtime import resolve_session_context
@@ -30,7 +30,7 @@ from app.workflows.execution.contracts import (
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
 )
-from app.workflows.execution.context import build_execution_channel_context
+from app.workflows.execution.context import build_transport_identity_from_metadata
 from app.workflows.execution.requests import (
     check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
     execute_request as execution_execute_request,
@@ -48,7 +48,7 @@ class TelegramExecutionCollaborators:
     build_conversation_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
     build_routed_task_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
     propose_delegation_plan: Callable[
-        [int | str, Any, SessionState, str, Any],
+        [str, Any, SessionState, str, Any],
         Awaitable[RequestExecutionOutcome],
     ]
 
@@ -141,7 +141,7 @@ def build_user_prompt(text: str, attachments: list[InboundAttachment]) -> tuple[
 
 def allowed_roots(
     runtime: TelegramRuntime,
-    chat_id: int | str,
+    conversation_key_value: str,
     resolved: ResolvedExecutionContext | None = None,
 ) -> list[Path]:
     cfg = runtime.config
@@ -151,7 +151,7 @@ def allowed_roots(
     else:
         roots = [cfg.working_dir]
         roots.extend(cfg.extra_dirs)
-    roots.append(chat_upload_dir(cfg.data_dir, conversation_key(chat_id)))
+    roots.append(chat_upload_dir(cfg.data_dir, conversation_key_value))
     return [root.resolve() for root in roots]
 
 
@@ -177,7 +177,11 @@ async def edit_or_reply_text(message, text: str, **kwargs) -> None:
     await message.reply_text(text, **kwargs)
 
 
-async def send_compact_reply(message, text: str, chat_id: int, slot: int) -> None:
+async def send_compact_reply(message, text: str, conversation_key_value: str, slot: int) -> None:
+    chat_id = telegram_numeric_id(conversation_key_value)
+    if chat_id is None:
+        await send_formatted_reply(message, text)
+        return
     blockquote_rendered = telegram_presenters.compact_reply_blockquote_message(text)
     if blockquote_rendered is not None:
         try:
@@ -205,7 +209,7 @@ async def send_path_to_chat(message, path: Path, *, force_image: bool | None = N
 
 
 async def send_directed_artifacts(
-    chat_id: int,
+    conversation_key_value: str,
     message,
     directives: list[tuple[str, str]],
     resolved_ctx: ResolvedExecutionContext | None = None,
@@ -215,7 +219,7 @@ async def send_directed_artifacts(
     for dtype, raw_path in directives:
         allowed_path = resolve_allowed_path(
             raw_path,
-            allowed_roots(runtime, chat_id, resolved_ctx),
+            allowed_roots(runtime, conversation_key_value, resolved_ctx),
         )
         if not allowed_path:
             rendered = telegram_presenters.cannot_send_path_message(raw_path)
@@ -303,6 +307,8 @@ def execution_channel_metadata(
     runtime: TelegramRuntime,
     message,
     chat_id: int | str,
+    *,
+    actor_key: str = "",
 ) -> ExecutionChannelMetadata:
     conversation_ref = getattr(message, "conversation_ref", "")
     dispatcher = getattr(runtime, "channel_dispatcher", None)
@@ -315,12 +321,39 @@ def execution_channel_metadata(
         )
     if dispatcher is not None and resolved_ref:
         descriptor = dispatcher.descriptor_for_ref(resolved_ref)
+    from app.identity import telegram_conversation_key, parse_conversation_key, telegram_actor_key
+
+    if isinstance(chat_id, int):
+        conv_key = telegram_conversation_key(chat_id)
+        origin = "telegram"
+    else:
+        conv_key = parse_conversation_key(chat_id)
+        origin = "registry"
+
+    # Resolve target_agent_id scoped by authority — no guessing
+    authority_ref = getattr(message, "authority_ref", "")
+    target_agent_id = ""
+    if authority_ref:
+        parts = authority_ref.split(":", 1)
+        if len(parts) == 2 and parts[0] == "registry":
+            target_agent_id = runtime.config.agent_id_for_registry(parts[1])
+
+    actor = actor_key
+    if not actor:
+        from_user = getattr(message, "from_user", None)
+        if from_user is not None:
+            actor = telegram_actor_key(getattr(from_user, "id", 0))
+
     return ExecutionChannelMetadata(
+        conversation_key=conv_key,
         descriptor=descriptor,
-        message_conversation_ref=conversation_ref,
+        message_conversation_ref=resolved_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
         authority_ref=getattr(message, "authority_ref", ""),
-        chat_id=chat_id,
+        origin_channel=origin,
+        external_conversation_ref=str(chat_id),
+        target_agent_id=target_agent_id,
+        actor=actor,
     )
 
 
@@ -329,16 +362,20 @@ def build_execution_runtime(
     *,
     collaborators: TelegramExecutionCollaborators,
 ) -> ExecutionRuntime:
+    from app.workflows.execution.event_sink import build_event_sink_for_context, _NOOP_SINK
+    projection = runtime.services.control_plane.conversation_projection
+
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
-        build_channel_context=lambda message, chat_id: build_execution_channel_context(
-            execution_channel_metadata(runtime, message, chat_id),
-            build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
-                runtime.config,
-                telegram_chat_id(numeric_chat_id),
-            ),
+        build_transport_identity=lambda message, chat_id, *, actor_key="": build_transport_identity_from_metadata(
+            execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
             conversation_callback_factory=collaborators.build_conversation_progress_callback,
             routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
+        ),
+        build_event_sink=(
+            (lambda transport: build_event_sink_for_context(transport, projection, runtime.config))
+            if projection
+            else (lambda _transport: _NOOP_SINK)
         ),
         render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,
@@ -346,8 +383,8 @@ def build_execution_runtime(
         send_retry_prompt=send_retry_prompt,
         send_approval_prompt=send_approval_prompt,
         send_formatted_reply=send_formatted_reply,
-        send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: send_directed_artifacts(
-            chat_id,
+        send_directed_artifacts=lambda conversation_key_value, message, directives, resolved_ctx=None: send_directed_artifacts(
+            conversation_key_value,
             message,
             directives,
             resolved_ctx,
@@ -355,6 +392,7 @@ def build_execution_runtime(
         ),
         send_compact_reply=send_compact_reply,
         propose_delegation_plan=collaborators.propose_delegation_plan,
+        agent_directory=runtime.services.control_plane.agent_directory,
     )
 
 
@@ -378,19 +416,59 @@ def build_pending_runtime(
     chat_lock: Callable[..., Any] = _unexpected_chat_lock,
     execution_runtime: ExecutionRuntime,
 ) -> TelegramPendingRuntime:
+    async def _execute_request(
+        chat_id: int | str,
+        prompt: str,
+        image_paths: list[str],
+        message,
+        **kwargs,
+    ):
+        raw_actor_key = kwargs.pop("actor_key", "")
+        actor_key = "" if raw_actor_key is None else str(raw_actor_key)
+        transport = execution_runtime.build_transport_identity(
+            message,
+            chat_id,
+            actor_key=actor_key,
+        )
+        return await execution_execute_request(
+            transport,
+            prompt,
+            image_paths,
+            message,
+            runtime=execution_runtime,
+            **kwargs,
+        )
+
+    async def _request_approval(
+        chat_id: int | str,
+        prompt: str,
+        image_paths: list[str],
+        attachments,
+        message,
+        **kwargs,
+    ):
+        raw_actor_key = kwargs.pop("actor_key", "")
+        actor_key = "" if raw_actor_key is None else str(raw_actor_key)
+        transport = execution_runtime.build_transport_identity(
+            message,
+            chat_id,
+            actor_key=actor_key,
+        )
+        return await execution_request_approval(
+            transport,
+            prompt,
+            image_paths,
+            attachments,
+            message,
+            runtime=execution_runtime,
+            **kwargs,
+        )
+
     return TelegramPendingRuntime(
         state=runtime,
         chat_lock=chat_lock,
         edit_or_reply_text=edit_or_reply_text,
-        execute_request=lambda *args, **kwargs: execution_execute_request(
-            *args,
-            runtime=execution_runtime,
-            **kwargs,
-        ),
-        request_approval=lambda *args, **kwargs: execution_request_approval(
-            *args,
-            runtime=execution_runtime,
-            **kwargs,
-        ),
+        execute_request=_execute_request,
+        request_approval=_request_approval,
         build_user_prompt=build_user_prompt,
     )

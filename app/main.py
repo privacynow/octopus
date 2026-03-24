@@ -16,7 +16,7 @@ from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.control_plane.processor_runner import ProcessorRunner
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.registry_capabilities import registry_authority_capabilities
+from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.registry_runtime import RegistryRuntime
 from app.content_store import init_content_store_for_config
@@ -314,11 +314,27 @@ def main() -> None:
         else {}
     )
     directory = build_control_plane_directory(authority_capabilities)
+
+    def _agent_id_for_authority(authority_ref: str) -> str:
+        """Resolve the per-registry agent_id from BotConfig (single source of truth)."""
+        try:
+            registry_id = registry_id_from_authority_ref(authority_ref)
+        except ValueError:
+            return ""
+        return config.agent_id_for_registry(registry_id)
+
     services = (
-        build_bus_bot_services(bus, directory)
+        build_bus_bot_services(
+            bus, directory, agent_id_for_authority=_agent_id_for_authority,
+        )
         if authority_capabilities
         else build_noop_bot_services()
     )
+    if authority_capabilities and not config.registry_agent_ids:
+        log.warning(
+            "Registry capabilities configured but no agent enrollment found. "
+            "Event publishing and delegation will not work until bots enroll."
+        )
     dispatcher = ChannelDispatcher()
     telegram_ingress = None
     worker_runtime_bundle = None

@@ -470,9 +470,9 @@ async def test_callback_handler_uses_normalized_data():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "on")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "on")
         session["pending_approval"] = {
-            "request_user_id": telegram_actor_key(42),
+            "actor_key": telegram_actor_key(42),
             "prompt": "test prompt",
             "image_paths": [],
             "attachment_dicts": [],

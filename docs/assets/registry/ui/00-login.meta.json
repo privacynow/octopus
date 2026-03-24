@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 512,
+      "y": 464.59375,
+      "width": 336,
+      "height": 53.1875,
+      "label": "Creates an operator session cookie",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

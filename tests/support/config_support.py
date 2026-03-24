@@ -50,14 +50,6 @@ def _normalize_projects(projects):
 
 
 def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotConfig:
-    if "allowed_user_ids" in overrides and "allowed_actor_keys" not in overrides:
-        overrides["allowed_actor_keys"] = frozenset(
-            telegram_actor_key(user_id) for user_id in overrides.pop("allowed_user_ids")
-        )
-    if "admin_user_ids" in overrides and "admin_actor_keys" not in overrides:
-        overrides["admin_actor_keys"] = frozenset(
-            telegram_actor_key(user_id) for user_id in overrides.pop("admin_user_ids")
-        )
     defaults = dict(
         instance="test",
         telegram_token="x",
@@ -122,6 +114,8 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         db_pool_min_size=1,
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
+        registry_publish_level="standard",
+        registry_agent_ids={},
     )
     defaults.update(overrides)
     if "projects" in defaults:

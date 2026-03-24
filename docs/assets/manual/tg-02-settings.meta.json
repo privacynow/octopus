@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 448,
+      "y": 123,
+      "width": 384,
+      "height": 158,
+      "label": "Inline buttons → setting_* callbacks",
+      "color": "#ff9800"
+    }
+  ],
+  "arrows": []
+}

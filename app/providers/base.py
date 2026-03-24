@@ -6,6 +6,24 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 
+@dataclass(frozen=True)
+class FileChangeRecord:
+    path: str
+    change_type: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class ToolExecutionRecord:
+    tool_name: str
+    call_id: str
+    status: str
+    input_summary: str
+    output_summary: str
+    duration_ms: int | None = None
+    file_changes: tuple[FileChangeRecord, ...] = ()
+
+
 @dataclass
 class RunResult:
     text: str
@@ -21,6 +39,7 @@ class RunResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
+    tool_executions: list[ToolExecutionRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -52,8 +71,9 @@ class ProgressSink(Protocol):
 class Provider(Protocol):
     name: str
 
-    def new_provider_state(self) -> dict[str, Any]:
-        """Return provider-specific fields for a fresh session."""
+    def new_provider_state(self, conversation_key: str) -> dict[str, Any]:
+        """Return provider-specific fields for a fresh session.
+        """
         ...
 
     async def run(

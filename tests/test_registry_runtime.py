@@ -36,7 +36,7 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = "", runtime_health=None):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health=None):
             return {"ok": True}
 
         async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1, kind_filter=None):

@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 272,
+      "y": 148.140625,
+      "width": 1064,
+      "height": 308.390625,
+      "label": "Pending request with clear decision actions",
+      "color": "#2196f3"
+    },
+    {
+      "x": 297,
+      "y": 378.03125,
+      "width": 1014,
+      "height": 53.5,
+      "label": "Approve, reject, or open the full conversation",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

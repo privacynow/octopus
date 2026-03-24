@@ -9,8 +9,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application and schema (migrations live in app/db/migrations/postgres)
 COPY app ./app
+COPY registry_sdk ./registry_sdk
 COPY skills ./skills
 COPY scripts ./scripts
+COPY ui ./ui
 
 # Default: run the bot (overridden by compose for one-shot db commands)
 ENV PYTHONUNBUFFERED=1

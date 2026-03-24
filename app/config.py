@@ -16,6 +16,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from app.agents.types import RegistryConnectionConfig
+from app.agents.state import load_registry_connection_state
 from app.identity import parse_actor_key, telegram_numeric_id
 from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
@@ -282,26 +283,48 @@ class BotConfig:
     db_pool_min_size: int
     db_pool_max_size: int
     db_connect_timeout_seconds: int
+    # Registry publish level — controls which event kinds are published to the registry UI
+    registry_publish_level: str  # BOT_REGISTRY_PUBLISH_LEVEL: "minimal" | "standard" | "full"
+    # Registry agent IDs — populated from enrollment state at startup. Single writer: enrollment
+    # pipeline writes connection state to disk, load_config reads it into this read model.
+    # Keys are registry_id (e.g. "local"), values are the agent_id assigned by that registry.
+    registry_agent_ids: dict[str, str]  # e.g. {"local": "0ace408e..."}; empty dict if no registries
 
-    @property
-    def allowed_user_ids(self) -> frozenset[int]:
-        return frozenset(
-            numeric
-            for key in self.allowed_actor_keys
-            if (numeric := telegram_numeric_id(key)) is not None
-        )
-
-    @property
-    def admin_user_ids(self) -> frozenset[int]:
-        return frozenset(
-            numeric
-            for key in self.admin_actor_keys
-            if (numeric := telegram_numeric_id(key)) is not None
-        )
 
     @property
     def provider(self) -> str:
         return self.provider_name
+
+    def agent_id_for_registry(self, registry_id: str) -> str:
+        """Return the agent_id assigned by a specific registry, or empty string."""
+        return self.registry_agent_ids.get(registry_id, "")
+
+
+PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
+    "minimal": {"message.user", "message.bot", "task.status", "error"},
+    "standard": {
+        "message.user", "message.bot", "task.status", "error",
+        "provider.request", "provider.response", "tool.execution",
+        "approval.requested",
+        "approval.decided",
+        "delegation.proposed", "delegation.submitted", "delegation.completed",
+    },
+    "full": {
+        "message.user", "message.bot", "task.status", "error",
+        "provider.request", "provider.response", "tool.execution",
+        "approval.requested",
+        "approval.decided",
+        "delegation.proposed", "delegation.submitted", "delegation.completed",
+    },
+}
+
+
+def should_publish_event(config: BotConfig, kind: str) -> bool:
+    """Return True if the configured publish level includes the given event kind."""
+    allowed = PUBLISH_LEVEL_KINDS.get(config.registry_publish_level)
+    if allowed is None:
+        return False
+    return kind in allowed
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:
@@ -397,6 +420,16 @@ def _parse_agent_registries(
             )
         )
     return tuple(registries)
+
+
+def _validated_publish_level(raw: str) -> str:
+    value = raw.strip().lower() or "standard"
+    if value not in PUBLISH_LEVEL_KINDS:
+        raise SystemExit(
+            f"CONFIG ERROR: BOT_REGISTRY_PUBLISH_LEVEL must be one of "
+            f"{', '.join(sorted(PUBLISH_LEVEL_KINDS))}, got '{value}'"
+        )
+    return value
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -509,6 +542,14 @@ def load_config(instance: str | None = None) -> BotConfig:
         # Fallback: all allowed users are admins
         admin_actor_keys, admin_names = actor_keys, usernames
 
+    # Read agent IDs from enrollment state files (single writer: enrollment pipeline)
+    data_dir = Path(get("BOT_DATA_DIR", str(default_data)))
+    registry_agent_ids: dict[str, str] = {}
+    for reg in agent_registries:
+        state = load_registry_connection_state(data_dir, reg.registry_id, default_scope=reg.registry_scope)
+        if state.agent_id:
+            registry_agent_ids[reg.registry_id] = state.agent_id
+
     return BotConfig(
         instance=instance,
         telegram_token=get("TELEGRAM_BOT_TOKEN"),
@@ -519,7 +560,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         model=get("BOT_MODEL"),
         working_dir=Path(get("BOT_WORKING_DIR", str(Path.home()))),
         extra_dirs=extra_dirs,
-        data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
+        data_dir=data_dir,
         timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
         approval_mode=approval,
         autonomous=autonomous,
@@ -579,6 +620,8 @@ def load_config(instance: str | None = None) -> BotConfig:
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
         db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
+        registry_publish_level=_validated_publish_level(get("BOT_REGISTRY_PUBLISH_LEVEL", "standard")),
+        registry_agent_ids=registry_agent_ids,
     )
 
 
@@ -686,6 +729,8 @@ def load_config_provider_health() -> BotConfig:
         db_pool_min_size=1,
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
+        registry_publish_level="standard",
+        registry_agent_ids={},
     )
 
 

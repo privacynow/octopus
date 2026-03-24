@@ -16,20 +16,17 @@ from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.state import TelegramRuntime
 from app.execution_context import ResolvedExecutionContext
-from app.identity import (
-    telegram_actor_key,
-    telegram_conversation_key,
-    telegram_event_id,
-    telegram_numeric_id,
+from app.channels.telegram.session_io import (
+    conversation_key as _conversation_key,
+    actor_key as _actor_key,
+    event_key as _event_key,
+    load as _session_io_load,
+    save as _session_io_save,
 )
+from app.identity import telegram_numeric_id
 from app.runtime import composition
-from app.runtime.session_runtime import (
-    load_runtime_session,
-    resolve_session_context,
-    save_runtime_session,
-)
+from app.runtime.session_runtime import resolve_session_context
 from app.session_state import SessionState
-from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 
 log = logging.getLogger(__name__)
@@ -53,41 +50,10 @@ def _flows():
     return composition.workflows()
 
 
-def _conversation_key(chat_id: int | str) -> str:
-    return telegram_conversation_key(chat_id)
-
-
-def _actor_key(user_id: int | str) -> str:
-    return telegram_actor_key(user_id)
-
-
-def _event_key(update_id: int | str) -> str:
-    return telegram_event_id(update_id)
-
-
 def _numeric_id(actor_key: str) -> int | None:
     return telegram_numeric_id(actor_key)
 
 
-def _load(runtime: TelegramRuntimeSkillsRuntime, chat_id: int | str) -> SessionState:
-    cfg = runtime.state.config
-    provider = runtime.state.provider
-    session = load_runtime_session(
-        cfg.data_dir,
-        _conversation_key(chat_id),
-        provider_name=provider.name,
-        provider_state_factory=provider.new_provider_state,
-        approval_mode=cfg.approval_mode,
-        default_role=cfg.role,
-        default_skills=cfg.default_skills,
-    )
-    if get_skill_activation_service().normalize(session):
-        _save(runtime, chat_id, session)
-    return session
-
-
-def _save(runtime: TelegramRuntimeSkillsRuntime, chat_id: int | str, session: SessionState) -> None:
-    save_runtime_session(runtime.state.config.data_dir, _conversation_key(chat_id), session)
 
 
 def _resolve_context(
@@ -133,7 +99,7 @@ def _check_prompt_size_cross_chat(
 
 async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
     catalog = {item.name: item for item in _flows().runtime_skills.catalog.list_skills()}
-    session = _load(runtime, event.chat_id)
+    session = _session_io_load(runtime.state, event.chat_id)
     resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
     active = _flows().runtime_skills.activation.list_conversation_skills(
         list(resolved.active_skills)
@@ -196,7 +162,7 @@ async def handle_skills_command(event, update: Update, *, runtime: TelegramRunti
 
 async def skills_list(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
     catalog = _flows().runtime_skills.catalog.list_skills()
-    session = _load(runtime, event.chat_id)
+    session = _session_io_load(runtime.state, event.chat_id)
     resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
     active = set(
         _flows().runtime_skills.activation.list_conversation_skills(
@@ -230,14 +196,14 @@ async def skills_add(event, update: Update, name: str, *, runtime: TelegramRunti
         return
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
-        session = _load(runtime, chat_id)
+        session = _session_io_load(runtime.state, chat_id)
         decision = lifecycle.begin_activate(
             session,
-            user_id=event.user.id,
+            actor_key=_actor_key(event.user.id),
             skill_name=name,
         )
         if decision.mutated:
-            _save(runtime, chat_id, session)
+            _session_io_save(runtime.state, chat_id, session)
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -268,8 +234,8 @@ async def skills_remove(event, update: Update, name: str, *, runtime: TelegramRu
     lifecycle = _flows().runtime_skills.activation
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
-        session = _load(runtime, chat_id)
-        decision = lifecycle.deactivate(session, user_id=event.user.id, skill_name=name)
+        session = _session_io_load(runtime.state, chat_id)
+        decision = lifecycle.deactivate(session, actor_key=_actor_key(event.user.id), skill_name=name)
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -277,7 +243,7 @@ async def skills_remove(event, update: Update, name: str, *, runtime: TelegramRu
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         if decision.mutated:
-            _save(runtime, chat_id, session)
+            _session_io_save(runtime.state, chat_id, session)
     if decision.status == "removed":
         rendered = telegram_presenters.runtime_skill_deactivated_message(name)
     else:
@@ -293,8 +259,8 @@ async def skills_setup(event, update: Update, name: str, *, runtime: TelegramRun
         return
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
-        session = _load(runtime, chat_id)
-        decision = lifecycle.begin_setup(session, user_id=event.user.id, skill_name=name)
+        session = _session_io_load(runtime.state, chat_id)
+        decision = lifecycle.begin_setup(session, actor_key=_actor_key(event.user.id), skill_name=name)
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -310,7 +276,7 @@ async def skills_setup(event, update: Update, name: str, *, runtime: TelegramRun
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         if decision.mutated:
-            _save(runtime, chat_id, session)
+            _session_io_save(runtime.state, chat_id, session)
     first_req = decision.first_requirement
     if not first_req:
         rendered = telegram_presenters.runtime_skill_setup_could_not_start_message()
@@ -324,8 +290,8 @@ async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsR
     lifecycle = _flows().runtime_skills.activation
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
-        session = _load(runtime, chat_id)
-        decision = lifecycle.clear(session, user_id=event.user.id)
+        session = _session_io_load(runtime.state, chat_id)
+        decision = lifecycle.clear(session, actor_key=_actor_key(event.user.id))
         if decision.status == "foreign_setup":
             rendered = telegram_presenters.runtime_skill_foreign_setup_message(
                 decision.foreign_setup or session.awaiting_skill_setup
@@ -333,7 +299,7 @@ async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsR
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         if decision.mutated:
-            _save(runtime, chat_id, session)
+            _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.runtime_skill_all_removed_message()
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -572,14 +538,14 @@ async def _execute_clear_credentials(
     async with runtime.chat_lock(chat_id, query=query) as already_answered:
         if not already_answered:
             await query.answer()
-        session = _load(runtime, chat_id)
+        session = _session_io_load(runtime.state, chat_id)
         outcome = _flows().credentials.management.clear_credentials(
             session,
             actor_key=_actor_key(user_id),
             skill_name=skill_name,
         )
         if outcome.mutated:
-            _save(runtime, chat_id, session)
+            _session_io_save(runtime.state, chat_id, session)
 
     rendered = telegram_presenters.clear_credentials_result_message(
         outcome.removed_skills,
@@ -634,9 +600,9 @@ async def handle_skill_add_callback(event, query, *, runtime: TelegramRuntimeSki
         async with runtime.chat_lock(chat_id, query=query) as already_answered:
             if not already_answered:
                 await query.answer()
-            session = _load(runtime, chat_id)
+            session = _session_io_load(runtime.state, chat_id)
             if _flows().runtime_skills.activation.confirm_activate(session, name).mutated:
-                _save(runtime, chat_id, session)
+                _session_io_save(runtime.state, chat_id, session)
         await query.edit_message_reply_markup(reply_markup=None)
         rendered = telegram_presenters.runtime_skill_activated_message(name)
         await query.edit_message_text(rendered.text, **rendered.kwargs())
@@ -694,9 +660,9 @@ async def maybe_handle_setup_message(
     chat_id = msg.chat_id
     user_id = msg.user.id
     data_dir = runtime.state.config.data_dir
-    session = _load(runtime, chat_id)
+    session = _session_io_load(runtime.state, chat_id)
     setup = session.awaiting_skill_setup
-    if not setup or setup.user_id != _actor_key(user_id):
+    if not setup or setup.actor_key != _actor_key(user_id):
         return False
     if not work_queue.record_update(
         data_dir,
@@ -708,9 +674,9 @@ async def maybe_handle_setup_message(
     ):
         return True
     async with runtime.chat_lock(chat_id, message=message, update_id=update.update_id, supersede_recovery=True):
-        session = _load(runtime, chat_id)
+        session = _session_io_load(runtime.state, chat_id)
         setup = session.awaiting_skill_setup
-        if not setup or setup.user_id != _actor_key(user_id):
+        if not setup or setup.actor_key != _actor_key(user_id):
             return True
         await message.chat.send_action(ChatAction.TYPING)
         raw_value = (message.text or "").strip()
@@ -720,7 +686,7 @@ async def maybe_handle_setup_message(
             return True
         outcome = await _flows().runtime_skills.setup.submit_credential_value(
             session,
-            user_id=_actor_key(user_id),
+            actor_key=_actor_key(user_id),
             raw_value=raw_value,
             validator=runtime.validate_credential,
         )
@@ -740,7 +706,7 @@ async def maybe_handle_setup_message(
         except Exception:
             log.warning("Could not delete credential message for user %d", user_id, exc_info=True)
         skill_name = outcome.skill_name or setup.skill
-        _save(runtime, chat_id, session)
+        _session_io_save(runtime.state, chat_id, session)
         if outcome.status == "next_requirement" and outcome.next_requirement:
             rendered = telegram_presenters.runtime_skill_next_requirement_message(outcome.next_requirement)
             await message.reply_text(rendered.text, **rendered.kwargs())

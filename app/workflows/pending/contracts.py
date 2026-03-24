@@ -13,7 +13,7 @@ from app.session_state import SessionState
 class PendingExecutionPlan:
     prompt: str
     image_paths: tuple[str, ...]
-    request_user_id: str
+    actor_key: str
     trust_tier: str
     extra_dirs: tuple[str, ...]
 

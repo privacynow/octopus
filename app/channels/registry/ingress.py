@@ -12,11 +12,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from app.content_store import init_content_store_for_config, reset_for_test as reset_content_store_for_test
-from app.credential_store import (
-    init_credential_store_for_config,
-    reset_for_test as reset_credential_store_for_test,
-)
 from app.channels.registry import presenters
 from app.identity import conversation_key_for_ref
 from app.registry_service.store_base import AbstractRegistryStore
@@ -33,7 +28,7 @@ from app.runtime.session_runtime import (
 from app.workflows.runtime_skills.contracts import PromptWarningContext
 from app.session_state import SessionState
 
-ProviderStateFactory = Callable[[], dict[str, Any]]
+ProviderStateFactory = Callable[[str], dict[str, Any]]
 
 _context: "RuntimeChannelContext | None" = None
 log = logging.getLogger(__name__)
@@ -64,8 +59,6 @@ def get_runtime_channel_context() -> RuntimeChannelContext:
     if _context is None:
         config = load_config_provider_health()
         runtime_backend.init(config)
-        init_content_store_for_config(config)
-        init_credential_store_for_config(config)
         if config.provider_name == "codex":
             provider_state_factory = CodexProvider(config).new_provider_state
         else:
@@ -283,7 +276,7 @@ def activate_conversation_skill(
     loaded = load_runtime_conversation(store, conversation_id)
     decision = _flows().runtime_skills.activation.begin_activate(
         loaded.session,
-        user_id=actor_key,
+        actor_key=actor_key,
         skill_name=skill_name,
         confirm=confirm,
     )
@@ -304,7 +297,7 @@ def deactivate_conversation_skill(
     loaded = load_runtime_conversation(store, conversation_id)
     decision = _flows().runtime_skills.activation.deactivate(
         loaded.session,
-        user_id=actor_key,
+        actor_key=actor_key,
         skill_name=skill_name,
     )
     if decision.status == "foreign_setup":
@@ -321,7 +314,7 @@ def clear_conversation_skills(
     actor_key: str,
 ) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    decision = _flows().runtime_skills.activation.clear(loaded.session, user_id=actor_key)
+    decision = _flows().runtime_skills.activation.clear(loaded.session, actor_key=actor_key)
     if decision.status == "foreign_setup":
         raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:
@@ -482,5 +475,3 @@ def reset_for_test() -> None:
     global _context
     _context = None
     runtime_backend.reset_for_test()
-    reset_content_store_for_test()
-    reset_credential_store_for_test()

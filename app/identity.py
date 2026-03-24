@@ -100,6 +100,14 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
     chat_id = telegram_chat_id_from_ref(conversation_ref)
     if chat_id is not None:
         return telegram_conversation_key(chat_id)
+    # Collapse registry conversation refs across registries:
+    # registry:<id>:conversation:<cid> → registry:conversation:<cid>
+    # but keep task refs un-collapsed:
+    # registry:<id>:task:<tid> stays as-is
+    if conversation_ref.startswith("registry:"):
+        parts = conversation_ref.split(":", 3)
+        if len(parts) == 4 and parts[2] == "conversation":
+            return f"registry:conversation:{parts[3]}"
     return conversation_ref
 
 
@@ -125,6 +133,33 @@ def resolve_event_conversation_ref(*, config: Any, event: Any) -> str:
     if not conversation_key:
         raise ValueError("event missing conversation_ref/conversation_key")
     return conversation_key
+
+
+def normalize_conversation_id(raw: str) -> str:
+    """Extract bare conversation_id from possibly-prefixed refs.
+
+    Handles:
+      "registry:local:conversation:abc123" → "abc123"
+      "registry:conversation:abc123"       → "abc123"
+      "abc123"                              → "abc123"
+    """
+    parts = raw.split(":")
+    # registry:<id>:conversation:<cid> or registry:conversation:<cid>
+    if len(parts) >= 3 and parts[0] == "registry":
+        for i, part in enumerate(parts):
+            if part == "conversation" and i + 1 < len(parts):
+                return parts[i + 1]
+    return raw
+
+
+def delegation_session_key(origin_agent_id: str, parent_conversation_id: str) -> str:
+    """Stable session key for delegated work on a target bot.
+
+    All tasks delegated from the same parent conversation by the same origin
+    agent share one provider session on the target, so the target bot has
+    conversational context across multiple delegations.
+    """
+    return f"delegation:{origin_agent_id}:{parent_conversation_id}"
 
 
 def filesystem_component_for_key(key: str | int) -> str:

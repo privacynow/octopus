@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Registry API — surface</title>
+  <style>
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#1e1e2e; color:#cdd6f4; padding:28px; }
+    h1 { font-size:20px; margin:0 0 20px; color:#89b4fa; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:960px; margin:0 auto; }
+    .box { background:#313244; border-radius:10px; padding:14px 16px; font-size:13px; line-height:1.55; border:1px solid #45475a; }
+    .box h2 { margin:0 0 8px; font-size:14px; color:#f9e2af; }
+    code { color:#a6e3a1; font-size:12px; }
+  </style>
+</head>
+<body>
+  <h1>Registry HTTP API — operator vs bot surfaces</h1>
+  <div class="grid">
+    <div class="box" data-doc="agents">
+      <h2>Agents</h2>
+      <code>POST /v1/agents/enroll</code><br/>
+      <code>POST /v1/agents/register</code><br/>
+      <code>POST /v1/agents/heartbeat</code><br/>
+      <code>GET /v1/agents</code>
+    </div>
+    <div class="box" data-doc="conv">
+      <h2>Conversations</h2>
+      <code>GET/POST /v1/conversations</code><br/>
+      <code>POST …/events</code> <code>GET …/export</code>
+    </div>
+    <div class="box" data-doc="skills">
+      <h2>Skill catalog</h2>
+      Draft → submit → approve → publish<br/>
+      <code>/v1/catalog/skills/…</code> (full lifecycle)
+    </div>
+    <div class="box" data-doc="guidance">
+      <h2>Provider guidance</h2>
+      <code>/v1/provider-guidance/{provider}/…</code><br/>
+      No top-level Registry UI screen today.
+    </div>
+  </div>
+</body>
+</html>

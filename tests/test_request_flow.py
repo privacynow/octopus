@@ -203,7 +203,7 @@ def test_is_public_user_open_with_allowed_list():
         cfg = make_config(
             data_dir,
             allow_open=True,
-            allowed_user_ids=frozenset({100}),
+            allowed_actor_keys=frozenset({"tg:100"}),
             allowed_usernames=frozenset({"admin"}),
         )
         setup_globals(cfg, FakeProvider("claude"))
@@ -218,7 +218,7 @@ def test_is_public_user_open_no_allowed_list():
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, allow_open=True,
-                          allowed_user_ids=frozenset(),
+                          allowed_actor_keys=frozenset(),
                           allowed_usernames=frozenset())
         setup_globals(cfg, FakeProvider("claude"))
 
@@ -233,7 +233,7 @@ def test_is_public_user_closed():
         cfg = make_config(
             data_dir,
             allow_open=False,
-            allowed_user_ids=frozenset({42}),
+            allowed_actor_keys=frozenset({"tg:42"}),
         )
         setup_globals(cfg, FakeProvider("claude"))
 
@@ -266,7 +266,7 @@ async def test_public_user_blocked_from_restricted_command(cmd_name, args):
         cfg = make_config(
             data_dir,
             allow_open=True,
-            allowed_user_ids=frozenset(),  # no allowed list -> everyone is public
+            allowed_actor_keys=frozenset(),  # no allowed list -> everyone is public
             allowed_usernames=frozenset(),
         )
         setup_globals(cfg, FakeProvider("claude"))
@@ -361,7 +361,7 @@ def test_public_mode_applies_default_rate_limits():
             allow_open=True,
             rate_limit_per_minute=0,
             rate_limit_per_hour=0,
-            allowed_user_ids=frozenset(),
+            allowed_actor_keys=frozenset(),
         )
         setup_globals(cfg, FakeProvider("claude"))
         per_minute = cfg.rate_limit_per_minute
@@ -383,7 +383,7 @@ def test_explicit_rate_limits_not_overridden():
             allow_open=True,
             rate_limit_per_minute=10,
             rate_limit_per_hour=60,
-            allowed_user_ids=frozenset(),
+            allowed_actor_keys=frozenset(),
         )
         per_minute = cfg.rate_limit_per_minute
         per_hour = cfg.rate_limit_per_hour
@@ -405,7 +405,7 @@ async def test_is_allowed_mixed_mode_admits_stranger():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
     }) as (data_dir, cfg, prov):
         trusted_user = FakeUser(uid=42, username="trustedguy")
         stranger = FakeUser(uid=999, username="nobody")
@@ -423,7 +423,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 
     with fresh_env(config_overrides={
         "allow_open": False,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
     }) as (data_dir, cfg, prov):
         trusted_user = FakeUser(uid=42)
         stranger = FakeUser(uid=999, username="nobody")
@@ -444,7 +444,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "public_working_dir": "/tmp/public-sandbox",
     }) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -466,8 +466,13 @@ async def test_execute_request_public_user_gets_inspect_policy():
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
         await execute_request(
-            chat.id, "test prompt", [], msg,
-            request_user_id=telegram_actor_key(999), trust_tier="public",
+            current_execution_runtime().build_transport_identity(
+                msg,
+                chat.id,
+                actor_key=telegram_actor_key(999),
+            ),
+            "test prompt", [], msg,
+            trust_tier="public",
             runtime=current_execution_runtime(),
         )
 
@@ -486,7 +491,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "public_working_dir": "/tmp/public-sandbox",
     }) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -504,8 +509,13 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 
         msg = FakeMessage(chat=chat, text="hello")
         await execute_request(
-            chat.id, "test prompt", [], msg,
-            request_user_id=telegram_actor_key(42), trust_tier="trusted",
+            current_execution_runtime().build_transport_identity(
+                msg,
+                chat.id,
+                actor_key=telegram_actor_key(42),
+            ),
+            "test prompt", [], msg,
+            trust_tier="trusted",
             runtime=current_execution_runtime(),
         )
 
@@ -522,7 +532,7 @@ async def test_handle_message_public_user_threads_trust_tier():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "public_working_dir": "/tmp/public-sandbox",
     }) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -544,7 +554,7 @@ async def test_handle_message_trusted_user_not_forced_inspect():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "public_working_dir": "/tmp/public-sandbox",
     }) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -565,7 +575,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
     """PendingApproval stores trust_tier; approve_pending passes it to execute_request."""
     # Verify trust_tier round-trips through serialization
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -586,7 +596,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
 async def test_pending_retry_preserves_trust_tier():
     """PendingRetry stores trust_tier through serialization round-trip."""
     pending = PendingRetry(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         context_hash="abc123",
@@ -628,7 +638,7 @@ def test_validate_pending_respects_stored_trust_tier():
 
     # Create a pending approval with the public hash and trust_tier
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(999),
+        actor_key=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -649,7 +659,7 @@ def test_validate_pending_detects_real_context_change():
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")
 
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -672,7 +682,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # ok: fresh, matching context
     pending_ok = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -684,7 +694,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # expired: old created_at
     pending_expired = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -696,7 +706,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # context_changed: hash mismatch
     pending_stale = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -718,7 +728,7 @@ def test_classify_pending_validation_accepts_iso_created_at():
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
     ).isoformat()
     pending = PendingApproval(
-        request_user_id=telegram_actor_key(42),
+        actor_key=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -749,7 +759,7 @@ def test_credential_check_uses_resolved_skills_not_session():
 
         result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
-            user_id=telegram_actor_key(999),
+            actor_key=telegram_actor_key(999),
             active_skills=[],  # resolved: public user gets no skills
         )
         assert result.status == "satisfied"
@@ -769,7 +779,7 @@ def test_credential_check_with_resolved_skills():
         # Use a fake skill name — check_credentials returns [] for unknown skills
         result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
-            user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             active_skills=["nonexistent-skill"],
         )
         # Unknown skills have no requirements, so satisfied
@@ -837,7 +847,7 @@ async def test_compact_long_reply_public_user():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "compact_mode": True,
         "public_working_dir": "/tmp/pub",
     }) as (data_dir, cfg, prov):
@@ -878,7 +888,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset(),  # no trusted users
+        "allowed_actor_keys": frozenset(),  # no trusted users
     }) as (data_dir, cfg, prov):
         # Create a session as a trusted user first, add skills
         session = telegram_load_session(current_runtime(), 8005)

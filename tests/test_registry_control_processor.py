@@ -12,9 +12,7 @@ from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.types import RegistryConnectionConfig
 from app.control_plane.models import ControlCommand
 from app.control_plane.requests import (
-    BindConversationRequest,
     PublishHealthRequest,
-    PublishTimelineRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
     SearchAgentsRequest,
@@ -36,19 +34,14 @@ class _FakeRegistryClient:
         self.reported_results: list[tuple[str, object]] = []
         self.status_updates: list[tuple[str, object]] = []
         self.heartbeats: list[dict] = []
+        self.created_conversations: list[dict] = []
+        self.published_events: list[tuple[str, list]] = []
 
     async def sync_binding(self, **kwargs):
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.bound.append(kwargs)
         return {"ok": True}
-
-    async def publish_timeline(self, events, *, checkpoint: str = ""):
-        del checkpoint
-        if self.fail:
-            raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
-        self.published.append(list(events))
-        return {"accepted": len(events)}
 
     async def submit_routed_task(self, request):
         if self.fail:
@@ -73,6 +66,24 @@ class _FakeRegistryClient:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.last_search = query
         return list(self.search_rows)
+
+    async def create_conversation(self, *, target_agent_id, origin_channel, external_conversation_ref, title=""):
+        if self.fail:
+            raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
+        record = {
+            "target_agent_id": target_agent_id,
+            "origin_channel": origin_channel,
+            "external_conversation_ref": external_conversation_ref,
+            "title": title,
+        }
+        self.created_conversations.append(record)
+        return {"conversation_id": f"conv-{len(self.created_conversations)}"}
+
+    async def publish_events(self, conversation_id, events):
+        if self.fail:
+            raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
+        self.published_events.append((conversation_id, list(events)))
+        return {"published_count": len(events)}
 
     async def heartbeat(self, **kwargs):
         if self.fail:
@@ -134,13 +145,14 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
     mapping = registry_authority_capabilities((channel, coordination, full))
 
     assert mapping == {
-        "registry:channel": {"conversation_projection", "health_publication"},
+        "registry:channel": {"conversation_projection", "health_publication", "mirror_retry"},
         "registry:coord": {"task_routing", "agent_directory", "health_publication"},
         "registry:full": {
             "conversation_projection",
             "task_routing",
             "agent_directory",
             "health_publication",
+            "mirror_retry",
         },
     }
     assert registry_authority_ref("channel") == "registry:channel"
@@ -150,7 +162,7 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
 
 
 @pytest.mark.asyncio
-async def test_registry_control_processor_processes_projection_and_health_commands() -> None:
+async def test_registry_control_processor_processes_health_commands() -> None:
     registry = RegistryConnectionConfig(
         registry_id="alpha",
         url="http://alpha",
@@ -160,35 +172,6 @@ async def test_registry_control_processor_processes_projection_and_health_comman
     client = _FakeRegistryClient()
     processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
 
-    bind_reply = await processor.process(
-        _command(
-            "cmd-bind",
-            capability="conversation_projection",
-            operation="bind_conversation",
-            authority_ref="registry:alpha",
-            payload_json=BindConversationRequest(
-                conversation_ref="telegram:bot:1",
-                title="Ops",
-                origin_channel="telegram",
-                external_id="123",
-            ).model_dump_json(),
-        )
-    )
-    timeline_reply = await processor.process(
-        _command(
-            "cmd-timeline",
-            capability="conversation_projection",
-            operation="publish_timeline",
-            authority_ref="registry:alpha",
-            payload_json=PublishTimelineRequest(
-                conversation_ref="telegram:bot:1",
-                kind="progress",
-                title="Running",
-                body="working",
-                progress=50,
-            ).model_dump_json(),
-        )
-    )
     health_reply = await processor.process(
         _command(
             "cmd-health",
@@ -204,19 +187,7 @@ async def test_registry_control_processor_processes_projection_and_health_comman
         )
     )
 
-    assert bind_reply.status == "completed"
-    assert timeline_reply.status == "completed"
     assert health_reply.status == "completed"
-    assert client.bound == [
-        {
-            "conversation_id": "telegram:bot:1",
-            "title": "Ops",
-            "origin_channel": "telegram",
-            "external_id": "123",
-        }
-    ]
-    assert client.published[0][0].conversation_id == "telegram:bot:1"
-    assert client.published[0][0].progress == 50
     assert client.heartbeats == [
         {
             "connectivity_state": "connected",
@@ -353,7 +324,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert resolution.status == "resolved"
     assert resolution.authority_ref == "registry:alpha"
     assert client.submitted_tasks[0].context == {"severity": "high"}
-    assert client.status_updates[0][1].timeline_events[0].event_id == "evt-1"
+    assert client.status_updates[0][1].timeline_events[0]["event_id"] == "evt-1"
     assert client.status_updates[0][1].progress == 50
     assert client.status_updates[0][1].updated_at == "2026-03-20T00:00:10+00:00"
     assert client.reported_results[0][1].artifacts == ({"path": "/tmp/report.txt"},)
@@ -366,13 +337,13 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
         registry_id="alpha",
         url="http://alpha",
         enroll_token="enroll-alpha",
-        registry_scope="channel",
+        registry_scope="full",
     )
     beta = RegistryConnectionConfig(
         registry_id="beta",
         url="http://beta",
         enroll_token="enroll-beta",
-        registry_scope="channel",
+        registry_scope="full",
     )
     runtime = _FakeRegistryRuntime(
         (alpha, beta),
@@ -386,28 +357,26 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
     failed = await processor.process(
         _command(
             "cmd-alpha",
-            capability="conversation_projection",
-            operation="bind_conversation",
+            capability="health_publication",
+            operation="publish_health",
             authority_ref="registry:alpha",
-            payload_json=BindConversationRequest(
-                conversation_ref="telegram:bot:1",
-                title="Ops",
-                origin_channel="telegram",
-                external_id="123",
+            payload_json=PublishHealthRequest(
+                connectivity_state="connected",
+                current_capacity=1,
+                max_capacity=2,
             ).model_dump_json(),
         )
     )
     succeeded = await processor.process(
         _command(
             "cmd-beta",
-            capability="conversation_projection",
-            operation="bind_conversation",
+            capability="health_publication",
+            operation="publish_health",
             authority_ref="registry:beta",
-            payload_json=BindConversationRequest(
-                conversation_ref="telegram:bot:2",
-                title="Ops",
-                origin_channel="telegram",
-                external_id="456",
+            payload_json=PublishHealthRequest(
+                connectivity_state="connected",
+                current_capacity=1,
+                max_capacity=2,
             ).model_dump_json(),
         )
     )
@@ -415,3 +384,81 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
     assert failed.status == "failed"
     assert "registry unavailable" in (failed.error or "")
     assert succeeded.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_registry_control_processor_processes_create_conversation() -> None:
+    registry = RegistryConnectionConfig(
+        registry_id="alpha",
+        url="http://alpha",
+        enroll_token="enroll-alpha",
+        registry_scope="full",
+    )
+    client = _FakeRegistryClient()
+    processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
+
+    import json
+
+    reply = await processor.process(
+        _command(
+            "cmd-create-conv",
+            capability="conversation_projection",
+            operation="create_conversation",
+            authority_ref="registry:alpha",
+            payload_json=json.dumps({
+                "target_agent_id": "agent-1",
+                "origin_channel": "telegram",
+                "external_conversation_ref": "chat-123",
+                "title": "Test conversation",
+            }),
+        )
+    )
+
+    assert reply.status == "completed"
+    result = json.loads(reply.result_json or "{}")
+    assert result["conversation_id"] == "conv-1"
+    assert len(client.created_conversations) == 1
+    assert client.created_conversations[0]["target_agent_id"] == "agent-1"
+    assert client.created_conversations[0]["origin_channel"] == "telegram"
+
+
+@pytest.mark.asyncio
+async def test_registry_control_processor_processes_publish_events() -> None:
+    registry = RegistryConnectionConfig(
+        registry_id="alpha",
+        url="http://alpha",
+        enroll_token="enroll-alpha",
+        registry_scope="full",
+    )
+    client = _FakeRegistryClient()
+    processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
+
+    import json
+
+    reply = await processor.process(
+        _command(
+            "cmd-publish-events",
+            capability="conversation_projection",
+            operation="publish_events",
+            authority_ref="registry:alpha",
+            payload_json=json.dumps({
+                "conversation_id": "conv-1",
+                "events": [
+                    {
+                        "event_id": "evt-1",
+                        "kind": "message.user",
+                        "actor": "user",
+                        "content": "Hello",
+                        "created_at": "2026-03-20T00:00:00+00:00",
+                        "metadata": {},
+                    }
+                ],
+            }),
+        )
+    )
+
+    assert reply.status == "completed"
+    assert len(client.published_events) == 1
+    assert client.published_events[0][0] == "conv-1"
+    assert len(client.published_events[0][1]) == 1
+    assert client.published_events[0][1][0].kind == "message.user"

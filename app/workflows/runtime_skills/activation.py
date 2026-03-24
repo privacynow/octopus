@@ -68,7 +68,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome:
@@ -80,7 +80,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
 
         requirements = self._catalog().requirements(skill_name)
         if requirements:
-            user_creds = self._credentials().load_for_skills(user_id, [skill_name])
+            user_creds = self._credentials().load_for_skills(actor_key, [skill_name])
             missing = self._credentials().missing_requirements(
                 requirements,
                 user_creds.get(skill_name, {}),
@@ -88,7 +88,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
             if missing:
                 setup_outcome = self._setup().begin_setup(
                     session,
-                    user_id=user_id,
+                    actor_key=actor_key,
                     skill_name=skill_name,
                     requirements=list(missing),
                 )
@@ -96,7 +96,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
                     status=setup_outcome.status,
                     mutated=setup_outcome.mutated,
                     first_requirement=setup_outcome.first_requirement,
-                    foreign_setup_user=setup_outcome.foreign_setup.user_id if setup_outcome.foreign_setup else "",
+                    foreign_setup_user=setup_outcome.foreign_setup.actor_key if setup_outcome.foreign_setup else "",
                     foreign_setup=setup_outcome.foreign_setup,
                 )
 
@@ -132,7 +132,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome:
         detail = self._catalog().get_skill(skill_name)
@@ -145,7 +145,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
             return ConversationSkillMutationOutcome(status="no_requirements")
         decision = self._setup().begin_setup(
             session,
-            user_id=user_id,
+            actor_key=actor_key,
             skill_name=skill_name,
             requirements=list(requirements),
         )
@@ -153,7 +153,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
             status=decision.status,
             mutated=decision.mutated,
             first_requirement=decision.first_requirement,
-            foreign_setup_user=decision.foreign_setup.user_id if decision.foreign_setup else "",
+            foreign_setup_user=decision.foreign_setup.actor_key if decision.foreign_setup else "",
             foreign_setup=decision.foreign_setup,
         )
 
@@ -161,22 +161,22 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome:
         setup = self._setup().apply_cleared_credentials(
             session,
-            user_id=user_id,
+            actor_key=actor_key,
             removed_skills=[],
             skill_name=skill_name,
         )
         if session.awaiting_skill_setup is not None and setup.setup_cleared is False:
-            foreign = self._setup().foreign_setup(session, user_id=user_id, skill_name=skill_name)
+            foreign = self._setup().foreign_setup(session, actor_key=actor_key, skill_name=skill_name)
             if foreign.status == "foreign_setup":
                 return ConversationSkillMutationOutcome(
                     status="foreign_setup",
                     mutated=False,
-                    foreign_setup_user=foreign.setup.user_id if foreign.setup else "",
+                    foreign_setup_user=foreign.setup.actor_key if foreign.setup else "",
                     foreign_setup=foreign.setup,
                 )
         removed = self._activation().deactivate(session, skill_name)
@@ -189,17 +189,17 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
     ) -> ConversationSkillMutationOutcome:
-        foreign = self._setup().foreign_setup(session, user_id=user_id)
+        foreign = self._setup().foreign_setup(session, actor_key=actor_key)
         if foreign.status == "foreign_setup":
             return ConversationSkillMutationOutcome(
                 status="foreign_setup",
                 mutated=False,
-                foreign_setup_user=foreign.setup.user_id if foreign.setup else "",
+                foreign_setup_user=foreign.setup.actor_key if foreign.setup else "",
                 foreign_setup=foreign.setup,
             )
-        setup_cancel = self._setup().cancel(session, user_id=user_id)
+        setup_cancel = self._setup().cancel(session, actor_key=actor_key)
         had_active = bool(self._activation().list_active(session))
         self._activation().clear(session)
         return ConversationSkillMutationOutcome(

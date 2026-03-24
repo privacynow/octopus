@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.control_plane.bus import ControlPlaneBus
@@ -41,6 +42,8 @@ def build_noop_control_plane_services() -> ControlPlaneServices:
 def build_bus_control_plane_services(
     bus: ControlPlaneBus,
     directory: ControlPlaneDirectory,
+    *,
+    agent_id_for_authority: Callable[[str], str] | None = None,
 ) -> ControlPlaneServices:
     from app.control_plane.adapters import (
         BusAgentDirectory,
@@ -50,7 +53,9 @@ def build_bus_control_plane_services(
     )
 
     return ControlPlaneServices(
-        conversation_projection=BusConversationProjection(bus, directory),
+        conversation_projection=BusConversationProjection(
+            bus, directory, agent_id_for_authority=agent_id_for_authority,
+        ),
         task_routing=BusTaskRouting(bus, directory),
         agent_directory=BusAgentDirectory(bus, directory),
         health_publication=BusHealthPublication(bus, directory),
@@ -64,5 +69,11 @@ def build_noop_bot_services() -> BotServices:
 def build_bus_bot_services(
     bus: ControlPlaneBus,
     directory: ControlPlaneDirectory,
+    *,
+    agent_id_for_authority: Callable[[str], str] | None = None,
 ) -> BotServices:
-    return BotServices(control_plane=build_bus_control_plane_services(bus, directory))
+    return BotServices(
+        control_plane=build_bus_control_plane_services(
+            bus, directory, agent_id_for_authority=agent_id_for_authority,
+        ),
+    )

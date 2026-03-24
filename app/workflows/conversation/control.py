@@ -27,14 +27,15 @@ class ConversationControlUseCases(ConversationControlPort):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         provider_name: str,
         provider_state_factory: ProviderStateFactory,
         approval_mode_default: str,
         default_role: str,
         default_skills: tuple[str, ...],
+        conversation_key: str,
     ) -> ConversationResetOutcome:
-        foreign = self._setup().foreign_setup(session, user_id=user_id)
+        foreign = self._setup().foreign_setup(session, actor_key=actor_key)
         if foreign.setup is not None:
             return ConversationResetOutcome(
                 status="foreign_setup",
@@ -44,7 +45,7 @@ class ConversationControlUseCases(ConversationControlPort):
         replacement = session_from_dict(
             default_session(
                 provider_name,
-                provider_state_factory(),
+                provider_state_factory(conversation_key),
                 approval_mode,
                 default_role,
                 default_skills,
@@ -91,7 +92,7 @@ class ConversationControlUseCases(ConversationControlPort):
             )
         decision = self._setup().cancel(
             session,
-            user_id=actor_key,
+            actor_key=actor_key,
             allow_override=allow_override,
         )
         if decision.status == "cancelled":

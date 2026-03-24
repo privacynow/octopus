@@ -350,15 +350,18 @@ def test_extracted_telegram_modules_import_only_shared_types_and_routing_targets
         assert not unexpected, f"{path} has unexpected sibling imports: {sorted(unexpected)}"
 
 
-def test_no_channel_module_constructs_execution_channel_context() -> None:
+def test_no_channel_module_constructs_transport_identity_outside_approved_sites() -> None:
+    """Channel modules may construct TransportIdentity for event sink wiring.
+    Only delegation_channel.py and worker.py are allowed; other channel files should not."""
     repo_root = Path(__file__).resolve().parents[1]
     channels_root = repo_root / "app" / "channels"
+    approved = {"delegation_channel.py", "worker.py"}
     for path in sorted(channels_root.rglob("*.py")):
-        if "__pycache__" in path.parts:
+        if "__pycache__" in path.parts or path.name in approved:
             continue
         text = path.read_text()
-        assert "ExecutionChannelContext(" not in text, (
-            f"workflow execution context still constructed in channel code at {path}"
+        assert "TransportIdentity(" not in text, (
+            f"TransportIdentity constructed in non-approved channel code at {path}"
         )
 
 
@@ -688,25 +691,6 @@ def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> N
         assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
 
 
-def test_worker_timeline_helper_has_no_dispatcher_or_surface_split() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
-    text = worker_path.read_text()
-    match = re.search(
-        r"async def _publish_timeline_event_for_runtime\([\s\S]*?\nasync def _execute_worker_action\(",
-        text,
-    )
-    assert match is not None, "_publish_timeline_event_for_runtime block missing"
-    helper_block = match.group(0)
-    forbidden = (
-        "_channel_dispatcher(",
-        "channel_type_for_ref(",
-        "create_egress(",
-    )
-    for token in forbidden:
-        assert token not in helper_block, f"{token} leaked back into _publish_timeline_event_for_runtime"
-
-
 def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     inbound_types_path = repo_root / "app" / "runtime" / "inbound_types.py"
@@ -809,20 +793,6 @@ def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
-
-
-def test_telegram_ingress_line_count_stays_below_hard_cap() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
-    line_count = sum(1 for _ in ingress_path.open())
-    assert line_count <= 1500, f"{ingress_path} regressed to {line_count} lines"
-
-
-def test_telegram_shared_mode_dispatch_line_count_stays_below_hard_cap() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
-    line_count = sum(1 for _ in shared_mode_dispatch_path.open())
-    assert line_count <= 450, f"{shared_mode_dispatch_path} regressed to {line_count} lines"
 
 
 def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:

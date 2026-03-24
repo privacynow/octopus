@@ -453,7 +453,8 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             calls.append(("register", card.agent_id, connectivity_state))
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             calls.append(("heartbeat", connectivity_state, str(current_capacity)))
             return {"ok": True}
 
@@ -509,11 +510,9 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
             connectivity_state: str,
             current_capacity: int,
             max_capacity: int,
-            active_work_count: int = 0,
-            timeline_checkpoint: str = "",
             runtime_health: dict | None = None,
         ):
-            calls.append(("heartbeat", runtime_health, active_work_count))
+            calls.append(("heartbeat", runtime_health))
             return {"ok": True}
 
     class FakeHealthProvider:
@@ -581,7 +580,6 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
                 "snapshot": None,
                 "diagnostics": [],
             },
-            2,
         )
     ]
 
@@ -605,7 +603,8 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             return {"ok": True}
 
         async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
@@ -680,7 +679,8 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
             return {"ok": True}
 
-        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, active_work_count: int = 0, timeline_checkpoint: str = ""):
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
             return {"ok": True}
 
         async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
@@ -756,9 +756,6 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
         async def sync_binding(self, binding):
             seen.append(("bind", str(binding.get("conversation_ref", ""))))
 
-        async def publish_timeline(self, event):
-            seen.append(("timeline", str(event.conversation_id)))
-
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
             del conversation_ref, config
@@ -805,9 +802,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert outcome_message == "accepted"
     assert outcome_task == "accepted"
     assert ("bind", registry_conversation_ref("prod", "conv-1")) in seen
-    assert ("timeline", registry_conversation_ref("prod", "conv-1")) in seen
     assert ("bind", registry_task_ref("prod", "task-1")) not in seen
-    assert ("timeline", registry_task_ref("prod", "task-1")) not in seen
     assert egress_kwargs == [
         {
             "conversation_key": _reg_conv(registry_conversation_ref("prod", "conv-1")),
@@ -832,10 +827,6 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
                     "origin_channel": str(binding.get("origin_channel", "")),
                 }
             )
-
-        async def publish_timeline(self, event):
-            del event
-            return None
 
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
@@ -911,7 +902,6 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
 
 
 async def test_handle_registry_routed_result_does_not_publish_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
-    published: list[dict[str, object]] = []
     egress_calls: list[str] = []
 
     with fresh_env(
@@ -924,39 +914,11 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
         dispatcher = current_runtime().channel_dispatcher
         services = current_runtime().services
 
-        async def fake_publish_external_timeline(
-            *,
-            conversation_ref,
-            kind,
-            title,
-            body="",
-            status="",
-            progress=None,
-            metadata=None,
-            event_id=None,
-        ):
-            del progress, event_id
-            published.append(
-                {
-                    "conversation_ref": conversation_ref,
-                    "kind": kind,
-                    "title": title,
-                    "body": body,
-                    "status": status,
-                    "metadata": metadata or {},
-                }
-            )
-
         def fake_create_egress(conversation_ref, *, config, **kwargs):
             del config, kwargs
             egress_calls.append(str(conversation_ref))
             raise AssertionError("projection-only registry delivery should not build egress")
 
-        monkeypatch.setattr(
-            services.control_plane.conversation_projection,
-            "publish_external_timeline",
-            fake_publish_external_timeline,
-        )
         monkeypatch.setattr(dispatcher, "create_egress", fake_create_egress)
         outcome = await handle_registry_delivery(
             config,
@@ -984,7 +946,6 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
 
         assert outcome == "retry_later"
         assert egress_calls == []
-        assert published == []
 
 
 async def test_admit_registry_delivery_rejects_missing_registry_id(monkeypatch, tmp_path: Path):
@@ -1288,46 +1249,16 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        published: list[dict[str, object]] = []
-
         class _FakeDispatcher:
             def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
                 del conversation_ref, config, kwargs
                 return True
-
-        async def fake_publish_external_timeline(
-            *,
-            conversation_ref,
-            kind,
-            title,
-            body="",
-            status="",
-            progress=None,
-            metadata=None,
-            event_id=None,
-        ):
-            del progress, event_id
-            published.append(
-                {
-                    "conversation_ref": conversation_ref,
-                    "kind": kind,
-                    "title": title,
-                    "body": body,
-                    "status": status,
-                    "metadata": metadata or {},
-                }
-            )
 
         monkeypatch.setattr(
             "app.agents.delivery.apply_runtime_delegation_result",
             lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
         )
         services = build_noop_bot_services()
-        monkeypatch.setattr(
-            services.control_plane.conversation_projection,
-            "publish_external_timeline",
-            fake_publish_external_timeline,
-        )
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
@@ -1362,7 +1293,6 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
             in record.message
             for record in caplog.records
         )
-        assert published == []
 
 
 async def test_handle_registry_routed_result_does_not_log_warning_when_result_matches(
@@ -1376,35 +1306,10 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        published: list[dict[str, object]] = []
-
         class _FakeDispatcher:
             def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
                 del conversation_ref, config, kwargs
                 return True
-
-        async def fake_publish_external_timeline(
-            *,
-            conversation_ref,
-            kind,
-            title,
-            body="",
-            status="",
-            progress=None,
-            metadata=None,
-            event_id=None,
-        ):
-            del progress, event_id
-            published.append(
-                {
-                    "conversation_ref": conversation_ref,
-                    "kind": kind,
-                    "title": title,
-                    "body": body,
-                    "status": status,
-                    "metadata": metadata or {},
-                }
-            )
 
         monkeypatch.setattr(
             "app.agents.delivery.apply_runtime_delegation_result",
@@ -1415,11 +1320,6 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
             ),
         )
         services = build_noop_bot_services()
-        monkeypatch.setattr(
-            services.control_plane.conversation_projection,
-            "publish_external_timeline",
-            fake_publish_external_timeline,
-        )
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
@@ -1453,13 +1353,3 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
             "did not match any pending delegation task" in record.message
             for record in caplog.records
         )
-        assert published == [
-            {
-                "conversation_ref": "telegram:bot-1:12345",
-                "kind": "delegated_result",
-                "title": "Delegated result received",
-                "body": "Delegated task completed successfully.",
-                "status": "completed",
-                "metadata": {"routed_task_id": "task-1"},
-            }
-        ]

@@ -18,14 +18,11 @@ from app.agents.types import (
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    TimelineEvent,
 )
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
 from app.control_plane.requests import (
-    BindConversationRequest,
     PublishHealthRequest,
-    PublishTimelineRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
     SearchAgentsRequest,
@@ -35,20 +32,6 @@ from app.control_plane.requests import (
 )
 from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
 from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
-
-
-def _timeline_event(payload: TimelineEventPayload) -> TimelineEvent:
-    return TimelineEvent(
-        event_id=payload.event_id,
-        conversation_id=payload.conversation_id,
-        kind=payload.kind,
-        title=payload.title,
-        body=payload.body,
-        status=payload.status,
-        progress=payload.progress,
-        metadata=dict(payload.metadata),
-        created_at=payload.created_at,
-    )
 
 
 class RegistryControlProcessor(ControlProcessor):
@@ -74,6 +57,8 @@ class RegistryControlProcessor(ControlProcessor):
         try:
             if command.capability == "conversation_projection":
                 return await self._process_conversation_projection(command, client)
+            if command.capability == "mirror_retry":
+                return await self._process_mirror_retry(command, client)
             if command.capability == "task_routing":
                 return await self._process_task_routing(command, client)
             if command.capability == "agent_directory":
@@ -93,33 +78,65 @@ class RegistryControlProcessor(ControlProcessor):
             )
 
     async def _process_conversation_projection(self, command: ControlCommand, client) -> ControlReply:
-        if command.operation == "bind_conversation":
-            request = BindConversationRequest.model_validate_json(command.payload_json)
-            await client.sync_binding(
-                conversation_id=request.conversation_ref,
-                title=request.title,
-                origin_channel=request.origin_channel,
-                external_id=request.external_id,
+        if command.operation == "create_conversation":
+            payload = json.loads(command.payload_json)
+            response = await client.create_conversation(
+                target_agent_id=payload["target_agent_id"],
+                origin_channel=payload["origin_channel"],
+                external_conversation_ref=payload["external_conversation_ref"],
+                title=payload.get("title", ""),
             )
-            return ControlReply(command_id=command.command_id, status="completed")
-        if command.operation == "publish_timeline":
-            request = PublishTimelineRequest.model_validate_json(command.payload_json)
-            event = TimelineEvent(
-                event_id=request.event_id or uuid.uuid4().hex,
-                conversation_id=request.conversation_ref,
-                kind=request.kind,
-                title=request.title,
-                body=request.body,
-                status=request.status,
-                progress=request.progress,
-                metadata=dict(request.metadata),
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
             )
-            await client.publish_timeline([event])
+        if command.operation == "get_conversation":
+            payload = json.loads(command.payload_json)
+            response = await client.get_conversation(payload["conversation_id"])
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
+        if command.operation == "publish_events":
+            payload = json.loads(command.payload_json)
+            conversation_id = payload["conversation_id"]
+            from registry_sdk.events import ConversationEvent as SdkConversationEvent
+            events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
+            await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
         return ControlReply(
             command_id=command.command_id,
             status="failed",
             error=f"unsupported conversation_projection operation {command.operation!r}",
+        )
+
+    async def _process_mirror_retry(self, command: ControlCommand, client) -> ControlReply:
+        if command.operation == "create_conversation":
+            payload = json.loads(command.payload_json)
+            response = await client.create_conversation(
+                target_agent_id=payload["target_agent_id"],
+                origin_channel=payload["origin_channel"],
+                external_conversation_ref=payload["external_conversation_ref"],
+                title=payload.get("title", ""),
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
+        if command.operation == "publish_events":
+            payload = json.loads(command.payload_json)
+            conversation_id = payload["conversation_id"]
+            from registry_sdk.events import ConversationEvent as SdkConversationEvent
+            events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
+            await client.publish_events(conversation_id, events)
+            return ControlReply(command_id=command.command_id, status="completed")
+        return ControlReply(
+            command_id=command.command_id,
+            status="failed",
+            error=f"unsupported mirror_retry operation {command.operation!r}",
         )
 
     async def _process_task_routing(self, command: ControlCommand, client) -> ControlReply:
@@ -174,7 +191,7 @@ class RegistryControlProcessor(ControlProcessor):
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
                 summary=payload.summary,
-                timeline_events=tuple(_timeline_event(event) for event in payload.timeline_events),
+                timeline_events=tuple(event.model_dump() for event in payload.timeline_events),
                 progress=payload.progress,
                 updated_at=payload.updated_at,
             )
@@ -207,7 +224,7 @@ class RegistryControlProcessor(ControlProcessor):
                     role=str(row.get("role", "")),
                     capabilities=tuple(
                         str(item)
-                        for item in row.get("capabilities", row.get("skills", []))
+                        for item in row.get("capabilities", [])
                         if item
                     ),
                     tags=tuple(str(item) for item in row.get("tags", []) if item),

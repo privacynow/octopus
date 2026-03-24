@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Registry HTTP API — main areas</title>
+  <desc id="desc">Bots use agent tokens on /v1; operators use the browser session or tools that send cookies and CSRF.</desc>
+  <rect width="1200" height="560" fill="#1e1e2e"/>
+  <text x="48" y="48" fill="#89b4fa" style="font-size:20px;font-family:system-ui,sans-serif">Registry HTTP API (excerpt)</text>
+  <g transform="translate(48 80)" font-family="ui-monospace, Menlo, monospace" font-size="13px">
+    <rect x="0" y="0" width="520" height="200" rx="10" fill="#313244" stroke="#45475a"/>
+    <text x="16" y="32" fill="#f9e2af" font-weight="600">Agents</text>
+    <text x="16" y="58" fill="#a6e3a1">POST /v1/agents/enroll</text>
+    <text x="16" y="78" fill="#a6e3a1">POST /v1/agents/register &#183; heartbeat</text>
+    <text x="16" y="98" fill="#a6e3a1">GET /v1/agents</text>
+    <rect x="560" y="0" width="520" height="200" rx="10" fill="#313244" stroke="#45475a"/>
+    <text x="576" y="32" fill="#f9e2af" font-weight="600">Conversations</text>
+    <text x="576" y="58" fill="#a6e3a1">GET/POST /v1/conversations</text>
+    <text x="576" y="78" fill="#a6e3a1">POST &#8230;/events &#183; GET &#8230;/export</text>
+    <rect x="0" y="224" width="520" height="200" rx="10" fill="#313244" stroke="#45475a"/>
+    <text x="16" y="256" fill="#f9e2af" font-weight="600">Skill catalog</text>
+    <text x="16" y="282" fill="#cdd6f4">Full lifecycle under /v1/catalog/skills/&#8230;</text>
+    <text x="16" y="308" fill="#8890a8" font-size="12px">(UI shows catalog; full lifecycle is often API)</text>
+    <rect x="560" y="224" width="520" height="200" rx="10" fill="#313244" stroke="#45475a"/>
+    <text x="576" y="256" fill="#f9e2af" font-weight="600">Provider guidance</text>
+    <text x="576" y="282" fill="#a6e3a1">/v1/provider-guidance/{provider}/&#8230;</text>
+    <text x="576" y="308" fill="#8890a8" font-size="12px">No dedicated top-level nav in the UI</text>
+  </g>
+</svg>

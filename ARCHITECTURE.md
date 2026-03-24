@@ -7,8 +7,7 @@ Octopus has two operator-facing layers:
 - `app.main` owns the runtime: Telegram ingress, worker execution, optional
   registry runtime, and the optional registry-backed control-plane processor.
 
-This document describes the code as it runs today. For rollout history and the
-phase-by-phase change log, read [status.md](status.md).
+This document describes the code as it runs today.
 
 ## Deployment Overview
 
@@ -21,8 +20,8 @@ flowchart LR
     User["Telegram user"] --> TG["Telegram"]
     Browser["Operator browser"] --> UI["Registry UI /ui"]
 
-    Compose --> Bot["Bot container<br/>python -m app.main"]
-    Compose --> Registry["Registry service<br/>uvicorn app.channels.registry.http:app"]
+    Compose --> Bot["Bot container<br/>python -m app.main<br/>includes registry_sdk/"]
+    Compose --> Registry["Registry service<br/>uvicorn app.channels.registry.http:app<br/>includes registry_sdk/ + ui/"]
     Compose --> PG["Optional Postgres"]
     Compose --> Auth["Provider auth mounts"]
 
@@ -166,6 +165,55 @@ Telegram refs are keyed by a stable local `bot_id`, not by a registry-issued
 - `./octopus` owns `.deploy/*.env`
 - the Python runtime owns the `BOT_DATA_DIR/agent/*` state files
 
+### Registry Agent IDs
+
+`BotConfig.registry_agent_ids` is the single source of truth for which
+`agent_id` this bot holds on each registry. It is a `dict[str, str]` keyed by
+`registry_id`, populated from enrollment state files at startup.
+
+`config.agent_id_for_registry(registry_id)` returns the agent_id for a
+specific registry or empty string. There is no first-hit fallback or default
+registry selection.
+
+## Registry SDK
+
+`registry_sdk/` is a standalone package at the repo root.
+
+Import direction: `app/` → `registry_sdk/` is allowed; `registry_sdk/` → `app/`
+is forbidden. The SDK defines the contract; bots translate their transport data
+into SDK types.
+
+Key components:
+
+- `ConversationEvent` model with required `event_id` and typed metadata per kind
+  (`extra="forbid"`, `created_at` required with `min_length=1`)
+- `EVENT_METADATA_SCHEMAS`: 9 event kinds with Pydantic validation
+- `RegistryClient` for bot→registry HTTP calls
+
+### Event Kind Schema
+
+The SDK defines these event kinds:
+
+| Kind | Metadata schema | Notes |
+|---|---|---|
+| `message.user` | `MessageMetadata` | attachments list |
+| `message.bot` | `MessageMetadata` | attachments list |
+| `provider.response` | `ProviderResponseMetadata` | tokens, cost, **provider** (required) |
+| `approval.decided` | `ApprovalMetadata` | action, decided_by, decision |
+| `delegation.proposed` | `DelegationMetadata` | tasks list |
+| `delegation.submitted` | `DelegationMetadata` | tasks list |
+| `delegation.completed` | `DelegationMetadata` | tasks list |
+| `task.status` | `TaskStatusMetadata` | status, optional progress |
+| `error` | `ErrorMetadata` | error_type, message |
+
+All metadata schemas use `extra="forbid"`. `DelegationMetadata` contains a
+`tasks: list[DelegationTaskSummary]` with per-task `title`, `target`, and
+`status` fields. `ProviderResponseMetadata` requires a `provider` field
+(`min_length=1`).
+
+Removed from prior versions: `tool.execution`, `file.change`,
+`provider.request`, `approval.requested`.
+
 ### Scope-Driven Channel Registration
 
 Each configured registry connection has a scope:
@@ -184,13 +232,157 @@ Two consequences matter:
   coordination-only registry does not advertise a user-facing `registry`
   surface
 
+## Execution Model: TransportIdentity And Event Sinks
+
+### TransportIdentity
+
+`TransportIdentity` (in `app/workflows/execution/contracts.py`) is a frozen
+dataclass that every channel must supply per execution. It replaces the former
+`ExecutionChannelContext` and describes how this conversation maps to registry
+projection, session storage, and UI.
+
+Fields: `conversation_key` (required), `origin_channel`,
+`external_conversation_ref`, `target_agent_id`, `conversation_ref`,
+`routed_task_id`, `authority_ref`, `actor`, and an optional
+`timeline_callback`.
+
+`ExecutionRuntime` composes:
+
+- `build_transport_identity` — channel-specific factory producing a
+  `TransportIdentity` from a message and chat_id
+- `build_event_sink` — factory producing an `ExecutionEventSink` from a
+  `TransportIdentity`
+- `dispatch` — `RuntimeDispatchRuntime` with provider, progress, cancellation
+- `delegation_parser` — optional `DelegationIntentParser`
+- `agent_directory` — optional `AgentDirectoryPort`
+- channel-specific send/render callbacks
+
+### ExecutionEventSink
+
+`ExecutionEventSink` (protocol in `app/ports/execution_events.py`) defines the
+interface for publishing execution lifecycle events. Methods:
+
+- `on_user_message`, `on_provider_response`, `on_bot_reply`, `on_error`
+- `on_delegation_proposed`, `on_delegation_submitted`, `on_delegation_completed`
+
+Two implementations in `app/workflows/execution/event_sink.py`:
+
+| Implementation | When used |
+|---|---|
+| `RegistryEventSink` | `ConversationProjectionPort` available and publish level allows the event kind |
+| `NoOpEventSink` | no registry projection or publish level excludes everything |
+
+`RegistryEventSink` composes `ConversationProjectionPort` + `TransportIdentity`
++ `BotConfig` into typed methods. It lazily creates the conversation on first
+publish, caches the `conversation_id`, and swallows all failures as warnings.
+All event publication is gated by `should_publish_event(config, kind)`.
+
+`build_event_sink_for_context()` is the standalone factory used by delegation
+handlers, delivery processors, and any path outside `execute_request`.
+
+### Publish Level Gating
+
+`BOT_REGISTRY_PUBLISH_LEVEL` controls which event kinds reach the registry.
+
+| Level | Kinds |
+|---|---|
+| `minimal` | `message.user`, `message.bot`, `task.status`, `error` |
+| `standard` | minimal + `approval.decided`, `delegation.*`, `provider.response` |
+| `full` | same as `standard` |
+
+`PUBLISH_LEVEL_KINDS` in `app/config.py` is the authoritative mapping.
+
+## Delegation
+
+### DelegationIntentParser
+
+`DelegationIntentParser` (protocol in `app/ports/delegation.py`) is an optional
+pluggable parser on `ExecutionRuntime`. Its job: given a provider response and a
+list of available agents, extract a list of task dicts with `routed_task_id`,
+`target_agent_id`, `title`, `instructions`.
+
+Default implementation: `XmlTagDelegationParser` in
+`app/workflows/execution/delegation_parser.py`. It extracts
+`<delegation>{"tasks": [...]}</delegation>` JSON blocks, resolves target slugs
+to agent_ids via the available_agents list, and generates fresh `routed_task_id`
+UUIDs.
+
+### Delegation Session Key
+
+`delegation_session_key(origin_agent_id, parent_conversation_id)` in
+`app/identity.py` produces a stable session key
+(`delegation:<origin>:<parent_cid>`) so that all tasks delegated from the same
+parent conversation by the same origin agent share one provider session on the
+target bot. This gives the target conversational context across multiple
+delegations.
+
+Used in `app/agents/bridge.py` when admitting `routed_task` deliveries: if
+`origin_agent_id` and `parent_conversation_id` are both present, the shared
+delegation session key overrides the default conversation key.
+
+### DelegationRuntime
+
+`DelegationRuntime` (in `app/agents/delegation.py`) bundles the config,
+provider name, provider state factory, `TaskRoutingPort`, and
+`AgentDirectoryPort` needed for delegation approval/submission/cancellation.
+
+`resolve_origin_agent_id(config, registry_id)` delegates to
+`config.agent_id_for_registry(registry_id)` — no first-hit fallback.
+
+## Identity And Key Normalization
+
+`app/identity.py` provides channel-neutral key helpers:
+
+- `telegram_actor_key(user_id)` → `tg:<id>`
+- `telegram_conversation_key(chat_id)` → `tg:<id>`
+- `parse_actor_key(raw)` / `parse_conversation_key(raw)` — bare integers become
+  `tg:` prefixed for backward compatibility; already-prefixed values pass
+  through
+- `normalize_conversation_id(raw)` — extracts bare `conversation_id` from
+  registry-prefixed refs like `registry:local:conversation:abc123`
+- `delegation_session_key(origin, parent_cid)` — stable shared session key
+- `conversation_key_for_ref(ref)` — collapses registry conversation refs across
+  registries but keeps task refs un-collapsed
+
+Actor identity throughout the codebase uses `actor_key` (not `actor_user_id`
+or `request_user_id`). All identity parsing goes through `parse_actor_key`.
+
+### Telegram Session Helpers
+
+`app/channels/telegram/session_io.py` deduplicates Telegram-specific session
+load/save and key conversion that was previously scattered across ingress,
+conversation, pending, and worker modules. It provides:
+
+- `conversation_key(chat_id)` — delegates to `parse_conversation_key`
+- `actor_key(user_id)` — delegates to `parse_actor_key` / `telegram_actor_key`
+- `event_key(update_id)` — normalizes to `tg:` prefix
+- `telegram_chat_id(chat_id)` — extracts numeric Telegram ID or raises
+- `load(runtime, chat_id)` / `save(runtime, chat_id, session)` — standard
+  session round-trip
+
+## Provider Protocol
+
+The `Provider` protocol (in `app/providers/base.py`) defines:
+
+- `name: str`
+- `new_provider_state(conversation_key)` — returns provider-specific session
+  fields. The Claude provider generates a deterministic `session_id` via
+  `uuid5(NAMESPACE_URL, conversation_key)`, ensuring session stability across
+  restarts for the same conversation.
+- `run(...)` / `run_preflight(...)` — execution and read-only approval
+- `check_health()` / `check_auth_health()` / `check_runtime_health()` — tiered
+  health probes
+
+`RunResult` includes `delegation_tasks: list[dict[str, str]]` for provider
+responses that contain delegation intent.
+
 ## Control Plane
 
 The control plane is capability-scoped and authority-addressed.
 
 `BotServices.control_plane` exposes four ports:
 
-- `ConversationProjectionPort`
+- `ConversationProjectionPort` — `create_conversation` + `publish_events`
 - `TaskRoutingPort`
 - `AgentDirectoryPort`
 - `HealthPublicationPort`
@@ -227,9 +419,9 @@ Current control-plane rules:
 - projection-only work stays on control-plane ports instead of borrowing live
   channel egress
 
-That is why delegated-result timeline publication happens through
-`ConversationProjectionPort`, while live completion messages still go through
-channel egress.
+Event publication flows exclusively through `ExecutionEventSink` →
+`ConversationProjectionPort`. There is no separate `_publish_to_registry`
+helper or `registry_publish.py` module.
 
 ## Registry Runtime And Delivery Adaptation
 
@@ -252,11 +444,16 @@ Registry-delivery adaptation is split intentionally:
 
 ### Delivery Kinds
 
+Delivery kinds (`channel_input`, `channel_action`, `routed_task`,
+`routed_result`) are a separate vocabulary from event kinds (`message.user`,
+`message.bot`, `task.status`, `error`, etc.). The `events` table uses SDK kinds
+from `EVENT_METADATA_SCHEMAS`; the `deliveries` table uses transport kinds.
+
 | Delivery kind | Handler | Local effect |
 |---|---|---|
 | `channel_input` | `admit_registry_delivery(...)` | records a normal inbound message, syncs conversation binding, publishes local timeline |
 | `channel_action` | `handle_registry_delivery(...)` | turns registry UI actions into semantic worker envelopes or cancel requests |
-| `routed_task` | `admit_registry_delivery(...)` | admits delegated work on a registry task ref through the normal queue |
+| `routed_task` | `admit_registry_delivery(...)` | admits delegated work on a registry task ref through the normal queue; uses `delegation_session_key` for shared target-bot sessions when origin/parent are present |
 | `routed_result` | `handle_registry_delivery(...)` | atomically applies the result to parent delegation state, publishes projection, and resumes the parent session when ready |
 
 ```mermaid
@@ -306,7 +503,7 @@ The normal worker path is:
 3. load the session/runtime state
 4. execute the appropriate workflow
 5. call the provider
-6. finalize usage, pending state, delegation state, projection, and egress
+6. finalize usage, pending state, delegation state, event sink publication, and egress
 
 Core durable state machines:
 
@@ -346,6 +543,9 @@ points:
 - pending approval / retry / recovery machines
 - delegation staleness expiration (machine-owned, measured from submission time)
 
+Conversation-level settings (reset_session, set_project, set_file_policy)
+require an explicit `conversation_key` — there is no default.
+
 ## Durable Stores And Backends
 
 Octopus has multiple durable seams:
@@ -358,7 +558,7 @@ Octopus has multiple durable seams:
 | control-plane bus store | SQLite + Postgres | commands, replies, leases, dead-letter / purge lifecycle |
 | content store | SQLite + Postgres | built-in/runtime content and guidance data |
 | credential store | SQLite + Postgres | encrypted per-user skill credentials |
-| registry service store | SQLite + Postgres | agents, conversations, deliveries, timelines, routed tasks |
+| registry service store | SQLite + Postgres | agents, conversations, deliveries, events, routed tasks, runtime_skills, skill_revisions, skill_approvals, provider_guidance, guidance_revisions, guidance_approvals |
 
 Backend-selection rules:
 
@@ -374,10 +574,12 @@ Boundary rules that matter:
 - content store seeds built-in content on initialization
 - credential store derives an encryption key from `BOT_CREDENTIAL_KEY`, with a
   logged Telegram-token fallback only for legacy configs
+- conversation table has `origin_channel` + `external_conversation_ref` with a
+  unique constraint for idempotent create
 
 ## HTTP Surfaces
 
-The registry service exposes two distinct surfaces.
+The registry service exposes three distinct surfaces.
 
 ### Agent API
 
@@ -386,7 +588,7 @@ The registry service exposes two distinct surfaces.
 Used by registry-connected runtimes and the control-plane processor for:
 
 - enroll/register/heartbeat
-- conversation binding and timeline publication
+- conversation binding and event publication
 - routed-task submission, status, and result delivery
 - search/discovery
 - delivery poll and ack
@@ -394,22 +596,41 @@ Used by registry-connected runtimes and the control-plane processor for:
 These endpoints validate their payloads against store contracts and use scope
 checks instead of assuming happy-path callers.
 
-### Operator UI
+### Resource API
 
-`/ui` and `/v1/ui/*`
+`/v1/*`
 
-Used by the browser shell for:
+Resource-oriented endpoints replacing the old `/v1/ui/*` surface. Scoped auth:
+agent tokens see own data, operator sessions see everything.
 
-- live bot directory and health detail
-- conversation list, detail, follow-up messaging, export, and cancel
-- routed-task board
-- runtime skill management
-- provider-guidance management and preview
-- capability kill switches
+- `/v1/agents`, `/v1/conversations`, `/v1/tasks` — list endpoints support
+  **pagination** (`cursor`, `limit`, `has_more`, `next_cursor`); conversations
+  add **`q`** (search) and **`status`**; tasks add **`status`** and agent-scoped
+  filtering via auth
+- `/v1/capabilities`, `/v1/usage` — usage accepts **`since`** / **`until`**
+  (ISO) for ranges
+- Event publishing: `POST /v1/conversations/{id}/events` with SDK validation
+- Catalog: `/v1/catalog/skills/*`, `/v1/provider-guidance/*`
 
-The UI is a server-rendered HTML shell with browser-side JavaScript. Login uses
-session cookies, and state-changing UI requests carry CSRF headers instead of
-embedding the master UI token in page JavaScript.
+### Operator SPA
+
+`/ui`
+
+Static files from `ui/`: **vanilla** HTML/CSS/JS (no framework, no build step).
+
+- **Router** (`ui/js/router.js`): `history.pushState`, per-route **cleanup**
+  (WebSocket unsubscribes, timers)
+- **API client** (`ui/js/api.js`): CSRF from `/v1/auth/csrf`, timeouts,
+  session-expired handling; list endpoints use **cursor / limit / has_more**
+  where implemented
+- **WebSocket** (`ui/js/ws.js`): `/v1/ws`, exponential backoff, ping, sidebar
+  status indicator
+- **Views** (`ui/js/components/*.js`): paginated agents, conversations, tasks,
+  agent-scoped conversations; conversation **compose**, cancel/export, timeline
+  filters, load-older pagination; capabilities toggles with confirm; skills
+  catalog; usage date ranges
+- **Markdown**: vendored `marked` + sanitizer; user content escaped via `esc()`
+- **Auth**: operator session cookie; mutating requests send `X-CSRF-Token`
 
 ## Security Boundaries
 
@@ -439,32 +660,22 @@ Hardened in the current codebase:
 - **Attachment size limits**: Telegram file downloads are validated against a
   size limit before the download starts.
 
-## Registry UI Rendering
+## Registry SPA Architecture
 
-Current UI rendering behavior reflected in code and tests:
+The operator UI is a **vanilla** SPA under `ui/` (see **Operator SPA** under
+HTTP Surfaces). Implementation notes:
 
-- one shell renders seven operator surfaces:
-  - bot directory
-  - conversation list
-  - shared detail panel for bot/task/conversation views
-  - routed-task board
-  - runtime-skills manager
-  - provider-guidance manager
-  - capabilities manager
-- routed-task statuses such as degraded or timed-out are humanized before
-  display
-- badge classes are mapped from normalized event/status kinds
-- malformed timestamps fall back to `(invalid date)`
-- diagnostic levels are normalized to supported CSS classes
-- search snippets are HTML-escaped through one helper before `<b>` tags are
-  reintroduced
-
-Accepted limitation:
-
-- the repo has strong source-level UI shell tests
-- browser screenshot regeneration for docs is an explicit script
-  (`scripts/generate_registry_docs_assets.py`), not part of the normal
-  automated suite
+- Each **view** is a plain function that renders into a container and may return
+  a **cleanup** for subscriptions
+- **Responsive** layout: mobile drawer sidebar, tablet collapsed icons, desktop
+  full sidebar; content max-width ~1200px
+- **List APIs** use offset-style **cursors** (`cursor` + `limit`); the UI keeps
+  a stack for "Previous"
+- **Registry UI screenshots** for docs: Playwright harness under
+  `docs/registry-ui-screenshots/`, then `annotate.py` — see
+  `docs/registry-guide.md` § *Regenerating UI screenshots*
+- `scripts/generate_registry_docs_assets.py` supports **static** asset checks;
+  it is not the Playwright capture pipeline
 
 ## Testing And Guardrails
 
@@ -502,3 +713,15 @@ Current codebase themes reinforced by tests:
 9. SQLite and Postgres behavior must stay aligned through contract tests.
 10. Invalid or unqualified registry inputs fail fast instead of selecting a
     default registry implicitly.
+11. `registry_sdk/` defines the event and conversation contract. All events
+    persisted in the `events` table use SDK kinds from `EVENT_METADATA_SCHEMAS`.
+    Delivery kinds in the `deliveries` table are a separate vocabulary.
+12. All event publication flows through `ExecutionEventSink`, never through
+    direct registry client calls or standalone publish helpers.
+13. `actor_key` is the single identity vocabulary across all channels and
+    workflows. No code uses `actor_user_id`, `request_user_id`, or bare
+    integer user IDs at seam boundaries.
+14. `registry_agent_ids` on `BotConfig` is the single source of truth for
+    per-registry agent identity. No fallback guessing across registries.
+15. Conversation-level operations (reset, project binding, file policy) require
+    an explicit `conversation_key`.

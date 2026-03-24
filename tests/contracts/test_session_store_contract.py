@@ -17,7 +17,7 @@ from app.storage import (
 )
 
 
-def _provider_state_factory():
+def _provider_state_factory(conversation_key: str):
     return {}
 
 
@@ -57,7 +57,7 @@ def test_session_exists_false_when_empty(backend_and_data_dir):
 
 def test_session_exists_true_after_save(backend_and_data_dir):
     backend, data_dir = backend_and_data_dir
-    session = default_session("claude", _provider_state_factory(), "on")
+    session = default_session("claude", _provider_state_factory("tg:test"), "on")
     save_session(data_dir, telegram_conversation_key(999), session)
     assert session_exists(data_dir, telegram_conversation_key(999)) is True
     assert session_exists(data_dir, telegram_conversation_key(998)) is False
@@ -81,7 +81,7 @@ def test_load_session_returns_default_when_missing(backend_and_data_dir):
 def test_save_load_roundtrip(backend_and_data_dir):
     backend, data_dir = backend_and_data_dir
     session = default_session(
-        "claude", _provider_state_factory(), "on", "Engineer", ("debugging",)
+        "claude", _provider_state_factory("tg:test"), "on", "Engineer", ("debugging",)
     )
     session["active_skills"] = ["debugging", "testing"]
     session["project_id"] = "myproj"
@@ -101,7 +101,7 @@ def test_load_merge_provider_state_factory_defaults(backend_and_data_dir):
     save_session(data_dir, telegram_conversation_key(666), session)
     loaded = load_session(
         data_dir, telegram_conversation_key(666), "claude",
-        lambda: {"session_id": "default", "new_key": "default_val"},
+        lambda _ck="": {"session_id": "default", "new_key": "default_val"},
         "on",
     )
     assert loaded["provider_state"]["session_id"] == "s1"
@@ -112,7 +112,7 @@ def test_load_merge_provider_state_factory_defaults(backend_and_data_dir):
 
 def test_delete_session_removes_session(backend_and_data_dir):
     backend, data_dir = backend_and_data_dir
-    session = default_session("claude", _provider_state_factory(), "off")
+    session = default_session("claude", _provider_state_factory("tg:test"), "off")
     save_session(data_dir, telegram_conversation_key(555), session)
     assert session_exists(data_dir, telegram_conversation_key(555)) is True
     delete_session(data_dir, telegram_conversation_key(555))
@@ -139,11 +139,11 @@ def test_list_sessions_after_saves(backend_and_data_dir):
     backend, data_dir = backend_and_data_dir
     save_session(
         data_dir, telegram_conversation_key(111),
-        default_session("claude", _provider_state_factory(), "on"),
+        default_session("claude", _provider_state_factory("tg:test"), "on"),
     )
     save_session(
         data_dir, telegram_conversation_key(222),
-        default_session("codex", _provider_state_factory(), "off"),
+        default_session("codex", _provider_state_factory("tg:test"), "off"),
     )
     listed = list_sessions(data_dir)
     assert len(listed) == 2
@@ -161,7 +161,7 @@ def test_list_sessions_ordering_by_updated_at(backend_and_data_dir):
     for chat_id in (1, 2, 3):
         save_session(
             data_dir, telegram_conversation_key(chat_id),
-            default_session("claude", _provider_state_factory(), "off"),
+            default_session("claude", _provider_state_factory("tg:test"), "off"),
         )
     listed = list_sessions(data_dir)
     assert len(listed) == 3

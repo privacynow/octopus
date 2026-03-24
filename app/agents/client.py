@@ -2,53 +2,50 @@
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
 import httpx
 
-from app.registry_errors import RegistryErrorCode
 from app.agents.types import (
     AgentCard,
     AgentDiscoveryQuery,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    TimelineEvent,
     to_wire,
 )
-
-log = logging.getLogger(__name__)
-
-
-class RegistryClientError(RuntimeError):
-    """Registry request failed or returned an unexpected response."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: RegistryErrorCode = "registry_request_failed",
-        operator_detail: str = "",
-        status_code: int | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.operator_detail = operator_detail or message
-        self.status_code = status_code
+from registry_sdk.agents import AgentCard as SdkAgentCard
+from registry_sdk.client import RegistryClient as SdkRegistryClient
+from registry_sdk.client import RegistryClientError
+from registry_sdk.discovery import AgentDiscoveryQuery as SdkAgentDiscoveryQuery
+from registry_sdk.tasks import RoutedTaskRequest as SdkRoutedTaskRequest
+from registry_sdk.tasks import RoutedTaskResult as SdkRoutedTaskResult
+from registry_sdk.tasks import RoutedTaskUpdate as SdkRoutedTaskUpdate
 
 
-def _registry_http_error_code(status_code: int) -> RegistryErrorCode:
-    if status_code in {401, 403}:
-        return "registry_auth_failed"
-    if status_code in {408, 504}:
-        return "registry_timeout"
-    if status_code >= 500:
-        return "registry_server_error"
-    return "registry_request_failed"
+def _sdk_agent_card(card: AgentCard) -> SdkAgentCard:
+    return SdkAgentCard.model_validate(to_wire(card))
 
 
-class AgentRegistryClient:
+def _sdk_discovery_query(query: AgentDiscoveryQuery) -> SdkAgentDiscoveryQuery:
+    return SdkAgentDiscoveryQuery.model_validate(to_wire(query))
+
+
+def _sdk_routed_task_request(request: RoutedTaskRequest) -> SdkRoutedTaskRequest:
+    return SdkRoutedTaskRequest.model_validate(to_wire(request))
+
+
+def _sdk_routed_task_update(update: RoutedTaskUpdate) -> SdkRoutedTaskUpdate:
+    payload = dict(to_wire(update))
+    payload.pop("routed_task_id", None)
+    return SdkRoutedTaskUpdate.model_validate(payload)
+
+
+def _sdk_routed_task_result(result: RoutedTaskResult) -> SdkRoutedTaskResult:
+    payload = dict(to_wire(result))
+    payload.pop("routed_task_id", None)
+    return SdkRoutedTaskResult.model_validate(payload)
+
+
+class AgentRegistryClient(SdkRegistryClient):
     def __init__(
         self,
         base_url: str,
@@ -57,86 +54,15 @@ class AgentRegistryClient:
         timeout_seconds: float = 10.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.agent_token = agent_token
-        self.timeout_seconds = timeout_seconds
-        self._client = client
-
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        json_data: dict[str, Any] | None = None,
-        params: dict[str, Any] | None = None,
-        require_auth: bool = True,
-    ) -> Any:
-        headers: dict[str, str] = {}
-        if require_auth:
-            if not self.agent_token:
-                raise RegistryClientError(
-                    "Missing agent token for authenticated registry call",
-                    error_code="registry_auth_failed",
-                    operator_detail="Authenticated registry call attempted without an agent token.",
-                )
-            headers["Authorization"] = f"Bearer {self.agent_token}"
-
-        async def _do(client: httpx.AsyncClient) -> Any:
-            try:
-                response = await client.request(
-                    method,
-                    f"{self.base_url}{path}",
-                    json=json_data,
-                    params=params,
-                    headers=headers,
-                )
-            except httpx.TimeoutException as exc:
-                raise RegistryClientError(
-                    f"Registry {method} {path} timed out",
-                    error_code="registry_timeout",
-                    operator_detail=f"Registry {method} {path} timed out ({exc.__class__.__name__}).",
-                ) from exc
-            except httpx.RequestError as exc:
-                raise RegistryClientError(
-                    f"Registry {method} {path} failed",
-                    error_code="registry_unreachable",
-                    operator_detail=(
-                        f"Registry {method} {path} failed with {exc.__class__.__name__}."
-                    ),
-                ) from exc
-            if response.status_code >= 400:
-                error_code = _registry_http_error_code(response.status_code)
-                log.debug(
-                    "Registry %s %s failed with HTTP %s (body omitted from exception path)",
-                    method,
-                    path,
-                    response.status_code,
-                )
-                raise RegistryClientError(
-                    f"Registry {method} {path} failed: HTTP {response.status_code}",
-                    error_code=error_code,
-                    operator_detail=f"Registry {method} {path} failed with HTTP {response.status_code}.",
-                    status_code=response.status_code,
-                )
-            if response.headers.get("content-type", "").startswith("application/json"):
-                return response.json()
-            return response.text
-
-        if self._client is not None:
-            return await _do(self._client)
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            return await _do(client)
-
-    async def enroll(self, card: AgentCard, enrollment_token: str) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/enroll",
-            json_data={
-                "enrollment_token": enrollment_token,
-                "agent_card": to_wire(card),
-            },
-            require_auth=False,
+        super().__init__(
+            base_url,
+            agent_token=agent_token,
+            timeout_seconds=timeout_seconds,
+            client=client,
         )
+
+    async def enroll(self, card: AgentCard, enrollment_token: str) -> dict[str, object]:
+        return await super().enroll(enrollment_token, _sdk_agent_card(card))
 
     async def register(
         self,
@@ -145,16 +71,12 @@ class AgentRegistryClient:
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-    ) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/register",
-            json_data={
-                "agent_card": to_wire(card),
-                "connectivity_state": connectivity_state,
-                "current_capacity": current_capacity,
-                "max_capacity": max_capacity,
-            },
+    ) -> dict[str, object]:
+        return await super().register(
+            _sdk_agent_card(card),
+            connectivity_state=connectivity_state,
+            current_capacity=current_capacity,
+            max_capacity=max_capacity,
         )
 
     async def heartbeat(
@@ -163,113 +85,37 @@ class AgentRegistryClient:
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        active_work_count: int = 0,
-        timeline_checkpoint: str = "",
-        runtime_health: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        payload = {
-            "connectivity_state": connectivity_state,
-            "current_capacity": current_capacity,
-            "max_capacity": max_capacity,
-            "active_work_count": active_work_count,
-            "timeline_checkpoint": timeline_checkpoint,
-        }
-        if runtime_health:
-            payload["runtime_health"] = runtime_health
-        return await self._request(
-            "POST",
-            "/v1/agents/heartbeat",
-            json_data=payload,
+        runtime_health: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        return await super().heartbeat(
+            connectivity_state=connectivity_state,
+            current_capacity=current_capacity,
+            max_capacity=max_capacity,
+            runtime_health=runtime_health,
         )
 
-    async def publish_timeline(self, events: list[TimelineEvent], *, checkpoint: str = "") -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/timeline",
-            json_data={
-                "events": [to_wire(event) for event in events],
-                "checkpoint": checkpoint,
-            },
-        )
+    async def search(self, query: AgentDiscoveryQuery) -> list[dict[str, object]]:
+        return await super().search(_sdk_discovery_query(query))
 
-    async def sync_binding(
+    async def submit_routed_task(self, request: RoutedTaskRequest) -> dict[str, object]:
+        return await super().submit_routed_task(_sdk_routed_task_request(request))
+
+    async def routed_task_status(
         self,
-        *,
-        conversation_id: str,
-        title: str,
-        origin_channel: str,
-        external_id: str,
-    ) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/conversations/bind",
-            json_data={
-                "conversation_id": conversation_id,
-                "title": title,
-                "origin_channel": origin_channel,
-                "external_id": external_id,
-            },
+        routed_task_id: str,
+        update: RoutedTaskUpdate,
+    ) -> dict[str, object]:
+        return await super().routed_task_status(
+            routed_task_id,
+            _sdk_routed_task_update(update),
         )
 
-    async def search(self, query: AgentDiscoveryQuery) -> list[dict[str, Any]]:
-        result = await self._request(
-            "POST",
-            "/v1/agents/discovery/search",
-            json_data=to_wire(query),
-        )
-        return list(result.get("agents", []))
-
-    async def submit_routed_task(self, request: RoutedTaskRequest) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/routed-tasks",
-            json_data=to_wire(request),
-        )
-
-    async def poll(
+    async def routed_task_result(
         self,
-        *,
-        cursor: str = "0",
-        limit: int = 20,
-        wait_seconds: int = 1,
-        kind_filter: tuple[str, ...] | None = None,
-    ) -> dict[str, Any]:
-        params = {
-            "cursor": cursor,
-            "limit": limit,
-            "wait_seconds": wait_seconds,
-        }
-        if kind_filter is not None:
-            params["kind_filter"] = list(kind_filter)
-        return await self._request(
-            "GET",
-            "/v1/agents/poll",
-            params=params,
+        routed_task_id: str,
+        result: RoutedTaskResult,
+    ) -> dict[str, object]:
+        return await super().routed_task_result(
+            routed_task_id,
+            _sdk_routed_task_result(result),
         )
-
-    async def ack(self, delivery_ids: list[str], *, classification: str) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            "/v1/agents/ack",
-            json_data={
-                "delivery_ids": delivery_ids,
-                "classification": classification,
-            },
-        )
-
-    async def routed_task_status(self, routed_task_id: str, update: RoutedTaskUpdate) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            f"/v1/agents/routed-tasks/{routed_task_id}/status",
-            json_data=to_wire(update),
-        )
-
-    async def routed_task_result(self, routed_task_id: str, result: RoutedTaskResult) -> dict[str, Any]:
-        return await self._request(
-            "POST",
-            f"/v1/agents/routed-tasks/{routed_task_id}/result",
-            json_data=to_wire(result),
-        )
-
-    async def deregister(self) -> dict[str, Any]:
-        return await self._request("POST", "/v1/agents/deregister", json_data={})

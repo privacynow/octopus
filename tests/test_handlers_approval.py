@@ -208,9 +208,9 @@ async def test_retry_skip():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "somehash",
@@ -277,7 +277,7 @@ async def test_retry_allow_no_pending():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         assert session.get("pending_retry") is None
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -303,9 +303,9 @@ async def test_stale_context_hash():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        session = default_session("claude", prov.new_provider_state(), "off")
+        session = default_session("claude", prov.new_provider_state("tg:test"), "off")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "definitely_stale_hash",
@@ -359,7 +359,7 @@ async def test_cross_user_approval():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_approval")
         assert pending is not None
-        assert pending["request_user_id"] == "tg:100"
+        assert pending["actor_key"] == "tg:100"
         callback_token = pending["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
@@ -452,7 +452,7 @@ async def test_duplicate_pending_blocked():
         assert (session.get("pending_approval") or session.get("pending_retry")) is not None
 
 
-async def test_denial_preserves_request_user_id():
+async def test_denial_preserves_actor_key():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="off")
         prov = FakeProvider("claude")
@@ -477,7 +477,7 @@ async def test_denial_preserves_request_user_id():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_retry")
         assert pending is not None
-        assert pending["request_user_id"] == "tg:100"
+        assert pending["actor_key"] == "tg:100"
         assert len(pending.get("denials", [])) > 0
 
 
@@ -492,9 +492,9 @@ async def test_cancel_pending():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["pending_approval"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "attachment_dicts": [],
@@ -527,7 +527,7 @@ async def test_cancel_nothing_to_cancel():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         assert not session.get("pending_approval") and not session.get("pending_retry")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -550,7 +550,7 @@ async def test_approve_no_pending_shows_canonical_message():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -571,7 +571,7 @@ async def test_reject_no_pending_shows_canonical_message():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -592,7 +592,7 @@ async def test_approve_callback_no_pending_shows_canonical_message():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -614,7 +614,7 @@ async def test_reject_callback_no_pending_shows_canonical_message():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
@@ -636,9 +636,9 @@ async def test_stale_pending_ttl():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_approval"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "old request",
             "image_paths": [],
             "attachment_dicts": [],

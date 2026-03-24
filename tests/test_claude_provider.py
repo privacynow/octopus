@@ -16,7 +16,7 @@ from tests.support.handler_support import FakeProgress
 
 def test_new_provider_state():
     p = ClaudeProvider(make_config())
-    state = p.new_provider_state()
+    state = p.new_provider_state("tg:test")
     assert bool(state.get("session_id"))
     assert state["started"] is False
 
@@ -221,7 +221,7 @@ async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
                 "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]}
             }
         }
-        return "", {"result": "ok"}, 0, ""
+        return "", {"result": "ok"}, 0, "", []
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(
@@ -260,7 +260,7 @@ async def test_mcp_temp_file_is_removed_after_timeout_result():
         path = cmd[idx + 1]
         seen["path"] = path
         assert os.path.exists(path)
-        return "", {}, -1, ""
+        return "", {}, -1, "", []
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(
@@ -353,7 +353,7 @@ def test_claude_preflight_hardening():
 def test_claude_error_state():
     """RunResult distinguishes success (started=True) from error (empty updates)."""
     p = ClaudeProvider(make_config(provider_name="claude"))
-    fresh = p.new_provider_state()
+    fresh = p.new_provider_state("tg:test")
     assert fresh["started"] is False
 
     success_result = RunResult(text="ok", provider_state_updates={"started": True})

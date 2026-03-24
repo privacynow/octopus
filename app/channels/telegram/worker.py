@@ -25,6 +25,7 @@ from app.channels.telegram.execution import (
 from app.channels.telegram.pending import handle_worker_pending_action
 from app.channels.telegram.runtime_skills import handle_worker_skill_action
 from app.channels.telegram.session_io import (
+    actor_key as _actor_key,
     conversation_key,
     load as load_session,
     save as save_session,
@@ -63,6 +64,17 @@ def _routed_task_requires_interactive_failure() -> RequestExecutionOutcome:
 
 async def _noop_async(*args: Any, **kwargs: Any) -> None:
     del args, kwargs
+
+
+def _item_conversation_key(item: dict[str, Any]) -> str:
+    conversation_key_value = str(item.get("conversation_key", "")).strip()
+    if not conversation_key_value:
+        raise RuntimeError(f"worker item missing conversation_key: {item.get('id')}")
+    return conversation_key_value
+
+
+def _normalized_event_text(text: str | None) -> str:
+    return "" if text is None else text
 
 
 def _channel_dispatcher(runtime: TelegramRuntime):
@@ -168,7 +180,7 @@ def _build_action_channel_egress(
     *,
     item: dict[str, Any],
 ):
-    action_conversation_key = str(item.get("conversation_key") or event.conversation_key)
+    action_conversation_key = _item_conversation_key(item)
     return _build_channel_egress(
         runtime,
         conversation_key=action_conversation_key,
@@ -196,9 +208,12 @@ def _build_channel_egress(
     dispatcher = _channel_dispatcher(runtime)
     chat_id = telegram_numeric_id(conversation_key)
     runtime_chat = chat_id if chat_id is not None else conversation_key
-    resolved_conversation_ref = conversation_ref or (
-        telegram_conversation_ref(runtime.config, chat_id) if chat_id is not None else conversation_key
-    )
+    resolved_conversation_ref = conversation_ref
+    if not resolved_conversation_ref:
+        if chat_id is not None:
+            resolved_conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
+        else:
+            resolved_conversation_ref = conversation_key
     channel_egress = dispatcher.create_egress(
         resolved_conversation_ref,
         config=runtime.config,
@@ -212,28 +227,6 @@ def _build_channel_egress(
     )
     setattr(channel_egress, "_worker_item_id", item_id)
     return channel_egress, runtime_chat, chat_id, resolved_conversation_ref, source
-
-
-async def _publish_timeline_event_for_runtime(
-    runtime: TelegramRuntime,
-    *,
-    config,
-    **kwargs: Any,
-) -> None:
-    del config
-    conversation_ref = str(kwargs.get("conversation_ref", ""))
-    if not conversation_ref:
-        return
-    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
-        conversation_ref=conversation_ref,
-        kind=str(kwargs.get("kind", "")),
-        title=str(kwargs.get("title", "")),
-        body=str(kwargs.get("body", "")),
-        status=str(kwargs.get("status", "")),
-        progress=kwargs.get("progress"),
-        metadata=kwargs.get("metadata"),
-        event_id=kwargs.get("event_id"),
-    )
 
 
 async def _execute_worker_action(
@@ -284,30 +277,48 @@ async def _execute_worker_action(
     ):
         return
 
+    action_conversation_key = _item_conversation_key(item)
+
     if action == "delegation_approve":
-        target = params.get("target_conversation_key") or runtime_chat
-        target_runtime = target
-        if isinstance(target, str):
-            numeric = telegram_numeric_id(target)
-            if numeric is not None:
-                target_runtime = numeric
+        from app.workflows.execution.event_sink import build_event_sink_for_context
+        from app.workflows.execution.contracts import TransportIdentity
+        from app.agents.registry_capabilities import registry_id_from_authority_ref
+        target_key = action_conversation_key
+        if params.get("target_conversation_key"):
+            target_key = str(params["target_conversation_key"])
+        authority = str(item.get("authority_ref", ""))
+        if not authority:
+            authority = getattr(event, "authority_ref", "")
+        try:
+            reg_id = registry_id_from_authority_ref(authority) if authority else ""
+        except ValueError:
+            reg_id = ""
+        transport = TransportIdentity(
+            conversation_key=target_key,
+            origin_channel=source,
+            external_conversation_ref=conversation_ref,
+            target_agent_id=runtime.config.agent_id_for_registry(reg_id),
+        )
+        sink = build_event_sink_for_context(
+            transport,
+            runtime.services.control_plane.conversation_projection,
+            runtime.config,
+        )
         await handle_channel_delegation_approve(
-            target_runtime,
+            target_key,
             conversation_ref,
             channel_egress,
             runtime=build_delegation_channel_runtime(runtime),
+            event_sink=sink,
         )
         return
 
     if action == "delegation_cancel":
-        target = params.get("target_conversation_key") or runtime_chat
-        target_runtime = target
-        if isinstance(target, str):
-            numeric = telegram_numeric_id(target)
-            if numeric is not None:
-                target_runtime = numeric
+        target_key = action_conversation_key
+        if params.get("target_conversation_key"):
+            target_key = str(params["target_conversation_key"])
         await handle_channel_delegation_cancel(
-            target_runtime,
+            target_key,
             conversation_ref,
             channel_egress,
             runtime=build_delegation_channel_runtime(runtime),
@@ -357,18 +368,21 @@ async def worker_dispatch(
 
     if isinstance(event, InboundMessage):
         source = getattr(event, "source", "telegram")
-        message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
+        message_conversation_key = _item_conversation_key(item)
         routed_task_id = getattr(event, "routed_task_id", "")
         authority_ref = getattr(event, "authority_ref", "")
         is_routed_task = bool(routed_task_id)
-        title = summarize_text(event.text) or "Conversation"
+        title = summarize_text(event.text)
+        if not title:
+            title = "Conversation"
         dispatcher = _channel_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
-        admission_conversation_ref = event.conversation_ref or (
-            telegram_conversation_ref(runtime.config, message_chat_id)
-            if message_chat_id is not None
-            else message_conversation_key
-        )
+        admission_conversation_ref = event.conversation_ref
+        if not admission_conversation_ref:
+            if message_chat_id is not None:
+                admission_conversation_ref = telegram_conversation_ref(runtime.config, message_chat_id)
+            else:
+                admission_conversation_ref = message_conversation_key
         channel_egress, runtime_chat, chat_id, conversation_ref, source = _build_channel_egress(
             runtime,
             conversation_key=message_conversation_key,
@@ -391,11 +405,13 @@ async def worker_dispatch(
             return
 
         if item.get("dispatch_mode") == "recovery":
-            update_id = telegram_numeric_id(str(item.get("event_id") or "")) or 0
+            raw_event_id = str(item.get("event_id", ""))
+            numeric_event_id = telegram_numeric_id(raw_event_id)
+            update_id = 0 if numeric_event_id is None else numeric_event_id
             recovery_outcome = await get_recovery_use_cases().dispatch_worker_recovery(
                 data_dir=data_dir,
                 item_id=item["id"],
-                original_text=event.text or "",
+                original_text=_normalized_event_text(event.text),
                 update_id=update_id,
                 bind_egress=(
                     (lambda: channel_egress.bind(title=title, config=runtime.config))
@@ -423,7 +439,7 @@ async def worker_dispatch(
             )
 
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-        user_id = event.user.id
+        user_id = _actor_key(event.user.id)
         if not is_routed_task:
             await channel_egress.bind(title=title, config=runtime.config)
             await channel_egress.on_message_received(event.text)
@@ -438,12 +454,17 @@ async def worker_dispatch(
                 if expiration.expired:
                     session.pending_delegation = expiration.pending
                     save_session(runtime, runtime_chat, session)
-                approval_mode = load_approval_mode(runtime_chat, runtime=execution_runtime)
+                approval_mode = load_approval_mode(message_conversation_key, runtime=execution_runtime)
 
                 async def _run_message(cancel_event: asyncio.Event | None):
                     nonlocal outcome
-                    outcome = await dispatch_message_request(
+                    transport = execution_runtime.build_transport_identity(
+                        channel_egress,
                         runtime_chat,
+                        actor_key=user_id,
+                    )
+                    outcome = await dispatch_message_request(
+                        transport,
                         prompt,
                         image_paths,
                         list(event.attachments),
@@ -451,7 +472,6 @@ async def worker_dispatch(
                         approval_mode=approval_mode,
                         routed_task_id=routed_task_id,
                         skip_approval=getattr(event, "skip_approval", False),
-                        request_user_id=user_id,
                         trust_tier=admission.trust_tier,
                         cancel_event=cancel_event,
                         runtime=execution_runtime,
@@ -473,7 +493,7 @@ async def worker_dispatch(
                 conversation_key=message_conversation_key,
                 runtime_chat=runtime_chat,
                 conversation_ref=conversation_ref,
-                chat_id=chat_id or 0,
+                chat_id=0 if chat_id is None else chat_id,
                 routed_task_id=routed_task_id,
                 authority_ref=authority_ref,
                 skip_approval=getattr(event, "skip_approval", False),
@@ -482,11 +502,6 @@ async def worker_dispatch(
                 save_session=lambda target_chat, session: save_session(runtime, target_chat, session),
                 task_routing=runtime.services.control_plane.task_routing,
                 record_usage=work_queue.record_usage,
-                publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
-                    runtime,
-                    config=config,
-                    **kwargs,
-                ),
             ),
         )
         return

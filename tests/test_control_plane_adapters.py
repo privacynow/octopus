@@ -8,7 +8,6 @@ from app.agents.types import (
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    TimelineEvent,
 )
 from app.control_plane.adapters import (
     BusAgentDirectory,
@@ -52,30 +51,6 @@ def _directory() -> ControlPlaneDirectory:
     directory.register(capability="agent_directory", authority_ref="registry:beta")
     directory.register(capability="health_publication", authority_ref="registry:alpha")
     return directory
-
-
-async def test_conversation_projection_expands_to_targeted_commands() -> None:
-    bus = _FakeBus()
-    adapter = BusConversationProjection(bus, _directory())
-
-    await adapter.bind_external_conversation(
-        conversation_ref="telegram:bot:1",
-        title="Ops",
-        origin_channel="telegram",
-        external_id="123",
-    )
-    await adapter.publish_external_timeline(
-        conversation_ref="telegram:bot:1",
-        kind="progress",
-        title="Running",
-        event_id="evt-1",
-    )
-
-    assert len(bus.submitted) == 4
-    assert {cmd.authority_ref for cmd in bus.submitted[:2]} == {"registry:alpha", "registry:beta"}
-    assert bus.submitted[2].idempotency_key == "evt-1"
-    payload = json.loads(bus.submitted[2].payload_json)
-    assert payload["conversation_ref"] == "telegram:bot:1"
 
 
 async def test_task_routing_submit_sets_idempotency_and_parses_reply() -> None:
@@ -131,13 +106,14 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
             status="running",
             summary="halfway",
             timeline_events=(
-                TimelineEvent(
-                    event_id="evt-1",
-                    conversation_id="parent-1",
-                    kind="progress",
-                    title="Halfway",
-                    progress=50,
-                ),
+                {
+                    "event_id": "evt-1",
+                    "conversation_id": "parent-1",
+                    "kind": "progress",
+                    "title": "Halfway",
+                    "progress": 50,
+                    "created_at": "2026-03-20T00:00:00+00:00",
+                },
             ),
             progress=50,
             updated_at="2026-03-20T00:00:00+00:00",

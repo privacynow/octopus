@@ -497,7 +497,7 @@ async def test_doctor_reports_prompt_weight():
     import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["role"] = "You are a senior Python engineer specializing in async systems."
         save_session(data_dir, telegram_conversation_key(1), session)
 
@@ -516,10 +516,10 @@ async def test_doctor_prompt_weight_uses_resolved_context():
 
     with fresh_env(config_overrides={
         "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
         "public_working_dir": "/tmp/pub",
     }) as (data_dir, cfg, prov):
-        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
         session["role"] = "You are a senior engineer."
         session["active_skills"] = ["nonexistent-skill"]
         save_session(data_dir, telegram_conversation_key(2001), session)
@@ -551,7 +551,7 @@ async def test_cmd_new_sends_message_feedback_when_chat_locked():
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
-        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        user = FakeUser(42)
 
         lock = current_runtime().chat_locks[1]
         await lock.acquire()
@@ -576,7 +576,7 @@ async def test_cmd_new_has_no_busy_feedback_when_lock_free():
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
-        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        user = FakeUser(42)
         msg = await send_command(th.cmd_new, chat, user, "/new")
 
         all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
@@ -602,12 +602,12 @@ async def test_contended_approval_callback_single_answer():
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
-        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        user = FakeUser(42)
         session = telegram_load_session(current_runtime(), chat_id)
         from app.session_state import PendingApproval
         ctx_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
-            request_user_id=_actor(user.id), prompt="test", image_paths=[],
+            actor_key=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )
@@ -645,7 +645,7 @@ async def test_contended_settings_callback_single_answer():
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
-        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        user = FakeUser(42)
         session = telegram_load_session(current_runtime(), chat_id)
         telegram_save_session(current_runtime(), chat_id, session)
 
@@ -678,7 +678,7 @@ async def test_contended_clear_cred_callback_single_answer():
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
-        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        user = FakeUser(42)
         session = telegram_load_session(current_runtime(), chat_id)
         telegram_save_session(current_runtime(), chat_id, session)
 
@@ -786,7 +786,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     from app.work_queue import PendingRecovery, record_and_enqueue
 
     with fresh_env(config_overrides={
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
     }) as (data_dir, cfg, prov):
         # Create a real claimed work item in the DB (must set claimed_at for CHECK and validator).
         _, item_id = record_and_enqueue(data_dir, telegram_event_id(9999), telegram_conversation_key(12345), telegram_actor_key(42), "message")
@@ -1765,7 +1765,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
     from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
-        "allowed_user_ids": frozenset({99}),  # user 42 is not allowed
+        "allowed_actor_keys": frozenset({"tg:99"}),  # user 42 is not allowed
         "allow_open": False,
     }) as (data_dir, cfg, prov):
         bot = _FakeBot()
@@ -1808,7 +1808,7 @@ async def test_worker_dispatch_command_still_notifies():
     from app.runtime.inbound_types import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
-        "allowed_user_ids": frozenset({42}),
+        "allowed_actor_keys": frozenset({"tg:42"}),
     }) as (data_dir, cfg, prov):
         bot = _FakeBot()
         set_bot_instance(bot)
@@ -2144,9 +2144,9 @@ async def test_claude_timeout_during_resume_sets_resume_failed():
     provider = _make_claude_provider()
     state = {"session_id": "dead-session-id", "started": True}
 
-    # _run_process returns ("", {}, -1, "") on timeout
+    # _run_process returns ("", {}, -1, "", []) on timeout
     with patch.object(provider, "_run_process", new_callable=AsyncMock,
-                      return_value=("", {}, -1, "")):
+                      return_value=("", {}, -1, "", [])):
         result = await provider.run(state, "test prompt", [], FakeProgress())
 
     assert result.timed_out is True
@@ -2165,7 +2165,7 @@ async def test_claude_timeout_during_fresh_session_no_resume_failed():
     state = {"session_id": "new-session-id", "started": False}
 
     with patch.object(provider, "_run_process", new_callable=AsyncMock,
-                      return_value=("", {}, -1, "")):
+                      return_value=("", {}, -1, "", [])):
         result = await provider.run(state, "test prompt", [], FakeProgress())
 
     assert result.timed_out is True

@@ -1,0 +1,37 @@
+{
+  "rects": [
+    {
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 872,
+      "label": "Primary navigation",
+      "color": "#ff9800"
+    },
+    {
+      "x": 272,
+      "y": 156.140625,
+      "width": 1064,
+      "height": 221.8125,
+      "label": "Start with the next decision, not the raw telemetry",
+      "color": "#2196f3"
+    },
+    {
+      "x": 272,
+      "y": 397.953125,
+      "width": 1064,
+      "height": 259.09375,
+      "label": "Action-first panels for approvals, health, and failed work",
+      "color": "#4caf50"
+    },
+    {
+      "x": 272,
+      "y": 1012.265625,
+      "width": 1064,
+      "height": 590.53125,
+      "label": "Preview lists for review work, conversations, and failures",
+      "color": "#9c27b0"
+    }
+  ],
+  "arrows": []
+}

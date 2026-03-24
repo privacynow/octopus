@@ -118,7 +118,7 @@ class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
     scope_key: str = Field(default="", description="Guidance scope key")
 
 
-from app.identity import normalize_conversation_id as _normalize_conversation_id
+from app.identity import normalize_conversation_id
 
 
 def _int_value(value: Any) -> int:
@@ -158,28 +158,6 @@ app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifesp
 configure_session_middleware(app)
 
 
-@app.middleware("http")
-async def normalize_conversation_id_middleware(request: Request, call_next):
-    """Strip registry ref prefixes from conversation_id in URL paths.
-
-    The SPA may navigate to /v1/conversations/registry:local:conversation:<cid>
-    (the full ref). The store expects bare <cid>. This middleware rewrites the
-    path so every endpoint receives the normalized ID without duplication.
-    """
-    path = request.scope.get("path", "")
-    prefix = "/v1/conversations/"
-    if path.startswith(prefix):
-        rest = path[len(prefix):]
-        # rest could be "<cid>/events" or just "<cid>"
-        slash_pos = rest.find("/")
-        if slash_pos == -1:
-            raw_id, suffix = rest, ""
-        else:
-            raw_id, suffix = rest[:slash_pos], rest[slash_pos:]
-        normalized = _normalize_conversation_id(raw_id)
-        if normalized != raw_id:
-            request.scope["path"] = prefix + normalized + suffix
-    return await call_next(request)
 
 # In-process WebSocket pub/sub manager (single-process only)
 _ws_manager = WebSocketManager()
@@ -510,6 +488,7 @@ def resource_get_conversation(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         conv = store.get_conversation(conversation_id)
     except KeyError as exc:
@@ -549,6 +528,7 @@ async def resource_publish_events(
     agent_token: str = Depends(require_agent_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     # Resolve agent from token
     agent_row = store.resolve_agent_for_token(agent_token)
     if agent_row is None:
@@ -589,6 +569,7 @@ def resource_list_events(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         conv = store.get_conversation(conversation_id)
     except KeyError as exc:
@@ -605,6 +586,7 @@ def resource_list_messages(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         conv = store.get_conversation(conversation_id)
     except KeyError as exc:
@@ -620,6 +602,7 @@ async def resource_add_message(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     text = payload.get("text", "").strip()
     try:
         result = store.add_conversation_message(conversation_id, text)
@@ -643,6 +626,7 @@ async def resource_add_action(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     action = payload.get("action", "").strip()
     try:
         result = store.add_conversation_action(
@@ -669,6 +653,7 @@ def resource_export_conversation(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> Response:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         conv = store.get_conversation(conversation_id)
     except KeyError as exc:
@@ -954,6 +939,7 @@ def api_conversation_skills(
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         return conversation_skill_state(store, conversation_id)
     except RegistryIngressError as exc:
@@ -968,6 +954,7 @@ def api_conversation_activate_skill(
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         return activate_conversation_skill(
             store,
@@ -988,6 +975,7 @@ def api_conversation_deactivate_skill(
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         return deactivate_conversation_skill(
             store,
@@ -1006,6 +994,7 @@ def api_conversation_clear_skills(
     store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
     try:
         return clear_conversation_skills(
             store,

@@ -274,6 +274,22 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
+            # Publish delegation.completed lifecycle event
+            from app.workflows.execution.event_sink import build_event_sink_for_context
+            from app.workflows.execution.contracts import TransportIdentity
+            transport = TransportIdentity(
+                conversation_key=conversation_key,
+                origin_channel="registry",
+                external_conversation_ref=parent_conversation_id,
+                target_agent_id=config.agent_id_for_registry(registry_id),
+            )
+            sink = build_event_sink_for_context(
+                transport,
+                runtime.services.control_plane.conversation_projection,
+                config,
+            )
+            tasks_summary = [{"title": t.title, "status": t.status} for t in (applied.pending.tasks or [])]
+            await sink.on_delegation_completed(tasks_summary)
         return "accepted"
 
     return "rejected"

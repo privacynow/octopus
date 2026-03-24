@@ -536,6 +536,8 @@ async def cmd_session(
     model_id = resolved.effective_model or cfg.model or "(default)"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_display = "on" if compact else "off"
+    # Note: excludes agent discovery context (requires async bus call, not available in /settings).
+    # Execution path includes agents via build_run_context; this is a best-effort UI estimate.
     prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
     prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
     session_cmds = ["/settings"]

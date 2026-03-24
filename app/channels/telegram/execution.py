@@ -30,7 +30,7 @@ from app.workflows.execution.contracts import (
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
 )
-from app.workflows.execution.context import build_execution_channel_context
+from app.workflows.execution.context import build_transport_identity_from_metadata
 from app.workflows.execution.requests import (
     check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
     execute_request as execution_execute_request,
@@ -366,7 +366,7 @@ def build_execution_runtime(
 
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
-        build_transport_identity=lambda message, chat_id, *, actor_key="": build_execution_channel_context(
+        build_transport_identity=lambda message, chat_id, *, actor_key="": build_transport_identity_from_metadata(
             execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
             build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
                 runtime.config,
@@ -399,13 +399,20 @@ def build_execution_runtime(
     )
 
 
-def build_delegation_channel_runtime(runtime: TelegramRuntime):
+def build_delegation_channel_runtime(runtime: TelegramRuntime, *, registry_id: str = ""):
+    # Resolve origin agent_id scoped to registry when available
+    effective_registry_id = registry_id
+    if not effective_registry_id and runtime.config.agent_registries:
+        effective_registry_id = runtime.config.agent_registries[0].registry_id
+    from app.agents.delegation import resolve_origin_agent_id
+    origin = resolve_origin_agent_id(runtime.config, effective_registry_id)
     return build_delegation_runtime(
         config=runtime.config,
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
         task_routing=runtime.services.control_plane.task_routing,
         agent_directory=runtime.services.control_plane.agent_directory,
+        origin_agent_id=origin,
     )
 
 

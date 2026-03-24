@@ -39,11 +39,35 @@ def test_validate_event_metadata_rejects_unknown_kind():
 def test_validate_event_metadata_accepts_all_sdk_kinds():
     # Provide valid metadata for kinds that have required fields
     required_metadata = {
+        "provider.request": {
+            "provider": "codex",
+            "model": "gpt-5.4",
+            "execution_mode": "run",
+            "working_dir": "/tmp/work",
+            "file_policy": "edit",
+            "image_count": 0,
+            "prompt_char_count": 42,
+        },
         "provider.response": {
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "cost_usd": 0.01,
             "provider": "codex",
+        },
+        "tool.execution": {
+            "tool_name": "exec_command",
+            "call_id": "tool-1",
+            "status": "completed",
+            "input_summary": "git status",
+            "output_summary": "ok",
+            "duration_ms": 12,
+            "file_changes": [],
+        },
+        "approval.requested": {
+            "request_kind": "preflight",
+            "actor_key": "telegram:123",
+            "trust_tier": "trusted",
+            "expires_at": "2026-03-23T00:05:00+00:00",
         },
         "approval.decided": {
             "action": "approve_pending",

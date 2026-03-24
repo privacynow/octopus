@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,14 @@ from app.progress import (
     ToolFinish, ToolStart, render as render_progress,
 )
 from app.progress import ProgressEvent
-from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
+from app.providers.base import (
+    FileChangeRecord,
+    PreflightContext,
+    ProgressSink,
+    RunContext,
+    RunResult,
+    ToolExecutionRecord,
+)
 from app.providers.codex_security import (
     validate_codex_sandbox,
     validated_codex_config_overrides,
@@ -25,6 +34,7 @@ from app.subprocess_env import build_subprocess_env
 log = logging.getLogger(__name__)
 
 _CODEX_ENV_KEYS = ("OPENAI_API_KEY", "CODEX_HOME")
+_PATCH_PATH_RE = re.compile(r"^\*\*\* (Update|Add|Delete) File: (.+)$", re.MULTILINE)
 
 
 class CodexProvider:
@@ -275,6 +285,80 @@ class CodexProvider:
         return ""
 
     @classmethod
+    def _parse_arguments_object(cls, arguments: Any) -> dict[str, Any]:
+        parsed = arguments
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return {}
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
+
+    @classmethod
+    def _tool_input_summary(cls, raw_name: str, arguments: Any) -> str:
+        command = cls._parse_command(arguments)
+        if command:
+            return trim_text(command, 300)
+        parsed = cls._parse_arguments_object(arguments)
+        if parsed:
+            try:
+                return trim_text(json.dumps(parsed, sort_keys=True), 300)
+            except TypeError:
+                pass
+        return raw_name or "tool call"
+
+    @classmethod
+    def _tool_file_changes(cls, raw_name: str, arguments: Any) -> tuple[FileChangeRecord, ...]:
+        parsed = cls._parse_arguments_object(arguments)
+        normalized = cls._normalize_type(raw_name)
+
+        def _path(*keys: str) -> str:
+            for key in keys:
+                value = parsed.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return ""
+
+        if normalized in {"write_file", "edit_file", "str_replace_editor", "replace_file"}:
+            path = _path("path", "file_path", "file")
+            if path:
+                return (FileChangeRecord(path=path, change_type="modified", summary="Updated file"),)
+        if normalized in {"create_file"}:
+            path = _path("path", "file_path", "file")
+            if path:
+                return (FileChangeRecord(path=path, change_type="created", summary="Created file"),)
+        if normalized in {"delete_file", "remove_file"}:
+            path = _path("path", "file_path", "file")
+            if path:
+                return (FileChangeRecord(path=path, change_type="deleted", summary="Deleted file"),)
+        if normalized in {"rename_file", "move_file"}:
+            src = _path("path", "src", "source_path", "old_path")
+            dst = _path("dest", "destination_path", "new_path", "target_path")
+            if src and dst:
+                return (FileChangeRecord(path=src, change_type="renamed", summary=f"Renamed to {dst}"),)
+        if normalized == "apply_patch":
+            patch_text = parsed.get("patch")
+            if isinstance(patch_text, str) and patch_text.strip():
+                changes: list[FileChangeRecord] = []
+                for change_type, path in _PATCH_PATH_RE.findall(patch_text):
+                    mapped = {
+                        "Update": "modified",
+                        "Add": "created",
+                        "Delete": "deleted",
+                    }.get(change_type, "modified")
+                    changes.append(
+                        FileChangeRecord(
+                            path=path.strip(),
+                            change_type=mapped,
+                            summary=f"{change_type.lower()} file via patch",
+                        )
+                    )
+                return tuple(changes)
+        return ()
+
+    @classmethod
     def _extract_assistant_text(cls, event: dict[str, Any]) -> tuple[str | None, str]:
         etype = cls._normalize_type(event.get("type"))
         item = event.get("item")
@@ -451,6 +535,9 @@ class CodexProvider:
         final_text = ""
         draft_text = ""
         tool_calls: dict[str, dict[str, str]] = {}
+        pending_tool_records: dict[str, dict[str, Any]] = {}
+        tool_records: list[ToolExecutionRecord] = []
+        tool_counter = 0
         usage_input = 0
         usage_output = 0
 
@@ -486,6 +573,48 @@ class CodexProvider:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
+                etype = self._normalize_type(event.get("type"))
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    ptype = self._normalize_type(payload.get("type"))
+                    if etype == "response_item" and ptype in {"function_call", "custom_tool_call"}:
+                        raw_name = str(payload.get("name") or "tool")
+                        call_id = str(payload.get("call_id") or f"tool-{tool_counter}")
+                        if not payload.get("call_id"):
+                            tool_counter += 1
+                        arguments = (
+                            payload.get("arguments")
+                            if ptype == "function_call"
+                            else payload.get("input")
+                        )
+                        pending_tool_records[call_id] = {
+                            "tool_name": raw_name,
+                            "call_id": call_id,
+                            "input_summary": self._tool_input_summary(raw_name, arguments),
+                            "file_changes": self._tool_file_changes(raw_name, arguments),
+                            "started_at": time.monotonic(),
+                        }
+                    elif etype == "response_item" and ptype == "function_call_output":
+                        call_id = str(payload.get("call_id") or "")
+                        pending = pending_tool_records.pop(call_id, None)
+                        if pending is not None:
+                            output = self._trimmed_text(payload.get("output")) or "completed"
+                            duration_ms: int | None = None
+                            started_at = pending.get("started_at")
+                            if isinstance(started_at, (int, float)):
+                                duration_ms = max(0, int((time.monotonic() - started_at) * 1000))
+                            tool_records.append(
+                                ToolExecutionRecord(
+                                    tool_name=str(pending["tool_name"]),
+                                    call_id=str(pending["call_id"]),
+                                    status="completed",
+                                    input_summary=str(pending["input_summary"]),
+                                    output_summary=trim_text(output, 300),
+                                    duration_ms=duration_ms,
+                                    file_changes=tuple(pending["file_changes"]),
+                                )
+                            )
 
                 msg = event.get("msg")
                 if isinstance(msg, dict) and msg.get("type") == "token_count":
@@ -557,7 +686,8 @@ class CodexProvider:
             if thread_id:
                 state_updates["thread_id"] = thread_id
             return RunResult(text=final_text or "", cancelled=True,
-                             provider_state_updates=state_updates)
+                             provider_state_updates=state_updates,
+                             tool_executions=tool_records)
 
         state_updates: dict[str, Any] = {}
         if thread_id:
@@ -571,6 +701,7 @@ class CodexProvider:
                 text=self._safe_failure_text(proc.returncode),
                 returncode=proc.returncode,
                 provider_state_updates=state_updates,
+                tool_executions=tool_records,
             )
 
         return RunResult(
@@ -578,6 +709,7 @@ class CodexProvider:
             provider_state_updates=state_updates,
             prompt_tokens=usage_input,
             completion_tokens=usage_output,
+            tool_executions=tool_records,
         )
 
     async def run(

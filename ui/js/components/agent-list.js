@@ -12,7 +12,7 @@ function renderAgentList(container) {
     // Shell
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Agents</h2><p>Enrolled bots and their current status</p>';
+    header.innerHTML = '<h2>Agents</h2><p>Registry members and their current operating state</p>';
     container.appendChild(header);
 
     // Filter bar
@@ -102,9 +102,9 @@ function renderAgentList(container) {
         }
 
         filtered.forEach(a => {
-            const card = document.createElement('div');
-            card.className = 'card clickable';
-            card.addEventListener('click', () => Router.navigate('/ui/agents/' + a.agent_id));
+                const card = document.createElement('div');
+                card.className = 'card clickable';
+                _makePressable(card, () => Router.navigate('/ui/agents/' + a.agent_id));
 
             const row = document.createElement('div');
             row.className = 'card-row';

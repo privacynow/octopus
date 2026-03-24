@@ -1,20 +1,12 @@
 {
   "rects": [
     {
-      "x": 510,
-      "y": 387.203125,
-      "width": 340,
-      "height": 132.578125,
-      "label": "Password = REGISTRY_UI_TOKEN",
-      "color": "#2196f3"
-    },
-    {
       "x": 512,
-      "y": 412.59375,
+      "y": 464.59375,
       "width": 336,
-      "height": 52,
-      "label": "Operator credential",
-      "color": "#ff9800"
+      "height": 53.1875,
+      "label": "Creates an operator session cookie",
+      "color": "#4caf50"
     }
   ],
   "arrows": []

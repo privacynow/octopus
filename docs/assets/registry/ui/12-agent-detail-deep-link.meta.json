@@ -1,0 +1,13 @@
+{
+  "rects": [
+    {
+      "x": 242,
+      "y": 0,
+      "width": 1124,
+      "height": 1107.96875,
+      "label": "Direct deep link to /ui/agents/{agent_id}",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

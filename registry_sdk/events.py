@@ -45,7 +45,38 @@ class ProviderResponseMetadata(BaseModel):
     completion_tokens: int = Field(..., ge=0)
     cost_usd: float = Field(..., ge=0.0)
     provider: str = Field(..., min_length=1)
-    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProviderRequestMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., min_length=1)
+    model: str = Field(..., min_length=1)
+    execution_mode: Literal["run", "resume", "preflight", "retry"]
+    working_dir: str = Field(..., min_length=1)
+    file_policy: str = Field(..., min_length=1)
+    image_count: int = Field(..., ge=0)
+    prompt_char_count: int = Field(..., ge=0)
+
+
+class FileChangeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(..., min_length=1)
+    change_type: Literal["created", "modified", "deleted", "renamed"]
+    summary: str = Field(..., min_length=1)
+
+
+class ToolExecutionMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = Field(..., min_length=1)
+    call_id: str = Field(..., min_length=1)
+    status: Literal["completed", "failed", "denied"]
+    input_summary: str = Field(..., min_length=1)
+    output_summary: str = Field(..., min_length=1)
+    duration_ms: int | None = Field(default=None, ge=0)
+    file_changes: list[FileChangeSummary] = Field(default_factory=list)
 
 
 class ApprovalMetadata(BaseModel):
@@ -54,6 +85,15 @@ class ApprovalMetadata(BaseModel):
     action: str = Field(..., min_length=1)
     decided_by: str = Field(..., min_length=1)
     decision: Literal["approved", "rejected"]
+
+
+class ApprovalRequestedMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_kind: Literal["preflight", "retry", "delegation"]
+    actor_key: str = Field(..., min_length=1)
+    trust_tier: str = Field(..., min_length=1)
+    expires_at: str | None = None
 
 
 class DelegationTaskSummary(BaseModel):
@@ -89,7 +129,10 @@ class ErrorMetadata(BaseModel):
 EVENT_METADATA_SCHEMAS: dict[str, type[BaseModel]] = {
     "message.user": MessageMetadata,
     "message.bot": MessageMetadata,
+    "provider.request": ProviderRequestMetadata,
     "provider.response": ProviderResponseMetadata,
+    "tool.execution": ToolExecutionMetadata,
+    "approval.requested": ApprovalRequestedMetadata,
     "approval.decided": ApprovalMetadata,
     "delegation.proposed": DelegationMetadata,
     "delegation.submitted": DelegationMetadata,

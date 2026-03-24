@@ -1446,16 +1446,18 @@ def test_all_levels_include_message_user_and_message_bot():
 
 def test_full_level_only_includes_live_detailed_event_kinds():
     kinds = PUBLISH_LEVEL_KINDS["full"]
+    assert "provider.request" in kinds
     assert "provider.response" in kinds
+    assert "tool.execution" in kinds
+    assert "approval.requested" in kinds
     assert "approval.decided" in kinds
     assert "delegation.completed" in kinds
-    assert "provider.request" not in kinds
-    assert "tool.execution" not in kinds
     assert "file.change" not in kinds
 
 
 def test_minimal_level_excludes_approval_delegation_provider_response():
     kinds = PUBLISH_LEVEL_KINDS["minimal"]
+    assert "provider.request" not in kinds
     assert "approval.requested" not in kinds
     assert "approval.decided" not in kinds
     assert "delegation.proposed" not in kinds

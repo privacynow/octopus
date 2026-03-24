@@ -7,7 +7,7 @@ function renderUsageView(container) {
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Usage</h2><p>Token usage and cost summary</p>';
+    header.innerHTML = '<h2>Usage</h2><p>Prompt, completion, and cost totals derived from provider response events</p>';
     container.appendChild(header);
 
     // Date range bar

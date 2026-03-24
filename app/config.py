@@ -304,15 +304,17 @@ PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
     "minimal": {"message.user", "message.bot", "task.status", "error"},
     "standard": {
         "message.user", "message.bot", "task.status", "error",
+        "provider.request", "provider.response", "tool.execution",
+        "approval.requested",
         "approval.decided",
         "delegation.proposed", "delegation.submitted", "delegation.completed",
-        "provider.response",
     },
     "full": {
         "message.user", "message.bot", "task.status", "error",
+        "provider.request", "provider.response", "tool.execution",
+        "approval.requested",
         "approval.decided",
         "delegation.proposed", "delegation.submitted", "delegation.completed",
-        "provider.response",
     },
 }
 

@@ -10,7 +10,7 @@ function renderTaskList(container) {
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Tasks</h2><p>Routed tasks across agents</p>';
+    header.innerHTML = '<h2>Tasks</h2><p>Delegated work and routed execution across agents</p>';
     container.appendChild(header);
 
     // Filter bar
@@ -143,7 +143,7 @@ function renderTaskList(container) {
                 card.appendChild(detail);
 
                 // Toggle detail on click
-                row.addEventListener('click', () => {
+                _makePressable(row, () => {
                     detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
                 });
 

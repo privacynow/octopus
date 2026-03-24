@@ -205,7 +205,7 @@ function renderAgentDetail(container, params) {
             convos.forEach(c => {
                 const card = document.createElement('div');
                 card.className = 'card clickable';
-                card.addEventListener('click', () => Router.navigate('/ui/conversations/' + c.conversation_id));
+                _makePressable(card, () => Router.navigate('/ui/conversations/' + c.conversation_id));
 
                 const row = document.createElement('div');
                 row.className = 'card-row';

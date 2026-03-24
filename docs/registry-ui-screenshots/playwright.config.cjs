@@ -22,6 +22,8 @@ module.exports = defineConfig({
   },
   webServer: {
     command: [
+      `rm -f ${dbPath} ${dbPath}-shm ${dbPath}-wal`,
+      "&&",
       `REGISTRY_DB_PATH=${dbPath}`,
       `REGISTRY_ENROLL_TOKEN=${enroll}`,
       `REGISTRY_UI_TOKEN=${ui}`,
@@ -31,7 +33,7 @@ module.exports = defineConfig({
     ].join(" "),
     cwd: repoRoot,
     url: "http://127.0.0.1:19987/healthz",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 120000,
     stdout: "pipe",
     stderr: "pipe",

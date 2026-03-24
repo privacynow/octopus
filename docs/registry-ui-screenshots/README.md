@@ -1,6 +1,6 @@
 # Registry UI screenshot capture
 
-Refreshes **annotated PNGs** under `docs/assets/registry/ui/` (embedded in [registry-guide.md](../registry-guide.md) and in [manual/registry-ui/](../manual/registry-ui/) feature pages). Optional **`capture:manual`** writes raw PNGs under `docs/assets/manual/` for fixture-based captures.
+Refreshes **annotated PNGs** under `docs/assets/registry/ui/` (embedded in [registry-guide.md](../registry-guide.md) and in [manual/registry-ui/](../manual/registry-ui/) feature pages). The live registry capture now reflects the **dashboard-first UI** and current event/API contract. Optional **`capture:manual`** still writes raw PNGs under `docs/assets/manual/` for fixture-based captures.
 
 ## Prerequisites
 
@@ -25,6 +25,7 @@ npm run capture:manual   # fixtures → docs/assets/manual/
 
 ## Notes
 
-- `capture-guide.spec.ts` uses **structural selectors** against the real SPA (`#content .filter-bar + div` for list panes, `#usage-summary` / `#usage-table`, etc.). If you change layout order or drop those hooks, update the spec—**do not** add capture-only `id`s to production UI components.
-- Playwright starts the registry on `127.0.0.1:19987` with env vars set in `playwright.config.cjs`. If SQLite errors mention missing columns, delete **`.capture-registry.sqlite3`** in this directory and re-run **`npm run capture`**.
+- `capture-guide.spec.ts` uses the **current** SPA routes and selectors (`/ui` dashboard, `/ui/agents`, `/ui/conversations/:id`, `.conversation-meta`, `#usage-summary`, `.guidance-textarea`, etc.). If you rename those structures, update the spec—**do not** add capture-only ids to production UI components.
+- Playwright starts the registry on `127.0.0.1:19987` with env vars set in `playwright.config.cjs`. The capture run now removes the throwaway SQLite DB before startup, so each run starts from a clean screenshot seed.
+- Usage screenshots come from seeded **`provider.response`** events only; there is no separate legacy usage seeding path anymore.
 - Tokens are `guide-capture-*` (must not be known-default tokens per `app/channels/registry/auth.py`).

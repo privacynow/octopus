@@ -75,6 +75,8 @@ const API = (() => {
         fetchCsrf,
 
         // Agents
+        getSummary: () =>
+            request('GET', '/v1/summary'),
         listAgents: (opts = {}) =>
             request('GET', '/v1/agents', { params: opts }),
         getAgentStatus: (id) =>
@@ -101,7 +103,7 @@ const API = (() => {
         sendMessage: (id, text) =>
             request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, { body: { text } }),
         conversationAction: (id, action, payload = {}) =>
-            request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, { body: { action, ...payload } }),
+            request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, { body: { action, payload } }),
         exportConversation: (id) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}/export`, { raw: true }),
 

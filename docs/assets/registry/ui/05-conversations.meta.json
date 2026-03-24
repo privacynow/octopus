@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 274,
+      "y": 150.140625,
+      "width": 146.40625,
+      "height": 40,
+      "label": "Create a new operator conversation",
+      "color": "#4caf50"
+    },
+    {
+      "x": 274,
+      "y": 190.140625,
+      "width": 1060,
+      "height": 58,
+      "label": "Server-backed search and status filter",
+      "color": "#ff9800"
+    },
+    {
+      "x": 274,
+      "y": 254.140625,
+      "width": 1060,
+      "height": 112.796875,
+      "label": "Conversation row → timeline detail",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

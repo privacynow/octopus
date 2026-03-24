@@ -78,7 +78,7 @@ class TestProviderCancelContract:
                 # Simulate cancel being set before result
                 if cancel:
                     cancel.set()
-                return "partial text", {}, 0, ""
+                return "partial text", {}, 0, "", []
 
             provider._run_process = fake_run_process  # type: ignore[method-assign]
 

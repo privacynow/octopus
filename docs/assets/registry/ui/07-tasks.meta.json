@@ -1,0 +1,21 @@
+{
+  "rects": [
+    {
+      "x": 274,
+      "y": 150.7609405517578,
+      "width": 1060,
+      "height": 58,
+      "label": "Status filter for routed work",
+      "color": "#ff9800"
+    },
+    {
+      "x": 272,
+      "y": 212.44406127929688,
+      "width": 1064,
+      "height": 116.796875,
+      "label": "Task cards expand inline and link to parent conversation",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

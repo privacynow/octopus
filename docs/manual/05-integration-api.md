@@ -11,10 +11,11 @@ Bots and automation call **`/v1/...`** on the registry with **agent tokens**; op
 ## Implementation
 
 - **Routes:** [`app/channels/registry/http.py`](../../app/channels/registry/http.py)
-- **UI coverage:** the Registry SPA covers agents, paginated conversations/tasks,
+- **UI coverage:** the Registry SPA covers the dashboard summary, agents, paginated conversations/tasks,
   operator **compose / cancel / export** on conversations, capabilities, skills
-  catalog, and usage ranges. **Not** covered in the UI: full skill **lifecycle**
-  (draft → publish), **provider-guidance** editors — those remain API-first.
+  catalog, usage ranges, and the **provider guidance** editor. **Not** covered as
+  first-class UI flows: full skill **lifecycle** beyond install / uninstall, and
+  conversation-bound skill activation.
 
 ## Skill catalog lifecycle (API)
 
@@ -22,7 +23,7 @@ Draft → submit → approve → publish → install/update/uninstall — all un
 
 ## Provider guidance (API)
 
-`/v1/provider-guidance/{provider}/...` — draft and publish flows for operator-tuned prompts; **no** top-level navigation item in the current UI.
+`/v1/provider-guidance/{provider}/...` — draft and publish flows for operator-tuned prompts; the Registry UI now exposes this surface at **`/ui/guidance`**.
 
 ## CSRF and sessions
 

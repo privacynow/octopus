@@ -4,6 +4,6 @@
 
 **Route:** `/ui/conversations` — every conversation across agents, with **pagination** (**Previous / Next**) and a **status** dropdown. **Click** a row → **conversation detail**.
 
-Search is covered on the [next page](conversations-search.md).
+Use **+ New Conversation** to start an operator-initiated conversation, or use the search box and status filter to narrow existing threads. Search is covered on the [next page](conversations-search.md).
 
-![All conversations](../../assets/registry/ui/04-conversations-annotated.png)
+![All conversations](../../assets/registry/ui/05-conversations-annotated.png)

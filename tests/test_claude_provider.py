@@ -221,7 +221,7 @@ async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
                 "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]}
             }
         }
-        return "", {"result": "ok"}, 0, ""
+        return "", {"result": "ok"}, 0, "", []
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(
@@ -260,7 +260,7 @@ async def test_mcp_temp_file_is_removed_after_timeout_result():
         path = cmd[idx + 1]
         seen["path"] = path
         assert os.path.exists(path)
-        return "", {}, -1, ""
+        return "", {}, -1, "", []
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(

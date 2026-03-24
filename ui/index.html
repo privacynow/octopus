@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/ui/css/main.css">
 </head>
 <body>
+    <a class="skip-link" href="#content">Skip to content</a>
     <div id="app">
         <button id="hamburger" class="hamburger" aria-label="Toggle navigation">
             <span></span><span></span><span></span>
@@ -17,7 +18,8 @@
                 <h1>Octopus</h1>
             </div>
             <ul class="nav-links">
-                <li><a href="/ui/" data-route="/" data-icon="A">Agents</a></li>
+                <li><a href="/ui/" data-route="/" data-icon="D">Dashboard</a></li>
+                <li><a href="/ui/agents" data-route="/agents" data-icon="A">Agents</a></li>
                 <li><a href="/ui/conversations" data-route="/conversations" data-icon="C">Conversations</a></li>
                 <li><a href="/ui/tasks" data-route="/tasks" data-icon="T">Tasks</a></li>
                 <li><a href="/ui/capabilities" data-route="/capabilities" data-icon="P">Capabilities</a></li>
@@ -26,6 +28,10 @@
                 <li><a href="/ui/guidance" data-route="/guidance" data-icon="G">Guidance</a></li>
             </ul>
             <div class="sidebar-footer">
+                <button id="theme-toggle" class="theme-toggle" type="button">
+                    <span>Theme</span>
+                    <strong id="theme-toggle-label">Light</strong>
+                </button>
                 <div id="ws-status" class="ws-status">
                     <span class="ws-dot"></span>
                     <span class="ws-label">Connecting</span>
@@ -33,11 +39,12 @@
                 <a href="/ui/logout">Logout</a>
             </div>
         </nav>
-        <main id="content"></main>
+        <main id="content" tabindex="-1"></main>
     </div>
     <script src="/ui/js/api.js"></script>
     <script src="/ui/js/ws.js"></script>
     <script src="/ui/js/router.js"></script>
+    <script src="/ui/js/components/dashboard.js"></script>
     <script src="/ui/js/components/agent-list.js"></script>
     <script src="/ui/js/components/agent-detail.js"></script>
     <script src="/ui/js/components/conversation-list.js"></script>

@@ -2144,9 +2144,9 @@ async def test_claude_timeout_during_resume_sets_resume_failed():
     provider = _make_claude_provider()
     state = {"session_id": "dead-session-id", "started": True}
 
-    # _run_process returns ("", {}, -1, "") on timeout
+    # _run_process returns ("", {}, -1, "", []) on timeout
     with patch.object(provider, "_run_process", new_callable=AsyncMock,
-                      return_value=("", {}, -1, "")):
+                      return_value=("", {}, -1, "", [])):
         result = await provider.run(state, "test prompt", [], FakeProgress())
 
     assert result.timed_out is True
@@ -2165,7 +2165,7 @@ async def test_claude_timeout_during_fresh_session_no_resume_failed():
     state = {"session_id": "new-session-id", "started": False}
 
     with patch.object(provider, "_run_process", new_callable=AsyncMock,
-                      return_value=("", {}, -1, "")):
+                      return_value=("", {}, -1, "", [])):
         result = await provider.run(state, "test prompt", [], FakeProgress())
 
     assert result.timed_out is True

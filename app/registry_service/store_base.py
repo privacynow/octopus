@@ -643,6 +643,9 @@ class AbstractRegistryStore(Protocol):
     def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
         """Return reported usage timeline rows within the provided UTC ISO timestamp range."""
 
+    def get_summary(self, *, now_iso: str) -> dict[str, Any]:
+        """Return global dashboard aggregates for the registry UI."""
+
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
         """Queue a follow-up channel_input for an existing conversation."""
 
@@ -657,8 +660,16 @@ class AbstractRegistryStore(Protocol):
     def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist events for a conversation. Idempotent on event_id (ON CONFLICT DO NOTHING)."""
 
-    def list_events(self, conversation_id: str, *, kind: str = "", cursor: int = 0, limit: int = 50) -> dict[str, Any]:
-        """Return paginated events for a conversation, optionally filtered by kind."""
+    def list_events(
+        self,
+        conversation_id: str,
+        *,
+        kind: str = "",
+        before_seq: int = 0,
+        after_seq: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return paginated events for a conversation using latest/before/after windows."""
 
     def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
         """Return paginated message events (message.user, message.bot) for a conversation."""

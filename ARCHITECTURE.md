@@ -192,32 +192,25 @@ when Slack should deliver events over a websocket instead of an inbound HTTP
 endpoint.
 
 ```mermaid
-flowchart TB
-    Slack["Slack"]
+sequenceDiagram
+    participant S as Slack
+    participant B as Bolt
+    participant T as Slack transport
+    participant X as SDK runtime
+    participant C as SDK registry
+    participant P as Provider
+    participant R as Registry
 
-    subgraph Bot["Slack bot process"]
-        direction TB
-        Bolt["Bolt for Python"]
-        Transport["Slack transport<br/>ingress + egress + refs"]
-        Exec["Execution runtime<br/>octopus_sdk.execution + octopus_sdk.runtime"]
-        RegSdk["Registry capability<br/>octopus_sdk.registry + octopus_sdk.event_sink"]
-    end
-
-    Provider["Claude / Codex"]
-    Registry["Registry service"]
-
-    Slack --> InSlack["events / commands"] --> Bolt
-    Bolt --> Inbound["normalized inbound"] --> Transport
-    Transport --> ToExec["identity + input"] --> Exec
-    Exec --> ToTransport["reply / actions / artifacts"] --> Transport
-    Transport --> ToBolt["outbound requests"] --> Bolt
-    Bolt --> OutSlack["messages / files / updates"] --> Slack
-    Exec <--> Provider
-    Exec --> ToRegistry["publish / search / route"] --> RegSdk
-    RegSdk <--> Registry
-
-    classDef annotation fill:transparent,stroke:transparent,color:#555;
-    class InSlack,Inbound,ToExec,ToTransport,ToBolt,OutSlack,ToRegistry annotation
+    Note over B,C: Slack bot process
+    S->>B: events / commands
+    B->>T: normalize inbound
+    T->>X: identity + input
+    X->>P: run / preflight
+    X->>T: reply / actions / artifacts
+    T->>B: outbound requests
+    B->>S: messages / files / updates
+    X->>C: publish / search / route
+    C->>R: registry API
 ```
 
 The transport split would look like this:

@@ -21,7 +21,7 @@ function renderApprovalList(container) {
 
     function setLoading() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 4, 'card');
+        UI.renderSkeletons(listEl, 4, 'card');
         pagEl.textContent = '';
     }
 
@@ -31,10 +31,7 @@ function renderApprovalList(container) {
         pagEl.textContent = '';
 
         if (!approvals.length) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.textContent = 'No approvals waiting right now';
-            listEl.appendChild(empty);
+            listEl.appendChild(UI.renderEmptyState('No approvals waiting right now'));
             return;
         }
 
@@ -58,7 +55,7 @@ function renderApprovalList(container) {
                 subtitleParts.push(item.target_display_name || item.target_agent_id);
             }
             if (item.request_kind) subtitleParts.push(item.request_kind);
-            if (item.created_at) subtitleParts.push(_relativeTime(item.created_at));
+            if (item.created_at) subtitleParts.push(UI.relativeTime(item.created_at));
             subtitle.textContent = subtitleParts.join(' · ');
             titleWrap.appendChild(subtitle);
             headerRow.appendChild(titleWrap);
@@ -79,11 +76,11 @@ function renderApprovalList(container) {
             [
                 ['Requested by', item.actor || 'agent'],
                 ['Trust tier', item.trust_tier || '—'],
-                ['Expires', item.expires_at ? _formatApprovalTime(item.expires_at) : 'No deadline'],
+                ['Expires', item.expires_at ? UI.formatApprovalTime(item.expires_at) : 'No deadline'],
             ].forEach(([label, value]) => {
                 const fact = document.createElement('div');
                 fact.className = 'approval-fact';
-                fact.innerHTML = `<span>${esc(label)}</span><strong>${esc(value)}</strong>`;
+                fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
                 facts.appendChild(fact);
             });
             card.appendChild(facts);
@@ -95,6 +92,7 @@ function renderApprovalList(container) {
             openBtn.className = 'btn';
             openBtn.type = 'button';
             openBtn.textContent = 'Open conversation';
+            openBtn.setAttribute('aria-label', `Open conversation ${item.conversation_title || item.conversation_id}`);
             openBtn.addEventListener('click', () => {
                 Router.navigate('/ui/conversations/' + item.conversation_id);
             });
@@ -104,11 +102,13 @@ function renderApprovalList(container) {
             approveBtn.className = 'btn btn-primary';
             approveBtn.type = 'button';
             approveBtn.textContent = 'Approve';
+            approveBtn.setAttribute('aria-label', `Approve request for ${item.conversation_title || item.conversation_id}`);
 
             const rejectBtn = document.createElement('button');
             rejectBtn.className = 'btn btn-danger';
             rejectBtn.type = 'button';
             rejectBtn.textContent = 'Reject';
+            rejectBtn.setAttribute('aria-label', `Reject request for ${item.conversation_title || item.conversation_id}`);
 
             const expired = item.expires_at ? new Date(item.expires_at) < new Date() : false;
             approveBtn.disabled = expired;
@@ -136,7 +136,7 @@ function renderApprovalList(container) {
             listEl.appendChild(card);
         });
 
-        _renderPagination(pagEl, {
+        UI.renderPagination(pagEl, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!data.has_more,
             info: '',
@@ -156,7 +156,7 @@ function renderApprovalList(container) {
         setLoading();
         API.listApprovals({ cursor, limit }).then(renderRows).catch((err) => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed to load approvals: ' + err.message, loadPage);
+            UI.renderError(listEl, 'Failed to load approvals: ' + err.message, loadPage);
         });
     }
 

@@ -42,16 +42,30 @@ function renderConversationDetail(container, params) {
 
     const filterGroup = document.createElement('div');
     filterGroup.className = 'segmented-control';
+    filterGroup.setAttribute('role', 'tablist');
+    filterGroup.setAttribute('aria-label', 'Conversation timeline view');
     toolbar.appendChild(filterGroup);
 
     const allBtn = document.createElement('button');
     allBtn.className = 'segmented-control-btn active';
+    allBtn.type = 'button';
+    allBtn.id = 'conversation-view-tab';
     allBtn.textContent = 'Conversation';
+    allBtn.setAttribute('role', 'tab');
+    allBtn.setAttribute('aria-selected', 'true');
+    allBtn.setAttribute('aria-controls', 'conversation-timeline-panel');
+    allBtn.tabIndex = 0;
     filterGroup.appendChild(allBtn);
 
     const messagesBtn = document.createElement('button');
     messagesBtn.className = 'segmented-control-btn';
+    messagesBtn.type = 'button';
+    messagesBtn.id = 'activity-view-tab';
     messagesBtn.textContent = 'Full activity';
+    messagesBtn.setAttribute('role', 'tab');
+    messagesBtn.setAttribute('aria-selected', 'false');
+    messagesBtn.setAttribute('aria-controls', 'conversation-timeline-panel');
+    messagesBtn.tabIndex = -1;
     filterGroup.appendChild(messagesBtn);
 
     const actionGroup = document.createElement('div');
@@ -74,6 +88,9 @@ function renderConversationDetail(container, params) {
 
     const timelinePanel = document.createElement('div');
     timelinePanel.className = 'card conversation-panel';
+    timelinePanel.id = 'conversation-timeline-panel';
+    timelinePanel.setAttribute('role', 'tabpanel');
+    timelinePanel.setAttribute('aria-labelledby', allBtn.id);
     layout.appendChild(timelinePanel);
 
     const timelineHeader = document.createElement('div');
@@ -84,6 +101,12 @@ function renderConversationDetail(container, params) {
     const timeline = document.createElement('div');
     timeline.className = 'chat-timeline';
     timelinePanel.appendChild(timeline);
+
+    const liveRegion = document.createElement('div');
+    liveRegion.className = 'sr-only';
+    liveRegion.setAttribute('aria-live', 'polite');
+    liveRegion.setAttribute('aria-atomic', 'true');
+    timelinePanel.appendChild(liveRegion);
 
     const sentinel = document.createElement('div');
     sentinel.className = 'history-sentinel';
@@ -104,12 +127,15 @@ function renderConversationDetail(container, params) {
 
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Send a message to this conversation';
+    textarea.setAttribute('aria-label', 'Message text');
     textarea.rows = 1;
     composer.appendChild(textarea);
 
     const sendBtn = document.createElement('button');
     sendBtn.className = 'btn btn-primary';
+    sendBtn.type = 'button';
     sendBtn.textContent = 'Send';
+    sendBtn.setAttribute('aria-label', 'Send message');
     composer.appendChild(sendBtn);
 
     function updateTimelineHeader() {
@@ -117,7 +143,12 @@ function renderConversationDetail(container, params) {
         const subtitle = showConversationView
             ? 'Replies, approvals, and progress updates'
             : 'Every stored event, including provider and tool activity';
-        timelineHeader.innerHTML = `<div><strong>${esc(label)}</strong><span>${esc(subtitle)}</span></div>`;
+        timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
+        allBtn.setAttribute('aria-selected', String(showConversationView));
+        allBtn.tabIndex = showConversationView ? 0 : -1;
+        messagesBtn.setAttribute('aria-selected', String(!showConversationView));
+        messagesBtn.tabIndex = showConversationView ? -1 : 0;
+        timelinePanel.setAttribute('aria-labelledby', showConversationView ? allBtn.id : messagesBtn.id);
     }
 
     function applyFilter(nextConversationView) {
@@ -130,6 +161,15 @@ function renderConversationDetail(container, params) {
 
     allBtn.addEventListener('click', () => applyFilter(true));
     messagesBtn.addEventListener('click', () => applyFilter(false));
+    filterGroup.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        if (document.activeElement === allBtn || document.activeElement === messagesBtn) {
+            const target = document.activeElement === allBtn ? messagesBtn : allBtn;
+            target.focus();
+            applyFilter(target === allBtn);
+        }
+    });
 
     exportBtn.addEventListener('click', async () => {
         exportBtn.disabled = true;
@@ -149,7 +189,7 @@ function renderConversationDetail(container, params) {
     });
 
     cancelBtn.addEventListener('click', () => {
-        _showConfirm('Cancel Conversation', 'Cancel further work on this conversation?', async () => {
+        UI.showConfirm('Cancel Conversation', 'Cancel further work on this conversation?', async () => {
             cancelBtn.disabled = true;
             try {
                 await API.conversationAction(convoId, 'cancel_conversation');
@@ -193,7 +233,7 @@ function renderConversationDetail(container, params) {
         meta = data;
         metaCard.textContent = '';
         const title = data.title || convoId;
-        header.innerHTML = `<h2>${esc(title)}</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
+        header.innerHTML = `<h2>${UI.esc(title)}</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
 
         const hero = document.createElement('div');
         hero.className = 'conversation-meta-hero';
@@ -226,7 +266,7 @@ function renderConversationDetail(container, params) {
             const updated = document.createElement('span');
             updated.className = 'meta-timestamp';
             updated.setAttribute('data-timestamp', data.updated_at);
-            updated.textContent = _relativeTime(data.updated_at);
+            updated.textContent = UI.relativeTime(data.updated_at);
             statusWrap.appendChild(updated);
         }
         hero.appendChild(statusWrap);
@@ -241,7 +281,7 @@ function renderConversationDetail(container, params) {
         ].forEach(([label, value]) => {
             const item = document.createElement('div');
             item.className = 'conversation-meta-fact';
-            item.innerHTML = `<span>${esc(label)}</span><strong>${esc(value)}</strong>`;
+            item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
             facts.appendChild(item);
         });
 
@@ -256,7 +296,7 @@ function renderConversationDetail(container, params) {
         loadingOlder = false;
         historyStatus.textContent = '';
         eventList.textContent = '';
-        _renderSkeletons(eventList, 4, 'card');
+        UI.renderSkeletons(eventList, 4, 'card');
     }
 
     function updateHistoryStatus() {
@@ -281,7 +321,7 @@ function renderConversationDetail(container, params) {
             renderMetaCard(data);
         } catch (err) {
             metaCard.textContent = '';
-            _renderError(metaCard, 'Failed to load conversation metadata', loadConversation);
+            UI.renderError(metaCard, 'Failed to load conversation metadata', loadConversation);
         }
     }
 
@@ -318,7 +358,7 @@ function renderConversationDetail(container, params) {
             initHistoryObserver();
         } catch (err) {
             eventList.textContent = '';
-            _renderError(eventList, 'Failed to load events: ' + err.message, reloadEvents);
+            UI.renderError(eventList, 'Failed to load events: ' + err.message, reloadEvents);
         }
     }
 
@@ -393,6 +433,9 @@ function renderConversationDetail(container, params) {
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId));
         if (seq) latestSeq = Math.max(latestSeq, seq);
+        if (event.kind === 'message.user' || event.kind === 'message.bot' || event.kind === 'approval.requested') {
+            liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
+        }
         if (shouldStick) {
             requestAnimationFrame(() => {
                 timeline.scrollTop = timeline.scrollHeight;
@@ -418,8 +461,9 @@ function _createConversationEventElement(event, convoId) {
     const card = document.createElement('article');
     card.className = `event-card ${_eventCardClass(kind)}`;
 
-    const header = document.createElement('div');
+    const header = document.createElement('button');
     header.className = 'event-card-header';
+    header.type = 'button';
 
     const titleGroup = document.createElement('div');
     titleGroup.className = 'event-card-heading';
@@ -435,14 +479,19 @@ function _createConversationEventElement(event, convoId) {
     }
     header.appendChild(titleGroup);
 
+    const summary = document.createElement('span');
+    summary.className = 'event-summary';
+    summary.textContent = _eventSummary(kind, event);
+    header.appendChild(summary);
+
     const time = document.createElement('span');
     time.className = 'event-card-time';
-    time.textContent = _formatTime(event.created_at);
+    time.textContent = UI.formatTime(event.created_at);
     header.appendChild(time);
     card.appendChild(header);
 
     const body = document.createElement('div');
-    body.className = 'event-card-body expanded';
+    body.className = 'event-card-body';
     const metadata = event.metadata || {};
 
     switch (kind) {
@@ -477,6 +526,14 @@ function _createConversationEventElement(event, convoId) {
             break;
     }
 
+    const startExpanded = kind === 'approval.requested';
+    body.classList.toggle('expanded', startExpanded);
+    header.setAttribute('aria-expanded', String(startExpanded));
+    header.addEventListener('click', () => {
+        const expanded = body.classList.toggle('expanded');
+        header.setAttribute('aria-expanded', String(expanded));
+    });
+
     card.appendChild(body);
     return card;
 }
@@ -493,7 +550,7 @@ function _renderMessageBubble(event, kind) {
     const body = document.createElement('div');
     body.className = 'md-content';
     const temp = document.createElement('div');
-    temp.innerHTML = _renderContent(event.content || '');
+    temp.innerHTML = UI.renderContent(event.content || '');
     while (temp.firstChild) body.appendChild(temp.firstChild);
     bubble.appendChild(body);
 
@@ -511,7 +568,7 @@ function _renderMessageBubble(event, kind) {
 
     const timestamp = document.createElement('div');
     timestamp.className = 'timestamp';
-    timestamp.textContent = _formatTime(event.created_at);
+    timestamp.textContent = UI.formatTime(event.created_at);
     bubble.appendChild(timestamp);
     return bubble;
 }
@@ -563,14 +620,14 @@ function _renderToolExecutionCard(body, metadata) {
     if (metadata.input_summary) {
         const input = document.createElement('div');
         input.className = 'event-text-block';
-        input.innerHTML = `<strong>Input</strong><p>${esc(metadata.input_summary)}</p>`;
+        input.innerHTML = `<strong>Input</strong><p>${UI.esc(metadata.input_summary)}</p>`;
         body.appendChild(input);
     }
 
     if (metadata.output_summary) {
         const output = document.createElement('div');
         output.className = 'event-text-block';
-        output.innerHTML = `<strong>Output</strong><p>${esc(metadata.output_summary)}</p>`;
+        output.innerHTML = `<strong>Output</strong><p>${UI.esc(metadata.output_summary)}</p>`;
         body.appendChild(output);
     }
 
@@ -580,7 +637,7 @@ function _renderToolExecutionCard(body, metadata) {
         list.className = 'change-list';
         changes.forEach((change) => {
             const item = document.createElement('li');
-            item.innerHTML = `<strong>${esc(change.change_type || 'changed')}</strong> <code>${esc(change.path || '')}</code><span>${esc(change.summary || '')}</span>`;
+            item.innerHTML = `<strong>${UI.esc(change.change_type || 'changed')}</strong> <code>${UI.esc(change.path || '')}</code><span>${UI.esc(change.summary || '')}</span>`;
             list.appendChild(item);
         });
         body.appendChild(list);
@@ -592,13 +649,13 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
         ['Request', metadata.request_kind || 'approval'],
         ['Requested by', metadata.actor_key || event.actor || 'agent'],
         ['Trust tier', metadata.trust_tier || ''],
-        ['Expires', metadata.expires_at ? _formatApprovalTime(metadata.expires_at) : 'No deadline'],
+        ['Expires', metadata.expires_at ? UI.formatApprovalTime(metadata.expires_at) : 'No deadline'],
     ]));
 
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Needs a decision</strong><p>${esc(event.content)}</p>`;
+        content.innerHTML = `<strong>Needs a decision</strong><p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
 
@@ -661,7 +718,7 @@ function _renderDelegationCard(body, metadata) {
     list.className = 'delegation-list';
     tasks.forEach((task) => {
         const item = document.createElement('li');
-        item.innerHTML = `<strong>${esc(task.title || '')}</strong><span>${esc(task.target || '')}</span><em>${esc(task.status || '')}</em>`;
+        item.innerHTML = `<strong>${UI.esc(task.title || '')}</strong><span>${UI.esc(task.target || '')}</span><em>${UI.esc(task.status || '')}</em>`;
         list.appendChild(item);
     });
     body.appendChild(list);
@@ -684,7 +741,7 @@ function _renderTaskStatusCard(body, event, metadata) {
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Update</strong><p>${esc(event.content)}</p>`;
+        content.innerHTML = `<strong>Update</strong><p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
 }
@@ -697,7 +754,7 @@ function _renderErrorCard(body, event, metadata) {
     if (event.content && event.content !== metadata.message) {
         const block = document.createElement('div');
         block.className = 'event-text-block';
-        block.innerHTML = `<strong>Content</strong><p>${esc(event.content)}</p>`;
+        block.innerHTML = `<strong>Content</strong><p>${UI.esc(event.content)}</p>`;
         body.appendChild(block);
     }
 }
@@ -707,7 +764,7 @@ function _renderGenericEventCard(body, event) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
         const temp = document.createElement('div');
-        temp.innerHTML = _renderContent(event.content);
+        temp.innerHTML = UI.renderContent(event.content);
         while (temp.firstChild) content.appendChild(temp.firstChild);
         body.appendChild(content);
     }
@@ -730,7 +787,7 @@ function _metadataGrid(entries) {
         if (value === '' || value === null || value === undefined) return;
         const item = document.createElement('div');
         item.className = 'metadata-item';
-        item.innerHTML = `<span>${esc(label)}</span><strong>${esc(String(value))}</strong>`;
+        item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(String(value))}</strong>`;
         grid.appendChild(item);
     });
     return grid;
@@ -739,15 +796,50 @@ function _metadataGrid(entries) {
 function _createInlineMetric(value, label) {
     const metric = document.createElement('div');
     metric.className = 'inline-metric';
-    metric.innerHTML = `<strong>${esc(String(value))}</strong><span>${esc(label)}</span>`;
+    metric.innerHTML = `<strong>${UI.esc(String(value))}</strong><span>${UI.esc(label)}</span>`;
     return metric;
 }
 
-function _formatApprovalTime(iso) {
-    try {
-        return new Date(iso).toLocaleString();
-    } catch {
-        return iso;
+function _eventSummary(kind, event) {
+    const metadata = event.metadata || {};
+    switch (kind) {
+        case 'provider.request':
+            return [
+                metadata.provider || metadata.model || 'Provider',
+                metadata.execution_mode || 'run',
+                `${Number(metadata.prompt_char_count || (event.content || '').length || 0).toLocaleString()} chars`,
+            ].filter(Boolean).join(' · ');
+        case 'provider.response':
+            return [
+                `${Number((metadata.prompt_tokens || 0) + (metadata.completion_tokens || 0)).toLocaleString()} tokens`,
+                `$${Number(metadata.cost_usd || 0).toFixed(4)}`,
+            ].join(' · ');
+        case 'tool.execution':
+            return [
+                metadata.tool_name || 'Tool',
+                metadata.status || 'completed',
+                metadata.duration_ms !== null && metadata.duration_ms !== undefined ? `${metadata.duration_ms} ms` : '',
+            ].filter(Boolean).join(' · ');
+        case 'delegation.proposed':
+        case 'delegation.submitted':
+        case 'delegation.completed': {
+            const tasks = Array.isArray(metadata.tasks) ? metadata.tasks.length : 0;
+            const label = kind.split('.')[1];
+            return `${tasks} task${tasks === 1 ? '' : 's'} ${label}`;
+        }
+        case 'task.status':
+            return [
+                metadata.status || 'update',
+                metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '',
+            ].filter(Boolean).join(' · ');
+        case 'error':
+            return (metadata.message || event.content || 'Execution problem').split('\n')[0].slice(0, 80);
+        case 'approval.decided':
+            return `${metadata.decision || 'handled'}${metadata.decided_by ? ` by ${metadata.decided_by}` : ''}`;
+        case 'approval.requested':
+            return metadata.request_kind || 'Approval needed';
+        default:
+            return event.actor || '';
     }
 }
 

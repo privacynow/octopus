@@ -18,6 +18,7 @@ function renderTaskList(container) {
     filterBar.className = 'filter-bar';
 
     const statusSelect = document.createElement('select');
+    statusSelect.setAttribute('aria-label', 'Filter tasks by status');
     statusSelect.innerHTML =
         '<option value="">All statuses</option>' +
         '<option value="queued">Queued</option>' +
@@ -28,6 +29,7 @@ function renderTaskList(container) {
     container.appendChild(filterBar);
 
     const listEl = document.createElement('div');
+    listEl.className = 'list-container list-container-loose';
     container.appendChild(listEl);
 
     const pagEl = document.createElement('div');
@@ -42,7 +44,7 @@ function renderTaskList(container) {
 
     function loadPage() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 5, 'row');
+        UI.renderSkeletons(listEl, 5, 'row');
         pagEl.textContent = '';
 
         const params = { cursor, limit };
@@ -53,29 +55,15 @@ function renderTaskList(container) {
             listEl.textContent = '';
 
             if (tasks.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No tasks';
-                listEl.appendChild(empty);
+                listEl.appendChild(UI.renderEmptyState('No tasks'));
                 return;
             }
 
             tasks.forEach(t => {
-                const card = document.createElement('div');
-                card.className = 'card task-card';
+                const item = document.createElement('div');
+                item.className = 'task-list-item';
 
-                // Summary row
-                const row = document.createElement('div');
-                row.className = 'card-row clickable';
-
-                const info = document.createElement('div');
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = t.title || t.routed_task_id;
-                info.appendChild(title);
-
-                const sub = document.createElement('div');
-                sub.className = 'card-subtitle';
+                const sub = document.createElement('span');
                 const parts = [];
                 if (t.origin_display_name || t.origin_agent_id) {
                     parts.push('From: ' + (t.origin_display_name || t.origin_agent_id));
@@ -84,24 +72,29 @@ function renderTaskList(container) {
                     parts.push('To: ' + (t.target_display_name || t.target_agent_id));
                 }
                 if (t.updated_at) {
-                    parts.push(_relativeTime(t.updated_at));
+                    parts.push(UI.relativeTime(t.updated_at));
                 }
                 sub.textContent = parts.join(' \u00b7 ');
-                info.appendChild(sub);
 
-                row.appendChild(info);
-
-                const badge = document.createElement('span');
-                badge.className = 'badge badge-' + (t.status || 'queued');
-                badge.textContent = t.status || 'queued';
-                row.appendChild(badge);
-
-                card.appendChild(row);
+                const row = UI.renderListRow({
+                    label: t.title || t.routed_task_id,
+                    sublabelNode: sub,
+                    badgeText: t.status || 'queued',
+                    badgeClass: 'badge-' + (t.status || 'queued'),
+                    onClick: () => {
+                        const expanded = !detail.hidden;
+                        detail.hidden = expanded;
+                        row.setAttribute('aria-expanded', String(!expanded));
+                    },
+                    className: 'task-summary-row',
+                });
+                row.setAttribute('aria-expanded', 'false');
+                item.appendChild(row);
 
                 // Detail section (collapsed by default)
                 const detail = document.createElement('div');
                 detail.className = 'task-detail';
-                detail.style.display = 'none';
+                detail.hidden = true;
 
                 if (t.instructions) {
                     const instrLabel = document.createElement('div');
@@ -140,18 +133,12 @@ function renderTaskList(container) {
                     detail.appendChild(linkWrap);
                 }
 
-                card.appendChild(detail);
-
-                // Toggle detail on click
-                _makePressable(row, () => {
-                    detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
-                });
-
-                listEl.appendChild(card);
+                item.appendChild(detail);
+                listEl.appendChild(item);
             });
 
             pagEl.textContent = '';
-            _renderPagination(pagEl, {
+            UI.renderPagination(pagEl, {
                 hasPrev: cursorStack.length > 0,
                 hasNext: !!data.has_more,
                 info: '',
@@ -167,7 +154,7 @@ function renderTaskList(container) {
             });
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadPage);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
         });
     }
 

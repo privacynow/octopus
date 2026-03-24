@@ -255,7 +255,7 @@ test("ui overhaul smoke flow", async ({ page }) => {
 
   await page.goto("/ui/login");
   await page.getByLabel("Password").fill(UI_TOKEN);
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.getByRole("button", { name: /sign in/i }).click();
 
   await expect(page).toHaveURL(/\/ui\/?$/);
   await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
@@ -271,12 +271,12 @@ test("ui overhaul smoke flow", async ({ page }) => {
 
   await page.locator(".nav-links").getByRole("link", { name: /Agents/ }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  await waitForViewReady(page, "#agent-list-content .card.clickable");
+  await waitForViewReady(page, "#agent-list-content .list-row");
   await expect(page.getByText(primaryDisplay)).toBeVisible();
 
   await page.locator(".nav-links").getByRole("link", { name: /Conversations/ }).click();
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
-  await waitForViewReady(page, ".card.clickable");
+  await waitForViewReady(page, ".list-container .list-row");
   await page.getByText(conversationTitle).click();
 
   await expect(page.getByRole("heading", { name: conversationTitle })).toBeVisible();
@@ -284,8 +284,8 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await expect(page.getByText("Kick off a release readiness review.")).toBeVisible();
   await expect(page.getByText("Approval needed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Full activity" })).toBeVisible();
-  await page.getByRole("button", { name: "Full activity" }).click();
+  await expect(page.getByRole("tab", { name: "Full activity" })).toBeVisible();
+  await page.getByRole("tab", { name: "Full activity" }).click();
   await expect(page.getByText("Agent started work")).toBeVisible();
   await expect(page.getByText("Agent finished work")).toBeVisible();
   await expect(page.getByText("Used a tool")).toBeVisible();
@@ -319,7 +319,7 @@ test.describe("mobile review", () => {
     await page.locator("#hamburger").click();
     await expect(page.locator("#sidebar.open")).toBeVisible();
     await page.locator(".nav-links").getByRole("link", { name: /Conversations/ }).click();
-    await waitForViewReady(page, ".card.clickable");
+    await waitForViewReady(page, ".list-container .list-row");
     await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
     await page.getByText(conversationTitle).click();
 

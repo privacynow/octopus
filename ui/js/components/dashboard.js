@@ -59,7 +59,7 @@ function renderDashboard(container) {
 
         const head = document.createElement('div');
         head.className = 'dashboard-section-header';
-        head.innerHTML = `<div><strong>${esc(title)}</strong><span>${esc(subtitle)}</span></div>`;
+        head.innerHTML = `<div><strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span></div>`;
         section.appendChild(head);
 
         if (!items.length) {
@@ -84,7 +84,7 @@ function renderDashboard(container) {
 
         const text = document.createElement('div');
         text.className = 'preview-row-text';
-        text.innerHTML = `<strong>${esc(title)}</strong><span>${esc(subtitle)}</span>`;
+        text.innerHTML = `<strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span>`;
         row.appendChild(text);
 
         if (badge) {
@@ -153,26 +153,26 @@ function renderDashboard(container) {
 
         const healthGrid = document.createElement('div');
         healthGrid.className = 'stat-grid stat-grid-hero stat-grid-simple';
-        healthGrid.appendChild(_createStatCard(
-            String(summary.agents?.connected || 0),
-            'Connected agents',
-            `${summary.agents?.total || 0} enrolled`
-        ));
-        healthGrid.appendChild(_createStatCard(
-            String(summary.conversations?.active || 0),
-            'Open conversations',
-            `${summary.conversations?.total || 0} total`
-        ));
-        healthGrid.appendChild(_createStatCard(
-            String(summary.tasks?.running || 0),
-            'Running tasks',
-            `${summary.tasks?.pending || 0} pending`
-        ));
-        healthGrid.appendChild(_createStatCard(
-            `$${Number(summary.usage_24h?.cost_usd || 0).toFixed(2)}`,
-            '24h cost',
-            `${Number(summary.usage_24h?.prompt_tokens || 0).toLocaleString()} prompt tokens`
-        ));
+        healthGrid.appendChild(UI.renderStatCard({
+            value: String(summary.agents?.connected || 0),
+            label: 'Connected agents',
+            detail: `${summary.agents?.total || 0} enrolled`,
+        }));
+        healthGrid.appendChild(UI.renderStatCard({
+            value: String(summary.conversations?.active || 0),
+            label: 'Open conversations',
+            detail: `${summary.conversations?.total || 0} total`,
+        }));
+        healthGrid.appendChild(UI.renderStatCard({
+            value: String(summary.tasks?.running || 0),
+            label: 'Running tasks',
+            detail: `${summary.tasks?.pending || 0} pending`,
+        }));
+        healthGrid.appendChild(UI.renderStatCard({
+            value: `$${Number(summary.usage_24h?.cost_usd || 0).toFixed(2)}`,
+            label: '24h cost',
+            detail: `${Number(summary.usage_24h?.prompt_tokens || 0).toLocaleString()} prompt tokens`,
+        }));
         content.appendChild(healthGrid);
 
         const lowerGrid = document.createElement('div');
@@ -183,7 +183,7 @@ function renderDashboard(container) {
             subtitle: [
                 item.target_display_name || item.target_agent_id || 'agent',
                 item.request_kind || 'approval request',
-                item.expires_at ? `expires ${_formatApprovalTime(item.expires_at)}` : _relativeTime(item.created_at),
+                item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
             ].filter(Boolean).join(' · '),
             badge: 'Review',
             badgeClass: 'badge badge-queued',
@@ -200,7 +200,7 @@ function renderDashboard(container) {
             title: item.title || item.conversation_id,
             subtitle: [
                 item.target_display_name || item.target_agent_id || 'agent',
-                _relativeTime(item.updated_at || item.created_at),
+                UI.relativeTime(item.updated_at || item.created_at),
             ].join(' · '),
             badge: item.status || 'open',
             badgeClass: `badge badge-${item.status || 'open'}`,
@@ -217,7 +217,7 @@ function renderDashboard(container) {
             title: item.title || item.routed_task_id,
             subtitle: [
                 item.target_display_name || item.target_agent_id || 'agent',
-                _relativeTime(item.updated_at || item.created_at),
+                UI.relativeTime(item.updated_at || item.created_at),
             ].join(' · '),
             badge: item.status || 'failed',
             badgeClass: `badge badge-${item.status || 'failed'}`,
@@ -237,7 +237,7 @@ function renderDashboard(container) {
         content.textContent = '';
         const shell = document.createElement('div');
         shell.className = 'dashboard-shell';
-        _renderSkeletons(shell, 6, 'card');
+        UI.renderSkeletons(shell, 6, 'card');
         content.appendChild(shell);
 
         Promise.all([
@@ -249,7 +249,7 @@ function renderDashboard(container) {
             renderDashboardView(summary, approvals, conversations, failedTasks);
         }).catch((err) => {
             content.textContent = '';
-            _renderError(content, 'Failed to load dashboard: ' + err.message, loadSummary);
+            UI.renderError(content, 'Failed to load dashboard: ' + err.message, loadSummary);
         });
     }
 

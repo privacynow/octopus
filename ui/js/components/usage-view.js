@@ -68,8 +68,8 @@ function renderUsageView(container) {
     function loadUsage() {
         summaryEl.textContent = '';
         tableEl.textContent = '';
-        _renderSkeletons(summaryEl, 1, 'card');
-        _renderSkeletons(tableEl, 3, 'row');
+        UI.renderSkeletons(summaryEl, 1, 'card');
+        UI.renderSkeletons(tableEl, 3, 'row');
 
         const params = _rangeToParams(currentRange);
         API.getUsage(params).then(usage => {
@@ -149,7 +149,7 @@ function renderUsageView(container) {
         }).catch(err => {
             summaryEl.textContent = '';
             tableEl.textContent = '';
-            _renderError(tableEl, 'Failed: ' + err.message, loadUsage);
+            UI.renderError(tableEl, 'Failed: ' + err.message, loadUsage);
         });
     }
 

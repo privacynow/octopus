@@ -103,12 +103,17 @@ const Router = (() => {
     function _updateActiveNav(path) {
         document.querySelectorAll('.nav-links a').forEach(a => {
             const route = a.getAttribute('data-route');
+            let isActive = false;
             if (route === '/' && (path === '/ui' || path === '/ui/')) {
-                a.classList.add('active');
+                isActive = true;
             } else if (route && route !== '/' && path.startsWith('/ui' + route)) {
-                a.classList.add('active');
+                isActive = true;
+            }
+            a.classList.toggle('active', isActive);
+            if (isActive) {
+                a.setAttribute('aria-current', 'page');
             } else {
-                a.classList.remove('active');
+                a.removeAttribute('aria-current');
             }
         });
     }

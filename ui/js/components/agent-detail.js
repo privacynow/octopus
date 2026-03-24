@@ -17,7 +17,7 @@ function renderAgentDetail(container, params) {
     const content = document.createElement('div');
     content.id = 'agent-detail-content';
     container.appendChild(content);
-    _renderSkeletons(content, 3, 'card');
+    UI.renderSkeletons(content, 3, 'card');
 
     function loadDetail() {
         API.getAgentStatus(agentId).then(status => {
@@ -75,7 +75,7 @@ function renderAgentDetail(container, params) {
                 const tdV = document.createElement('td');
                 if (label === 'Last Heartbeat' && a.last_heartbeat_at) {
                     tdV.setAttribute('data-timestamp', a.last_heartbeat_at);
-                    tdV.textContent = _relativeTime(a.last_heartbeat_at);
+                    tdV.textContent = UI.relativeTime(a.last_heartbeat_at);
                 } else {
                     tdV.textContent = val;
                 }
@@ -141,7 +141,7 @@ function renderAgentDetail(container, params) {
                         ['Worker', w.worker_id || ''],
                         ['Role', w.process_role || ''],
                         ['Current', w.current_item_id || 'idle'],
-                        ['Last Seen', w.last_seen_at ? _relativeTime(w.last_seen_at) : ''],
+                        ['Last Seen', w.last_seen_at ? UI.relativeTime(w.last_seen_at) : ''],
                     ];
                     cells.forEach(([label, val]) => {
                         const td = document.createElement('td');
@@ -178,7 +178,7 @@ function renderAgentDetail(container, params) {
 
         }).catch(err => {
             content.textContent = '';
-            _renderError(content, 'Failed to load agent: ' + err.message, loadDetail);
+            UI.renderError(content, 'Failed to load agent: ' + err.message, loadDetail);
         });
     }
 
@@ -187,7 +187,8 @@ function renderAgentDetail(container, params) {
         const pag = document.getElementById('agent-convos-pag');
         if (!list) return;
         list.textContent = '';
-        _renderSkeletons(list, 3, 'card');
+        list.className = 'list-container';
+        UI.renderSkeletons(list, 3, 'row');
 
         API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit }).then(data => {
             const convos = data.conversations || data || [];
@@ -195,49 +196,28 @@ function renderAgentDetail(container, params) {
             if (pag) pag.textContent = '';
 
             if (convos.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No conversations';
-                list.appendChild(empty);
+                list.appendChild(UI.renderEmptyState('No conversations'));
                 return;
             }
 
             convos.forEach(c => {
-                const card = document.createElement('div');
-                card.className = 'card clickable';
-                _makePressable(card, () => Router.navigate('/ui/conversations/' + c.conversation_id));
-
-                const row = document.createElement('div');
-                row.className = 'card-row';
-
-                const info = document.createElement('div');
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = c.title || c.conversation_id;
-                info.appendChild(title);
-
-                const sub = document.createElement('div');
-                sub.className = 'card-subtitle';
+                const sub = document.createElement('span');
                 const ts = document.createElement('span');
                 ts.setAttribute('data-timestamp', c.created_at || '');
-                ts.textContent = _relativeTime(c.created_at);
-                sub.textContent = (c.origin_channel || '') + ' \u00b7 ';
+                ts.textContent = UI.relativeTime(c.created_at);
+                sub.appendChild(document.createTextNode((c.origin_channel || '') + ' \u00b7 '));
                 sub.appendChild(ts);
-                info.appendChild(sub);
-
-                row.appendChild(info);
-
-                const badge = document.createElement('span');
-                badge.className = 'badge badge-' + (c.status || 'open');
-                badge.textContent = c.status || 'open';
-                row.appendChild(badge);
-
-                card.appendChild(row);
-                list.appendChild(card);
+                list.appendChild(UI.renderListRow({
+                    href: '/ui/conversations/' + c.conversation_id,
+                    label: c.title || c.conversation_id,
+                    sublabelNode: sub,
+                    badgeText: c.status || 'open',
+                    badgeClass: 'badge-' + (c.status || 'open'),
+                }));
             });
 
             if (pag) {
-                _renderPagination(pag, {
+                UI.renderPagination(pag, {
                     hasPrev: convosCursorStack.length > 0,
                     hasNext: !!data.has_more,
                     info: '',
@@ -254,7 +234,7 @@ function renderAgentDetail(container, params) {
             }
         }).catch(err => {
             list.textContent = '';
-            _renderError(list, 'Failed to load conversations: ' + err.message, loadConversations);
+            UI.renderError(list, 'Failed to load conversations: ' + err.message, loadConversations);
         });
     }
 
@@ -318,7 +298,8 @@ function renderAgentConversations(container, params) {
 
     function loadPage() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 5, 'card');
+        listEl.className = 'list-container';
+        UI.renderSkeletons(listEl, 5, 'row');
 
         API.getAgentConversations(agentId, { cursor, limit }).then(data => {
             const convos = data.conversations || data || [];
@@ -326,48 +307,27 @@ function renderAgentConversations(container, params) {
             pagEl.textContent = '';
 
             if (convos.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No conversations';
-                listEl.appendChild(empty);
+                listEl.appendChild(UI.renderEmptyState('No conversations'));
                 return;
             }
 
             convos.forEach(c => {
-                const card = document.createElement('div');
-                card.className = 'card clickable';
-                card.addEventListener('click', () => Router.navigate('/ui/conversations/' + c.conversation_id));
-
-                const row = document.createElement('div');
-                row.className = 'card-row';
-
-                const info = document.createElement('div');
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = c.title || c.conversation_id;
-                info.appendChild(title);
-
-                const sub = document.createElement('div');
-                sub.className = 'card-subtitle';
+                const sub = document.createElement('span');
                 const ts = document.createElement('span');
                 ts.setAttribute('data-timestamp', c.created_at || '');
-                ts.textContent = _relativeTime(c.created_at);
-                sub.textContent = (c.origin_channel || '') + ' \u00b7 ';
+                ts.textContent = UI.relativeTime(c.created_at);
+                sub.appendChild(document.createTextNode((c.origin_channel || '') + ' \u00b7 '));
                 sub.appendChild(ts);
-                info.appendChild(sub);
-
-                row.appendChild(info);
-
-                const badge = document.createElement('span');
-                badge.className = 'badge badge-' + (c.status || 'open');
-                badge.textContent = c.status || 'open';
-                row.appendChild(badge);
-
-                card.appendChild(row);
-                listEl.appendChild(card);
+                listEl.appendChild(UI.renderListRow({
+                    href: '/ui/conversations/' + c.conversation_id,
+                    label: c.title || c.conversation_id,
+                    sublabelNode: sub,
+                    badgeText: c.status || 'open',
+                    badgeClass: 'badge-' + (c.status || 'open'),
+                }));
             });
 
-            _renderPagination(pagEl, {
+            UI.renderPagination(pagEl, {
                 hasPrev: cursorStack.length > 0,
                 hasNext: !!data.has_more,
                 info: '',
@@ -383,7 +343,7 @@ function renderAgentConversations(container, params) {
             });
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadPage);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
         });
     }
 

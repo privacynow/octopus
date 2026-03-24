@@ -12,6 +12,7 @@ function renderGuidanceEditor(container) {
     selectorBar.className = 'filter-bar';
 
     const providerSelect = document.createElement('select');
+    providerSelect.setAttribute('aria-label', 'Guidance provider');
     providerSelect.innerHTML =
         '<option value="claude">Claude</option>' +
         '<option value="codex">Codex</option>';
@@ -31,14 +32,14 @@ function renderGuidanceEditor(container) {
 
     function loadGuidance() {
         contentEl.textContent = '';
-        _renderSkeletons(contentEl, 2, 'card');
+        UI.renderSkeletons(contentEl, 2, 'card');
 
         API.getGuidance(currentProvider).then(data => {
             contentEl.textContent = '';
             renderGuidanceContent(data);
         }).catch(err => {
             contentEl.textContent = '';
-            _renderError(contentEl, 'Failed: ' + err.message, loadGuidance);
+            UI.renderError(contentEl, 'Failed: ' + err.message, loadGuidance);
         });
     }
 
@@ -160,7 +161,7 @@ function renderGuidanceEditor(container) {
         publishBtn.className = 'btn btn-sm btn-primary';
         publishBtn.textContent = 'Publish';
         publishBtn.addEventListener('click', async () => {
-            _showConfirm('Publish Guidance', 'Publish this guidance to all active conversations?', async () => {
+            UI.showConfirm('Publish Guidance', 'Publish this guidance to all active conversations?', async () => {
                 publishBtn.disabled = true;
                 try {
                     await API.publishGuidance(currentProvider);

@@ -16,6 +16,7 @@ function renderSkillCatalog(container) {
     searchInput.className = 'search-input';
     searchInput.placeholder = 'Search skills...';
     searchInput.type = 'text';
+    searchInput.setAttribute('aria-label', 'Search skills');
     container.appendChild(searchInput);
 
     const listEl = document.createElement('div');
@@ -34,7 +35,7 @@ function renderSkillCatalog(container) {
 
     function loadSkills() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 4, 'card');
+        UI.renderSkeletons(listEl, 4, 'card');
 
         API.listSkills().then(data => {
             const skills = Array.isArray(data) ? data : (data.skills || []);
@@ -42,7 +43,7 @@ function renderSkillCatalog(container) {
             renderList();
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadSkills);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadSkills);
         });
     }
 
@@ -59,10 +60,7 @@ function renderSkillCatalog(container) {
         }
 
         if (filtered.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.textContent = allSkills.length === 0 ? 'No skills available' : 'No skills match search';
-            listEl.appendChild(empty);
+            listEl.appendChild(UI.renderEmptyState(allSkills.length === 0 ? 'No skills available' : 'No skills match search'));
             return;
         }
 

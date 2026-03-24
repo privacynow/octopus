@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
   <title id="title">Octopus main menu</title>
-  <desc id="desc">Main menu when at least one bot exists: five options including Manage workspaces.</desc>
+  <desc id="desc">Main menu when bots exist: seven state-driven sections including Recommended Actions, Lifecycle, and Diagnose.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -22,17 +22,19 @@
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="364" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
-    <text class="label" x="102" y="34">main menu (existing bots)</text>
+    <text class="label" x="102" y="34">main menu (state-driven)</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-menu">
       <text class="line" xml:space="preserve">
         <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
         <tspan x="34" dy="29">What would you like to do?</tspan>
-        <tspan x="34" dy="29">  1. Add a bot</tspan>
-        <tspan x="34" dy="29">  2. Manage bots</tspan>
-        <tspan x="34" dy="29">  3. Connect bot to registry</tspan>
-        <tspan x="34" dy="29">  4. Manage workspaces</tspan>
-        <tspan x="34" dy="29">  5. Advanced</tspan>
+        <tspan x="34" dy="29">  1. Recommended Actions</tspan>
+        <tspan x="34" dy="29">  2. Lifecycle</tspan>
+        <tspan x="34" dy="29">  3. Bots</tspan>
+        <tspan x="34" dy="29">  4. Registry</tspan>
+        <tspan x="34" dy="29">  5. Workspaces</tspan>
+        <tspan x="34" dy="29">  6. Diagnose</tspan>
+        <tspan x="34" dy="29">  7. Status</tspan>
         <tspan x="34" dy="29">Choose an option: _</tspan>
       </text>
     </g>

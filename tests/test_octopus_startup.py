@@ -1,69 +1,65 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from app.octopus_cli.core import OctopusManager
 
-REPO = Path(__file__).resolve().parent.parent
 
+class FakeDockerRunner:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
 
-def _run_bash(script: str, *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["bash", "-lc", script],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+    def ensure_network(self) -> None:
+        return None
+
+    def bot_compose(self, slug, *args, **kwargs):  # noqa: ANN001
+        self.commands.append((slug, *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(["docker"], 0, "", "")
+
+    def docker_status_for_slug(self, slug: str) -> str:
+        del slug
+        return "Up 1 second"
+
+    def image_labels(self, image: str) -> dict[str, str]:
+        del image
+        return {}
+
+    def image_exists(self, image: str) -> bool:
+        del image
+        return True
 
 
 def test_start_bot_until_running_rebuilds_provider_image_before_start(tmp_path: Path) -> None:
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-mkdir -p .deploy/bots/example-bot
-cat > .deploy/bots/example-bot/.env <<'EOF'
-BOT_PROVIDER=codex
-EOF
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text("BOT_PROVIDER=codex\n", encoding="utf-8")
 
-ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1" >> calls.log; }}
-bot_compose() {{ printf 'compose:%s\\n' "$*" >> calls.log; }}
-bot_is_running() {{ return 0; }}
-sleep() {{ :; }}
+    docker = FakeDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+    calls: list[str] = []
+    manager.ensure_provider_image_ready = lambda provider, force=False: calls.append(f"image:{provider}")  # type: ignore[method-assign]
 
-start_bot_until_running example-bot
-cat calls.log
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert result.stdout.splitlines() == [
-        "image:codex",
-        "compose:example-bot up -d bot",
-    ]
+    manager.start_bot("example-bot")
+
+    assert calls == ["image:codex"]
+    assert docker.commands == [("example-bot", "up", "-d", "bot")]
 
 
 def test_run_bot_doctor_rebuilds_provider_image_before_doctor(tmp_path: Path) -> None:
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-mkdir -p .deploy/bots/example-bot
-cat > .deploy/bots/example-bot/.env <<'EOF'
-BOT_PROVIDER=codex
-EOF
+    env_dir = tmp_path / ".deploy" / "bots" / "example-bot"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / ".env").write_text("BOT_PROVIDER=codex\n", encoding="utf-8")
 
-ensure_provider_image_ready() {{ printf 'image:%s\\n' "$1" >> calls.log; }}
-bot_compose() {{ printf 'compose:%s\\n' "$*" >> calls.log; }}
+    docker = FakeDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+    calls: list[str] = []
+    manager.ensure_provider_image_ready = lambda provider, force=False: calls.append(f"image:{provider}")  # type: ignore[method-assign]
 
-run_bot_doctor example-bot >/dev/null
-cat calls.log
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert result.stdout.splitlines() == [
-        "image:codex",
-        "compose:example-bot run --rm bot python -m app.main --doctor",
+    manager.run_bot_doctor("example-bot")
+
+    assert calls == ["image:codex"]
+    assert docker.commands == [
+        ("example-bot", "run", "--rm", "bot", "python", "-m", "app.main", "--doctor"),
     ]

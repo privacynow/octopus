@@ -87,10 +87,7 @@ def _install_env(bin_dir: Path, command_log: Path, tmp_path: Path, **extra: str)
 
 def _make_temp_build_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
-    for relative_path in (
-        "scripts/provider/build_bot_image.sh",
-        "scripts/lib/bot.sh",
-    ):
+    for relative_path in ("scripts/provider/build_bot_image.sh",):
         dest = repo_root / relative_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / relative_path, dest)

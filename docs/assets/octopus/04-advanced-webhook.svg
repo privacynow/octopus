@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
-  <title id="title">Octopus advanced and webhook</title>
-  <desc id="desc">Advanced menu: full add-bot; webhook URL and listen port prompts.</desc>
+  <title id="title">Octopus diagnose menu</title>
+  <desc id="desc">Diagnose submenu: logs, shell, doctor, and provider auth recovery.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -22,13 +22,26 @@
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="228" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
-    <text class="label" x="102" y="34">advanced menu</text>
+    <text class="label" x="102" y="34">diagnose submenu</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-adv">
       <text class="line" xml:space="preserve">
-        <tspan x="34" y="94">  1. Add a bot with full setup</tspan>
-        <tspan x="34" dy="29">  2. Configure webhook mode</tspan>
-        <tspan x="34" dy="29">  3. Back</tspan>
+        <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
+        <tspan x="34" dy="29">What would you like to do?</tspan>
+        <tspan x="34" dy="29">  1. Recommended Actions</tspan>
+        <tspan x="34" dy="29">  2. Lifecycle</tspan>
+        <tspan x="34" dy="29">  3. Bots</tspan>
+        <tspan x="34" dy="29">  4. Registry</tspan>
+        <tspan x="34" dy="29">  5. Workspaces</tspan>
+        <tspan x="34" dy="29">  6. Diagnose</tspan>
+        <tspan x="34" dy="29">  7. Status</tspan>
+        <tspan x="34" dy="29">Choose an option: 6</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Diagnose</tspan>
+        <tspan x="34" dy="29">  1. Logs</tspan>
+        <tspan x="34" dy="29">  2. Shell</tspan>
+        <tspan x="34" dy="29">  3. Doctor</tspan>
+        <tspan x="34" dy="29">  4. Provider auth</tspan>
       </text>
     </g>
     <use href="#copy-adv" class="glow-copy"/>
@@ -36,14 +49,15 @@
 
     <rect class="panel" x="0" y="250" width="1144" height="238" rx="10"/>
     <circle class="dot" cx="26" cy="278" r="6.5"/><circle class="dot" cx="48" cy="278" r="6.5"/><circle class="dot" cx="70" cy="278" r="6.5"/>
-    <text class="label" x="102" y="284">webhook mode (excerpt)</text>
+    <text class="label" x="102" y="284">provider auth (excerpt)</text>
     <line class="rule" x1="0" y1="308" x2="1144" y2="308"/>
     <g id="copy-wh">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="344">Webhook URL (https://...):</tspan>
-        <tspan x="34" dy="29">https://bot.example.com/webhook/abc</tspan>
-        <tspan x="34" dy="29">Webhook port [8443]:</tspan>
-        <tspan x="34" dy="29">Webhook mode settings saved. Restart to apply.</tspan>
+        <tspan x="34" y="344">Provider auth</tspan>
+        <tspan x="34" dy="29">  1. claude     authenticated</tspan>
+        <tspan x="34" dy="29">  2. codex      not configured</tspan>
+        <tspan x="34" dy="29">Choose provider to authenticate: 2</tspan>
+        <tspan x="34" dy="29">Codex login completed. Run ./octopus status to confirm.</tspan>
       </text>
     </g>
     <use href="#copy-wh" class="glow-copy"/>

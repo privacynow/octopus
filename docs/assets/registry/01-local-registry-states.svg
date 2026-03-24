@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
   <title id="title">Local registry states</title>
-  <desc id="desc">Three terminal panels showing the local registry as not configured, stopped, and running.</desc>
+  <desc id="desc">Three terminal panels showing ./octopus status output when the local registry is not configured, stopped, and running.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -26,13 +26,15 @@
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-not-configured">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="94">$ ./octopus registry</tspan>
+        <tspan class="prompt" x="34" y="94">$ ./octopus status</tspan>
+        <tspan x="34" dy="29">Bots:</tspan>
+        <tspan x="34" dy="29">  (none)</tspan>
+        <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">Registry:</tspan>
         <tspan x="34" dy="29">  local      not configured</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. Start local registry</tspan>
-        <tspan x="34" dy="29">  2. Back</tspan>
-        <tspan x="34" dy="29">Choose an option:</tspan>
+        <tspan x="34" dy="29">Provider auth:</tspan>
+        <tspan x="34" dy="29">  claude     authenticated</tspan>
       </text>
     </g>
     <use href="#copy-not-configured" class="glow-copy"/>
@@ -44,13 +46,15 @@
     <line class="rule" x1="0" y1="372" x2="1144" y2="372"/>
     <g id="copy-stopped">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="408">$ ./octopus registry</tspan>
+        <tspan class="prompt" x="34" y="408">$ ./octopus status</tspan>
+        <tspan x="34" dy="29">Bots:</tspan>
+        <tspan x="34" dy="29">  Example Bot (@example_bot)    codex   standalone   stopped</tspan>
+        <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">Registry:</tspan>
         <tspan x="34" dy="29">  local      stopped    http://localhost:8787/ui</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. Start local registry</tspan>
-        <tspan x="34" dy="29">  2. Back</tspan>
-        <tspan x="34" dy="29">Choose an option:</tspan>
+        <tspan x="34" dy="29">Provider auth:</tspan>
+        <tspan x="34" dy="29">  codex      authenticated</tspan>
       </text>
     </g>
     <use href="#copy-stopped" class="glow-copy"/>
@@ -62,14 +66,16 @@
     <line class="rule" x1="0" y1="686" x2="1144" y2="686"/>
     <g id="copy-running">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="722">$ ./octopus registry</tspan>
+        <tspan class="prompt" x="34" y="722">$ ./octopus status</tspan>
+        <tspan x="34" dy="29">Bots:</tspan>
+        <tspan x="34" dy="29">  Example Bot (@example_bot)    codex   registry   running   (Up 15 seconds)</tspan>
+        <tspan x="34" dy="29">      local    full    connected    http://registry:8787</tspan>
+        <tspan x="34" dy="29"></tspan>
         <tspan x="34" dy="29">Registry:</tspan>
         <tspan x="34" dy="29">  local      running    http://localhost:8787/ui</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. Follow local registry logs</tspan>
-        <tspan x="34" dy="29">  2. Stop local registry</tspan>
-        <tspan x="34" dy="29">  3. Back</tspan>
-        <tspan x="34" dy="29">Choose an option:</tspan>
+        <tspan x="34" dy="29">Provider auth:</tspan>
+        <tspan x="34" dy="29">  codex      authenticated</tspan>
       </text>
     </g>
     <use href="#copy-running" class="glow-copy"/>

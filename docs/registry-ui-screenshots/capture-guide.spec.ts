@@ -712,12 +712,12 @@ test("capture all registry UI surfaces", async ({ page }) => {
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  await waitForViewReady(page, "#agent-list-content .card.clickable");
+  await waitForViewReady(page, "#agent-list-content .list-row");
   await page.screenshot({ path: path.join(OUT, "02-agents.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "02-agents.png"), [
-    { selector: ".filter-bar", label: "Current-page filters for name and state", color: "#ff9800", pad: 6 },
-    { selector: "#agent-list-content .card.clickable:nth-child(1)", label: "Agent card → detail", color: "#2196f3", pad: 6 },
-    { selector: "#agent-list-content .card.clickable:nth-child(2)", label: "Additional enrolled registry member", color: "#4caf50", pad: 6 },
+    { selector: ".filter-bar", label: "Server-side search and state filters", color: "#ff9800", pad: 6 },
+    { selector: "#agent-list-content .list-row:nth-child(1)", label: "Agent row → detail", color: "#2196f3", pad: 6 },
+    { selector: "#agent-list-content .list-row:nth-child(2)", label: "Additional enrolled registry member", color: "#4caf50", pad: 6 },
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);
@@ -731,28 +731,28 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}/conversations`);
-  await waitForViewReady(page, "#agent-convos .card, #agent-convos .empty-state");
+  await waitForViewReady(page, "#agent-convos .list-row, #agent-convos .empty-state");
   await page.screenshot({ path: path.join(OUT, "04-agent-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "04-agent-conversations.png"), [
     { selector: "#agent-convos", label: "All conversations scoped to the selected agent", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/conversations");
-  await waitForViewReady(page, ".card.clickable");
+  await waitForViewReady(page, ".list-container .list-row");
   await page.screenshot({ path: path.join(OUT, "05-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05-conversations.png"), [
     { selector: ".action-bar", label: "Start a conversation or jump to the approvals queue", color: "#4caf50", pad: 6 },
     { selector: ".filter-bar", label: "Server-backed search and status filter", color: "#ff9800", pad: 6 },
-    { selector: ".card.clickable:nth-of-type(1)", label: "Conversation row → timeline detail", color: "#2196f3", pad: 6 },
+    { selector: ".list-container .list-row:nth-of-type(1)", label: "Conversation row → timeline detail", color: "#2196f3", pad: 6 },
   ]);
 
   await page.locator(".search-input").first().fill("Release");
   await page.waitForTimeout(700);
-  await waitForViewReady(page, ".card.clickable");
+  await waitForViewReady(page, ".list-container .list-row");
   await page.screenshot({ path: path.join(OUT, "05b-conversations-filtered.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05b-conversations-filtered.png"), [
     { selector: ".search-input", label: "Search activates after 3+ characters", color: "#ff9800", pad: 6 },
-    { selector: ".card.clickable:nth-of-type(1)", label: "Filtered results from registry search", color: "#2196f3", pad: 6 },
+    { selector: ".list-container .list-row:nth-of-type(1)", label: "Filtered results from registry search", color: "#2196f3", pad: 6 },
   ]);
 
   await page.goto(`/ui/conversations/${seed.focusConversationId}`);
@@ -766,11 +766,11 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/tasks");
-  await waitForViewReady(page, ".task-card");
+  await waitForViewReady(page, ".task-list-item");
   await page.screenshot({ path: path.join(OUT, "07-tasks.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "07-tasks.png"), [
     { selector: ".filter-bar", label: "Status filter for routed work", color: "#ff9800", pad: 6 },
-    { selector: ".task-card:nth-of-type(1)", label: "Task cards expand inline and link to parent conversation", color: "#2196f3", pad: 8 },
+    { selector: ".task-list-item:nth-of-type(1)", label: "Task rows expand inline and link to parent conversation", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/capabilities");

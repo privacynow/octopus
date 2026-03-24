@@ -5,7 +5,7 @@
       "y": 150.140625,
       "width": 1060,
       "height": 58,
-      "label": "Current-page filters for name and state",
+      "label": "Server-side search and state filters",
       "color": "#ff9800"
     },
     {
@@ -13,7 +13,7 @@
       "y": 214.140625,
       "width": 1060,
       "height": 130.796875,
-      "label": "Agent card → detail",
+      "label": "Agent row → detail",
       "color": "#2196f3"
     },
     {

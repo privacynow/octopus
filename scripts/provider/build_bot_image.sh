@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# Build the supported bot image for the chosen provider (real Claude or Codex CLI).
-# Usage: ./scripts/provider/build_bot_image.sh [claude|codex]
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
-# shellcheck source=scripts/lib/bot.sh
-. "$REPO_DIR/scripts/lib/bot.sh"
 
 provider="${1:-${BOT_PROVIDER:-claude}}"
 case "$provider" in
@@ -67,5 +63,3 @@ if [ "$build_rc" -ne 0 ]; then
   exit "$build_rc"
 fi
 
-# Record repo rev so octopus can detect pulls/deletions and force rebuild
-git rev-parse HEAD 2>/dev/null > "$REPO_DIR/.bot-image-build-rev" || true

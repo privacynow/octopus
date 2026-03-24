@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
-  <title id="title">Octopus manage bot</title>
-  <desc id="desc">Per-bot menu: logs, restart, stop, doctor, edit settings, registry, back.</desc>
+  <title id="title">Octopus bots menu</title>
+  <desc id="desc">Bots submenu: add, connect, disconnect, start, stop, restart, redeploy, and inspect.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -22,19 +22,31 @@
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="464" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
-    <text class="label" x="102" y="34">manage bot</text>
+    <text class="label" x="102" y="34">bots submenu</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-manage">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="94">Bot: Example — @example_bot — claude, registry, running</tspan>
+        <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. View logs</tspan>
-        <tspan x="34" dy="29">  2. Restart</tspan>
-        <tspan x="34" dy="29">  3. Stop</tspan>
-        <tspan x="34" dy="29">  4. Health check</tspan>
-        <tspan x="34" dy="29">  5. Edit settings</tspan>
-        <tspan x="34" dy="29">  6. Connect to registry</tspan>
-        <tspan x="34" dy="29">  7. Back</tspan>
+        <tspan x="34" dy="29">What would you like to do?</tspan>
+        <tspan x="34" dy="29">  1. Recommended Actions</tspan>
+        <tspan x="34" dy="29">  2. Lifecycle</tspan>
+        <tspan x="34" dy="29">  3. Bots</tspan>
+        <tspan x="34" dy="29">  4. Registry</tspan>
+        <tspan x="34" dy="29">  5. Workspaces</tspan>
+        <tspan x="34" dy="29">  6. Diagnose</tspan>
+        <tspan x="34" dy="29">  7. Status</tspan>
+        <tspan x="34" dy="29">Choose an option: 3</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Bots</tspan>
+        <tspan x="34" dy="29">  1. Add bot</tspan>
+        <tspan x="34" dy="29">  2. Connect</tspan>
+        <tspan x="34" dy="29">  3. Disconnect</tspan>
+        <tspan x="34" dy="29">  4. Start</tspan>
+        <tspan x="34" dy="29">  5. Stop</tspan>
+        <tspan x="34" dy="29">  6. Restart</tspan>
+        <tspan x="34" dy="29">  7. Redeploy</tspan>
+        <tspan x="34" dy="29">  8. Inspect</tspan>
         <tspan x="34" dy="29">Choose an option: _</tspan>
       </text>
     </g>

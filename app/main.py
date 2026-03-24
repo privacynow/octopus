@@ -277,7 +277,7 @@ def main() -> None:
             print("Provider not authenticated or unavailable.", file=sys.stderr)
             for e in auth_errors:
                 print(f"  {e}", file=sys.stderr)
-            print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
+            print("Run ./octopus and choose Diagnose -> Provider auth to authenticate, or check your subscription.", file=sys.stderr)
             sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")

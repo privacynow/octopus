@@ -12,7 +12,9 @@ The primary command is:
 
 `./octopus` validates your Telegram bot token, guides provider login, writes
 deployment config under `.deploy/`, starts Docker services, and manages local
-or remote registry connections for each bot.
+deployment state for bots, workspaces, and the local registry. Runtime config
+still supports multiple local or remote registry connections per bot, but the
+current first-class Octopus connect/disconnect flows are local-registry focused.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)
 
@@ -86,8 +88,8 @@ Setup offers three modes:
   private (allowed users only). Optionally joins a shared workspace.
 - **Safe** (default) — human reviews plans before execution, public access ok,
   provider runs in sandboxed mode.
-- **Advanced** — configure everything manually (role, tags, skills, allowed
-  users, working dir, timeout, webhook, registry).
+- **Advanced** — configure everything manually (role, tags, description,
+  skills, allowed users, working dir, timeout, completion webhook URL).
 
 ![First bot setup](docs/assets/quickstart/01-first-bot-setup.svg)
 
@@ -95,11 +97,8 @@ When the bot starts successfully:
 
 ![Bot is running](docs/assets/quickstart/02-bot-running.svg)
 
-For the full advanced setup on first run:
-
-```bash
-./octopus --full
-```
+For advanced setup, choose **Bots → Add bot** from the no-arg menu and select
+the **Advanced** mode when prompted.
 
 ### Autonomous Mode
 
@@ -141,7 +140,7 @@ Octopus can run in three practical shapes:
   - no registry UI is required
 - **Registry-backed bot**
   - Telegram remains the user-facing chat surface
-  - one bot can connect to one or more local/remote registries
+  - one bot can still connect to one or more local/remote registries
   - the registry adds operator UI, routed-task flows, agent discovery, and
     shared timelines
 - **Shared runtime deployment**
@@ -152,8 +151,9 @@ Octopus can run in three practical shapes:
 
 ## Registry Connections And Scopes
 
-Each bot can have zero, one, or multiple registry connections. Octopus stores
-them as indexed `BOT_AGENT_REGISTRY_<n>_*` entries in the bot env file.
+Each bot can have zero, one, or multiple registry connections. The runtime and
+env model store them as indexed `BOT_AGENT_REGISTRY_<n>_*` entries in the bot
+env file.
 
 Every connection has a scope:
 
@@ -161,11 +161,14 @@ Every connection has a scope:
 - `channel`: conversation/UI/timeline surfaces only
 - `coordination`: routed tasks, agent discovery, and health publication only
 
-Octopus prompts for a scope whenever you add or switch a registry connection.
+The current Octopus CLI first-class manages the **local** registry connection
+path (`connect` / `disconnect` plus local registry lifecycle). Remote and
+multi-registry records still exist in config/runtime, but they are not exposed
+through an equally rich local CLI wizard today.
 
 Registry mode can point at:
 
-- a **local registry** managed from `./octopus registry`
+- a **local registry** managed from `./octopus start registry` or the no-arg menu
 - a **remote registry** over HTTPS
 
 ## Day-To-Day Commands
@@ -175,26 +178,25 @@ Registry mode can point at:
 The most common operator commands:
 
 ```bash
-./octopus status       # show bots, registry, and provider auth
-./octopus logs         # follow live logs
-./octopus doctor       # run a health check
-./octopus registry     # manage the local registry
-./octopus workspace    # manage shared workspaces
-./octopus clean        # wipe everything and start fresh
+./octopus                     # dynamic menu: recommended actions, lifecycle, bots, registry, workspaces
+./octopus status              # show bots, registry, provider auth, and image freshness
+./octopus start registry      # start (or create) the local registry
+./octopus connect             # connect all eligible bots to the local registry
+./octopus restart bots        # restart all configured bots
+./octopus redeploy registry   # rebuild and recreate the local registry, preserving data
+./octopus logs m1 --follow    # follow one bot's logs
+./octopus shell m1            # open a shell in one bot container
+./octopus doctor m1           # run a health check for one bot
+./octopus clean               # destructive reset of Octopus Docker state and .deploy
 ```
 
 If more than one bot exists, Octopus asks which bot to use only when the choice
 is ambiguous.
 
-### Registry Subcommands
+All mutating commands resolve the current candidates, preview them, and ask for
+one confirmation unless `--yes` is provided.
 
-```bash
-./octopus registry start     # start (or create) the local registry
-./octopus registry stop      # stop the local registry
-./octopus registry logs      # follow registry logs
-./octopus registry status    # show registry and bot connection status
-./octopus registry connect   # connect bot(s) to local registry
-```
+Short selectors such as `m1` work when they are unique.
 
 ## Shared Workspaces
 
@@ -202,23 +204,16 @@ Multiple bots on the same machine can share a project directory so they
 collaborate on the same codebase. A workspace is a host directory that gets
 bind-mounted into member bot containers.
 
-```bash
-# Create a workspace pointing at a host directory
-./octopus workspace create myapp /path/to/project
+Use the no-arg menu:
 
-# Add bots to the workspace
-./octopus workspace add-bot myapp my-claude-bot
-./octopus workspace add-bot myapp my-codex-bot
+1. Run `./octopus`
+2. Open `Workspaces`
+3. Create the workspace
+4. Attach one or more bots
+5. Inspect the generated assignments from the same section
 
-# Check workspace status
-./octopus workspace status
-
-# Verify workspace health
-./octopus workspace verify
-```
-
-After adding a bot to a workspace, restart it (`./octopus stop <slug> &&
-./octopus start <slug>`) for the mount to take effect. Inside the container,
+After adding a bot to a workspace, restart it (`./octopus restart <slug>`) for
+the mount to take effect. Inside the container,
 the workspace is available at `/workspace/<name>`. Each member bot gets a
 `BOT_PROJECTS` entry so users can switch to the workspace with `/project
 myapp` in the chat.
@@ -241,7 +236,7 @@ provider CLI inside the image.
   `npm install -g @anthropic-ai/claude-code`
 - If you need to pin or override that path, set
   `CLAUDE_CLI_NPM_PACKAGE=@anthropic-ai/claude-code@<version>` before running
-  `./octopus` or `./scripts/provider/build_bot_image.sh claude`
+  `./octopus redeploy bots`
 - If you specifically want Anthropic's native installer instead, set
   `CLAUDE_INSTALL_METHOD=native`; `CLAUDE_INSTALL_URL` remains available as an
   override for that path
@@ -286,14 +281,17 @@ uses **session cookies** and **CSRF** on mutating requests (`/v1/auth/csrf`).
 The UI is **vanilla HTML, JS, and CSS** under `ui/` (no framework, no build
 step). It includes:
 
-- **Agents** — paginated list, connectivity badges, WebSocket heartbeat hints;
-  agent detail with workers and a paginated conversation sub-list
+- **Agents** — paginated list rows with server-side search/status filtering,
+  connectivity badges, WebSocket heartbeat hints; agent detail with workers and
+  a paginated conversation sub-list
 - **Conversations** — paginated list, **debounced server-side search** (`q`,
   ≥3 characters), **status** filter; detail with **compose** (operator
-  messages), **cancel / export**, **messages-only** vs all events, **load older**
-  history, live **WebSocket** updates when `/v1/ws` is available
-- **Tasks** — paginated **routed tasks**, status filter, jump to parent
-  conversation; optional live refresh on task status events
+  messages), **cancel / export**, **Conversation** vs **Full activity**,
+  scroll-up history loading, and live **WebSocket** updates when `/v1/ws` is
+  available
+- **Tasks** — paginated **routed tasks** with row summaries, inline detail,
+  status filter, jump to parent conversation, and live refresh on task status
+  events
 - **Capabilities** — global toggles with confirmation
 - **Skills** — catalog browse with client-side search
 - **Usage** — date ranges (**Today / 7d / 30d**) via `since` / `until` query
@@ -303,15 +301,36 @@ step). It includes:
   the WebSocket client
 
 **Screenshots** (annotated) are generated by Playwright + `annotate.py` into
-`docs/assets/registry/ui/` — numbered **`00`–`09`**, plus **`04b`** (search demo),
-**`10`** (agent deep link), **`11`** (conversation deep link). Each has a raw
-`*.png`, `*.meta.json`, and `*-annotated.png`.
+`docs/assets/registry/ui/`. The current desktop set is:
+
+- `00-login`
+- `01-dashboard`
+- `01b-approvals`
+- `02-agents`
+- `03-agent-detail`
+- `04-agent-conversations`
+- `05-conversations`
+- `05b-conversations-filtered`
+- `06-conversation-detail`
+- `07-tasks`
+- `08-capabilities`
+- `09-skills`
+- `10-usage`
+- `11-guidance`
+- `12-agent-detail-deep-link`
+- `13-conversation-deep-link`
+
+The mobile quick-look images are raw captures:
+
+- `14-mobile-dashboard`
+- `15-mobile-approvals`
+- `16-mobile-conversation`
 
 Examples:
 
-![Registry UI — agents](docs/assets/registry/ui/01-agents-annotated.png)
+![Registry UI — agents](docs/assets/registry/ui/02-agents-annotated.png)
 
-![Registry UI — conversation detail](docs/assets/registry/ui/05-conversation-detail-annotated.png)
+![Registry UI — conversation detail](docs/assets/registry/ui/06-conversation-detail-annotated.png)
 
 Full **screen-by-screen** tour in one doc: **[docs/registry-guide.md](docs/registry-guide.md)**.
 Operator **manual** (feature pages, each with a screenshot): **[docs/manual/03-operator-registry.md](docs/manual/03-operator-registry.md)** → **[docs/manual/registry-ui/](docs/manual/registry-ui/)**.
@@ -330,9 +349,13 @@ CLI registry flows use **SVG** in `docs/assets/registry/`. Regenerate PNGs: regi
 - startup validates Postgres schema health before boot when
   `BOT_DATABASE_URL` is set
 - `BOT_REGISTRY_PUBLISH_LEVEL` controls what events bots publish to the
-  registry. Three levels: `minimal` (messages + errors), `standard` (+
-  approvals, delegation, provider summary), `full` (+ provider requests, tool
-  execution, file changes). Default: `standard`
+  registry. Three levels:
+  - `minimal`: `message.user`, `message.bot`, `task.status`, `error`
+  - `standard`: minimal + `provider.request`, `provider.response`,
+    `tool.execution`, `approval.requested`, `approval.decided`,
+    `delegation.proposed`, `delegation.submitted`, `delegation.completed`
+  - `full`: currently the same event set as `standard`
+  Default: `standard`
 
 ## Security Notes
 
@@ -365,7 +388,7 @@ If the bot is registry-backed:
 1. Run `./octopus status` and confirm the bot shows the expected registry
    connection rows.
 2. Open the local UI or hosted registry UI.
-3. Send `/doctor` in Telegram or run `./octopus doctor`.
+3. Send `/doctor` in Telegram or run `./octopus doctor <bot>`.
 
 ## Troubleshooting
 
@@ -373,28 +396,22 @@ If the bot will not start:
 
 1. Run `./octopus` again.
 2. If provider auth expired, Octopus will walk you through login again.
-3. Run `./octopus doctor`.
+3. Run `./octopus doctor <bot>`.
 4. Send `/doctor` to the bot in Telegram if it is reachable.
 
-If a remote registry connect fails immediately:
+If a remote registry connection that you configured manually fails:
 
 1. Confirm the URL starts with `https://`.
-2. Confirm the enrollment token is correct.
-3. Re-run the registry flow from `./octopus`.
-
-If a switch flow is unavailable:
-
-1. Run `./octopus status`.
-2. Check how many registry connections the bot already has.
-3. Use add/remove connection flows when more than one registry connection is
-   configured.
+2. Confirm the enrollment token and scope values are correct.
+3. Inspect the indexed `BOT_AGENT_REGISTRY_<n>_*` records in the bot env file.
+4. Run `./octopus doctor <bot>` and check the per-registry connection state.
 
 If the registry UI is not updating:
 
-1. Run `./octopus registry`.
+1. Run `./octopus status`.
 2. Confirm the local registry is running, or verify the remote registry URL.
 3. Re-run `./octopus status` and inspect the per-bot connection state.
-4. Re-run `./octopus` and choose the registry management path if needed.
+4. Re-run `./octopus` and use **Registry** or **Bots → Connect** if needed.
 
 ## More Documentation
 

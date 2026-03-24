@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">First bot wizard</title>
-  <desc id="desc">./octopus with no .deploy yet: token, provider, setup mode, then doctor and start.</desc>
+  <desc id="desc">./octopus with no .deploy yet: token, provider, setup mode, then image build, provider login, health check, and start.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -36,7 +36,7 @@
         <tspan x="34" dy="29">Setup mode:</tspan>
         <tspan class="muted" x="34" dy="29">  1. Autonomous   2. Safe (default)   3. Advanced</tspan>
         <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">&gt; build image &gt; provider login &gt; ./octopus doctor &gt; start container</tspan>
+        <tspan x="34" dy="29">&gt; build image &gt; provider login &gt; health check &gt; start container</tspan>
       </text>
     </g>
     <use href="#copy-wiz" class="glow-copy"/>

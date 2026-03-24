@@ -42,26 +42,25 @@ Use registry mode when you want:
 
 **URLs**
 
-- Operator browser (local): `http://localhost:<port>/ui` (port from `./octopus registry` or `.deploy/registry/.env`).
+- Operator browser (local): `http://localhost:<port>/ui` (port from `./octopus status` or `.deploy/registry/.env`).
 - Bots inside Docker: `http://registry:8787` (same API, no `/ui` required).
 
 ---
 
 ## CLI: lifecycle with `./octopus`
 
-The following workflows are illustrated with **terminal diagrams** (SVG). They are unchanged in spirit from earlier docs; use them for **add / switch / disconnect** registry connections.
+Use the verb-first lifecycle commands or the no-arg menu. The SVG storyboards
+under `docs/assets/registry/` document the current local-registry operator
+flows and map to the same lifecycle/connect/disconnect behavior.
 
 | Step | Topic | Asset |
 |------|--------|--------|
-| Check status | `./octopus registry` menu | [`01-local-registry-states.svg`](assets/registry/01-local-registry-states.svg) |
-| Start local registry | Option `1` | [`02-start-local-registry.svg`](assets/registry/02-start-local-registry.svg) |
-| Connect existing bot | Manage bots | [`04-connect-local.svg`](assets/registry/04-connect-local.svg) |
-| New bot in registry mode | First-run prompts | [`05-add-bot-local.svg`](assets/registry/05-add-bot-local.svg) |
-| Remote registry | HTTPS + enrollment token | [`06-connect-remote.svg`](assets/registry/06-connect-remote.svg) |
-| Multiple connections | Add/remove | [`10-manage-registry-connections.svg`](assets/registry/10-manage-registry-connections.svg) |
-| Switch local ↔ remote | Requires exactly one connection | [`07-switch-local-remote.svg`](assets/registry/07-switch-local-remote.svg), [`08-switch-remote-local.svg`](assets/registry/08-switch-remote-local.svg) |
-| Disconnect | Back to standalone or trim connections | [`09-disconnect-registry.svg`](assets/registry/09-disconnect-registry.svg) |
-| Logs / stop | Maintenance menu | [`11-registry-maintenance.svg`](assets/registry/11-registry-maintenance.svg) |
+| Check status | `./octopus status` | [`01-local-registry-states.svg`](assets/registry/01-local-registry-states.svg) |
+| Start local registry | `./octopus start registry` | [`02-start-local-registry.svg`](assets/registry/02-start-local-registry.svg) |
+| Connect eligible bots | `./octopus connect` | [`04-connect-local.svg`](assets/registry/04-connect-local.svg) |
+| Add a new bot, then connect it | `./octopus` → **Bots** → **Add bot**, then `./octopus connect <bot>` | [`05-add-bot-local.svg`](assets/registry/05-add-bot-local.svg) |
+| Disconnect local registry | `./octopus disconnect <bot>` | [`09-disconnect-registry.svg`](assets/registry/09-disconnect-registry.svg) |
+| Logs / stop / redeploy | `./octopus logs registry`, `stop registry`, `redeploy registry` | [`11-registry-maintenance.svg`](assets/registry/11-registry-maintenance.svg) |
 
 After startup, note:
 
@@ -92,9 +91,9 @@ The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conv
 |------|-------|---------|
 | **Dashboard** | `/ui`, `/ui/` | Attention-first home screen built from summary + approvals/tasks/conversations. |
 | **Approvals** | `/ui/approvals` | Pending decisions that still block work. |
-| **Agents** | `/ui/agents` | Paginated agent cards; entry to detail. |
+| **Agents** | `/ui/agents` | Paginated list rows with server-side search/state filtering; entry to detail. |
 | **Conversations** | `/ui/conversations` | Paginated list; **search** (≥3 chars, server-side `q`); **status** filter. |
-| **Tasks** | `/ui/tasks` | Routed task cards; **status** filter; expand → **parent conversation**. |
+| **Tasks** | `/ui/tasks` | Routed task row summaries; **status** filter; expand → **parent conversation**. |
 | **Capabilities** | `/ui/capabilities` | Global toggles (confirm); CSRF on POST. |
 | **Skills** | `/ui/skills` | Skill catalog; client-side search; install / uninstall. |
 | **Usage** | `/ui/usage` | Ranges: Today / 7d / 30d (`since` / `until`). |
@@ -121,9 +120,9 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 
 ![Agents](assets/registry/ui/02-agents-annotated.png)
 
-- Each **card** is one enrolled agent; **connectivity** reflects the current heartbeat state.
-- The filters are **current-page** filters over the current result set.
-- **Click** a card → **Agent detail**.
+- Each **row** is one enrolled agent; **connectivity** reflects the current heartbeat state.
+- The filters are server-side (`q` and `state`), not current-page-only.
+- **Click** a row → **Agent detail**.
 
 ### 3. Agent detail
 
@@ -170,9 +169,9 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 
 ![Tasks](assets/registry/ui/07-tasks-annotated.png)
 
-- **Pagination** and **status** filter keep task cards focused on one slice of routed work.
-- Expanding a card shows instructions, result summary, and the link back to the **parent conversation**.
-- Task cards refresh when routed-task updates land over the WebSocket.
+- **Pagination** and **status** filter keep task rows focused on one slice of routed work.
+- Expanding a row shows instructions, result summary, and the link back to the **parent conversation**.
+- Task rows refresh when routed-task updates land over the WebSocket.
 
 ### 8. Capabilities
 
@@ -238,7 +237,7 @@ The operator UI is still the same app on mobile: the sidebar becomes a drawer, t
 |------|--------|
 | **Full skill lifecycle** | Catalog view only. Draft → submit → approve → publish flows are **API-first** (`/v1/catalog/skills/...`). |
 | **Conversation-bound skill activation** | Still API-first; there is no dedicated top-level browser screen for activating or clearing skills on one conversation. |
-| **Standalone approvals inbox** | Approval requests appear inside conversation timelines; there is no separate queue screen yet. |
+| **Batch approval operations** | The approvals page is intentionally action-first one item at a time; there is no bulk decision workflow yet. |
 | **WebSocket without upgrade** | Live updates need a WebSocket-capable ASGI stack. If `/v1/ws` cannot upgrade, the UI still works via **`GET …/events`** polling on navigation and manual refresh patterns. |
 | **Automatic retry on 5xx** from the browser API client | Single `fetch` with timeout; optional future polish. |
 
@@ -250,17 +249,16 @@ After any registry change:
 
 ```bash
 ./octopus status
-./octopus doctor
+./octopus doctor <bot>
 ```
 
 Expect: bots in **registry** mode when connected, one connection line per registry with expected `registry_id`, `scope`, state, URL; local registry **running** when using local mode.
 
 | Symptom | Things to check |
 |---------|------------------|
-| UI does not load | Registry container up; port in `.deploy/registry/.env`; try `./octopus registry` → start. |
-| “No agents” | Bot not enrolled or heartbeat path broken — `./octopus doctor`, reconnect bot. |
-| Remote connect fails | URL must be `https://…`; enrollment token correct; scope appropriate. |
-| Switch unavailable | **Switch** flows need **exactly one** registry connection — remove extras first. |
+| UI does not load | Registry container up; port in `.deploy/registry/.env`; try `./octopus start registry`. |
+| “No agents” | Bot not enrolled or heartbeat path broken — `./octopus doctor <bot>`, reconnect the bot. |
+| Remote registry config fails | Check the indexed `BOT_AGENT_REGISTRY_<n>_*` records, confirm the URL is `https://…`, then inspect the per-registry state shown by `./octopus doctor <bot>`. |
 
 **Nuclear reset** (local dev only):
 

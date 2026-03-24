@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import webbrowser
+from pathlib import Path
+
+from app.octopus_cli.core import OctopusError, OctopusManager, PromptIO
+from app.octopus_cli.models import Action, BotState, ResolvedTarget, SystemState, TargetKind
+
+
+class OctopusCLI:
+    def __init__(self, repo_dir: Path, *, io: PromptIO | None = None) -> None:
+        self.io = io or PromptIO()
+        self.manager = OctopusManager(repo_dir, io=self.io)
+
+    def build_parser(self) -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser(prog="./octopus", add_help=False)
+        parser.add_argument("command", nargs="?", default="")
+        parser.add_argument("targets", nargs="*")
+        parser.add_argument("--yes", action="store_true")
+        parser.add_argument("--follow", action="store_true")
+        parser.add_argument("--live-provider", action="store_true")
+        parser.add_argument("--help", "-h", action="store_true")
+        return parser
+
+    def run(self, argv: list[str] | None = None) -> int:
+        args = self.build_parser().parse_args(argv)
+        if args.help:
+            self.print_help()
+            return 0
+        command = (args.command or "").strip().lower()
+        try:
+            if not command:
+                return self.interactive_menu()
+            if command == "help":
+                self.print_help()
+                return 0
+            if command == "clean":
+                self.manager.clean_all()
+                return 0
+            if command == "status":
+                return self.cmd_status(args.targets)
+            if command in {"start", "stop", "restart", "redeploy", "connect", "disconnect"}:
+                return self.run_mutating(Action(command), args.targets, yes=args.yes)
+            if command == "logs":
+                return self.cmd_logs(args.targets, follow=args.follow or True)
+            if command == "shell":
+                return self.cmd_shell(args.targets)
+            if command == "doctor":
+                return self.cmd_doctor(args.targets, live_provider=args.live_provider)
+            raise OctopusError(f"Unknown command: {command}")
+        except OctopusError as exc:
+            self.io.error(str(exc))
+            return 1
+
+    def print_help(self) -> None:
+        self.io.print("Usage: ./octopus <action> [target...] [--yes]")
+        self.io.print("")
+        self.io.print("Actions:")
+        self.io.print("  status")
+        self.io.print("  start [target...] [--yes]")
+        self.io.print("  stop [target...] [--yes]")
+        self.io.print("  restart [target...] [--yes]")
+        self.io.print("  redeploy [target...] [--yes]")
+        self.io.print("  connect [target...] [--yes]")
+        self.io.print("  disconnect [target...] [--yes]")
+        self.io.print("  logs <target> [--follow]")
+        self.io.print("  shell <target>")
+        self.io.print("  doctor <target> [--live-provider]")
+        self.io.print("  clean")
+        self.io.print("")
+        self.io.print("Targets:")
+        self.io.print("  registry")
+        self.io.print("  bots")
+        self.io.print("  bot slug")
+        self.io.print("  short alias like m1 when unique")
+
+    def _render_bot_lines(self, bots: list[BotState]) -> None:
+        for bot in bots:
+            running = "running" if bot.running else "stopped"
+            detail = f"({bot.docker_status})" if bot.docker_status else ""
+            self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
+            if bot.local_registry_connection_state != "none":
+                self.io.print(
+                    f"      local    {bot.bot_local_scope if hasattr(bot, 'bot_local_scope') else 'full'}    {bot.local_registry_live_state}    http://registry:8787"
+                )
+
+    def cmd_status(self, targets: list[str]) -> int:
+        state = self.manager.inspect_state()
+        if not targets:
+            self.render_system_status(state)
+            return 0
+        lowered = [item.lower() for item in targets]
+        if lowered == ["registry"]:
+            self.render_registry_status(state)
+            return 0
+        if lowered == ["bots"]:
+            self.render_bot_status(state)
+            return 0
+        for target in targets:
+            bot = self.manager.resolve_bot(target, state)
+            self.render_single_bot_status(bot, state)
+        return 0
+
+    def render_system_status(self, state: SystemState) -> None:
+        self.render_bot_status(state)
+        self.io.print("")
+        self.render_registry_status(state)
+        self.io.print("")
+        self.render_provider_auth_status(state)
+        self.io.print("")
+        self.render_freshness_status(state)
+
+    def render_bot_status(self, state: SystemState) -> None:
+        self.io.print("Bots:")
+        if not state.bots:
+            self.io.print("  (none)")
+            return
+        for bot in state.bots:
+            running = "running" if bot.running else "stopped"
+            detail = f"({bot.docker_status})" if bot.docker_status else ""
+            self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
+            connection = self.manager.bot_local_registry_connection(bot.slug)
+            if connection is not None:
+                self.io.print(f"      local    {connection.scope}    {bot.local_registry_live_state}    {connection.url}")
+
+    def render_single_bot_status(self, bot: BotState, state: SystemState) -> None:
+        del state
+        self.io.print(f"Bot: {bot.label}")
+        self.io.print(f"  Slug:      {bot.slug}")
+        self.io.print(f"  Provider:  {bot.provider}")
+        self.io.print(f"  Mode:      {bot.mode}")
+        self.io.print(f"  State:     {'running' if bot.running else 'stopped'}")
+        if bot.docker_status:
+            self.io.print(f"  Docker:    {bot.docker_status}")
+        self.io.print(f"  Role:      {bot.role or '(not set)'}")
+        self.io.print(f"  Tags:      {bot.tags or '(not set)'}")
+        if bot.registry_connections:
+            self.io.print("  Registry connections:")
+            for connection in bot.registry_connections:
+                self.io.print(
+                    f"    {connection.registry_id}    {connection.scope}    {connection.url}"
+                )
+        else:
+            self.io.print("  Registry connections: none")
+        if bot.workspace_memberships:
+            self.io.print(f"  Workspaces: {', '.join(bot.workspace_memberships)}")
+
+    def render_registry_status(self, state: SystemState) -> None:
+        self.io.print("Registry:")
+        if not state.registry.configured:
+            self.io.print("  local      not configured")
+            return
+        status = "running" if state.registry.running else "stopped"
+        self.io.print(f"  local      {status}    {state.registry.ui_url}")
+        self.io.print("")
+        self.io.print("Connected bots:")
+        connected = [bot for bot in state.bots if bot.local_registry_live_state == "connected"]
+        if not connected:
+            self.io.print("  (none)")
+        else:
+            for bot in connected:
+                connection = self.manager.bot_local_registry_connection(bot.slug)
+                scope = connection.scope if connection else "full"
+                self.io.print(f"  {bot.label}    scope: {scope}    state: connected")
+        self.io.print("")
+        self.io.print("Configured but not connected:")
+        configured = [
+            bot
+            for bot in state.bots
+            if bot.local_registry_connection_state != "none" and bot.local_registry_live_state != "connected"
+        ]
+        if not configured:
+            self.io.print("  (none)")
+        else:
+            for bot in configured:
+                connection = self.manager.bot_local_registry_connection(bot.slug)
+                scope = connection.scope if connection else "full"
+                self.io.print(f"  {bot.label}    scope: {scope}    state: {bot.local_registry_live_state}")
+
+    def render_provider_auth_status(self, state: SystemState) -> None:
+        self.io.print("Provider auth:")
+        for provider in state.provider_auth:
+            label = "authenticated" if provider.configured else "not configured"
+            self.io.print(f"  {provider.provider:<10} {label}")
+
+    def render_freshness_status(self, state: SystemState) -> None:
+        self.io.print("Freshness:")
+        for key, freshness in sorted(state.freshness.items()):
+            status = "stale" if freshness.stale else "current"
+            self.io.print(f"  {key:<12} {status}    {freshness.image}")
+
+    def run_mutating(self, action: Action, selectors: list[str], *, yes: bool) -> int:
+        state = self.manager.inspect_state()
+        targets = self.manager.resolve_targets(selectors, action, state)
+        if not targets:
+            self.io.print("Nothing to do.")
+            return 0
+        plan = self.manager.plan_action(action, targets, state)
+        self.manager.confirm_plan(plan, yes=yes)
+        if action == Action.START:
+            return self.execute_start(targets)
+        if action == Action.STOP:
+            return self.execute_stop(targets)
+        if action == Action.RESTART:
+            return self.execute_restart(targets)
+        if action == Action.REDEPLOY:
+            return self.execute_redeploy(targets)
+        if action == Action.CONNECT:
+            return self.execute_connect(targets)
+        if action == Action.DISCONNECT:
+            return self.execute_disconnect(targets)
+        raise OctopusError(f"Unsupported action: {action.value}")
+
+    def execute_start(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            if target.kind == TargetKind.REGISTRY:
+                self.manager.start_registry()
+            else:
+                self.manager.start_bot(target.identifier)
+        return 0
+
+    def execute_stop(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            if target.kind == TargetKind.REGISTRY:
+                self.manager.stop_registry()
+            else:
+                self.manager.stop_bot(target.identifier)
+        return 0
+
+    def execute_restart(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            if target.kind == TargetKind.REGISTRY:
+                if self.manager.has_local_registry():
+                    self.manager.stop_registry()
+                self.manager.start_registry()
+            else:
+                self.manager.restart_bot(target.identifier)
+        return 0
+
+    def execute_redeploy(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            if target.kind == TargetKind.REGISTRY:
+                if self.manager.has_local_registry():
+                    self.manager.stop_registry()
+                self.manager.start_registry(force_rebuild=True, force_recreate=True)
+            else:
+                self.manager.restart_bot(target.identifier, force_rebuild=True)
+        return 0
+
+    def execute_connect(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            self.manager.connect_bot_to_local_registry(target.identifier)
+            self.io.print(f"Connected {target.label} to the local registry.")
+        return 0
+
+    def execute_disconnect(self, targets: list[ResolvedTarget]) -> int:
+        for target in targets:
+            self.manager.disconnect_bot_from_local_registry(target.identifier)
+            self.io.print(f"Disconnected {target.label} from the local registry.")
+        return 0
+
+    def cmd_logs(self, targets: list[str], *, follow: bool) -> int:
+        state = self.manager.inspect_state()
+        resolved = self.manager.resolve_targets(targets, Action.LOGS, state)
+        if len(resolved) != 1:
+            raise OctopusError("logs requires exactly one target.")
+        return self.manager.follow_logs(resolved[0], follow=follow)
+
+    def cmd_shell(self, targets: list[str]) -> int:
+        state = self.manager.inspect_state()
+        resolved = self.manager.resolve_targets(targets, Action.SHELL, state)
+        if len(resolved) != 1:
+            raise OctopusError("shell requires exactly one target.")
+        return self.manager.open_shell(resolved[0])
+
+    def cmd_doctor(self, targets: list[str], *, live_provider: bool) -> int:
+        state = self.manager.inspect_state()
+        resolved = self.manager.resolve_targets(targets, Action.DOCTOR, state)
+        if len(resolved) != 1 or resolved[0].kind != TargetKind.BOT:
+            raise OctopusError("doctor requires exactly one bot target.")
+        output = self.manager.run_bot_doctor(resolved[0].identifier, live_provider=live_provider)
+        self.io.print(output.rstrip())
+        return 0
+
+    def recommended_actions(self, state: SystemState) -> list[tuple[str, callable[[], int]]]:
+        actions: list[tuple[str, callable[[], int]]] = []
+        if not state.bots:
+            actions.append(("Add your first bot", self.manager.add_bot_interactive))
+            return actions
+        stale_registry = state.freshness["registry"].stale and state.registry.configured
+        if stale_registry:
+            actions.append(("Redeploy stale registry", lambda: self.execute_redeploy([ResolvedTarget(TargetKind.REGISTRY, "registry", "registry")])))
+        stopped_bots = [bot for bot in state.bots if not bot.running]
+        if stopped_bots:
+            actions.append((f"Start {len(stopped_bots)} stopped bot(s)", lambda: self.execute_start([ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in stopped_bots])))
+        degraded = [
+            bot for bot in state.bots if bot.local_registry_connection_state != "none" and bot.local_registry_live_state != "connected"
+        ]
+        if degraded:
+            actions.append((f"Reconnect {len(degraded)} bot(s) to registry", lambda: self.execute_connect([ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in degraded])))
+        missing_auth = [auth for auth in state.provider_auth if not auth.configured]
+        for auth in missing_auth:
+            actions.append((f"Authenticate {auth.provider}", lambda provider=auth.provider: self.manager.ensure_provider_auth_ready(provider) or 0))
+        return actions
+
+    def interactive_menu(self) -> int:
+        while True:
+            state = self.manager.inspect_state()
+            self.io.print("What would you like to do?")
+            options: list[tuple[str, callable[[], int | None]]] = []
+            options.append(("Recommended Actions", self.menu_recommended))
+            options.append(("Lifecycle", self.menu_lifecycle))
+            options.append(("Bots", self.menu_bots))
+            if state.registry.configured or state.bots:
+                options.append(("Registry", self.menu_registry))
+            options.append(("Workspaces", self.menu_workspaces))
+            options.append(("Diagnose", self.menu_diagnose))
+            options.append(("Status", self.menu_status))
+            for index, (label, _) in enumerate(options, start=1):
+                self.io.print(f"  {index}. {label}")
+            try:
+                choice = self.io.prompt("Choose an option: ").strip()
+            except EOFError:
+                return 0
+            if not choice.isdigit():
+                self.io.error("Choose one of the listed options.")
+                continue
+            numeric = int(choice)
+            if numeric < 1 or numeric > len(options):
+                self.io.error("Choose one of the listed options.")
+                continue
+            action = options[numeric - 1][1]
+            result = action()
+            if result is not None:
+                return int(result)
+
+    def choose_from_items(self, title: str, items: list[tuple[str, callable[[], int | None]]]) -> int | None:
+        while True:
+            self.io.print(title)
+            for index, (label, _) in enumerate(items, start=1):
+                self.io.print(f"  {index}. {label}")
+            self.io.print(f"  {len(items) + 1}. Back")
+            choice = self.io.prompt("Choose an option: ").strip()
+            if not choice.isdigit():
+                self.io.error("Choose one of the listed options.")
+                continue
+            numeric = int(choice)
+            if numeric == len(items) + 1:
+                return None
+            if numeric < 1 or numeric > len(items):
+                self.io.error("Choose one of the listed options.")
+                continue
+            return items[numeric - 1][1]()
+
+    def menu_recommended(self) -> int | None:
+        state = self.manager.inspect_state()
+        recommended = self.recommended_actions(state)
+        if not recommended:
+            self.io.print("No recommended actions right now.")
+            return None
+        items = [(label, lambda callback=callback: callback()) for label, callback in recommended]
+        return self.choose_from_items("Recommended Actions", items)
+
+    def menu_lifecycle(self) -> int | None:
+        return self.choose_from_items(
+            "Lifecycle",
+            [
+                ("Start", lambda: self.menu_select_action(Action.START)),
+                ("Stop", lambda: self.menu_select_action(Action.STOP)),
+                ("Restart", lambda: self.menu_select_action(Action.RESTART)),
+                ("Redeploy", lambda: self.menu_select_action(Action.REDEPLOY)),
+            ],
+        )
+
+    def target_choices_for_menu(self, state: SystemState) -> list[tuple[str, list[ResolvedTarget]]]:
+        choices: list[tuple[str, list[ResolvedTarget]]] = []
+        all_targets: list[ResolvedTarget] = []
+        if state.registry.configured:
+            all_targets.append(ResolvedTarget(TargetKind.REGISTRY, "registry", "registry"))
+            choices.append(("Registry", [ResolvedTarget(TargetKind.REGISTRY, "registry", "registry")]))
+        if state.bots:
+            bot_targets = [ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in state.bots]
+            all_targets.extend(bot_targets)
+            choices.append(("Bots", bot_targets))
+            for bot in state.bots:
+                choices.append((bot.label, [ResolvedTarget(TargetKind.BOT, bot.slug, bot.label)]))
+        if all_targets:
+            choices.insert(0, ("All", all_targets))
+        return choices
+
+    def menu_select_action(self, action: Action) -> int | None:
+        state = self.manager.inspect_state()
+        choices = self.target_choices_for_menu(state)
+        return self.choose_from_items(
+            f"{action.value.title()}",
+            [(label, lambda targets=targets, act=action: self.run_mutating(act, [target.identifier for target in targets], yes=False)) for label, targets in choices],
+        )
+
+    def menu_bots(self) -> int | None:
+        state = self.manager.inspect_state()
+        items: list[tuple[str, callable[[], int | None]]] = [("Add bot", self.manager.add_bot_interactive)]
+        if state.bots:
+            items.extend(
+                [
+                    ("Connect", lambda: self.menu_select_action(Action.CONNECT)),
+                    ("Disconnect", lambda: self.menu_select_action(Action.DISCONNECT)),
+                    ("Start", lambda: self.menu_select_action(Action.START)),
+                    ("Stop", lambda: self.menu_select_action(Action.STOP)),
+                    ("Restart", lambda: self.menu_select_action(Action.RESTART)),
+                    ("Redeploy", lambda: self.menu_select_action(Action.REDEPLOY)),
+                    ("Inspect", lambda: self.cmd_status(["bots"])),
+                ]
+            )
+        return self.choose_from_items("Bots", items)
+
+    def menu_registry(self) -> int | None:
+        state = self.manager.inspect_state()
+        items: list[tuple[str, callable[[], int | None]]] = []
+        if state.registry.running:
+            items.extend(
+                [
+                    ("Stop registry", lambda: self.run_mutating(Action.STOP, ["registry"], yes=False)),
+                    ("Restart registry", lambda: self.run_mutating(Action.RESTART, ["registry"], yes=False)),
+                ]
+            )
+        else:
+            items.append(("Start registry", lambda: self.run_mutating(Action.START, ["registry"], yes=False)))
+        items.append(("Redeploy registry", lambda: self.run_mutating(Action.REDEPLOY, ["registry"], yes=False)))
+        items.append(("Open registry UI", lambda: webbrowser.open(state.registry.ui_url) or 0))
+        items.append(("Inspect registry", lambda: self.cmd_status(["registry"])))
+        return self.choose_from_items("Registry", items)
+
+    def menu_workspaces(self) -> int | None:
+        items = [
+            ("Create workspace", self.menu_workspace_create),
+            ("Remove workspace", self.menu_workspace_remove),
+            ("Attach bot", self.menu_workspace_attach),
+            ("Detach bot", self.menu_workspace_detach),
+            ("Inspect workspaces", self.menu_workspace_status),
+        ]
+        return self.choose_from_items("Workspaces", items)
+
+    def menu_workspace_create(self) -> int:
+        name = self.io.prompt("Workspace name: ").strip()
+        path = self.io.prompt("Host path: ").strip()
+        self.manager.create_workspace(name, path)
+        self.io.print(f'Workspace "{name}" created.')
+        return 0
+
+    def menu_workspace_remove(self) -> int:
+        state = self.manager.inspect_state()
+        if not state.workspaces:
+            raise OctopusError("No workspaces configured.")
+        choices = [(workspace.slug, lambda slug=workspace.slug: self._workspace_remove(slug)) for workspace in state.workspaces]
+        result = self.choose_from_items("Remove workspace", choices)
+        return 0 if result is None else int(result)
+
+    def _workspace_remove(self, slug: str) -> int:
+        ws_dir = self.manager.workspace_conf_file(slug).parent
+        members = self.manager.workspace_members(slug)
+        if ws_dir.exists():
+            for member in members:
+                self.manager.remove_bot_from_workspace(slug, member)
+            for child in sorted(ws_dir.glob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink()
+            ws_dir.rmdir()
+        self.io.print(f'Workspace "{slug}" removed.')
+        return 0
+
+    def menu_workspace_attach(self) -> int:
+        state = self.manager.inspect_state()
+        if not state.workspaces:
+            raise OctopusError("No workspaces configured.")
+        if not state.bots:
+            raise OctopusError("No bots configured.")
+        ws_name = self.io.prompt("Workspace name: ").strip()
+        bot_selector = self.io.prompt("Bot: ").strip()
+        bot = self.manager.resolve_bot(bot_selector, state)
+        self.manager.add_bot_to_workspace(ws_name, bot.slug)
+        self.io.print(f'Added "{bot.slug}" to workspace "{ws_name}".')
+        return 0
+
+    def menu_workspace_detach(self) -> int:
+        state = self.manager.inspect_state()
+        if not state.workspaces:
+            raise OctopusError("No workspaces configured.")
+        ws_name = self.io.prompt("Workspace name: ").strip()
+        bot_selector = self.io.prompt("Bot: ").strip()
+        bot = self.manager.resolve_bot(bot_selector, state)
+        self.manager.remove_bot_from_workspace(ws_name, bot.slug)
+        self.io.print(f'Removed "{bot.slug}" from workspace "{ws_name}".')
+        return 0
+
+    def menu_workspace_status(self) -> int:
+        state = self.manager.inspect_state()
+        self.io.print("Workspaces:")
+        if not state.workspaces:
+            self.io.print("  (none)")
+            return 0
+        for workspace in state.workspaces:
+            self.io.print(f"  {workspace.slug:<20} {workspace.root}    {workspace.mode}")
+            self.io.print("    Members:")
+            if not workspace.members:
+                self.io.print("      (none)")
+            else:
+                for member in workspace.members:
+                    running = "running" if self.manager.bot_is_running(member) else "stopped"
+                    self.io.print(f"      {member:<20} {running}")
+        return 0
+
+    def menu_diagnose(self) -> int | None:
+        items = [
+            ("Logs", lambda: self._diagnose_choose_target(self.cmd_logs)),
+            ("Shell", lambda: self._diagnose_choose_target(self.cmd_shell)),
+            ("Doctor", lambda: self._diagnose_choose_target(self.cmd_doctor, bot_only=True)),
+            ("Provider auth", self.menu_provider_auth),
+        ]
+        return self.choose_from_items("Diagnose", items)
+
+    def _diagnose_choose_target(self, callback, *, bot_only: bool = False):
+        state = self.manager.inspect_state()
+        items: list[tuple[str, callable[[], int | None]]] = []
+        if not bot_only and state.registry.configured:
+            items.append(("registry", lambda: callback(["registry"])))
+        for bot in state.bots:
+            items.append((bot.label, lambda slug=bot.slug: callback([slug])))
+        return self.choose_from_items("Choose a target", items)
+
+    def menu_provider_auth(self) -> int:
+        state = self.manager.inspect_state()
+        items = [
+            (
+                f"{provider.provider} ({'authenticated' if provider.configured else 'not configured'})",
+                lambda provider_name=provider.provider: self._provider_auth(provider_name),
+            )
+            for provider in state.provider_auth
+        ]
+        result = self.choose_from_items("Provider auth", items)
+        return 0 if result is None else int(result)
+
+    def _provider_auth(self, provider: str) -> int:
+        self.manager.ensure_provider_auth_ready(provider)
+        self.io.print(f"{provider} authentication complete.")
+        return 0
+
+    def menu_status(self) -> int | None:
+        return self.choose_from_items(
+            "Status",
+            [
+                ("System summary", lambda: self.cmd_status([])),
+                ("Bots", lambda: self.cmd_status(["bots"])),
+                ("Registry", lambda: self.cmd_status(["registry"])),
+                ("Workspaces", self.menu_workspace_status),
+                ("Freshness", lambda: self._status_freshness()),
+            ],
+        )
+
+    def _status_freshness(self) -> int:
+        self.render_freshness_status(self.manager.inspect_state())
+        return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    repo_dir = Path(__file__).resolve().parents[2]
+    cli = OctopusCLI(repo_dir)
+    return cli.run(argv)

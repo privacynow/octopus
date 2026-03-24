@@ -1,20 +1,33 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from app.octopus_cli.cli import OctopusCLI
+from app.octopus_cli.core import OctopusManager
+from app.octopus_cli.models import Action
 
-REPO = Path(__file__).resolve().parent.parent
 
+class FakeDockerRunner:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
 
-def _run_bash(script: str, *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["bash", "-lc", script],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=check,
-    )
+    def docker_status_for_slug(self, slug: str) -> str:
+        del slug
+        return ""
+
+    def bot_compose(self, slug, *args, **kwargs):  # noqa: ANN001
+        self.commands.append((slug, *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(["docker"], 1, "", "")
+
+    def image_labels(self, image: str) -> dict[str, str]:
+        del image
+        return {}
+
+    def image_exists(self, image: str) -> bool:
+        del image
+        return True
 
 
 def _write_registry_bot_env(tmp_path: Path, slug: str, display_name: str) -> None:
@@ -33,40 +46,28 @@ def _write_registry_bot_env(tmp_path: Path, slug: str, display_name: str) -> Non
                 "BOT_AGENT_REGISTRY_1_SCOPE=full",
                 "",
             ]
-        )
+        ),
+        encoding="utf-8",
     )
 
 
-def test_connect_menu_all_eligible_survives_bot_compose_stdin_reads(tmp_path: Path) -> None:
+def test_connect_all_targets_all_eligible_bots(tmp_path: Path) -> None:
     _write_registry_bot_env(tmp_path, "m1", "M1")
     _write_registry_bot_env(tmp_path, "m2", "M2")
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-bot_compose() {{ cat >/dev/null; return 1; }}
-selected_bots_need_local_scope() {{ return 1; }}
-connect_bots_to_local_registry_batch() {{ printf 'BATCH:%s\\n' "$*"; }}
-printf 'a\\n' | connect_bot_to_local_registry_menu
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert "BATCH:full m1 m2" in result.stdout
+    manager = OctopusManager(tmp_path, docker=FakeDockerRunner())
+    state = manager.inspect_state()
+
+    targets = manager.resolve_targets([], Action.CONNECT, state)
+
+    assert [target.identifier for target in targets] == ["m1", "m2"]
 
 
-def test_registry_connect_all_survives_bot_compose_stdin_reads(tmp_path: Path) -> None:
-    _write_registry_bot_env(tmp_path, "m1", "M1")
-    _write_registry_bot_env(tmp_path, "m2", "M2")
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-bot_compose() {{ cat >/dev/null; return 1; }}
-connect_bots_to_local_registry_batch() {{ printf 'BATCH:%s\\n' "$*"; }}
-registry_connect_cmd --all
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert "BATCH:full m1 m2" in result.stdout
+def test_short_alias_resolution_uses_display_name_when_unique(tmp_path: Path) -> None:
+    _write_registry_bot_env(tmp_path, "lift-and-shift-m1-bot", "M1")
+    _write_registry_bot_env(tmp_path, "lift-and-shift-m2-bot", "M2")
+    manager = OctopusManager(tmp_path, docker=FakeDockerRunner())
+    state = manager.inspect_state()
+
+    bot = manager.resolve_bot("m1", state)
+
+    assert bot.slug == "lift-and-shift-m1-bot"

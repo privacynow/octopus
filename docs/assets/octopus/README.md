@@ -4,10 +4,10 @@ Terminal-style diagrams for **non-registry** Octopus flows. They use the same pa
 
 | File | Flow |
 |------|------|
-| [01-main-menu.svg](01-main-menu.svg) | Main menu (`main_menu`) — five options |
-| [02-manage-bot.svg](02-manage-bot.svg) | Manage bot (`manage_bot_menu`) |
-| [03-workspace.svg](03-workspace.svg) | `workspace create` / `add-bot` / `verify` |
-| [04-advanced-webhook.svg](04-advanced-webhook.svg) | `advanced_menu` + `configure_webhook_mode_flow` |
+| [01-main-menu.svg](01-main-menu.svg) | State-driven main menu — Recommended Actions, Lifecycle, Bots, Registry, Workspaces, Diagnose, Status |
+| [02-manage-bot.svg](02-manage-bot.svg) | Bots submenu — add/connect/disconnect/start/stop/restart/redeploy/inspect |
+| [03-workspace.svg](03-workspace.svg) | Workspace menu — create, attach, detach, inspect |
+| [04-advanced-webhook.svg](04-advanced-webhook.svg) | Diagnose submenu — logs, shell, doctor, provider auth |
 | [05-clean.svg](05-clean.svg) | `cmd_clean` confirmation |
 | [06-status.svg](06-status.svg) | `./octopus status` output |
 

@@ -154,6 +154,9 @@ class RegistryClient:
     async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/conversations/{conversation_id}")
 
+    async def get_agent_status(self, agent_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/agents/{agent_id}/status")
+
     async def publish_events(
         self,
         conversation_id: str,

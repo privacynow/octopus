@@ -195,13 +195,16 @@ endpoint.
 flowchart LR
     Slack["Slack"]
     Bolt["Bolt for Python"]
-    Transport["app/channels/slack<br/>ingress + egress + refs"]
-    Sdk["octopus_sdk<br/>execution + runtime + identity + event sink"]
     Registry["Registry service"]
+
+    subgraph Bot["Slack bot process"]
+        Transport["app/channels/slack<br/>ingress + egress + refs"]
+        Sdk["octopus_sdk<br/>execution + runtime + identity + event sink"]
+    end
 
     Slack <--> Bolt
     Bolt --> Transport
-    Transport --> Sdk
+    Transport <--> Sdk
     Sdk <--> Registry
 ```
 

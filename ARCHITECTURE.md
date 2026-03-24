@@ -192,27 +192,26 @@ when Slack should deliver events over a websocket instead of an inbound HTTP
 endpoint.
 
 ```mermaid
-flowchart LR
+flowchart TB
     Slack["Slack"]
-    Registry["Registry service"]
-    Provider["Claude / Codex"]
 
     subgraph Bot["Slack bot process"]
+        direction TB
         Bolt["Bolt for Python"]
-        Transport["app/channels/slack<br/>ingress + egress + refs"]
-        Exec["octopus_sdk<br/>execution + runtime"]
-        RegSdk["octopus_sdk.registry<br/>client + event sink"]
+        Transport["Slack transport<br/>ingress + egress + refs"]
+        Exec["Execution runtime<br/>octopus_sdk.execution + octopus_sdk.runtime"]
+        RegSdk["Registry capability<br/>octopus_sdk.registry + octopus_sdk.event_sink"]
     end
 
-    Slack -->|events / commands| Bolt
-    Bolt -->|normalized inbound| Transport
-    Transport -->|identity + input| Exec
-    Exec -->|reply / actions / artifacts| Transport
-    Transport -->|messages / files / updates| Bolt
-    Bolt -->|Slack API calls| Slack
-    Exec -->|publish / search / route| RegSdk
-    RegSdk <--> Registry
+    Provider["Claude / Codex"]
+    Registry["Registry service"]
+
+    Slack <--> Bolt
+    Bolt <--> Transport
+    Transport <--> Exec
     Exec <--> Provider
+    Exec <--> RegSdk
+    RegSdk <--> Registry
 ```
 
 The transport split would look like this:

@@ -206,12 +206,18 @@ flowchart TB
     Provider["Claude / Codex"]
     Registry["Registry service"]
 
-    Slack <--> Bolt
-    Bolt <--> Transport
-    Transport <--> Exec
+    Slack --> InSlack["events / commands"] --> Bolt
+    Bolt --> Inbound["normalized inbound"] --> Transport
+    Transport --> ToExec["identity + input"] --> Exec
+    Exec --> ToTransport["reply / actions / artifacts"] --> Transport
+    Transport --> ToBolt["outbound requests"] --> Bolt
+    Bolt --> OutSlack["messages / files / updates"] --> Slack
     Exec <--> Provider
-    Exec <--> RegSdk
+    Exec --> ToRegistry["publish / search / route"] --> RegSdk
     RegSdk <--> Registry
+
+    classDef annotation fill:transparent,stroke:transparent,color:#555;
+    class InSlack,Inbound,ToExec,ToTransport,ToBolt,OutSlack,ToRegistry annotation
 ```
 
 The transport split would look like this:

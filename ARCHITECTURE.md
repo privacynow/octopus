@@ -231,22 +231,25 @@ In practice a Slack transport would:
 4. supply runtime collaborator implementations for `ExecutionServices`
 5. call `build_execution_runtime(...)`, then `execute_request(...)` for normalized inbound work
 
-The development/composition process would look like this:
+Once implemented, the runtime behavior would look like this:
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer
+    participant S as Slack
     participant Bolt as Bolt
     participant Transport as Slack transport
     participant Runtime as SDK runtime
     participant RegistrySdk as SDK registry
+    participant Provider as Provider
     participant Registry as Registry service
 
-    Dev->>Bolt: choose Bolt for Slack ingress / API
-    Dev->>Transport: implement bootstrap, ingress, egress, refs
-    Dev->>Runtime: compose ExecutionServices and build_execution_runtime(...)
-    Dev->>RegistrySdk: enable RegistryClient / RegistryEventSink when needed
+    Note over Bolt,RegistrySdk: Slack bot process
+    S->>Bolt: events / commands
     Transport->>Runtime: hand off normalized inbound work
+    Runtime->>Provider: run / preflight
+    Runtime->>Transport: reply / actions / artifacts
+    Transport->>Bolt: outbound requests
+    Bolt->>S: messages / files / updates
     Runtime->>RegistrySdk: publish, search, route
     RegistrySdk->>Registry: registry API calls
 ```

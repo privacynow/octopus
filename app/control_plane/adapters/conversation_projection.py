@@ -26,6 +26,8 @@ class BusConversationProjection:
     ``create_conversation`` for that authority before publishing (idempotent).
     """
 
+    bus_timeout_seconds: float = 5.0
+
     def __init__(
         self,
         bus: ControlPlaneBus,
@@ -83,7 +85,7 @@ class BusConversationProjection:
                         authority_ref=authority_ref,
                         idempotency_key=idempotency_key,
                     ),
-                    timeout_seconds=5.0,
+                    timeout_seconds=self.bus_timeout_seconds,
                 )
                 if reply.status == "failed":
                     log.error(
@@ -176,7 +178,7 @@ class BusConversationProjection:
                         payload_json=json.dumps({"conversation_id": conversation_id}),
                         authority_ref=recovery_authority,
                     ),
-                    timeout_seconds=5.0,
+                    timeout_seconds=self.bus_timeout_seconds,
                 )
                 if reply.status == "completed" and reply.result_json:
                     conv = json.loads(reply.result_json)
@@ -229,7 +231,7 @@ class BusConversationProjection:
                         authority_ref=authority_ref,
                         idempotency_key=f"{resolved_agent_id}:{cached['origin_channel']}:{cached['external_conversation_ref']}",
                     ),
-                    timeout_seconds=5.0,
+                    timeout_seconds=self.bus_timeout_seconds,
                 )
             except Exception:
                 log.warning(

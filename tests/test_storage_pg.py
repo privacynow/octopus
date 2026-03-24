@@ -8,7 +8,7 @@ from app.identity import telegram_conversation_key
 from app.session_defaults import default_session
 
 
-def _provider_state_factory():
+def _provider_state_factory(conversation_key: str = ""):
     return {}
 
 
@@ -249,7 +249,7 @@ def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
             )
         conn.commit()
         loaded = storage_postgres.load_session(
-            conn, conversation_key, "claude", lambda: {"session_id": "new"}, "on"
+            conn, conversation_key, "claude", lambda _ck="": {"session_id": "new"}, "on"
         )
     assert isinstance(loaded["provider_state"], dict)
     assert loaded["provider_state"]["session_id"] == "new"

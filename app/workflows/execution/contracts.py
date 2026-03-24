@@ -58,6 +58,7 @@ class ExecutionEventSink(Protocol):
     async def on_error(self, content: str, *, error_type: str = "execution", message: str = "") -> None: ...
     async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None: ...
     async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None: ...
+    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class RequestExecutionOutcome:
 @dataclass(frozen=True)
 class ExecutionRuntime:
     dispatch: RuntimeDispatchRuntime
-    build_transport_identity: Callable[[Any, int | str], TransportIdentity]
+    build_transport_identity: Callable[..., TransportIdentity]  # (message, chat_id, *, actor_key="")
     build_event_sink: Callable[[TransportIdentity], ExecutionEventSink]
     render_provider_error: Callable[[str], str]
     show_foreign_setup: Callable[[Any, Any], Awaitable[None]]

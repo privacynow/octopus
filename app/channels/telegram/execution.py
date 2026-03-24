@@ -303,6 +303,8 @@ def execution_channel_metadata(
     runtime: TelegramRuntime,
     message,
     chat_id: int | str,
+    *,
+    actor_key: str = "",
 ) -> ExecutionChannelMetadata:
     conversation_ref = getattr(message, "conversation_ref", "")
     dispatcher = getattr(runtime, "channel_dispatcher", None)
@@ -349,7 +351,7 @@ def execution_channel_metadata(
         origin_channel=origin,
         external_conversation_ref=str(chat_id),
         target_agent_id=target_agent_id,
-        actor=telegram_actor_key(getattr(getattr(message, "from_user", None), "id", 0)) if getattr(message, "from_user", None) else "",
+        actor=actor_key or (telegram_actor_key(getattr(getattr(message, "from_user", None), "id", 0)) if getattr(message, "from_user", None) else ""),
     )
 
 
@@ -364,8 +366,8 @@ def build_execution_runtime(
 
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
-        build_transport_identity=lambda message, chat_id: build_execution_channel_context(
-            execution_channel_metadata(runtime, message, chat_id),
+        build_transport_identity=lambda message, chat_id, *, actor_key="": build_execution_channel_context(
+            execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
             build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
                 runtime.config,
                 telegram_chat_id(numeric_chat_id),

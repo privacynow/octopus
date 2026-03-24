@@ -272,3 +272,74 @@ class TestDualUsageQuery:
             rows = conn.execute("SELECT * FROM events WHERE kind IN ('provider.response', 'usage')").fetchall()
             assert len(rows) == 2
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Deterministic session_id
+# ---------------------------------------------------------------------------
+
+class TestDeterministicSessionId:
+    def test_same_conversation_key_produces_same_session_id(self):
+        from app.providers.claude import ClaudeProvider
+        p = ClaudeProvider.__new__(ClaudeProvider)
+        s1 = p.new_provider_state("tg:12345")
+        s2 = p.new_provider_state("tg:12345")
+        assert s1["session_id"] == s2["session_id"]
+
+    def test_different_conversation_key_produces_different_session_id(self):
+        from app.providers.claude import ClaudeProvider
+        p = ClaudeProvider.__new__(ClaudeProvider)
+        s1 = p.new_provider_state("tg:12345")
+        s2 = p.new_provider_state("tg:99999")
+        assert s1["session_id"] != s2["session_id"]
+
+    def test_empty_conversation_key_produces_random_session_id(self):
+        from app.providers.claude import ClaudeProvider
+        p = ClaudeProvider.__new__(ClaudeProvider)
+        s1 = p.new_provider_state()
+        s2 = p.new_provider_state()
+        assert s1["session_id"] != s2["session_id"]
+
+
+# ---------------------------------------------------------------------------
+# ExecutionRuntime shape
+# ---------------------------------------------------------------------------
+
+class TestExecutionRuntimeShape:
+    def test_requires_build_transport_identity(self):
+        from app.workflows.execution.contracts import ExecutionRuntime
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(ExecutionRuntime)}
+        assert "build_transport_identity" in fields
+        assert "build_event_sink" in fields
+        assert "build_channel_context" not in fields
+        assert "conversation_projection" not in fields
+
+    def test_delegation_parser_is_optional(self):
+        from app.workflows.execution.contracts import ExecutionRuntime
+        import dataclasses
+        field_map = {f.name: f for f in dataclasses.fields(ExecutionRuntime)}
+        assert field_map["delegation_parser"].default is None
+
+
+# ---------------------------------------------------------------------------
+# Actor key normalization at boundary
+# ---------------------------------------------------------------------------
+
+class TestActorKeyNormalization:
+    def test_telegram_actor_key_from_int(self):
+        from app.channels.telegram.session_io import actor_key
+        assert actor_key(42) == "tg:42"
+
+    def test_actor_key_from_string_passthrough(self):
+        from app.channels.telegram.session_io import actor_key
+        assert actor_key("tg:42") == "tg:42"
+
+    def test_session_state_uses_actor_key_field(self):
+        from app.session_state import PendingApproval, PendingRetry, AwaitingSkillSetup
+        import dataclasses
+        for cls in (PendingApproval, PendingRetry, AwaitingSkillSetup):
+            field_names = {f.name for f in dataclasses.fields(cls)}
+            assert "actor_key" in field_names, f"{cls.__name__} missing actor_key"
+            assert "request_user_id" not in field_names, f"{cls.__name__} still has request_user_id"
+            assert "user_id" not in field_names or cls is not AwaitingSkillSetup, f"{cls.__name__} still has user_id"

@@ -115,6 +115,7 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
         old_session = _session_io_load(runtime.state, chat_id)
         outcome = _flows().conversation.control.reset_session(
             old_session,
+            conversation_key=_conversation_key(chat_id),
             actor_key=_actor_key(event.user.id),
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
@@ -404,6 +405,7 @@ async def cmd_project(event, update: Update, context, *, runtime: TelegramConver
                 value,
                 cfg=cfg,
                 provider_state_factory=runtime.state.provider.new_provider_state,
+                conversation_key=_conversation_key(event.chat_id),
             )
             if outcome.mutated:
                 _session_io_save(runtime.state, event.chat_id, session)
@@ -486,6 +488,7 @@ async def cmd_policy(event, update: Update, context, *, runtime: TelegramConvers
                 provider_name=runtime.state.provider.name,
                 trust_tier=_trust_tier(runtime, event.user),
                 provider_state_factory=runtime.state.provider.new_provider_state,
+                conversation_key=_conversation_key(event.chat_id),
             )
             if outcome.mutated:
                 _session_io_save(runtime.state, event.chat_id, session)
@@ -579,6 +582,7 @@ async def handle_settings_callback(
                 provider_name=runtime.state.provider.name,
                 trust_tier=_trust_tier(runtime, event.user),
                 provider_state_factory=runtime.state.provider.new_provider_state,
+                conversation_key=_conversation_key(chat_id),
             )
             if outcome.status == "invalid":
                 return
@@ -603,6 +607,7 @@ async def handle_settings_callback(
                 value,
                 cfg=runtime.state.config,
                 provider_state_factory=runtime.state.provider.new_provider_state,
+                conversation_key=_conversation_key(chat_id),
             )
             if outcome.mutated:
                 _session_io_save(runtime.state, chat_id, session)
@@ -631,6 +636,7 @@ async def handle_worker_conversation_action(
         old_session = _session_io_load(runtime.state, runtime_chat)
         outcome = _flows().conversation.control.reset_session(
             old_session,
+            conversation_key=_conversation_key(runtime_chat),
             actor_key=_actor_key(event.user.id),
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
@@ -752,6 +758,7 @@ async def handle_worker_conversation_action(
             str(params.get("value", "")),
             cfg=runtime.state.config,
             provider_state_factory=runtime.state.provider.new_provider_state,
+            conversation_key=_conversation_key(runtime_chat),
         )
         if outcome.mutated:
             _session_io_save(runtime.state, runtime_chat, session)
@@ -773,6 +780,7 @@ async def handle_worker_conversation_action(
             provider_name=runtime.state.provider.name,
             trust_tier=trust,
             provider_state_factory=runtime.state.provider.new_provider_state,
+            conversation_key=_conversation_key(runtime_chat),
         )
         if outcome.status == "invalid":
             return True

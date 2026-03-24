@@ -263,18 +263,34 @@ async def _execute_worker_action(
     ):
         return
 
+    action_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
+
     if action == "delegation_approve":
-        target_key = params.get("target_conversation_key") or message_conversation_key
+        from app.workflows.execution.event_sink import build_event_sink_for_context
+        from app.workflows.execution.contracts import TransportIdentity
+        target_key = params.get("target_conversation_key") or action_conversation_key
+        transport = TransportIdentity(
+            conversation_key=target_key,
+            origin_channel=source,
+            external_conversation_ref=target_key,
+            target_agent_id=runtime.config.agent_id_for_registry("default"),
+        )
+        sink = build_event_sink_for_context(
+            transport,
+            runtime.services.control_plane.conversation_projection,
+            runtime.config,
+        )
         await handle_channel_delegation_approve(
             target_key,
             conversation_ref,
             channel_egress,
             runtime=build_delegation_channel_runtime(runtime),
+            event_sink=sink,
         )
         return
 
     if action == "delegation_cancel":
-        target_key = params.get("target_conversation_key") or message_conversation_key
+        target_key = params.get("target_conversation_key") or action_conversation_key
         await handle_channel_delegation_cancel(
             target_key,
             conversation_ref,

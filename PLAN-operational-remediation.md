@@ -496,3 +496,79 @@ No copying from `requests.py`. No `isinstance(chat_id, int)`.
 - No changes to `ResolvedExecutionContext` (provider identity is already the right seam for LLM identity)
 - No big `ExecutionRuntime` restructure beyond adding factories — callbacks stay as-is this pass
 - **New channels must not require registry schema, SDK model, or existing bot changes.** Only new bot/channel implementations and deployment config. `origin_channel` and `external_conversation_ref` are the extension points — no channel-specific columns, event kinds, or SDK fields.
+
+---
+
+## Remaining work (post-initial implementation)
+
+### Phase 9: Test performance (do first — unblocks all verification)
+
+**Problem:** Full suite is 465s (7.7min). `test_handlers.py` alone is 389s. 13 tests take 25-50s each due to bus timeouts from `RegistryEventSink` publishing through an unprocessed control plane bus.
+
+**Root cause:** Tests that configure `agent_registries` get a real `ConversationProjectionPort` backed by the bus. The event sink publishes through it, each call times out at 5s. Multiple publish calls per test × 5s = 25-50s per test.
+
+**Fix:**
+1. Add `registry_publish_level: "off"` to all `test_handlers.py` test configs that use `agent_registries` but don't assert on event publishing. This makes `build_event_sink_for_context` return `NoOpEventSink`.
+2. For the 2 tests that specifically test delegation event publishing (`test_delegation_proposed_event_published`, `test_worker_dispatch_skips_completion_webhook_for_delegation_proposed`): mock the projection port to return immediately instead of going through the bus.
+3. `test_invariants.py::test_format_provider_error_kills_subprocess_on_timeout` (15s) — inherent subprocess timeout test, leave as-is.
+
+**Exit gate:** Full suite under 60s. No test takes >5s except explicit timeout tests.
+
+### Phase 10: Fix worker-to-execution actor handoff
+
+**Problem:** Worker passes normalized `actor_key` into `dispatch_message_request`, but `execute_request` ignores it — uses `transport.actor` instead. In the worker path, `transport.actor` is built from `message.from_user` on the channel egress object (not the original inbound message), so it's empty. This means:
+- Credential/setup ownership checks run without the real actor
+- Registry events lose actor attribution
+
+**Fix:**
+1. `execution_channel_metadata` must accept `actor_key` as an explicit parameter (not derive it from message.from_user when the message is a channel egress)
+2. Worker passes the already-normalized `actor_key` through to `execution_channel_metadata` → `TransportIdentity.actor`
+3. `execute_request` uses `transport.actor` for everything (already does after our changes)
+
+**Test:**
+- Unit: worker-originated execution has correct `transport.actor`
+- Unit: `FakeMessage` in test harness sets `from_user` with an id so `transport.actor` is non-empty
+
+**Exit gate:** `transport.actor` is never empty in any execution path. Tests pin the handoff.
+
+### Phase 11: Fix remaining test failures (15 failures from profiling run)
+
+**Failures by category:**
+
+1. **Delegation tests (6 failures):** `handle_delegation_approve/cancel` signature changed to `conversation_key` but test helpers still pass `chat_id`. Fix: update test helpers to pass `_conversation_key(chat_id)`.
+
+2. **Registry service tests (4 failures):** `CODEX_SANDBOX` config validation error — test config passes invalid value `'seatbelt'`. Fix: update test config or use valid sandbox value.
+
+3. **Skills tests (2 failures):** Same `CODEX_SANDBOX` config issue.
+
+4. **Delegation boundary tests (3 failures):** `actor_key` rename broke assertions on `pending_delegation` field names. Fix: update assertions.
+
+**Exit gate:** 0 failures, 0 errors in full suite.
+
+### Phase 12: Update test_operational_units.py
+
+Add tests for:
+- Deterministic session_id: same conversation_key → same uuid5 session_id
+- `ExecutionRuntime` shape: `build_transport_identity` and `build_event_sink` are required fields, no `build_channel_context`
+- Authority-scoped agent_id: `agent_id_for_registry` returns correct value per registry
+- Worker actor handoff: `transport.actor` populated from normalized actor_key
+- `delegation_session_key`: multiple tasks from same parent share key
+
+### Resolved items (verified correct, no action needed)
+
+- **`target_agent_id=""` fallback** in `execution.py:329` — legitimate "no registries configured" case. The mirrored projection adapter overrides per-authority on fan-out in production.
+- **`str(chat_id)` as `external_conversation_ref`** in `execution.py:350` — Telegram adapter converting chat_id to string for the transport field. Correct.
+- **`_conversation_key(chat_id)` and `isinstance(chat_id, int)` in `channels/telegram/`** — Telegram boundary code that correctly uses `telegram_conversation_key`. The plan's scope was the workflow layer (`requests.py`), not rewriting every Telegram channel internal. Channel-level type dispatch is legitimate at the transport boundary.
+- **`_actor_key(event.user.id)` calls in Telegram channel code** — boundary normalizations. Correct pattern: normalize raw Telegram IDs at the channel boundary, thread only `actor_key` strings into shared code.
+- **First-hit `target_agent_id` fallback in Telegram execution** — less concerning now because the mirrored projection adapter is wired with per-authority `agent_id_for_authority` in production, so it can override on fan-out.
+
+### Full test suite verification
+
+The 263 core tests pass but the full ~1800 tests haven't been verified since the `actor_key` rename. Phase 11 covers fixing the 15 known failures from the profiling run plus any additional failures from the rename. Some tests may still reference old field names (`request_user_id`, `user_id` on `AwaitingSkillSetup`) or pass wrong types.
+
+### Execution sequence
+
+1. **Phase 9** (test performance) — unblocks fast iteration
+2. **Phase 10** (actor handoff) — fixes the remaining P1 correctness bug
+3. **Phase 11** (test failures) — achieves 0 failures in full suite
+4. **Phase 12** (unit tests) — pins the contracts

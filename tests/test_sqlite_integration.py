@@ -246,7 +246,7 @@ async def test_close_db_and_reopen():
         assert session_exists(data_dir, telegram_conversation_key(6001)) is True
 
         loaded = load_session(data_dir, telegram_conversation_key(6001), "claude",
-                              lambda: {"session_id": "abc", "started": False}, "on")
+                              lambda _ck="": {"session_id": "abc", "started": False}, "on")
         assert loaded["role"] == "persistent role"
 
         # Save new data after reopen
@@ -256,7 +256,7 @@ async def test_close_db_and_reopen():
 
         # Verify again
         loaded2 = load_session(data_dir, telegram_conversation_key(6001), "claude",
-                               lambda: {"session_id": "abc", "started": False}, "on")
+                               lambda _ck="": {"session_id": "abc", "started": False}, "on")
         assert loaded2["role"] == "updated role"
 
 

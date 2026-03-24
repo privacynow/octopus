@@ -28,7 +28,7 @@ from app.runtime.session_runtime import (
 from app.workflows.runtime_skills.contracts import PromptWarningContext
 from app.session_state import SessionState
 
-ProviderStateFactory = Callable[[], dict[str, Any]]
+ProviderStateFactory = Callable[[str], dict[str, Any]]
 
 _context: "RuntimeChannelContext | None" = None
 log = logging.getLogger(__name__)

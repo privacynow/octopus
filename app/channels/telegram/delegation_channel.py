@@ -96,13 +96,28 @@ async def propose_delegation_plan(
             agent_directory=runtime.services.control_plane.agent_directory,
         )
         from app.channels.telegram.session_io import conversation_key as _conversation_key
+        from app.workflows.execution.event_sink import build_event_sink_for_context
+        from app.workflows.execution.contracts import TransportIdentity
+        conv_key = _conversation_key(chat_id)
+        transport = TransportIdentity(
+            conversation_key=conv_key,
+            origin_channel="telegram",
+            external_conversation_ref=str(chat_id),
+            target_agent_id=runtime.config.agent_id_for_registry("local"),
+        )
+        sink = build_event_sink_for_context(
+            transport,
+            runtime.services.control_plane.conversation_projection,
+            runtime.config,
+        )
         try:
             await handle_channel_delegation_approve(
-                _conversation_key(chat_id),
+                conv_key,
                 conversation_ref,
                 _AutoSubmitEgress(message),
                 runtime=delegation_rt,
                 retry_markup=None,
+                event_sink=sink,
             )
         except Exception:
             # Ensure pending_delegation is not stuck in proposed state
@@ -147,13 +162,28 @@ async def handle_delegation_approve(
     delegation_runtime: DelegationRuntime,
 ) -> None:
     from app.channels.telegram.session_io import conversation_key as _conversation_key
+    from app.workflows.execution.event_sink import build_event_sink_for_context
+    from app.workflows.execution.contracts import TransportIdentity
+    conv_key = _conversation_key(chat_id)
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
+    transport = TransportIdentity(
+        conversation_key=conv_key,
+        origin_channel="telegram",
+        external_conversation_ref=str(chat_id),
+        target_agent_id=runtime.config.agent_id_for_registry("local"),
+    )
+    sink = build_event_sink_for_context(
+        transport,
+        runtime.services.control_plane.conversation_projection,
+        runtime.config,
+    )
     await handle_channel_delegation_approve(
-        _conversation_key(chat_id),
+        conv_key,
         conversation_ref,
         DelegationCallbackChannel(query),
         runtime=delegation_runtime,
         retry_markup=delegation_reply_markup(chat_id),
+        event_sink=sink,
     )
 
 

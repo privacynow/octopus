@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class RegistryDeliveryRuntime:
     provider_name: str
-    provider_state_factory: Callable[[], dict[str, Any]]
+    provider_state_factory: Callable[[str], dict[str, Any]]
     services: BotServices
     bot: Any | None = None
     dispatcher: ChannelDispatcher | None = None
@@ -44,7 +44,7 @@ class RegistryDeliveryRuntime:
 def build_registry_delivery_runtime(
     *,
     provider_name: str,
-    provider_state_factory: Callable[[], dict[str, Any]],
+    provider_state_factory: Callable[[str], dict[str, Any]],
     services: BotServices,
     bot: Any | None = None,
     dispatcher: ChannelDispatcher | None = None,

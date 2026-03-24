@@ -44,16 +44,10 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
             },
         ],
     )
-    published = []
-
-    async def _record_publish(runtime, message, delegation):
-        published.append((runtime, message, delegation))
-
     async def _resolve_target_authority(*, target_agent_id):
         assert target_agent_id == "agent-reviewer"
         return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-    monkeypatch.setattr(delegation_channel, "publish_delegation_proposed_event", _record_publish)
     monkeypatch.setattr(
         runtime.services.control_plane.agent_directory,
         "resolve_target_authority",
@@ -73,7 +67,7 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
     assert session.pending_delegation is not None
     assert session.pending_delegation.title == "Delegate this"
     assert len(session.pending_delegation.tasks) == 1
-    assert published and published[0][2] is session.pending_delegation
+    # delegation.proposed event is now published by execute_request via the event sink, not here
     assert message.replies[-1]["reply_markup"] is not None
     assert "Delegation plan" in message.replies[-1]["text"]
     assert "ready via" in message.replies[-1]["text"]
@@ -105,15 +99,11 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
         assert target_agent_id == "agent-reviewer"
         return AuthorityResolution(status="unavailable", error="registry_unreachable")
 
-    async def _record_publish(runtime, message, delegation):
-        del runtime, message, delegation
-
     monkeypatch.setattr(
         runtime.services.control_plane.agent_directory,
         "resolve_target_authority",
         _resolve_target_authority,
     )
-    monkeypatch.setattr(delegation_channel, "publish_delegation_proposed_event", _record_publish)
 
     await delegation_channel.propose_delegation_plan(
         runtime,
@@ -126,31 +116,3 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
 
     assert "registry unavailable" in message.replies[-1]["text"].lower()
     assert "could not be reached" in message.replies[-1]["text"].lower()
-
-
-@pytest.mark.asyncio
-async def test_publish_delegation_proposed_event_is_noop(tmp_path: Path):
-    runtime = build_telegram_runtime(
-        make_config(tmp_path),
-        FakeProvider("codex"),
-    )
-    delegation = delegation_channel.build_delegation_plan(
-        "telegram:bot-1:12345",
-        "Delegate this",
-        "resume",
-        [
-            {
-                "routed_task_id": "task-1",
-                "title": "Review docs",
-                "target_agent_id": "agent-reviewer",
-                "instructions": "Review the docs",
-            },
-        ],
-    )
-
-    # publish_delegation_proposed_event is now a no-op (legacy timeline removal)
-    await delegation_channel.publish_delegation_proposed_event(
-        runtime,
-        SimpleNamespace(),
-        delegation,
-    )

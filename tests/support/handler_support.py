@@ -213,6 +213,7 @@ class FakeMessage:
         self.replies = []
         self.deleted = False
         self._user = user
+        self.from_user = user
 
     async def reply_text(self, text, **kwargs):
         self.replies.append({"text": text, **kwargs})
@@ -500,6 +501,11 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     or a narrower seam in isolation.
     """
     reset_handler_test_runtime()
+    # Reduce bus/projection timeout so tests with unprocessed bus commands fail fast
+    from app.control_plane.bus import ControlPlaneBus
+    from app.control_plane.adapters.conversation_projection import BusConversationProjection
+    ControlPlaneBus.default_timeout_seconds = 0.1
+    BusConversationProjection.bus_timeout_seconds = 0.1
     global _TEST_RUNTIME, _TEST_APPLICATION
     import app.content_store as _cs
     import app.credential_store as _creds

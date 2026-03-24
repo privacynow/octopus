@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 class DelegationRuntime:
     config: BotConfig
     provider_name: str
-    provider_state_factory: Callable[[], dict[str, Any]]
+    provider_state_factory: Callable[[str], dict[str, Any]]
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
     origin_agent_id: str = ""
@@ -56,7 +56,7 @@ def build_delegation_runtime(
     *,
     config: BotConfig,
     provider_name: str,
-    provider_state_factory: Callable[[], dict[str, Any]],
+    provider_state_factory: Callable[[str], dict[str, Any]],
     task_routing: TaskRoutingPort,
     agent_directory: AgentDirectoryPort,
     origin_agent_id: str = "",

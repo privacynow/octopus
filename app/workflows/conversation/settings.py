@@ -174,6 +174,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
         *,
         cfg: BotConfig,
         provider_state_factory: ProviderStateFactory,
+        conversation_key: str,
     ) -> SettingMutationOutcome:
         if not cfg.projects:
             return SettingMutationOutcome(status="no_projects", message=_msg.no_projects_configured())
@@ -181,7 +182,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
             if not session.project_id:
                 return SettingMutationOutcome(status="no_project", message=_msg.trust_no_project_active())
             session.project_id = ""
-            session.provider_state = provider_state_factory()
+            session.provider_state = provider_state_factory(conversation_key)
             session.clear_pending()
             return SettingMutationOutcome(
                 status="cleared",
@@ -194,7 +195,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
         if session.project_id == value:
             return SettingMutationOutcome(status="unchanged", message=_msg.trust_already_using_project(value))
         session.project_id = value
-        session.provider_state = provider_state_factory()
+        session.provider_state = provider_state_factory(conversation_key)
         session.clear_pending()
         return SettingMutationOutcome(
             status="updated",
@@ -216,6 +217,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
         provider_name: str,
         trust_tier: str,
         provider_state_factory: ProviderStateFactory,
+        conversation_key: str,
     ) -> SettingMutationOutcome:
         if value == "":
             if not session.file_policy:
@@ -224,7 +226,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
                     message="File policy is already inherited.",
                 )
             session.file_policy = ""
-            session.provider_state = provider_state_factory()
+            session.provider_state = provider_state_factory(conversation_key)
             session.clear_pending()
             resolved = resolve_execution_context(session, cfg, provider_name, trust_tier=trust_tier)
             effective = resolved.file_policy or "edit"
@@ -245,7 +247,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
                 effective_policy=effective,
             )
         session.file_policy = value
-        session.provider_state = provider_state_factory()
+        session.provider_state = provider_state_factory(conversation_key)
         session.clear_pending()
         return SettingMutationOutcome(
             status="updated",

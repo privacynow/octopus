@@ -34,6 +34,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         submitted = []
@@ -78,7 +79,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
         channel_egress = _ChannelEgress()
 
         await handle_delegation_approve(
-            chat_id,
+            f"tg:{chat_id}",
             conversation_ref,
             channel_egress,
             runtime=build_delegation_runtime(
@@ -110,6 +111,7 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -132,7 +134,7 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
         channel_egress = _ChannelEgress()
 
         await handle_delegation_cancel(
-            chat_id,
+            f"tg:{chat_id}",
             conversation_ref,
             channel_egress,
             runtime=build_delegation_runtime(
@@ -188,6 +190,7 @@ async def test_delegation_partial_submission_message_names_sent_and_remaining_ta
         config_overrides={
             "agent_mode": "registry",
             "agent_registries": (make_registry_connection(),),
+            "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
         attempts: list[str] = []
@@ -248,7 +251,7 @@ async def test_delegation_partial_submission_message_names_sent_and_remaining_ta
         )
 
         await handle_delegation_approve(
-            chat_id,
+            f"tg:{chat_id}",
             conversation_ref,
             channel_egress,
             runtime=runtime,
@@ -268,7 +271,7 @@ async def test_delegation_partial_submission_message_names_sent_and_remaining_ta
         fail_second = False
 
         await handle_delegation_approve(
-            chat_id,
+            f"tg:{chat_id}",
             conversation_ref,
             channel_egress,
             runtime=runtime,

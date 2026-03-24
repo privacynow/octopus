@@ -30,8 +30,12 @@ class ClaudeProvider:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
 
-    def new_provider_state(self) -> dict[str, Any]:
-        return {"session_id": str(uuid.uuid4()), "started": False}
+    def new_provider_state(self, conversation_key: str = "") -> dict[str, Any]:
+        if conversation_key:
+            sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
+        else:
+            sid = str(uuid.uuid4())
+        return {"session_id": sid, "started": False}
 
     def check_health(self) -> list[str]:
         errors: list[str] = []

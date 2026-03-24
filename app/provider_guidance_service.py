@@ -106,8 +106,13 @@ class ProviderGuidanceService:
             parts.append(f"Active runtime skills: {labels}.\n")
         return "\n".join(parts) if parts else ""
 
-    def prompt_weight(self, role: str, active_skills: list[str]) -> int:
-        return len(self.system_prompt(role, active_skills))
+    def prompt_weight(
+        self,
+        role: str,
+        active_skills: list[str],
+        available_agents: list[dict[str, str]] | None = None,
+    ) -> int:
+        return len(self.system_prompt(role, active_skills, available_agents=available_agents))
 
     def provider_config(
         self,

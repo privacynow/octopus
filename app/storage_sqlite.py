@@ -226,7 +226,7 @@ class SQLiteSessionStore:
         default_skills: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         session = default_session(
-            provider_name, provider_state_factory(), approval_mode, role, default_skills
+            provider_name, provider_state_factory(conversation_key), approval_mode, role, default_skills
         )
         conn = self._db(data_dir)
         row = conn.execute(
@@ -247,7 +247,7 @@ class SQLiteSessionStore:
                     session["approval_mode"] = saved["approval_mode"]
                     session["approval_mode_explicit"] = True
                 if saved.get("provider") == provider_name:
-                    fresh_state = provider_state_factory()
+                    fresh_state = provider_state_factory(conversation_key)
                     fresh_state.update(saved.get("provider_state", {}))
                     session["provider_state"] = fresh_state
             except (json.JSONDecodeError, KeyError, TypeError, AttributeError):

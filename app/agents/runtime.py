@@ -104,14 +104,12 @@ class AgentRuntime:
         )
 
     def _effective_capabilities(self) -> tuple[str, ...]:
-        """Merge explicit capabilities with auto-detected ones from provider/skills."""
-        caps: set[str] = set(self.config.agent_capabilities)
-        if self.config.provider_name:
-            caps.add(self.config.provider_name)
-        for skill in self.config.default_skills:
-            if skill:
-                caps.add(skill)
-        return tuple(sorted(caps))
+        """Return explicitly configured capabilities only.
+
+        No auto-detection from provider/skills — capabilities advertised to
+        the registry should be intentional, not inferred.
+        """
+        return self.config.agent_capabilities
 
     def _client(self) -> AgentRegistryClient:
         return AgentRegistryClient(

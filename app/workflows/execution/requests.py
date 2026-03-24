@@ -11,12 +11,6 @@ from app import user_messages as _msg
 from app.approvals import build_preflight_prompt
 from app.execution_context import ResolvedExecutionContext
 from app.formatting import extract_send_directives
-from app.identity import (
-    parse_actor_key,
-    parse_conversation_key,
-    telegram_actor_key,
-    telegram_conversation_key,
-)
 from app.provider_guidance_service import get_provider_guidance_service
 from app.request_flow import extra_dirs_from_denials
 from app.runtime import composition
@@ -36,7 +30,8 @@ from app.workflows.execution.contracts import (
     ExecutionRuntime,
     RequestExecutionOutcome,
 )
-from app.workflows.execution.registry_publish import _publish_to_registry
+from app.ports.delegation import DelegationIntentParser
+from app.workflows.execution.delegation_parser import XmlTagDelegationParser
 
 import json
 import logging
@@ -44,8 +39,7 @@ from uuid import uuid4
 
 _log = logging.getLogger(__name__)
 
-_DELEGATION_OPEN = "<delegation>"
-_DELEGATION_CLOSE = "</delegation>"
+_DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
 
 
 async def _discover_available_agents(
@@ -84,82 +78,38 @@ async def _discover_available_agents(
 def _parse_delegation_from_response(
     text: str,
     available_agents: list[dict[str, str]] | None,
+    parser: DelegationIntentParser | None = None,
 ) -> list[dict[str, str]]:
-    """Parse <delegation> blocks from provider response and resolve slugs to agent_ids."""
-    if not text or not available_agents:
+    """Parse delegation intent using the provided or default parser."""
+    if not available_agents:
         return []
-    # Extract content between <delegation>...</delegation> tags robustly
-    start = text.find(_DELEGATION_OPEN)
-    if start < 0:
-        return []
-    start += len(_DELEGATION_OPEN)
-    end = text.find(_DELEGATION_CLOSE, start)
-    if end < 0:
-        return []
-    raw_json = text[start:end].strip()
-    try:
-        parsed = json.loads(raw_json)
-    except (json.JSONDecodeError, ValueError):
-        _log.warning("Failed to parse delegation JSON from provider response")
-        return []
-    raw_tasks = parsed.get("tasks")
-    if not isinstance(raw_tasks, list):
-        return []
-    # Build slug → agent_id lookup
-    slug_to_agent = {a["slug"]: a for a in available_agents if a.get("slug")}
-    tasks: list[dict[str, str]] = []
-    for task in raw_tasks:
-        if not isinstance(task, dict):
-            continue
-        target_slug = str(task.get("target", "")).strip()
-        agent = slug_to_agent.get(target_slug)
-        if not agent:
-            _log.warning("Delegation target slug '%s' not found in available agents", target_slug)
-            continue
-        tasks.append({
-            "routed_task_id": uuid4().hex,
-            "target_agent_id": agent["agent_id"],
-            "title": str(task.get("title", "")).strip() or "Delegated task",
-            "instructions": str(task.get("instructions", "")).strip(),
-        })
-    return tasks
+    effective_parser = parser or _DEFAULT_DELEGATION_PARSER
+    return effective_parser.parse(text, available_agents)
 
 
-def _conversation_key(chat_id: int | str) -> str:
-    if isinstance(chat_id, str):
-        return parse_conversation_key(chat_id)
-    return telegram_conversation_key(chat_id)
 
-
-def _actor_key(user_id: int | str) -> str:
-    if isinstance(user_id, str):
-        return parse_actor_key(user_id)
-    return telegram_actor_key(user_id)
-
-
-def _load(runtime: ExecutionRuntime, chat_id: int | str) -> SessionState:
+def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
     cfg = runtime.dispatch.config
     provider = runtime.dispatch.provider
-    conv_key = _conversation_key(chat_id)
     session = load_runtime_session(
         cfg.data_dir,
-        conv_key,
+        conversation_key,
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         approval_mode=cfg.approval_mode,
         default_role=cfg.role,
         default_skills=cfg.default_skills,
     )
-    _log.debug("_load(%s): session_id=%s started=%s", conv_key[:40],
+    _log.debug("_load(%s): session_id=%s started=%s", conversation_key[:40],
                session.provider_state.get("session_id", "")[:12],
                session.provider_state.get("started"))
     if get_skill_activation_service().normalize(session):
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
     return session
 
 
-def _save(runtime: ExecutionRuntime, chat_id: int | str, session: SessionState) -> None:
-    save_runtime_session(runtime.dispatch.config.data_dir, _conversation_key(chat_id), session)
+def _save(runtime: ExecutionRuntime, conversation_key: str, session: SessionState) -> None:
+    save_runtime_session(runtime.dispatch.config.data_dir, conversation_key, session)
 
 
 def _resolve_context(
@@ -193,20 +143,20 @@ def check_prompt_size_cross_chat(
 
 
 def load_approval_mode(
-    chat_id: int | str,
+    conversation_key: str,
     *,
     runtime: ExecutionRuntime,
 ) -> str:
-    return _load(runtime, chat_id).approval_mode
+    return _load(runtime, conversation_key).approval_mode
 
 
-def prompt_weight(role: str, active_skills: list[str]) -> int:
-    return get_provider_guidance_service().prompt_weight(role, active_skills)
+def prompt_weight(role: str, active_skills: list[str], available_agents: list[dict[str, str]] | None = None) -> int:
+    return get_provider_guidance_service().prompt_weight(role, active_skills, available_agents=available_agents)
 
 
 async def check_credential_satisfaction(
-    chat_id: int | str,
-    user_id: int | str,
+    conversation_key: str,
+    actor_key: str,
     session: SessionState,
     message,
     *,
@@ -215,7 +165,7 @@ async def check_credential_satisfaction(
 ) -> dict[str, str] | None:
     outcome = composition.workflows().runtime_skills.setup.check_satisfaction(
         session,
-        user_id=_actor_key(user_id),
+        user_id=actor_key,
         active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
@@ -229,7 +179,7 @@ async def check_credential_satisfaction(
         or outcome.first_requirement is None
     ):
         return None
-    _save(runtime, chat_id, session)
+    _save(runtime, conversation_key, session)
     await runtime.show_setup_prompt(
         message,
         outcome.missing_skill,
@@ -254,16 +204,18 @@ async def execute_request(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    session = _load(runtime, chat_id)
-    # Persist newly-created sessions so the provider_state.session_id is stable
-    # across reloads within this execution (prevents double new_provider_state).
-    if not session.provider_state.get("started"):
-        _save(runtime, chat_id, session)
+
+    # Build transport identity and event sink FIRST — all durable operations use transport fields
+    transport = runtime.build_transport_identity(message, chat_id)
+    conversation_key = transport.conversation_key
+    event_sink = runtime.build_event_sink(transport)
+
+    session = _load(runtime, conversation_key)
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
 
     credential_env = await check_credential_satisfaction(
-        chat_id,
-        request_user_id,
+        conversation_key,
+        transport.actor,
         session,
         message,
         resolved=resolved,
@@ -272,27 +224,15 @@ async def execute_request(
     if credential_env is None:
         return None
 
-    # Publish user message event to registry (non-blocking)
-    if runtime.conversation_projection is not None:
-        await _publish_to_registry(
-            runtime.conversation_projection,
-            cfg,
-            "message.user",
-            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
-            external_conversation_ref=str(chat_id),
-            target_agent_id="",
-            title=f"Chat {chat_id}",
-            actor=str(request_user_id) if request_user_id else "",
-            content=prompt,
-        )
+    await event_sink.on_user_message(prompt, actor=str(request_user_id) if request_user_id else "")
 
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, conversation_key))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
     if prov.name == "codex":
         scripts_dir = guidance.stage_codex_scripts(
             cfg.data_dir,
-            _conversation_key(chat_id),
+            conversation_key,
             resolved.active_skills,
         )
         if scripts_dir:
@@ -330,11 +270,10 @@ async def execute_request(
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
         session.provider_state["boot_id"] = runtime.dispatch.boot_id
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
-    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_request(
         chat_id,
@@ -346,22 +285,20 @@ async def execute_request(
         cancel_event=cancel_event,
         label=label,
         runtime=runtime.dispatch,
-        timeline_callback=channel_context.timeline_callback,
+        timeline_callback=transport.timeline_callback,
     )
     progress = dispatched.progress
     result = dispatched.result
 
     if result.cancelled:
-        session = _load(runtime, chat_id)
         session.provider_state.update(result.provider_state_updates)
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
         await progress.update(_msg.cancel_live_completed(), force=True)
         return RequestExecutionOutcome(status="cancelled")
 
     if runtime.dispatch.run_result_was_interrupted(result.returncode):
         raise work_queue.LeaveClaimed()
 
-    session = _load(runtime, chat_id)
     session.provider_state.update(result.provider_state_updates)
 
     if result.resume_failed:
@@ -372,28 +309,17 @@ async def execute_request(
     elif prov.name == "codex" and is_resume and not result.timed_out and result.returncode and result.returncode != 0:
         session.provider_state["thread_id"] = None
 
-    _save(runtime, chat_id, session)
+    _save(runtime, conversation_key, session)
     _log.info("Session saved after provider return: session_id=%s started=%s",
               session.provider_state.get("session_id", "")[:12],
               session.provider_state.get("started"))
 
-    # Publish provider.response event with token/cost metadata (all non-cancelled outcomes)
-    if runtime.conversation_projection is not None:
-        await _publish_to_registry(
-            runtime.conversation_projection,
-            cfg,
-            "provider.response",
-            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
-            external_conversation_ref=str(chat_id),
-            target_agent_id="",
-            title=f"Chat {chat_id}",
-            metadata={
-                "prompt_tokens": result.prompt_tokens,
-                "completion_tokens": result.completion_tokens,
-                "cost_usd": result.cost_usd,
-                "provider": prov.name,
-            },
-        )
+    await event_sink.on_provider_response(
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        cost_usd=result.cost_usd,
+        provider=prov.name,
+    )
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
@@ -405,24 +331,12 @@ async def execute_request(
         if result.resume_failed:
             error_text += runtime.render_provider_error(_msg.progress_session_not_resumed())
         await progress.update(error_text, force=True)
-        # Publish error event to registry (non-blocking)
-        if runtime.conversation_projection is not None:
-            await _publish_to_registry(
-                runtime.conversation_projection,
-                cfg,
-                "error",
-                origin_channel="telegram" if isinstance(chat_id, int) else "registry",
-                external_conversation_ref=str(chat_id),
-                target_agent_id="",
-                title=f"Chat {chat_id}",
-                content=error_text[:500],
-                metadata={"error_type": "provider_error", "message": error_text[:500]},
-            )
+        await event_sink.on_error(error_text, error_type="provider_error", message=error_text[:500])
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
         await progress.update(_msg.progress_completed_with_blocked(), force=True)
-        session = _load(runtime, chat_id)
+        session = _load(runtime, conversation_key)
         session.pending_retry = PendingRetry(
             request_user_id=request_user_id,
             prompt=prompt,
@@ -433,7 +347,7 @@ async def execute_request(
             trust_tier=trust_tier,
             created_at=time.time(),
         )
-        _save(runtime, chat_id, session)
+        _save(runtime, conversation_key, session)
         await runtime.send_retry_prompt(
             message,
             tuple(result.denials),
@@ -454,7 +368,7 @@ async def execute_request(
 
     # Parse delegation intent from provider response if not already populated
     if not result.delegation_tasks and available_agents:
-        parsed_tasks = _parse_delegation_from_response(result.text, available_agents)
+        parsed_tasks = _parse_delegation_from_response(result.text, available_agents, parser=runtime.delegation_parser)
         if parsed_tasks:
             _log.info("Parsed %d delegation tasks from provider response", len(parsed_tasks))
             result.delegation_tasks.extend(parsed_tasks)
@@ -462,7 +376,7 @@ async def execute_request(
     if result.delegation_tasks:
         _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
         await progress.update("Delegation plan ready.", force=True)
-        session = _load(runtime, chat_id)
+        session = _load(runtime, conversation_key)
         _log.info("Session reloaded for delegation: session_id=%s started=%s",
                   session.provider_state.get("session_id", "")[:12],
                   session.provider_state.get("started"))
@@ -470,33 +384,21 @@ async def execute_request(
             chat_id,
             message,
             session,
-            conversation_ref=channel_context.conversation_ref,
+            conversation_ref=transport.conversation_ref,
             result=result,
         )
 
     await progress.update(_msg.progress_completed(), force=True)
     cleaned_reply, directives = extract_send_directives(result.text)
-    slot = save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, cleaned_reply)
+    slot = save_raw(cfg.data_dir, conversation_key, prompt, cleaned_reply)
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    if compact and len(cleaned_reply) > 800 and isinstance(chat_id, int):
+    if compact and len(cleaned_reply) > 800 and transport.origin_channel == "telegram":
         await runtime.send_compact_reply(message, cleaned_reply, chat_id, slot)
     else:
         await runtime.send_formatted_reply(message, cleaned_reply)
     await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-    # Publish bot reply event to registry (non-blocking)
-    if runtime.conversation_projection is not None:
-        await _publish_to_registry(
-            runtime.conversation_projection,
-            cfg,
-            "message.bot",
-            origin_channel="telegram" if isinstance(chat_id, int) else "registry",
-            external_conversation_ref=str(chat_id),
-            target_agent_id="",
-            title=f"Chat {chat_id}",
-            actor=cfg.agent_display_name,
-            content=cleaned_reply[:2000] if cleaned_reply else "",
-        )
+    await event_sink.on_bot_reply(cleaned_reply[:2000] if cleaned_reply else "")
     return RequestExecutionOutcome(
         status="completed",
         reply_text=cleaned_reply,
@@ -561,7 +463,9 @@ async def request_approval(
     cfg = runtime.dispatch.config
     prov = runtime.dispatch.provider
     guidance = get_provider_guidance_service()
-    session = _load(runtime, chat_id)
+    transport = runtime.build_transport_identity(message, chat_id)
+    conversation_key = transport.conversation_key
+    session = _load(runtime, conversation_key)
 
     if session.has_pending:
         await message.reply_text(_msg.approval_already_waiting())
@@ -569,8 +473,8 @@ async def request_approval(
 
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
     credential_env = await check_credential_satisfaction(
-        chat_id,
-        request_user_id,
+        conversation_key,
+        transport.actor,
         session,
         message,
         resolved=resolved,
@@ -580,7 +484,7 @@ async def request_approval(
         return
     del credential_env
 
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, conversation_key))
     preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
     preflight_context = guidance.build_preflight_context(
         resolved.role,
@@ -592,7 +496,6 @@ async def request_approval(
         effective_model=resolved.effective_model,
     )
     context_hash = resolved.context_hash
-    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_preflight(
         chat_id,
@@ -603,7 +506,7 @@ async def request_approval(
         cancel_event=cancel_event,
         label=_msg.approval_preparing(),
         runtime=runtime.dispatch,
-        timeline_callback=channel_context.timeline_callback,
+        timeline_callback=transport.timeline_callback,
     )
     progress = dispatched.progress
     plan_result = dispatched.result
@@ -641,10 +544,10 @@ async def request_approval(
         trust_tier=trust_tier,
         created_at=time.time(),
     )
-    _save(runtime, chat_id, session)
+    _save(runtime, conversation_key, session)
 
     await progress.update(_msg.approval_required(), force=True)
     plan_text = plan_result.text or "[empty plan]"
-    save_raw(runtime.dispatch.config.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
+    save_raw(runtime.dispatch.config.data_dir, conversation_key, prompt, plan_text, kind="approval")
     await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
     await runtime.send_approval_prompt(message, session.pending_approval.callback_token)

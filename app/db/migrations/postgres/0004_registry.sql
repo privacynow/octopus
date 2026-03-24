@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     max_capacity                INTEGER NOT NULL DEFAULT 1,
     channel_capabilities_json   JSONB NOT NULL DEFAULT '[]'::jsonb,
     version                     TEXT NOT NULL DEFAULT '',
-    bot_key                     TEXT NOT NULL DEFAULT '',
     runtime_health_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at                  TEXT NOT NULL,
     updated_at                  TEXT NOT NULL,
@@ -36,8 +35,6 @@ CREATE INDEX IF NOT EXISTS idx_registry_agents_state
     ON agent_registry.agents (connectivity_state);
 CREATE INDEX IF NOT EXISTS idx_registry_agents_name
     ON agent_registry.agents ((lower(display_name)));
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_bot_key
-    ON agent_registry.agents (bot_key) WHERE bot_key != '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.agent_runtime_workers (
     agent_id                  TEXT NOT NULL,

@@ -321,10 +321,15 @@ class FakeProvider:
         self.preflight_results = []
         self._health_errors = []
 
-    def new_provider_state(self):
+    def new_provider_state(self, conversation_key: str = ""):
         if self.name == "codex":
             return {"thread_id": None}
-        return {"session_id": "test-session-id", "started": False}
+        import uuid
+        if conversation_key:
+            sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
+        else:
+            sid = str(uuid.uuid4())
+        return {"session_id": sid, "started": False}
 
     async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
         self.run_calls.append({

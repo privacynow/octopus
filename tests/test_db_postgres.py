@@ -74,6 +74,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
         "agents": {
             "agent_id",
             "agent_token",
+            "bot_key",
             "display_name",
             "slug",
             "role",

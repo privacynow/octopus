@@ -213,7 +213,7 @@ def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> 
         runtime = build_execution_runtime(current_runtime(), collaborators=collaborators)
         message = FakeMessage(chat=FakeChat(12345))
         message.conversation_ref = telegram_conversation_ref(current_runtime().config, 12345)
-        context = runtime.build_channel_context(message, 12345)
+        context = runtime.build_transport_identity(message, 12345)
 
         assert context.timeline_callback is fake_timeline
         assert runtime.propose_delegation_plan is fake_propose
@@ -248,9 +248,16 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
     with fresh_env() as (data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
+        from app.workflows.execution.event_sink import NoOpEventSink
+        _noop = NoOpEventSink()
         runtime = ExecutionRuntime(
             dispatch=current_execution_runtime().dispatch,
-            build_channel_context=lambda _message, _chat_id: ExecutionChannelContext(),
+            build_transport_identity=lambda _message, _chat_id: ExecutionChannelContext(
+                conversation_key=f"tg:{_chat_id}" if isinstance(_chat_id, int) else str(_chat_id),
+                origin_channel="telegram" if isinstance(_chat_id, int) else "registry",
+                external_conversation_ref=str(_chat_id),
+            ),
+            build_event_sink=lambda _transport: _noop,
             render_provider_error=lambda text: text,
             show_foreign_setup=_no_op,
             show_setup_prompt=_no_op,

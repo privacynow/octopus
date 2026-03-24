@@ -17,7 +17,7 @@ from app.storage import (
 )
 
 
-def _provider_state_factory():
+def _provider_state_factory(conversation_key: str = ""):
     return {}
 
 
@@ -101,7 +101,7 @@ def test_load_merge_provider_state_factory_defaults(backend_and_data_dir):
     save_session(data_dir, telegram_conversation_key(666), session)
     loaded = load_session(
         data_dir, telegram_conversation_key(666), "claude",
-        lambda: {"session_id": "default", "new_key": "default_val"},
+        lambda _ck="": {"session_id": "default", "new_key": "default_val"},
         "on",
     )
     assert loaded["provider_state"]["session_id"] == "s1"

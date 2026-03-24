@@ -191,26 +191,29 @@ and also supports [Socket Mode](https://docs.slack.dev/tools/bolt-python/concept
 when Slack should deliver events over a websocket instead of an inbound HTTP
 endpoint.
 
-```mermaid
-sequenceDiagram
-    participant S as Slack
-    participant B as Bolt
-    participant T as Slack transport
-    participant X as SDK runtime
-    participant C as SDK registry
-    participant P as Provider
-    participant R as Registry
+The resulting runtime shape would look like this:
 
-    Note over B,C: Slack bot process
-    S->>B: events / commands
-    B->>T: normalize inbound
-    T->>X: identity + input
-    X->>P: run / preflight
-    X->>T: reply / actions / artifacts
-    T->>B: outbound requests
-    B->>S: messages / files / updates
-    X->>C: publish / search / route
-    C->>R: registry API
+```mermaid
+flowchart TB
+    Slack["Slack"]
+
+    subgraph Bot["Slack bot process"]
+        direction TB
+        Bolt["Bolt for Python"]
+        Transport["Slack transport<br/>ingress + egress + refs"]
+        Exec["Execution runtime<br/>octopus_sdk.execution + octopus_sdk.runtime"]
+        RegSdk["Registry capability<br/>octopus_sdk.registry + octopus_sdk.event_sink"]
+    end
+
+    Provider["Claude / Codex"]
+    Registry["Registry service"]
+
+    Slack <--> Bolt
+    Bolt <--> Transport
+    Transport <--> Exec
+    Exec <--> Provider
+    Exec <--> RegSdk
+    RegSdk <--> Registry
 ```
 
 The transport split would look like this:
@@ -227,6 +230,26 @@ In practice a Slack transport would:
 3. define a stable Slack ref family and build `TransportIdentity` from Slack conversation, thread, and actor ids
 4. supply runtime collaborator implementations for `ExecutionServices`
 5. call `build_execution_runtime(...)`, then `execute_request(...)` for normalized inbound work
+
+The development/composition process would look like this:
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Bolt as Bolt
+    participant Transport as Slack transport
+    participant Runtime as SDK runtime
+    participant RegistrySdk as SDK registry
+    participant Registry as Registry service
+
+    Dev->>Bolt: choose Bolt for Slack ingress / API
+    Dev->>Transport: implement bootstrap, ingress, egress, refs
+    Dev->>Runtime: compose ExecutionServices and build_execution_runtime(...)
+    Dev->>RegistrySdk: enable RegistryClient / RegistryEventSink when needed
+    Transport->>Runtime: hand off normalized inbound work
+    Runtime->>RegistrySdk: publish, search, route
+    RegistrySdk->>Registry: registry API calls
+```
 
 That keeps Slack-specific code in `app/channels/slack/` while reusing the SDK
 for execution, delegation, approvals, event publication, session state, and

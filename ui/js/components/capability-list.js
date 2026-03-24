@@ -2,6 +2,7 @@
  * Capability list — global capability overrides with toggle switches.
  */
 function renderCapabilityList(container) {
+    const cleanups = UI.beginCleanupScope();
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
@@ -10,44 +11,21 @@ function renderCapabilityList(container) {
 
     const listEl = document.createElement('div');
     listEl.id = 'cap-list';
+    listEl.className = 'list-container list-container-loose';
     container.appendChild(listEl);
 
     function loadCapabilities() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 4, 'card');
+        UI.renderSkeletons(listEl, 4, 'row');
 
         API.listCapabilities().then(caps => {
             listEl.textContent = '';
             if (!caps || caps.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No capabilities declared';
-                listEl.appendChild(empty);
+                listEl.appendChild(UI.renderEmptyState('No capabilities declared'));
                 return;
             }
 
             caps.forEach(c => {
-                const card = document.createElement('div');
-                card.className = 'card';
-
-                const row = document.createElement('div');
-                row.className = 'card-row';
-
-                const info = document.createElement('div');
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = c.name || c.capability_name || '';
-                info.appendChild(title);
-
-                if (c.declared_by_agents && c.declared_by_agents.length > 0) {
-                    const sub = document.createElement('div');
-                    sub.className = 'card-subtitle';
-                    sub.textContent = 'Declared by: ' + c.declared_by_agents.join(', ');
-                    info.appendChild(sub);
-                }
-
-                row.appendChild(info);
-
                 // Toggle switch
                 const enabled = c.enabled !== false;
                 const capName = c.name || c.capability_name;
@@ -64,10 +42,16 @@ function renderCapabilityList(container) {
 
                 toggle.appendChild(checkbox);
                 toggle.appendChild(slider);
-                row.appendChild(toggle);
+                checkbox.setAttribute('aria-label', `${enabled ? 'Disable' : 'Enable'} capability ${capName}`);
 
-                card.appendChild(row);
-                listEl.appendChild(card);
+                const row = UI.renderSettingsRow({
+                    label: c.name || c.capability_name || '',
+                    sublabel: c.declared_by_agents && c.declared_by_agents.length > 0
+                        ? 'Declared by: ' + c.declared_by_agents.join(', ')
+                        : '',
+                    control: toggle,
+                });
+                listEl.appendChild(row);
 
                 // Toggle handler with confirmation
                 checkbox.addEventListener('change', () => {
@@ -75,7 +59,7 @@ function renderCapabilityList(container) {
                     const action = newEnabled ? 'enable' : 'disable';
                     // Revert immediately — confirm callback will set final state
                     checkbox.checked = !newEnabled;
-                    _showConfirm(
+                    UI.showConfirm(
                         (newEnabled ? 'Enable' : 'Disable') + ' Capability',
                         'Are you sure you want to ' + action + ' "' + capName + '"?',
                         async () => {
@@ -89,7 +73,7 @@ function renderCapabilityList(container) {
                                 checkbox.checked = newEnabled;
                             } catch (err) {
                                 checkbox.checked = !newEnabled;
-                                console.error('Toggle capability failed', err);
+                                UI.reportError('Failed to update the capability', err, { context: 'Toggle capability failed' });
                             }
                             checkbox.disabled = false;
                         }
@@ -98,20 +82,17 @@ function renderCapabilityList(container) {
             });
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadCapabilities);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadCapabilities);
         });
     }
 
     loadCapabilities();
 
-    // WS: reload on heartbeat (capabilities come from agent registrations)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'heartbeat') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadCapabilities, 3000);
-        }
+    const unsub = WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadCapabilities, 600);
     });
-
-    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

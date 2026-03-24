@@ -118,6 +118,51 @@ def _ws_recorder(monkeypatch):
     return calls
 
 
+@pytest.fixture()
+def _ws_invalidation_recorder(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    original_manager = registry_http._ws_manager
+
+    async def fake_broadcast(
+        topic: str,
+        *,
+        reason: str,
+        conversation_id: str = "",
+        agent_id: str = "",
+        routed_task_id: str = "",
+    ) -> None:
+        calls.append(
+            {
+                "topic": topic,
+                "reason": reason,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+                "routed_task_id": routed_task_id,
+            }
+        )
+
+    monkeypatch.setattr(original_manager, "broadcast_invalidation", fake_broadcast)
+    return calls
+
+
+@pytest.fixture()
+def _ws_progress_recorder(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    original_manager = registry_http._ws_manager
+
+    async def fake_broadcast(conversation_id: str, agent_id: str, progress_data: dict) -> None:
+        calls.append(
+            {
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+                "progress_data": progress_data,
+            }
+        )
+
+    monkeypatch.setattr(original_manager, "broadcast_progress", fake_broadcast)
+    return calls
+
+
 def test_publish_events_broadcasts_via_websocket(
     monkeypatch, tmp_path: Path, _ws_recorder,
 ) -> None:
@@ -157,6 +202,54 @@ def test_publish_events_broadcasts_via_websocket(
         assert "seq" in ev
         assert "created_at" in ev
         assert "metadata" in ev
+
+
+def test_publish_events_invalidates_usage_and_approvals(
+    monkeypatch, tmp_path: Path, _ws_invalidation_recorder,
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        agent_id, token = _enroll_and_register(client, "ws-invalidate-bot")
+        conv_id = _create_conversation(client, token, agent_id)
+
+        resp = client.post(
+            f"/v1/conversations/{conv_id}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "events": [
+                    {
+                        "event_id": "evt-provider-1",
+                        "kind": "provider.response",
+                        "actor": "ws-invalidate-bot",
+                        "content": "",
+                        "created_at": "2026-03-22T00:00:00+00:00",
+                        "metadata": {
+                            "prompt_tokens": 20,
+                            "completion_tokens": 5,
+                            "cost_usd": 0.02,
+                            "provider": "codex",
+                        },
+                    },
+                    {
+                        "event_id": "evt-approval-1",
+                        "kind": "approval.requested",
+                        "actor": "ws-invalidate-bot",
+                        "content": "Need approval",
+                        "created_at": "2026-03-22T00:00:01+00:00",
+                        "metadata": {
+                            "request_kind": "preflight",
+                            "actor_key": "telegram:1",
+                            "trust_tier": "trusted",
+                            "expires_at": "2026-03-22T00:05:00+00:00",
+                        },
+                    },
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        topics = {item["topic"] for item in _ws_invalidation_recorder}
+        assert {"conversations", "summary", "usage", "approvals"} <= topics
 
 
 def test_add_message_broadcasts_message_user_event(
@@ -228,9 +321,15 @@ def test_routed_task_status_broadcasts_task_status_event(
         # Create a routed task via the store directly
         from app.channels.registry.http import get_store
         store = get_store()
+        conversation = store.create_conversation(
+            target_agent_id=origin_id,
+            title="WS parent conversation",
+            origin_channel="registry",
+            external_conversation_ref="ws-parent-conv-1",
+        )
         store.create_routed_task({
             "routed_task_id": "ws-task-1",
-            "parent_conversation_id": "ws-parent-conv-1",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "WebSocket task",
@@ -247,7 +346,7 @@ def test_routed_task_status_broadcasts_task_status_event(
                 "timeline_events": [
                     {
                         "event_id": "evt-ws-task-1",
-                        "conversation_id": "ws-parent-conv-1",
+                        "conversation_id": conversation["conversation_id"],
                         "kind": "task.status",
                         "title": "Running",
                         "body": "halfway there",
@@ -264,7 +363,89 @@ def test_routed_task_status_broadcasts_task_status_event(
         assert len(_ws_recorder) == 1
         ev = _ws_recorder[0]["event_data"]
         assert ev["kind"] == "task.status"
-        assert _ws_recorder[0]["conversation_id"] == "ws-parent-conv-1"
+        assert _ws_recorder[0]["conversation_id"] == conversation["conversation_id"]
         assert ev["event_id"] == "evt-ws-task-1"
         assert ev["metadata"] == {"status": "running", "progress": 50}
         assert "created_at" in ev
+
+
+def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
+    monkeypatch, tmp_path: Path, _ws_recorder, _ws_invalidation_recorder,
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        origin_id, origin_token = _enroll_and_register(client, "ws-origin-2")
+        target_id, target_token = _enroll_and_register(client, "ws-target-2")
+        conv_id = _create_conversation(client, origin_token, origin_id)
+
+        create_resp = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": "ws-task-2",
+                "parent_conversation_id": conv_id,
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": "Delegate review",
+                "instructions": "Please review it",
+                "requested_capabilities": ["python"],
+                "created_at": "2026-03-22T00:00:00+00:00",
+            },
+        )
+
+        assert create_resp.status_code == 200
+        assert len(_ws_recorder) == 1
+        assert _ws_recorder[0]["event_data"]["kind"] == "task.status"
+        assert _ws_recorder[0]["event_data"]["metadata"] == {"status": "queued"}
+        assert _ws_recorder[0]["event_data"]["seq"] > 0
+
+        result_resp = client.post(
+            "/v1/agents/routed-tasks/ws-task-2/result",
+            headers={"Authorization": f"Bearer {target_token}"},
+            json={
+                "status": "completed",
+                "summary": "Done",
+                "full_text": "All done",
+                "completed_at": "2026-03-22T00:01:00+00:00",
+            },
+        )
+
+        assert result_resp.status_code == 200
+        assert len(_ws_recorder) == 2
+        assert _ws_recorder[1]["event_data"]["kind"] == "task.status"
+        assert _ws_recorder[1]["event_data"]["metadata"] == {"status": "completed"}
+        assert _ws_recorder[1]["event_data"]["seq"] > 0
+        topics = {item["topic"] for item in _ws_invalidation_recorder}
+        assert {"tasks", "conversations", "summary"} <= topics
+
+
+def test_publish_progress_broadcasts_ephemeral_progress(
+    monkeypatch, tmp_path: Path, _ws_progress_recorder,
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        agent_id, token = _enroll_and_register(client, "ws-progress-bot")
+        conv_id = _create_conversation(client, token, agent_id)
+
+        resp = client.post(
+            f"/v1/conversations/{conv_id}/progress",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "content": "Thinking about the delegation plan",
+                "created_at": "2026-03-22T00:00:00+00:00",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert _ws_progress_recorder == [
+            {
+                "conversation_id": conv_id,
+                "agent_id": agent_id,
+                "progress_data": {
+                    "conversation_id": conv_id,
+                    "agent_id": agent_id,
+                    "content": "Thinking about the delegation plan",
+                    "created_at": "2026-03-22T00:00:00+00:00",
+                },
+            }
+        ]

@@ -248,6 +248,27 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     assert agents[0]["connectivity_state"] == "connected"
 
 
+def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    _alpha_id, _alpha_token = _enroll_and_register(client, "Alpha Reviewer", "alpha-reviewer")
+    _beta_id, beta_token = _enroll_and_register(client, "Beta Builder", "beta-builder")
+    client.post(
+        "/v1/agents/deregister",
+        headers={"Authorization": f"Bearer {beta_token}"},
+    )
+
+    filtered = client.get("/v1/agents?q=review&state=connected")
+    assert filtered.status_code == 200
+    assert [item["slug"] for item in filtered.json()["agents"]] == ["alpha-reviewer"]
+
+    offline = client.get("/v1/agents?state=offline")
+    assert offline.status_code == 200
+    assert [item["slug"] for item in offline.json()["agents"]] == ["beta-builder"]
+
+
 def test_registry_channel_only_agent_gets_403_on_discovery(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -1439,13 +1460,20 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
 
     origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin")
     target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target")
+    conversation = _create_conversation(
+        client,
+        origin_token,
+        origin_id,
+        "conv-1",
+        title="Delegation parent",
+    )
 
     routed = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
         json={
             "routed_task_id": "task-1",
-            "parent_conversation_id": "conv-1",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review test plan",
@@ -1497,13 +1525,20 @@ def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path)
 
     origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-invalid-task")
     target_id, _target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-invalid-task")
+    conversation = _create_conversation(
+        client,
+        origin_token,
+        origin_id,
+        "conv-1",
+        title="Delegation validation",
+    )
 
     routed = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
         json={
             "routed_task_id": "task-invalid",
-            "parent_conversation_id": "conv-1",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "instructions": "Find missing test coverage.",
@@ -1555,13 +1590,20 @@ def test_registry_routed_task_status_requires_explicit_status(monkeypatch, tmp_p
 
     origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-status")
     target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-status")
+    conversation = _create_conversation(
+        client,
+        origin_token,
+        origin_id,
+        "conv-1",
+        title="Delegation status validation",
+    )
 
     routed = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
         json={
             "routed_task_id": "task-status-1",
-            "parent_conversation_id": "conv-1",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review test plan",
@@ -1587,13 +1629,20 @@ def test_registry_routed_task_result_requires_explicit_status(monkeypatch, tmp_p
 
     origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin-result")
     target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target-result")
+    conversation = _create_conversation(
+        client,
+        origin_token,
+        origin_id,
+        "conv-1",
+        title="Delegation result validation",
+    )
 
     routed = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
         json={
             "routed_task_id": "task-result-1",
-            "parent_conversation_id": "conv-1",
+            "parent_conversation_id": conversation["conversation_id"],
             "origin_agent_id": origin_id,
             "target_agent_id": target_id,
             "title": "Review test plan",

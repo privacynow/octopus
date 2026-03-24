@@ -9,6 +9,7 @@ import pytest
 
 from app.config import BotConfig, validate_config
 from app.identity import telegram_actor_key
+from app.octopus_cli.core import OctopusManager
 from tests.support.config_support import make_config
 
 
@@ -193,57 +194,39 @@ async def test_non_autonomous_no_grant():
 
 
 def test_setup_mode_autonomous_writes_correct_env(tmp_path: Path) -> None:
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-print_channel_setup_help() {{ :; }}
-validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
-prompt_provider_choice() {{ printf 'claude\\n'; }}
-prompt_setup_mode() {{ printf 'autonomous\\n'; }}
-prompt_autonomous_allowed_user() {{ printf '42\\n'; }}
-ensure_provider_image_ready() {{ :; }}
-ensure_provider_auth_ready() {{ :; }}
-ensure_network() {{ :; }}
-run_bot_doctor_until_ready() {{ :; }}
-start_bot_until_running() {{ :; }}
-print_first_bot_success() {{ :; }}
-printf '123456:real-token\\n\\n' | first_bot_flow quick
-cat .deploy/bots/example-bot/.env
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert "BOT_AUTONOMOUS=1" in result.stdout
-    assert "BOT_APPROVAL_MODE=off" in result.stdout
-    assert "BOT_ALLOW_OPEN=0" in result.stdout
-    assert "BOT_ALLOWED_USERS=42" in result.stdout
+    manager = OctopusManager(tmp_path)
+    env_file = manager.write_bot_env(
+        slug="example-bot",
+        telegram_id="123456789",
+        username="example_bot",
+        display_name="Example Bot",
+        token="123456:real-token",
+        provider="claude",
+        mode="autonomous",
+        allowed_users="42",
+    )
+    contents = env_file.read_text(encoding="utf-8")
+    assert "BOT_AUTONOMOUS=1" in contents
+    assert "BOT_APPROVAL_MODE=off" in contents
+    assert "BOT_ALLOW_OPEN=0" in contents
+    assert "BOT_ALLOWED_USERS=42" in contents
 
 
 def test_setup_mode_safe_writes_correct_env(tmp_path: Path) -> None:
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-print_channel_setup_help() {{ :; }}
-validate_telegram_token() {{ printf '123456789\\nexample_bot\\nExample Bot\\n'; }}
-prompt_provider_choice() {{ printf 'claude\\n'; }}
-prompt_setup_mode() {{ printf 'safe\\n'; }}
-ensure_provider_image_ready() {{ :; }}
-ensure_provider_auth_ready() {{ :; }}
-ensure_network() {{ :; }}
-run_bot_doctor_until_ready() {{ :; }}
-start_bot_until_running() {{ :; }}
-print_first_bot_success() {{ :; }}
-printf '123456:real-token\\n\\n' | first_bot_flow quick
-cat .deploy/bots/example-bot/.env
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert "BOT_AUTONOMOUS=0" in result.stdout
-    assert "BOT_APPROVAL_MODE=on" in result.stdout
-    assert "BOT_ALLOW_OPEN=1" in result.stdout
+    manager = OctopusManager(tmp_path)
+    env_file = manager.write_bot_env(
+        slug="example-bot",
+        telegram_id="123456789",
+        username="example_bot",
+        display_name="Example Bot",
+        token="123456:real-token",
+        provider="claude",
+        mode="safe",
+    )
+    contents = env_file.read_text(encoding="utf-8")
+    assert "BOT_AUTONOMOUS=0" in contents
+    assert "BOT_APPROVAL_MODE=on" in contents
+    assert "BOT_ALLOW_OPEN=1" in contents
 
 
 def test_maybe_join_autonomous_workspace(tmp_path: Path) -> None:
@@ -255,17 +238,8 @@ def test_maybe_join_autonomous_workspace(tmp_path: Path) -> None:
     (bot_dir / ".env").write_text(
         "BOT_SLUG=example-bot\nBOT_PROVIDER=claude\n"
     )
-    script = f"""
-set -euo pipefail
-cd "{tmp_path}"
-export OCTOPUS_SOURCE_ONLY=1
-source "{REPO}/octopus"
-cd "{tmp_path}"
-BOT_SETUP_AUTONOMOUS_WORKSPACE="{ws_dir}"
-maybe_join_autonomous_workspace example-bot
-test -f .deploy/workspaces/myproject/workspace.conf && echo "ws_exists"
-grep -q example-bot .deploy/workspaces/myproject/members.txt && echo "bot_member"
-"""
-    result = _run_bash(script, cwd=tmp_path)
-    assert "ws_exists" in result.stdout
-    assert "bot_member" in result.stdout
+    manager = OctopusManager(tmp_path)
+    manager.maybe_join_autonomous_workspace("example-bot", str(ws_dir))
+    assert (tmp_path / ".deploy" / "workspaces" / "myproject" / "workspace.conf").exists()
+    members = (tmp_path / ".deploy" / "workspaces" / "myproject" / "members.txt").read_text(encoding="utf-8")
+    assert "example-bot" in members

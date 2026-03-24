@@ -2,31 +2,31 @@
   "rects": [
     {
       "x": 274,
-      "y": 144.140625,
+      "y": 139.796875,
       "width": 1060,
-      "height": 199.78125,
+      "height": 201.96875,
       "label": "Readable summary: who this is with, source, status, and reference",
       "color": "#ff9800"
     },
     {
       "x": 274,
-      "y": 361.921875,
+      "y": 359.765625,
       "width": 1060,
-      "height": 63.78125,
+      "height": 66.78125,
       "label": "Default conversation view plus optional full activity log",
       "color": "#4caf50"
     },
     {
       "x": 273,
-      "y": 532.6875,
+      "y": 536.53125,
       "width": 1062,
-      "height": 2075.21875,
+      "height": 1383.53125,
       "label": "Human-first conversation flow with approvals and progress updates",
       "color": "#2196f3"
     },
     {
       "x": 275,
-      "y": 2609.90625,
+      "y": 1922.0625,
       "width": 1058,
       "height": 105,
       "label": "Operator compose box for /messages",

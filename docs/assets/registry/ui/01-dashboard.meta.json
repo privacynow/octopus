@@ -10,7 +10,7 @@
     },
     {
       "x": 272,
-      "y": 156.140625,
+      "y": 151.796875,
       "width": 1064,
       "height": 221.8125,
       "label": "Start with the next decision, not the raw telemetry",
@@ -18,17 +18,17 @@
     },
     {
       "x": 272,
-      "y": 397.953125,
+      "y": 393.609375,
       "width": 1064,
-      "height": 259.09375,
+      "height": 265.09375,
       "label": "Action-first panels for approvals, health, and failed work",
       "color": "#4caf50"
     },
     {
       "x": 272,
-      "y": 1012.265625,
+      "y": 1019.921875,
       "width": 1064,
-      "height": 590.53125,
+      "height": 684.5625,
       "label": "Preview lists for review work, conversations, and failures",
       "color": "#9c27b0"
     }

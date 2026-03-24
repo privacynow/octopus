@@ -200,3 +200,62 @@ def test_sdk_client_enroll_sends_body_not_header():
     }
     assert "X-Enrollment-Token" not in captured.get("headers", {})
     assert result["agent_id"] == "a1"
+
+
+def test_sdk_client_publish_progress_uses_progress_endpoint():
+    import asyncio
+    from unittest.mock import patch
+    from registry_sdk.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"ok": true}'
+            text = '{"ok": true}'
+
+            def json(self):
+                return {"ok": True}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(
+            client.publish_progress(
+                "conv-1",
+                {
+                    "content": "Working on it",
+                    "created_at": "2026-03-24T00:00:00+00:00",
+                },
+            )
+        )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://test:8787/v1/conversations/conv-1/progress"
+    assert captured["json"] == {
+        "content": "Working on it",
+        "created_at": "2026-03-24T00:00:00+00:00",
+    }
+
+
+def test_sdk_agent_card_contract_has_no_agent_id_field():
+    from registry_sdk.agents import AgentCard
+
+    card = AgentCard(
+        bot_key="bot:demo",
+        display_name="Bot",
+        slug="demo-bot",
+        registry_scope="full",
+    )
+
+    dumped = card.model_dump()
+    assert "agent_id" not in dumped

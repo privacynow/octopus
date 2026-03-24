@@ -2,12 +2,12 @@
  * Agent list — home view showing all enrolled agents with pagination.
  */
 function renderAgentList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
-    const limit = 25;
+    const limit = UI.DEFAULT_PAGE_LIMIT;
     let cursorStack = []; // stack of previous cursors for "prev"
-    let nameFilter = '';
-    let stateFilter = '';
-    const cleanups = [];
+    let nameFilter = UI.readQueryParam('q', '');
+    let stateFilter = UI.readQueryParam('state', '');
 
     // Shell
     const header = document.createElement('div');
@@ -21,21 +21,31 @@ function renderAgentList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Filter by name...';
+    searchInput.placeholder = 'Search agents';
     searchInput.type = 'text';
+    searchInput.setAttribute('aria-label', 'Filter agents by name');
+    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
 
+    const searchHint = document.createElement('span');
+    searchHint.className = 'search-shortcut-hint';
+    searchHint.textContent = 'Shortcut: /';
+    filterBar.appendChild(searchHint);
+
     const stateSelect = document.createElement('select');
+    stateSelect.setAttribute('aria-label', 'Filter agents by connectivity state');
     stateSelect.innerHTML = '<option value="">All states</option>' +
         '<option value="connected">Connected</option>' +
         '<option value="degraded">Degraded</option>' +
-        '<option value="stopped">Stopped</option>';
+        '<option value="disconnected">Disconnected</option>' +
+        '<option value="offline">Offline</option>';
     filterBar.appendChild(stateSelect);
 
     container.appendChild(filterBar);
 
     const listEl = document.createElement('div');
     listEl.id = 'agent-list-content';
+    listEl.className = 'list-container';
     container.appendChild(listEl);
 
     const pagEl = document.createElement('div');
@@ -47,9 +57,10 @@ function renderAgentList(container) {
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
-            nameFilter = searchInput.value.trim().toLowerCase();
+            nameFilter = searchInput.value.trim();
             cursor = 0;
             cursorStack = [];
+            UI.updateQueryParams({ q: nameFilter, state: stateFilter });
             loadPage();
         }, 300);
     });
@@ -58,22 +69,23 @@ function renderAgentList(container) {
         stateFilter = stateSelect.value;
         cursor = 0;
         cursorStack = [];
+        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
         loadPage();
     });
-
-    let lastData = null;
+    searchInput.value = nameFilter;
+    stateSelect.value = stateFilter;
 
     function loadPage() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 5, 'card');
+        UI.renderSkeletons(listEl, 5, 'row');
+        pagEl.textContent = '';
 
-        API.listAgents({ cursor, limit }).then(data => {
-            lastData = data;
+        API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then(data => {
             const agents = data.agents || data || [];
             renderCards(agents, data.has_more, data.next_cursor);
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed to load agents: ' + err.message, loadPage);
+            UI.renderError(listEl, 'Failed to load agents: ' + err.message, loadPage);
         });
     }
 
@@ -81,66 +93,38 @@ function renderAgentList(container) {
         listEl.textContent = '';
         pagEl.textContent = '';
 
-        // Client-side name filter
-        let filtered = agents;
-        if (nameFilter) {
-            filtered = agents.filter(a => {
-                const name = (a.display_name || a.slug || '').toLowerCase();
-                return name.includes(nameFilter);
-            });
-        }
-        if (stateFilter) {
-            filtered = filtered.filter(a => a.connectivity_state === stateFilter);
-        }
-
-        if (filtered.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.textContent = agents.length === 0 ? 'No agents enrolled' : 'No agents match filters';
-            listEl.appendChild(empty);
+        if (agents.length === 0) {
+            listEl.appendChild(UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled'));
             return;
         }
 
-        filtered.forEach(a => {
-                const card = document.createElement('div');
-                card.className = 'card clickable';
-                _makePressable(card, () => Router.navigate('/ui/agents/' + a.agent_id));
-
-            const row = document.createElement('div');
-            row.className = 'card-row';
-
-            const info = document.createElement('div');
-            const title = document.createElement('div');
-            title.className = 'card-title';
-            title.textContent = a.display_name || a.slug;
-            info.appendChild(title);
-
-            const sub = document.createElement('div');
-            sub.className = 'card-subtitle';
+        agents.forEach(a => {
+            const sub = document.createElement('span');
             const parts = [a.role || 'agent', a.provider || '', a.slug].filter(Boolean);
-            sub.textContent = parts.join(' \u00b7 ');
-            info.appendChild(sub);
-
-            const heartbeat = document.createElement('div');
-            heartbeat.className = 'card-subtitle';
+            sub.appendChild(document.createTextNode(parts.join(' \u00b7 ')));
+            const heartbeat = document.createElement('span');
             heartbeat.setAttribute('data-timestamp', a.last_heartbeat_at || '');
-            heartbeat.textContent = a.last_heartbeat_at ? _relativeTime(a.last_heartbeat_at) : '';
-            info.appendChild(heartbeat);
+            heartbeat.textContent = a.last_heartbeat_at ? UI.relativeTime(a.last_heartbeat_at) : '';
+            if (parts.length && heartbeat.textContent) {
+                sub.appendChild(document.createTextNode(' \u00b7 '));
+            }
+            if (heartbeat.textContent) {
+                sub.appendChild(heartbeat);
+            }
 
-            row.appendChild(info);
-
-            const badge = document.createElement('span');
-            badge.className = 'badge badge-' + (a.connectivity_state || 'stopped');
-            badge.id = 'agent-badge-' + a.agent_id;
-            badge.textContent = a.connectivity_state || 'unknown';
-            row.appendChild(badge);
-
-            card.appendChild(row);
-            listEl.appendChild(card);
+            const row = UI.renderListRow({
+                href: '/ui/agents/' + a.agent_id,
+                label: a.display_name || a.slug,
+                sublabelNode: sub,
+                badgeText: a.connectivity_state || 'unknown',
+                badgeClass: 'badge-' + (a.connectivity_state || 'stopped'),
+            });
+            row.id = 'agent-badge-' + a.agent_id;
+            listEl.appendChild(row);
         });
 
         // Pagination
-        _renderPagination(pagEl, {
+        UI.renderPagination(pagEl, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!hasMore,
             info: '',
@@ -156,28 +140,13 @@ function renderAgentList(container) {
         });
     }
 
-    // WS: subscribe to * for heartbeat + event updates
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'heartbeat' && msg.data) {
-            const badge = document.getElementById('agent-badge-' + msg.data.agent_id);
-            if (badge && msg.data.connectivity_state) {
-                badge.className = 'badge badge-' + msg.data.connectivity_state;
-                badge.textContent = msg.data.connectivity_state;
-            }
-        }
-        // Reload agent list on any event (new conversations change counts)
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 2000);
-        }
-    });
-    cleanups.push(unsub);
+    cleanups.add(WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
+    }));
 
     loadPage();
-
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        cleanups.forEach(fn => fn());
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

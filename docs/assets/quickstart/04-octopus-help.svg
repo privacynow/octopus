@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="920" viewBox="0 0 1200 920" role="img" aria-labelledby="title desc">
   <title id="title">Octopus help</title>
-  <desc id="desc">Terminal panel showing current ./octopus help output: status, doctor, registry, workspace, clean.</desc>
+  <desc id="desc">Terminal panel showing current ./octopus help output: verb-first lifecycle commands, diagnose verbs, and targets.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -27,36 +27,26 @@
     <g id="copy-help">
       <text class="line" xml:space="preserve">
         <tspan class="prompt" x="34" y="94">$ ./octopus help</tspan>
-        <tspan x="34" dy="26">Usage: ./octopus [command]</tspan>
+        <tspan x="34" dy="26">Usage: ./octopus &lt;action&gt; [target...] [--yes]</tspan>
         <tspan x="34" dy="26"></tspan>
-        <tspan x="34" dy="26">Commands:</tspan>
-        <tspan x="34" dy="26">  (no command)   Guided setup (first bot) or main menu (existing bots)</tspan>
-        <tspan x="34" dy="26">  --full         First-bot or add-bot with advanced options</tspan>
-        <tspan x="34" dy="26">  status         Show all bots, registry, and provider auth status</tspan>
-        <tspan x="34" dy="26">  start [slug]   Start a bot (auto-selects when only one exists)</tspan>
-        <tspan x="34" dy="26">  stop [slug]    Stop a bot</tspan>
-        <tspan x="34" dy="26">  logs [slug]    Follow a bot's live logs</tspan>
-        <tspan x="34" dy="26">  doctor [--live-provider] [slug]</tspan>
-        <tspan x="34" dy="26">                 Run a health check (safe by default; live provider probe optional)</tspan>
-        <tspan x="34" dy="26">  registry                         Manage the local registry</tspan>
-        <tspan x="34" dy="26">    registry start                 Start (or create) the local registry</tspan>
-        <tspan x="34" dy="26">    registry stop                  Stop the local registry</tspan>
-        <tspan x="34" dy="26">    registry logs                  Follow registry logs</tspan>
-        <tspan x="34" dy="26">    registry status                Show registry and bot connection status</tspan>
-        <tspan x="34" dy="26">    registry connect [slug|--all]  Connect bot(s) to local registry</tspan>
-        <tspan x="34" dy="26">    UI password is stored in .deploy/registry/.env (REGISTRY_UI_TOKEN)</tspan>
-        <tspan x="34" dy="26">  workspace      Manage shared workspaces</tspan>
-        <tspan x="34" dy="26">    workspace create &lt;name&gt; &lt;host-path&gt;</tspan>
-        <tspan x="34" dy="26">    workspace remove &lt;name&gt;</tspan>
-        <tspan x="34" dy="26">    workspace add-bot &lt;workspace&gt; &lt;bot-slug&gt;</tspan>
-        <tspan x="34" dy="26">    workspace remove-bot &lt;workspace&gt; &lt;bot-slug&gt;</tspan>
-        <tspan x="34" dy="26">    workspace status [workspace]</tspan>
-        <tspan x="34" dy="26">    workspace verify [workspace]</tspan>
-        <tspan x="34" dy="26">  clean          Stop and remove all bots, registry, volumes, and config</tspan>
-        <tspan x="34" dy="26">  help           Show this help</tspan>
+        <tspan x="34" dy="26">Actions:</tspan>
+        <tspan x="34" dy="26">  status</tspan>
+        <tspan x="34" dy="26">  start [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  stop [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  restart [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  redeploy [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  connect [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  disconnect [target...] [--yes]</tspan>
+        <tspan x="34" dy="26">  logs &lt;target&gt; [--follow]</tspan>
+        <tspan x="34" dy="26">  shell &lt;target&gt;</tspan>
+        <tspan x="34" dy="26">  doctor &lt;target&gt; [--live-provider]</tspan>
+        <tspan x="34" dy="26">  clean</tspan>
         <tspan x="34" dy="26"></tspan>
-        <tspan x="34" dy="26">After ./octopus clean, the next ./octopus run starts fresh as if</tspan>
-        <tspan x="34" dy="26">the repo were just cloned.</tspan>
+        <tspan x="34" dy="26">Targets:</tspan>
+        <tspan x="34" dy="26">  registry</tspan>
+        <tspan x="34" dy="26">  bots</tspan>
+        <tspan x="34" dy="26">  bot slug</tspan>
+        <tspan x="34" dy="26">  short alias like m1 when unique</tspan>
       </text>
     </g>
     <use href="#copy-help" class="glow-copy"/>

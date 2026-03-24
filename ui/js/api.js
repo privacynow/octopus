@@ -11,16 +11,33 @@ const API = (() => {
         csrfToken = token;
     }
 
+    function _notify(message, error, context = '') {
+        if (window.UI && typeof window.UI.reportError === 'function') {
+            window.UI.reportError(message, error, { context });
+            return;
+        }
+        console.warn(message, error);
+    }
+
     /** Fetch CSRF token from the auth endpoint. */
-    async function fetchCsrf() {
+    async function fetchCsrf({ silent = false } = {}) {
         try {
             const resp = await fetch('/v1/auth/csrf', { credentials: 'same-origin' });
-            if (resp.ok) {
-                const data = await resp.json();
-                csrfToken = data.token || data.csrf_token || '';
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}`);
             }
+            const data = await resp.json();
+            csrfToken = data.token || data.csrf_token || '';
+            if (!csrfToken) {
+                throw new Error('Token missing from response');
+            }
+            return csrfToken;
         } catch (e) {
-            console.warn('Failed to fetch CSRF token', e);
+            csrfToken = '';
+            if (!silent) {
+                _notify('Could not verify your session', e, 'Failed to fetch CSRF token');
+            }
+            return '';
         }
     }
 
@@ -38,7 +55,13 @@ const API = (() => {
             signal: AbortSignal.timeout(REQUEST_TIMEOUT),
         };
         if (body !== undefined) opts.body = JSON.stringify(body);
-        if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method) && csrfToken) {
+        if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+            if (!csrfToken) {
+                await fetchCsrf();
+            }
+            if (!csrfToken) {
+                throw new Error('Could not verify your session security. Refresh and try again.');
+            }
             opts.headers['X-CSRF-Token'] = csrfToken;
         }
         const resp = await fetch(url, opts);
@@ -63,11 +86,22 @@ const API = (() => {
         overlay.id = 'session-expired-overlay';
         overlay.className = 'session-expired';
         overlay.innerHTML = '<div class="session-card">' +
-            '<h3>Session Expired</h3>' +
+            '<h3 id="session-expired-title">Session Expired</h3>' +
             '<p>Your session has timed out. Please log in again.</p>' +
+            '<div class="session-card-actions">' +
             '<a href="/ui/login" class="btn btn-primary">Log in</a>' +
+            '<button type="button" class="btn" id="session-expired-close">Dismiss</button>' +
+            '</div>' +
             '</div>';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-labelledby', 'session-expired-title');
         document.body.appendChild(overlay);
+        const close = document.getElementById('session-expired-close');
+        if (close) close.addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
     }
 
     return {

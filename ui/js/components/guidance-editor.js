@@ -12,6 +12,7 @@ function renderGuidanceEditor(container) {
     selectorBar.className = 'filter-bar';
 
     const providerSelect = document.createElement('select');
+    providerSelect.setAttribute('aria-label', 'Guidance provider');
     providerSelect.innerHTML =
         '<option value="claude">Claude</option>' +
         '<option value="codex">Codex</option>';
@@ -31,14 +32,14 @@ function renderGuidanceEditor(container) {
 
     function loadGuidance() {
         contentEl.textContent = '';
-        _renderSkeletons(contentEl, 2, 'card');
+        UI.renderSkeletons(contentEl, 2, 'card');
 
         API.getGuidance(currentProvider).then(data => {
             contentEl.textContent = '';
             renderGuidanceContent(data);
         }).catch(err => {
             contentEl.textContent = '';
-            _renderError(contentEl, 'Failed: ' + err.message, loadGuidance);
+            UI.renderError(contentEl, 'Failed: ' + err.message, loadGuidance);
         });
     }
 
@@ -116,7 +117,7 @@ function renderGuidanceEditor(container) {
                 saveBtn.textContent = 'Saved';
                 setTimeout(() => { saveBtn.textContent = 'Save Draft'; }, 2000);
             } catch (err) {
-                console.error('Save draft failed', err);
+                UI.reportError('Failed to save the draft', err, { context: 'Guidance save draft failed' });
             }
             saveBtn.disabled = false;
         });
@@ -133,7 +134,7 @@ function renderGuidanceEditor(container) {
                 const previewText = result.preview || result.system_prompt || JSON.stringify(result, null, 2);
                 _showPreview(previewText);
             } catch (err) {
-                console.error('Preview failed', err);
+                UI.reportError('Failed to preview the guidance', err, { context: 'Guidance preview failed' });
             }
             previewBtn.disabled = false;
         });
@@ -149,7 +150,7 @@ function renderGuidanceEditor(container) {
                 await API.submitGuidance(currentProvider);
                 loadGuidance();
             } catch (err) {
-                console.error('Submit failed', err);
+                UI.reportError('Failed to submit the guidance', err, { context: 'Guidance submit failed' });
             }
             submitBtn.disabled = false;
         });
@@ -160,13 +161,13 @@ function renderGuidanceEditor(container) {
         publishBtn.className = 'btn btn-sm btn-primary';
         publishBtn.textContent = 'Publish';
         publishBtn.addEventListener('click', async () => {
-            _showConfirm('Publish Guidance', 'Publish this guidance to all active conversations?', async () => {
+            UI.showConfirm('Publish Guidance', 'Publish this guidance to all active conversations?', async () => {
                 publishBtn.disabled = true;
                 try {
                     await API.publishGuidance(currentProvider);
                     loadGuidance();
                 } catch (err) {
-                    console.error('Publish failed', err);
+                    UI.reportError('Failed to publish the guidance', err, { context: 'Guidance publish failed' });
                 }
                 publishBtn.disabled = false;
             });
@@ -212,5 +213,4 @@ function renderGuidanceEditor(container) {
 
     loadGuidance();
 
-    return function cleanup() {};
 }

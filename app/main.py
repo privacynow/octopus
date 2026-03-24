@@ -19,6 +19,7 @@ from app.agents.delivery import build_registry_delivery_runtime, handle_registry
 from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.registry_runtime import RegistryRuntime
+from app.agents.state import runtime_registry_agent_id
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
@@ -276,7 +277,7 @@ def main() -> None:
             print("Provider not authenticated or unavailable.", file=sys.stderr)
             for e in auth_errors:
                 print(f"  {e}", file=sys.stderr)
-            print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
+            print("Run ./octopus and choose Diagnose -> Provider auth to authenticate, or check your subscription.", file=sys.stderr)
             sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
@@ -316,12 +317,19 @@ def main() -> None:
     directory = build_control_plane_directory(authority_capabilities)
 
     def _agent_id_for_authority(authority_ref: str) -> str:
-        """Resolve the per-registry agent_id from BotConfig (single source of truth)."""
         try:
             registry_id = registry_id_from_authority_ref(authority_ref)
         except ValueError:
             return ""
-        return config.agent_id_for_registry(registry_id)
+        registry = next(
+            (item for item in config.agent_registries if item.registry_id == registry_id),
+            None,
+        )
+        return runtime_registry_agent_id(
+            config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope if registry is not None else "full",
+        )
 
     services = (
         build_bus_bot_services(

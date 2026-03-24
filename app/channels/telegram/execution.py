@@ -16,6 +16,7 @@ from app.channels.telegram.pending import TelegramPendingRuntime
 from app.channels.telegram.runtime_skills import TelegramRuntimeSkillsRuntime
 from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
+from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
 from app.execution_context import ResolvedExecutionContext
 from app.identity import telegram_conversation_ref, telegram_numeric_id
@@ -336,7 +337,10 @@ def execution_channel_metadata(
     if authority_ref:
         parts = authority_ref.split(":", 1)
         if len(parts) == 2 and parts[0] == "registry":
-            target_agent_id = runtime.config.agent_id_for_registry(parts[1])
+            target_agent_id = runtime_registry_agent_id(
+                runtime.config.data_dir,
+                parts[1],
+            )
 
     actor = actor_key
     if not actor:

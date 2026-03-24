@@ -10,6 +10,7 @@ from app.agents.registry_capabilities import (
     registry_id_from_authority_ref,
 )
 from app.agents.types import RegistryConnectionConfig
+from app.agents.state import runtime_registry_agent_id
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
@@ -39,7 +40,11 @@ def _services_for_registry(
             rid = registry_id_from_authority_ref(ref)
         except ValueError:
             return ""
-        return config.agent_id_for_registry(rid)
+        return runtime_registry_agent_id(
+            config.data_dir,
+            rid,
+            registry_scope=registry.registry_scope,
+        )
 
     return build_bus_bot_services(
         bus, directory, agent_id_for_authority=_agent_id_for_authority,

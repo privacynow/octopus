@@ -2,13 +2,13 @@
  * Conversation list — all conversations with search/filter and pagination.
  */
 function renderConversationList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
-    const limit = 25;
-    let currentQ = '';
-    let currentStatus = '';
+    const limit = UI.DEFAULT_PAGE_LIMIT;
+    let currentQ = UI.readQueryParam('q', '');
+    let currentStatus = UI.readQueryParam('status', '');
     let searchTimeout = null;
-    const cleanups = [];
 
     // Header
     const header = document.createElement('div');
@@ -37,11 +37,19 @@ function renderConversationList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search conversations (3+ chars)...';
+    searchInput.placeholder = 'Search conversations';
     searchInput.type = 'text';
+    searchInput.setAttribute('aria-label', 'Search conversations');
+    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
 
+    const searchHint = document.createElement('span');
+    searchHint.className = 'search-shortcut-hint';
+    searchHint.textContent = 'Shortcut: /';
+    filterBar.appendChild(searchHint);
+
     const statusSelect = document.createElement('select');
+    statusSelect.setAttribute('aria-label', 'Filter conversations by status');
     statusSelect.innerHTML =
         '<option value="">All statuses</option>' +
         '<option value="open">Open</option>' +
@@ -53,6 +61,7 @@ function renderConversationList(container) {
     container.appendChild(filterBar);
 
     const listEl = document.createElement('div');
+    listEl.className = 'list-container';
     container.appendChild(listEl);
 
     const pagEl = document.createElement('div');
@@ -63,9 +72,10 @@ function renderConversationList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             const q = searchInput.value.trim();
-            currentQ = q.length >= 3 ? q : '';
+            currentQ = q;
             cursor = 0;
             cursorStack = [];
+            UI.updateQueryParams({ q: currentQ, status: currentStatus });
             loadPage();
         }, 300);
     });
@@ -74,12 +84,15 @@ function renderConversationList(container) {
         currentStatus = statusSelect.value;
         cursor = 0;
         cursorStack = [];
+        UI.updateQueryParams({ q: currentQ, status: currentStatus });
         loadPage();
     });
+    searchInput.value = currentQ;
+    statusSelect.value = currentStatus;
 
     function loadPage() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 5, 'card');
+        UI.renderSkeletons(listEl, 5, 'row');
         pagEl.textContent = '';
 
         const params = { cursor, limit };
@@ -91,61 +104,39 @@ function renderConversationList(container) {
             listEl.textContent = '';
 
             if (convos.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No conversations found';
-                listEl.appendChild(empty);
+                listEl.appendChild(UI.renderEmptyState('No conversations found'));
                 pagEl.textContent = '';
                 return;
             }
 
             convos.forEach(c => {
-                const card = document.createElement('div');
-                card.className = 'card clickable';
-                _makePressable(card, () => Router.navigate('/ui/conversations/' + c.conversation_id));
-
-                const row = document.createElement('div');
-                row.className = 'card-row';
-
-                const info = document.createElement('div');
-                const title = document.createElement('div');
-                title.className = 'card-title';
-                title.textContent = c.title || c.conversation_id;
-                info.appendChild(title);
-
-                const sub = document.createElement('div');
-                sub.className = 'card-subtitle';
+                const sub = document.createElement('span');
                 const prefixParts = [];
                 if (c.target_display_name || c.target_agent_id) {
                     prefixParts.push(c.target_display_name || c.target_agent_id);
                 }
                 if (c.origin_channel) prefixParts.push(c.origin_channel);
                 if (prefixParts.length > 0) {
-                    sub.textContent = prefixParts.join(' \u00b7 ') + ' \u00b7 ';
+                    sub.appendChild(document.createTextNode(prefixParts.join(' \u00b7 ') + ' \u00b7 '));
                 }
                 const timeSpan = document.createElement('span');
                 timeSpan.setAttribute('data-timestamp', c.updated_at || c.created_at || '');
-                timeSpan.textContent = _relativeTime(c.updated_at || c.created_at);
+                timeSpan.textContent = UI.relativeTime(c.updated_at || c.created_at);
                 sub.appendChild(timeSpan);
                 if (c.event_count !== undefined) {
-                    const evtSpan = document.createTextNode(' \u00b7 ' + c.event_count + ' events');
-                    sub.appendChild(evtSpan);
+                    sub.appendChild(document.createTextNode(' \u00b7 ' + c.event_count + ' events'));
                 }
-                info.appendChild(sub);
-
-                row.appendChild(info);
-
-                const badge = document.createElement('span');
-                badge.className = 'badge badge-' + (c.status || 'open');
-                badge.textContent = c.status || 'open';
-                row.appendChild(badge);
-
-                card.appendChild(row);
-                listEl.appendChild(card);
+                listEl.appendChild(UI.renderListRow({
+                    href: '/ui/conversations/' + c.conversation_id,
+                    label: c.title || c.conversation_id,
+                    sublabelNode: sub,
+                    badgeText: c.status || 'open',
+                    badgeClass: 'badge-' + (c.status || 'open'),
+                }));
             });
 
             pagEl.textContent = '';
-            _renderPagination(pagEl, {
+            UI.renderPagination(pagEl, {
                 hasPrev: cursorStack.length > 0,
                 hasNext: !!data.has_more,
                 info: '',
@@ -161,21 +152,17 @@ function renderConversationList(container) {
             });
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadPage);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
         });
     }
 
     loadPage();
 
-    // WS: reload on any new event (new conversations, status changes)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event' || msg.type === 'heartbeat') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadPage, 2000);
-        }
-    });
-    cleanups.push(unsub);
+    cleanups.add(WS.subscribe('conversations', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadPage, 400);
+    }));
 
     function _showNewConversationDialog() {
         const overlay = document.createElement('div');
@@ -183,12 +170,17 @@ function renderConversationList(container) {
 
         const dialog = document.createElement('div');
         dialog.className = 'confirm-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
 
         const h3 = document.createElement('h3');
+        h3.id = 'new-conversation-title';
         h3.textContent = 'New Conversation';
+        dialog.setAttribute('aria-labelledby', h3.id);
         dialog.appendChild(h3);
 
         const agentLabel = document.createElement('label');
+        agentLabel.htmlFor = 'new-conversation-agent';
         agentLabel.textContent = 'Target Agent';
         agentLabel.style.display = 'block';
         agentLabel.style.marginBottom = '4px';
@@ -197,6 +189,8 @@ function renderConversationList(container) {
         dialog.appendChild(agentLabel);
 
         const agentSelect = document.createElement('select');
+        agentSelect.id = 'new-conversation-agent';
+        agentSelect.setAttribute('aria-label', 'Target agent');
         agentSelect.style.width = '100%';
         agentSelect.style.marginBottom = '12px';
         agentSelect.style.padding = '8px';
@@ -204,7 +198,7 @@ function renderConversationList(container) {
         dialog.appendChild(agentSelect);
 
         // Load agents
-        API.listAgents().then(data => {
+        API.listAgents({ limit: 100 }).then(data => {
             const agents = data.agents || data || [];
             agentSelect.innerHTML = '';
             if (agents.length === 0) {
@@ -217,6 +211,9 @@ function renderConversationList(container) {
                 opt.textContent = a.display_name || a.slug || a.agent_id;
                 agentSelect.appendChild(opt);
             });
+        }).catch((err) => {
+            agentSelect.innerHTML = '<option value="">Failed to load agents</option>';
+            UI.reportError('Failed to load agents for a new conversation', err, { context: 'Load conversation agents failed' });
         });
 
         const actions = document.createElement('div');
@@ -224,11 +221,13 @@ function renderConversationList(container) {
 
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'btn';
+        cancelBtn.type = 'button';
         cancelBtn.textContent = 'Cancel';
         cancelBtn.addEventListener('click', () => overlay.remove());
 
         const createBtn = document.createElement('button');
         createBtn.className = 'btn btn-primary';
+        createBtn.type = 'button';
         createBtn.textContent = 'Create';
         createBtn.addEventListener('click', async () => {
             const agentId = agentSelect.value;
@@ -242,7 +241,7 @@ function renderConversationList(container) {
             } catch (err) {
                 createBtn.disabled = false;
                 createBtn.textContent = 'Create';
-                console.error('Create conversation failed', err);
+                UI.reportError('Failed to start the conversation', err, { context: 'Create conversation failed' });
             }
         });
 
@@ -254,11 +253,9 @@ function renderConversationList(container) {
             if (e.target === overlay) overlay.remove();
         });
         document.body.appendChild(overlay);
+        requestAnimationFrame(() => agentSelect.focus());
     }
 
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        clearTimeout(reloadDebounce);
-        cleanups.forEach(fn => fn());
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

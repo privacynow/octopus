@@ -173,6 +173,9 @@ class CodexProvider:
             args.extend(["--add-dir", d])
         return args
 
+    def _resolved_working_dir(self, working_dir: str | None = None) -> str:
+        return str(working_dir or self.config.working_dir)
+
     def _build_new_cmd(
         self,
         prompt: str,
@@ -183,6 +186,7 @@ class CodexProvider:
         safe_mode: bool = False,
         extra_dirs: list[str] | None = None,
         effective_model: str = "",
+        working_dir: str = "",
     ) -> list[str]:
         cmd = ["codex", "exec", "--json"]
         if safe_mode:
@@ -202,7 +206,7 @@ class CodexProvider:
         cmd.extend(self._extra_dir_args(extra_dirs))
         for p in image_paths:
             cmd.extend(["-i", p])
-        cmd.extend(["-C", str(self.config.working_dir), prompt])
+        cmd.extend(["-C", self._resolved_working_dir(working_dir), prompt])
         return cmd
 
     def _build_resume_cmd(
@@ -213,10 +217,13 @@ class CodexProvider:
         *,
         ephemeral: bool = False,
         effective_model: str = "",
+        working_dir: str = "",
     ) -> list[str]:
         # NOTE: codex exec resume does NOT support --add-dir (verified on
-        # codex-cli 0.111.0).  Extra dirs are only passed on initial exec.
-        cmd = ["codex", "exec", "resume", "--json"]
+        # codex-cli 0.116.0). Extra dirs are only passed on initial exec.
+        # Working root still matters for workspace-write sandboxing, so pass
+        # it via the global -C flag that applies to all codex subcommands.
+        cmd = ["codex", "-C", self._resolved_working_dir(working_dir), "exec", "resume", "--json"]
         cmd.extend(self._common_args(effective_model))
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
@@ -751,12 +758,23 @@ class CodexProvider:
                     sandbox_override = None
 
         effective_model = context.effective_model if context else ""
+        working_dir = context.working_dir if context else ""
         if thread_id:
-            cmd = self._build_resume_cmd(thread_id, effective_prompt, image_paths, effective_model=effective_model)
+            cmd = self._build_resume_cmd(
+                thread_id,
+                effective_prompt,
+                image_paths,
+                effective_model=effective_model,
+                working_dir=working_dir,
+            )
         else:
             cmd = self._build_new_cmd(
-                effective_prompt, image_paths, extra_dirs=extra_dirs,
-                sandbox=sandbox_override, effective_model=effective_model,
+                effective_prompt,
+                image_paths,
+                extra_dirs=extra_dirs,
+                sandbox=sandbox_override,
+                effective_model=effective_model,
+                working_dir=working_dir,
             )
 
         # Preserve resume semantics after a bot-level approval. Changing a resumed
@@ -780,7 +798,6 @@ class CodexProvider:
                 cmd.insert(-1, override)
 
         extra_env = context.credential_env if context else {}
-        working_dir = context.working_dir if context else ""
         return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env, working_dir=working_dir, cancel=cancel)
 
     async def run_preflight(
@@ -804,7 +821,6 @@ class CodexProvider:
         effective_model = getattr(context, 'effective_model', '') if context else ""
         cmd = self._build_new_cmd(
             effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,
-            extra_dirs=extra_dirs, effective_model=effective_model,
+            extra_dirs=extra_dirs, effective_model=effective_model, working_dir=working_dir,
         )
-        working_dir = context.working_dir if context else ""
         return await self._run_cmd(cmd, progress, working_dir=working_dir, cancel=cancel)

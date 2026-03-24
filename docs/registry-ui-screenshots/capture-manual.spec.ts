@@ -101,13 +101,13 @@ test("capture manual fixtures for operator & product docs", async ({ page }) => 
   await page.screenshot({ path: path.join(OUT, "oct-01-main-menu.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "oct-01-main-menu.png"), [
     { selector: '[data-doc="title"]', label: "Primary entry when bots exist", color: "#2196f3", pad: 8 },
-    { selector: '[data-doc="menu"]', label: "Add bot · Manage · Registry · Workspace · Advanced", color: "#ff9800", pad: 8 },
+    { selector: '[data-doc="menu"]', label: "Recommended · Lifecycle · Bots · Registry · Workspaces · Diagnose · Status", color: "#ff9800", pad: 8 },
   ]);
 
   await page.goto(fixture("oct-02-manage-bot.html"));
   await page.screenshot({ path: path.join(OUT, "oct-02-manage-bot.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "oct-02-manage-bot.png"), [
-    { selector: '[data-doc="menu"]', label: "Logs · restart · doctor · settings · registry", color: "#ff9800", pad: 8 },
+    { selector: '[data-doc="menu"]', label: "Add · connect · disconnect · start · stop · restart · redeploy · inspect", color: "#ff9800", pad: 8 },
   ]);
 
   await page.goto(fixture("oct-03-edit-settings.html"));
@@ -142,13 +142,13 @@ test("capture manual fixtures for operator & product docs", async ({ page }) => 
   await page.goto(fixture("oct-07-workspace.html"));
   await page.screenshot({ path: path.join(OUT, "oct-07-workspace.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "oct-07-workspace.png"), [
-    { selector: '[data-doc="help"]', label: "create · add-bot · verify host paths", color: "#ff9800", pad: 8 },
+    { selector: '[data-doc="help"]', label: "Create · remove · attach · detach · inspect", color: "#ff9800", pad: 8 },
   ]);
 
   await page.goto(fixture("oct-08-advanced.html"));
   await page.screenshot({ path: path.join(OUT, "oct-08-advanced.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "oct-08-advanced.png"), [
-    { selector: '[data-doc="menu"]', label: "Full add-bot wizard · webhook mode", color: "#ff9800", pad: 8 },
+    { selector: '[data-doc="menu"]', label: "Logs · shell · doctor · provider auth", color: "#ff9800", pad: 8 },
   ]);
 
   await page.goto(fixture("oct-09-webhook.html"));

@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.agents.state import save_registry_connection_state
+from app.agents.types import RegistryConnectionState
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
@@ -139,6 +141,22 @@ def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-bo
         if config_overrides:
             overrides.update(config_overrides)
         cfg = make_config(data_dir, **overrides)
+        registry_scopes = {
+            item.registry_id: item.registry_scope
+            for item in getattr(cfg, "agent_registries", ())
+        }
+        for registry_id, agent_id in getattr(cfg, "registry_agent_ids", {}).items():
+            if not str(agent_id or "").strip():
+                continue
+            save_registry_connection_state(
+                data_dir,
+                RegistryConnectionState(
+                    registry_id=registry_id,
+                    registry_scope=registry_scopes.get(registry_id, "full"),
+                    agent_id=str(agent_id),
+                    connectivity_state="connected",
+                ),
+            )
         setup_globals(cfg, prov, boot_id=boot_id, bot_instance=bot_instance)
         try:
             yield data_dir, cfg, prov

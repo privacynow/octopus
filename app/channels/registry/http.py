@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import hmac
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +36,7 @@ from app.channels.registry.ws import WebSocketManager
 from app.capability_service import CapabilityService
 from registry_sdk.conversations import ConversationCreate
 from registry_sdk.events import ConversationEvent, validate_event_metadata
+from registry_sdk.realtime import ConversationProgressUpdate
 from app.channels.registry.ingress import (
     approve_catalog_skill,
     approve_provider_guidance,
@@ -88,6 +90,8 @@ _REGISTRY_UI_SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
+
+log = logging.getLogger(__name__)
 
 
 class ConversationSkillMutationRequest(BaseModel):
@@ -167,6 +171,35 @@ def get_ws_manager() -> WebSocketManager:
     return _ws_manager
 
 
+def _event_invalidation_topics(kind: str) -> tuple[str, ...]:
+    topics = {"conversations", "summary"}
+    if kind == "provider.response":
+        topics.add("usage")
+    if kind == "task.status":
+        topics.add("tasks")
+    if kind in {"approval.requested", "approval.decided"}:
+        topics.add("approvals")
+    return tuple(sorted(topics))
+
+
+async def _broadcast_invalidations(
+    *,
+    topics: tuple[str, ...] | list[str] | set[str],
+    reason: str,
+    conversation_id: str = "",
+    agent_id: str = "",
+    routed_task_id: str = "",
+) -> None:
+    for topic in sorted(set(topics)):
+        await _ws_manager.broadcast_invalidation(
+            topic,
+            reason=reason,
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+            routed_task_id=routed_task_id,
+        )
+
+
 @app.websocket("/v1/ws")
 async def websocket_feed(ws: WebSocket) -> None:
     """Real-time event feed. v1: operator session cookie auth only."""
@@ -218,7 +251,7 @@ def get_csrf_token(request: Request) -> dict[str, Any]:
 
 
 @app.post("/v1/agents/enroll")
-def enroll(
+async def enroll(
     request: Request,
     payload: dict[str, Any],
     store: AbstractRegistryStore = Depends(get_store),
@@ -230,23 +263,39 @@ def enroll(
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
     clear_auth_attempt_limit(request, "registry-enroll")
     try:
-        return store.enroll(payload.get("agent_card"))
+        result = store.enroll(payload.get("agent_card"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _broadcast_invalidations(
+        topics=("agents", "summary"),
+        reason="agent.enrolled",
+        agent_id=str(result.get("agent_id", "")),
+    )
+    return result
 
 
 @app.post("/v1/agents/register")
-def register(
+async def register(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        return store.register(agent_token, payload)
+        result = store.register(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    agent = result.get("agent", {})
+    agent_id = str(agent.get("agent_id", ""))
+    if agent_id:
+        await _ws_manager.broadcast_heartbeat(agent_id, agent)
+    await _broadcast_invalidations(
+        topics=("agents", "summary"),
+        reason="agent.registered",
+        agent_id=agent_id,
+    )
+    return result
 
 
 @app.post("/v1/agents/heartbeat")
@@ -266,6 +315,11 @@ async def heartbeat(
     agent_id = agent_data.get("agent_id", "")
     if agent_id:
         await _ws_manager.broadcast_heartbeat(agent_id, agent_data)
+    await _broadcast_invalidations(
+        topics=("agents", "summary"),
+        reason="agent.heartbeat",
+        agent_id=str(agent_id or ""),
+    )
     return result
 
 
@@ -288,7 +342,7 @@ def search_agents(
 
 
 @app.post("/v1/agents/routed-tasks")
-def create_routed_task(
+async def create_routed_task(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
     store: AbstractRegistryStore = Depends(get_store),
@@ -297,13 +351,27 @@ def create_routed_task(
         store.assert_agent_scope(agent_token, {"coordination", "full"})
         validated_request = validated_routed_task_request(payload)
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
-        return store.create_routed_task(validated_request)
+        result = store.create_routed_task(validated_request)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except CapabilityDisabledError as exc:
         raise HTTPException(status_code=409, detail="capability_disabled") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown conversation: {exc.args[0]}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    parent_conversation_id = str(result.get("parent_conversation_id", ""))
+    agent_id = str(result.get("target_agent_id", "") or result.get("origin_agent_id", ""))
+    for ev in result.get("inserted_events", []):
+        await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev)
+    await _broadcast_invalidations(
+        topics=("tasks", "conversations", "summary"),
+        reason="routed_task.created",
+        conversation_id=parent_conversation_id,
+        agent_id=agent_id,
+        routed_task_id=str(result.get("routed_task_id", "")),
+    )
+    return result
 
 
 @app.get("/v1/agents/poll")
@@ -358,35 +426,67 @@ async def routed_task_status(
     if parent_conversation_id and result.get("events_written"):
         for ev in result.get("inserted_events", []):
             await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev)
+    await _broadcast_invalidations(
+        topics=("tasks", "conversations", "summary"),
+        reason="routed_task.updated",
+        conversation_id=parent_conversation_id,
+        agent_id=agent_id,
+        routed_task_id=routed_task_id,
+    )
     return result
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/result")
-def routed_task_result(
+async def routed_task_result(
     routed_task_id: str,
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        return store.update_routed_task_result(agent_token, routed_task_id, payload)
+        result = store.update_routed_task_result(agent_token, routed_task_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
+    parent_conversation_id = str(result.get("parent_conversation_id", ""))
+    agent_id = str(result.get("target_agent_id", "") or result.get("origin_agent_id", ""))
+    if parent_conversation_id and result.get("events_written"):
+        for ev in result.get("inserted_events", []):
+            await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev)
+    await _broadcast_invalidations(
+        topics=("tasks", "conversations", "summary"),
+        reason="routed_task.completed",
+        conversation_id=parent_conversation_id,
+        agent_id=agent_id,
+        routed_task_id=routed_task_id,
+    )
+    return result
 
 
 @app.post("/v1/agents/deregister")
-def deregister(
+async def deregister(
     agent_token: str = Depends(require_agent_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        return store.deregister(agent_token)
+        result = store.deregister(agent_token)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
+    agent_id = str(result.get("agent_id", ""))
+    if agent_id:
+        await _ws_manager.broadcast_heartbeat(
+            agent_id,
+            {"agent_id": agent_id, "connectivity_state": result.get("connectivity_state", "offline")},
+        )
+    await _broadcast_invalidations(
+        topics=("agents", "summary"),
+        reason="agent.deregistered",
+        agent_id=agent_id,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +524,18 @@ def _paginated_response(key: str, items: list[Any], cursor: int, limit: int) -> 
 def resource_list_agents(
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
+    q: str = Query(default=""),
+    state: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    agents = store.list_agents(for_agent_id=_scoped_agent_id(auth), cursor=cursor, limit=limit)
+    agents = store.list_agents(
+        for_agent_id=_scoped_agent_id(auth),
+        cursor=cursor,
+        limit=limit,
+        q=q,
+        connectivity_state=state,
+    )
     return _paginated_response("agents", agents, cursor, limit)
 
 
@@ -498,7 +606,7 @@ def resource_get_conversation(
 
 
 @app.post("/v1/conversations", status_code=201)
-def resource_create_conversation(
+async def resource_create_conversation(
     payload: ConversationCreate,
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
@@ -513,12 +621,50 @@ def resource_create_conversation(
     # Validate the agent exists
     if not store.agent_exists(payload.target_agent_id):
         raise HTTPException(status_code=404, detail=f"Unknown agent: {payload.target_agent_id}")
-    return store.create_conversation(
+    result = store.create_conversation(
         target_agent_id=payload.target_agent_id,
         title=payload.title,
         origin_channel=payload.origin_channel,
         external_conversation_ref=payload.external_conversation_ref,
     )
+    await _broadcast_invalidations(
+        topics=("conversations", "summary"),
+        reason="conversation.created",
+        conversation_id=str(result.get("conversation_id", "")),
+        agent_id=payload.target_agent_id,
+    )
+    return result
+
+
+@app.post("/v1/conversations/{conversation_id}/progress")
+async def resource_publish_progress(
+    conversation_id: str,
+    payload: ConversationProgressUpdate,
+    agent_token: str = Depends(require_agent_token),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    conversation_id = normalize_conversation_id(conversation_id)
+    agent_row = store.resolve_agent_for_token(agent_token)
+    if agent_row is None:
+        raise HTTPException(status_code=401, detail="Unknown agent token")
+    agent_id = str(agent_row["agent_id"])
+    try:
+        conv = store.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_id}") from exc
+    if conv.get("target_agent_id") != agent_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this agent resource.")
+    await _ws_manager.broadcast_progress(
+        conversation_id,
+        agent_id,
+        {
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "content": payload.content,
+            "created_at": payload.created_at,
+        },
+    )
+    return {"ok": True}
 
 
 @app.post("/v1/conversations/{conversation_id}/events")
@@ -556,9 +702,18 @@ async def resource_publish_events(
         except (ValueError, Exception) as exc:
             raise HTTPException(status_code=422, detail=f"Event {i}: {exc}") from exc
     result = store.publish_events(agent_token, conversation_id, validated)
+    topics: set[str] = set()
     # Broadcast actual stored event rows (with seq, matching list_events shape)
     for ev in result.get("inserted_events", []):
         await _ws_manager.broadcast_event(conversation_id, agent_id, ev)
+        topics.update(_event_invalidation_topics(str(ev.get("kind", ""))))
+    if topics:
+        await _broadcast_invalidations(
+            topics=topics,
+            reason="conversation.event_published",
+            conversation_id=conversation_id,
+            agent_id=agent_id,
+        )
     return {"inserted": result["inserted"], "skipped": result["skipped"]}
 
 
@@ -627,6 +782,12 @@ async def resource_add_message(
     event_data = result.get("event")
     if event_data:
         await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
+    await _broadcast_invalidations(
+        topics=("conversations", "summary"),
+        reason="conversation.message_added",
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+    )
     return result
 
 
@@ -655,6 +816,15 @@ async def resource_add_action(
     event_data = result.get("event")
     if event_data:
         await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
+        topics = set(_event_invalidation_topics(str(event_data.get("kind", ""))))
+    else:
+        topics = {"conversations", "summary"}
+    await _broadcast_invalidations(
+        topics=topics,
+        reason="conversation.action_added",
+        conversation_id=conversation_id,
+        agent_id=agent_id,
+    )
     return result
 
 

@@ -2,6 +2,7 @@
  * Usage view — token/cost summary with date range selection.
  */
 function renderUsageView(container) {
+    const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
 
     // Header
@@ -53,10 +54,10 @@ function renderUsageView(container) {
             // Calendar midnight today (not 24h ago)
             since.setHours(0, 0, 0, 0);
         } else if (range === '7d') {
-            since.setDate(since.getDate() - 7);
+            since.setDate(since.getDate() - 6);
             since.setHours(0, 0, 0, 0);
         } else {
-            since.setDate(since.getDate() - 30);
+            since.setDate(since.getDate() - 29);
             since.setHours(0, 0, 0, 0);
         }
         return {
@@ -68,8 +69,8 @@ function renderUsageView(container) {
     function loadUsage() {
         summaryEl.textContent = '';
         tableEl.textContent = '';
-        _renderSkeletons(summaryEl, 1, 'card');
-        _renderSkeletons(tableEl, 3, 'row');
+        UI.renderSkeletons(summaryEl, 1, 'card');
+        UI.renderSkeletons(tableEl, 3, 'row');
 
         const params = _rangeToParams(currentRange);
         API.getUsage(params).then(usage => {
@@ -149,7 +150,7 @@ function renderUsageView(container) {
         }).catch(err => {
             summaryEl.textContent = '';
             tableEl.textContent = '';
-            _renderError(tableEl, 'Failed: ' + err.message, loadUsage);
+            UI.renderError(tableEl, 'Failed: ' + err.message, loadUsage);
         });
     }
 
@@ -171,12 +172,10 @@ function renderUsageView(container) {
 
     // WS: reload usage on new events (token costs update)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'event') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadUsage, 5000);
-        }
+    const unsub = WS.subscribe('usage', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadUsage, 600);
     });
-
-    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

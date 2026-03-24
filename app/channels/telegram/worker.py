@@ -13,6 +13,7 @@ from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
+from app.agents.state import runtime_registry_agent_id
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
@@ -297,7 +298,10 @@ async def _execute_worker_action(
             conversation_key=target_key,
             origin_channel=source,
             external_conversation_ref=conversation_ref,
-            target_agent_id=runtime.config.agent_id_for_registry(reg_id),
+            target_agent_id=runtime_registry_agent_id(
+                runtime.config.data_dir,
+                reg_id,
+            ),
         )
         sink = build_event_sink_for_context(
             transport,

@@ -14,48 +14,32 @@ This document **enumerates every operator-facing and product-facing flow** imple
 
 ## 1. Operator: `./octopus` (CLI and menus)
 
-Implementation: [`octopus`](../octopus) (shell), with helpers under [`scripts/lib/`](../scripts/lib/).
+Implementation: [`octopus`](../octopus) (thin wrapper) → [`app/octopus_cli/`](../app/octopus_cli/).
 
 | Flow | Surface | Implementation | Documented in |
 |------|---------|----------------|---------------|
-| First-time guided setup | Run `./octopus` with **no bots** | `first_bot_flow` (quick or `--full` advanced) | [README.md](../README.md) Quick Start |
-| Main menu (existing bots) | Run `./octopus` when ≥1 bot exists | `main_menu` | [README.md](../README.md), `./octopus help` |
-| Add another bot (quick) | Main menu **1** | `add_bot_flow quick` → `prepare_new_bot_setup` | — |
-| Add another bot (full options) | Main menu **5** Advanced → **1** | `add_bot_flow full` | — |
-| First bot with full prompts | `./octopus --full` | `first_bot_flow full` | — |
-| **Manage bot** | Main menu **2** | `manage_bot_menu` | — |
-| View logs | Manage **1** | `cmd_logs` | `./octopus help` |
-| Restart bot | Manage **2** | `cmd_start` after stop | — |
-| Stop bot | Manage **3** | `cmd_stop` | — |
-| Health check | Manage **4** | `cmd_doctor` (optional `--live-provider`) | README, registry-guide troubleshooting |
-| **Edit settings** | Manage **5** | `edit_bot_settings_menu`: display name, role, tags, allowed users, timeout, open editor | — |
-| **Registry connection for bot** | Manage **6** or main **3** | `manage_bot_registry_flow` / `connect_bot_to_registry_flow` / `connect_bot_to_local_registry_menu` | [docs/registry-guide.md](registry-guide.md) CLI SVGs |
-| Workspaces | Main menu **4** | `cmd_workspace` | `./octopus help` |
-| **Advanced** | Main menu **5** | `advanced_menu`: full add-bot, **webhook mode** | — |
-| Webhook mode setup | Advanced **2** | `configure_webhook_mode_flow` | [ARCHITECTURE.md](../ARCHITECTURE.md) (deployment context) |
-| Status (all bots + registry + auth) | `./octopus status` | `cmd_status` | README |
-| Start / stop / logs | `./octopus start|stop|logs [slug]` | `cmd_*` | `./octopus help` |
-| Doctor | `./octopus doctor [--live-provider] [slug]` | `cmd_doctor` | README |
-| **Local registry** | `./octopus registry …` | `cmd_registry` → `registry_start_cmd`, `registry_stop_cmd`, `registry_logs_cmd`, `registry_status_cmd`, `registry_connect_cmd`, `registry_interactive_menu` | [docs/registry-guide.md](registry-guide.md) §CLI + SVGs under `docs/assets/registry/*.svg` |
-| **Workspace subcommands** | `./octopus workspace create|remove|add-bot|remove-bot|status|verify` | `workspace_*` functions | `./octopus help` |
-| **Nuclear reset** | `./octopus clean` | `cmd_clean` | README Security / troubleshooting |
+| Dynamic operator menu | Run `./octopus` | `OctopusCLI.interactive_menu` | [README.md](../README.md), `./octopus help` |
+| Recommended actions | No-arg menu → **Recommended Actions** | `OctopusCLI.recommended_actions` | — |
+| Lifecycle actions | `./octopus start|stop|restart|redeploy ...` or menu → **Lifecycle** | `OctopusCLI.run_mutating` + `OctopusManager` lifecycle methods | [README.md](../README.md), `./octopus help` |
+| Add bot | Menu → **Bots** → **Add bot** | `OctopusManager.add_bot_interactive` | [README.md](../README.md) Quick Start |
+| Connect / disconnect local registry | `./octopus connect|disconnect ...` or menu → **Bots** | `OctopusManager.connect_bot_to_local_registry`, `disconnect_bot_from_local_registry` | [docs/registry-guide.md](registry-guide.md) |
+| Logs / shell / doctor | `./octopus logs|shell|doctor ...` or menu → **Diagnose** | `OctopusCLI.cmd_logs`, `cmd_shell`, `cmd_doctor` | README |
+| Registry lifecycle | `./octopus start|stop|restart|redeploy registry` or menu → **Registry** | `OctopusManager.start_registry`, `stop_registry` | [docs/registry-guide.md](registry-guide.md) |
+| Workspace management | Menu → **Workspaces** | `OctopusManager.create_workspace`, `add_bot_to_workspace`, `remove_bot_from_workspace` | README |
+| Status and freshness | `./octopus status` or menu → **Status** | `OctopusCLI.render_*_status` | README |
+| Destructive reset | `./octopus clean` | `OctopusManager.clean_all` | README |
 
-**SVG storyboards (general Octopus):** [`docs/assets/octopus/README.md`](assets/octopus/README.md) — main menu, manage bot, workspace, advanced/webhook, clean. **`./octopus help`:** [`docs/assets/quickstart/04-octopus-help.svg`](assets/quickstart/04-octopus-help.svg).
+**SVG storyboards (general Octopus):** [`docs/assets/octopus/README.md`](assets/octopus/README.md) — main menu, Bots submenu, Workspaces submenu, Diagnose submenu, clean. **`./octopus help`:** [`docs/assets/quickstart/04-octopus-help.svg`](assets/quickstart/04-octopus-help.svg).
 
 ### 1.1 Registry connection flows (Octopus ↔ bot env)
 
-These are the **logical** branches inside `manage_bot_registry_flow` and related helpers (`add_registry_connection_flow`, `disconnect_bot_from_registry_flow`, `switch_local_bot_to_remote_registry_flow`, `switch_remote_bot_to_local_registry_flow`, `connect_bot_to_registry_flow` for standalone → first connection).
+Current Octopus uses one consistent local-registry connection flow:
 
 | Flow | When | Documented in |
 |------|------|----------------|
-| Connect standalone bot to registry | Bot in standalone mode | [`04-connect-local.svg`](assets/registry/04-connect-local.svg), [`05-add-bot-local.svg`](assets/registry/05-add-bot-local.svg) |
-| Connect to **remote** HTTPS registry | Prompts URL + enrollment token + scope | [`06-connect-remote.svg`](assets/registry/06-connect-remote.svg) |
-| **Multiple** registry connections | `manage_bot_registry` when count > 1 | [`10-manage-registry-connections.svg`](assets/registry/10-manage-registry-connections.svg) |
-| Switch local ↔ remote | Exactly one connection; branch in menu | [`07-switch-local-remote.svg`](assets/registry/07-switch-local-remote.svg), [`08-switch-remote-local.svg`](assets/registry/08-switch-remote-local.svg) |
-| Disconnect / return to standalone | `disconnect_bot_from_registry_flow` | [`09-disconnect-registry.svg`](assets/registry/09-disconnect-registry.svg) |
-| Local registry **maintenance** | `./octopus registry` interactive menu | [`11-registry-maintenance.svg`](assets/registry/11-registry-maintenance.svg) |
-| Start local registry | `registry start` | [`02-start-local-registry.svg`](assets/registry/02-start-local-registry.svg) |
-| Registry state overview | `registry status` / `status` | [`01-local-registry-states.svg`](assets/registry/01-local-registry-states.svg) |
+| Connect eligible bots to local registry | `./octopus connect` or menu → **Bots** → **Connect** | [docs/registry-guide.md](registry-guide.md) |
+| Disconnect local registry | `./octopus disconnect` or menu → **Bots** → **Disconnect** | [docs/registry-guide.md](registry-guide.md) |
+| Start / stop / redeploy registry | lifecycle verbs or menu → **Registry** | [docs/registry-guide.md](registry-guide.md) |
 
 ---
 
@@ -169,10 +153,10 @@ These are not single screens but **modes** that change behavior across surfaces:
 | Topic | Config / code | Where it appears |
 |-------|----------------|------------------|
 | Standalone vs registry bot | `BOT_AGENT_MODE`, registry connection records | Octopus, bot runtime, registry UI |
-| Registry **scope** | `full` / `channel` / `coordination` per connection | Octopus prompts, [registry-guide](registry-guide.md) scope table |
-| Multi-registry per bot | Multiple rows in bot env | Octopus `manage_bot_registry_flow` when count > 1 |
+| Registry **scope** | `full` / `channel` / `coordination` per connection | local-registry connect flow, bot env records, [registry-guide](registry-guide.md) scope table |
+| Multi-registry per bot | Multiple indexed rows in bot env | runtime/config capability; not currently a symmetric first-class Octopus wizard flow |
 | Publish level | `BOT_REGISTRY_PUBLISH_LEVEL` | README, runtime → registry events |
-| Webhook vs polling | `BOT_MODE`, webhook env | `configure_webhook_mode_flow`, deployment docs |
+| Webhook vs polling | `BOT_MODE`, webhook env | deployment/runtime config and startup behavior |
 
 ---
 

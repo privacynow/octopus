@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 150.140625,
+      "y": 145.796875,
       "width": 1060,
       "height": 58,
       "label": "Client-side search across the skill catalog",
@@ -10,7 +10,7 @@
     },
     {
       "x": 274,
-      "y": 212.140625,
+      "y": 238.90625,
       "width": 1060,
       "height": 112.796875,
       "label": "Catalog row with install or uninstall action",

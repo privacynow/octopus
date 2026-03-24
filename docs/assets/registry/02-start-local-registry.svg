@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
   <title id="title">Start local registry</title>
-  <desc id="desc">Terminal panel showing the local registry being started from the octopus registry menu.</desc>
+  <desc id="desc">Terminal panel showing the local registry being started with the verb-first CLI.</desc>
   <style>
     .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
@@ -26,14 +26,11 @@
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <g id="copy-start-local">
       <text class="line" xml:space="preserve">
-        <tspan class="prompt" x="34" y="94">$ ./octopus registry</tspan>
-        <tspan x="34" dy="29">Registry:</tspan>
-        <tspan x="34" dy="29">  local      not configured</tspan>
-        <tspan x="34" dy="29"></tspan>
-        <tspan x="34" dy="29">  1. Start local registry</tspan>
-        <tspan x="34" dy="29">  2. Back</tspan>
-        <tspan x="34" dy="29">Choose an option: 1</tspan>
-        <tspan x="34" dy="29">Registry UI: http://localhost:8787/ui</tspan>
+        <tspan class="prompt" x="34" y="94">$ ./octopus start registry</tspan>
+        <tspan x="34" dy="29">Will start: registry</tspan>
+        <tspan x="34" dy="29">Proceed? [y/N] y</tspan>
+        <tspan x="34" dy="29">Registry started: http://localhost:8787/ui</tspan>
+        <tspan x="34" dy="29">UI password stored in .deploy/registry/.env (REGISTRY_UI_TOKEN)</tspan>
       </text>
     </g>
     <use href="#copy-start-local" class="glow-copy"/>

@@ -2,6 +2,7 @@
  * Skill catalog — runtime skills list with install/uninstall actions.
  */
 function renderSkillCatalog(container) {
+    const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
     let currentQ = '';
 
@@ -14,9 +15,16 @@ function renderSkillCatalog(container) {
     // Search
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search skills...';
+    searchInput.placeholder = 'Search skills';
     searchInput.type = 'text';
+    searchInput.setAttribute('aria-label', 'Search skills');
+    searchInput.setAttribute('title', 'Press / to focus search');
     container.appendChild(searchInput);
+
+    const searchHint = document.createElement('div');
+    searchHint.className = 'search-shortcut-hint search-shortcut-inline';
+    searchHint.textContent = 'Shortcut: /';
+    container.appendChild(searchHint);
 
     const listEl = document.createElement('div');
     listEl.style.marginTop = '16px';
@@ -34,7 +42,7 @@ function renderSkillCatalog(container) {
 
     function loadSkills() {
         listEl.textContent = '';
-        _renderSkeletons(listEl, 4, 'card');
+        UI.renderSkeletons(listEl, 4, 'card');
 
         API.listSkills().then(data => {
             const skills = Array.isArray(data) ? data : (data.skills || []);
@@ -42,7 +50,7 @@ function renderSkillCatalog(container) {
             renderList();
         }).catch(err => {
             listEl.textContent = '';
-            _renderError(listEl, 'Failed: ' + err.message, loadSkills);
+            UI.renderError(listEl, 'Failed: ' + err.message, loadSkills);
         });
     }
 
@@ -59,10 +67,7 @@ function renderSkillCatalog(container) {
         }
 
         if (filtered.length === 0) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.textContent = allSkills.length === 0 ? 'No skills available' : 'No skills match search';
-            listEl.appendChild(empty);
+            listEl.appendChild(UI.renderEmptyState(allSkills.length === 0 ? 'No skills available' : 'No skills match search'));
             return;
         }
 
@@ -115,7 +120,7 @@ function renderSkillCatalog(container) {
                 } catch (err) {
                     actionBtn.disabled = false;
                     actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
-                    console.error('Skill action failed', err);
+                    UI.reportError('Failed to update the skill', err, { context: 'Skill action failed' });
                 }
             });
             actions.appendChild(actionBtn);
@@ -128,18 +133,13 @@ function renderSkillCatalog(container) {
 
     loadSkills();
 
-    // WS: reload on heartbeat (skills may change on agent registration)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('*', (msg) => {
-        if (msg.type === 'heartbeat') {
-            clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadSkills, 3000);
-        }
+    const unsub = WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(loadSkills, 600);
     });
 
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        clearTimeout(reloadDebounce);
-        unsub();
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

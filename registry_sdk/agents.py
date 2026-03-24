@@ -11,7 +11,6 @@ class AgentCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bot_key: str = Field(..., min_length=1)
-    agent_id: str = ""
     display_name: str = ""
     slug: str = ""
     role: str = ""

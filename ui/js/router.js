@@ -72,13 +72,26 @@ const Router = (() => {
         const inner = document.createElement('div');
         inner.className = 'content-inner route-enter';
         contentEl.appendChild(inner);
+        const renderCleanup = window.UI && typeof UI.createCleanupBag === 'function'
+            ? UI.createCleanupBag()
+            : null;
         try {
+            if (renderCleanup && typeof UI.setActiveCleanupBag === 'function') {
+                UI.setActiveCleanupBag(renderCleanup);
+            }
             const result = renderFn(inner, params);
-            if (typeof result === 'function') {
+            if (renderCleanup) {
+                if (typeof result === 'function') renderCleanup.add(result);
+                currentCleanup = () => renderCleanup.flush();
+            } else if (typeof result === 'function') {
                 currentCleanup = result;
             }
         } catch (e) {
+            if (renderCleanup) renderCleanup.flush();
             console.error('Route render error', e);
+            if (window.UI && typeof UI.notify === 'function') {
+                UI.notify('This page failed to render. You can retry or navigate elsewhere.', 'danger');
+            }
             const errCard = document.createElement('div');
             errCard.className = 'error-card';
             const errMsg = document.createElement('p');
@@ -91,6 +104,10 @@ const Router = (() => {
             errCard.appendChild(retryBtn);
             inner.textContent = '';
             inner.appendChild(errCard);
+        } finally {
+            if (window.UI && typeof UI.setActiveCleanupBag === 'function') {
+                UI.setActiveCleanupBag(null);
+            }
         }
         requestAnimationFrame(() => {
             contentEl.classList.remove('loading-route');
@@ -103,12 +120,17 @@ const Router = (() => {
     function _updateActiveNav(path) {
         document.querySelectorAll('.nav-links a').forEach(a => {
             const route = a.getAttribute('data-route');
+            let isActive = false;
             if (route === '/' && (path === '/ui' || path === '/ui/')) {
-                a.classList.add('active');
+                isActive = true;
             } else if (route && route !== '/' && path.startsWith('/ui' + route)) {
-                a.classList.add('active');
+                isActive = true;
+            }
+            a.classList.toggle('active', isActive);
+            if (isActive) {
+                a.setAttribute('aria-current', 'page');
             } else {
-                a.classList.remove('active');
+                a.removeAttribute('aria-current');
             }
         });
     }

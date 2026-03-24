@@ -28,6 +28,7 @@ function renderLoginForm(container) {
     passInput.id = 'login-password';
     passInput.className = 'search-input';
     passInput.placeholder = 'UI password';
+    passInput.setAttribute('aria-label', 'UI password');
     passInput.autocomplete = 'current-password';
     passWrap.appendChild(passInput);
 

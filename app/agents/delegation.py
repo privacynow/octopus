@@ -10,6 +10,7 @@ from typing import Any
 from app.registry_errors import registry_error_summary
 from app.agents.types import RoutedTaskRequest
 from app.agents.registry_capabilities import registry_id_from_authority_ref
+from app.agents.state import runtime_registry_agent_id
 
 
 from app.config import BotConfig
@@ -41,7 +42,15 @@ def resolve_origin_agent_id(config: BotConfig, registry_id: str) -> str:
 
     Requires registry_id — no first-hit fallback.
     """
-    return config.agent_id_for_registry(registry_id)
+    registry = next(
+        (item for item in config.agent_registries if item.registry_id == registry_id),
+        None,
+    )
+    return runtime_registry_agent_id(
+        config.data_dir,
+        registry_id,
+        registry_scope=registry.registry_scope if registry is not None else "full",
+    )
 
 
 def build_delegation_runtime(

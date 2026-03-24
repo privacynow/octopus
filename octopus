@@ -1817,6 +1817,18 @@ ensure_provider_image_ready() {
   fi
 }
 
+bot_provider_for_slug() {
+  local slug="${1:-}" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  get_bot_provider "$env_file"
+}
+
+ensure_bot_provider_image_ready() {
+  local slug="${1:-}" provider=""
+  provider="$(bot_provider_for_slug "$slug")"
+  ensure_provider_image_ready "${provider:-claude}"
+}
+
 ensure_provider_auth_ready() {
   local provider="$1"
 
@@ -1966,7 +1978,7 @@ prepare_new_bot_setup() {
     # of re-asking all prompts.
     printf 'Resuming incomplete setup for %s...\n' "$existing_slug"
     local provider
-    provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$existing_slug")")"
+    provider="$(bot_provider_for_slug "$existing_slug")"
     ensure_provider_image_ready "${provider:-claude}" || return 1
     ensure_provider_auth_ready "${provider:-claude}" || return 1
     ensure_network || return 1
@@ -2110,6 +2122,7 @@ prompt_rejected_telegram_token_repair() {
 run_bot_doctor() {
   local slug="$1"
   shift || true
+  ensure_bot_provider_image_ready "$slug" || return 1
   bot_compose "$slug" run --rm bot python -m app.main --doctor "$@" 2>&1
 }
 
@@ -2134,6 +2147,7 @@ run_bot_doctor_until_ready() {
 start_bot_until_running() {
   local slug="$1" doctor_output=""
   while true; do
+    ensure_bot_provider_image_ready "$slug" || return 1
     bot_compose "$slug" up -d bot >/dev/null
     sleep 5
     if bot_is_running "$slug"; then
@@ -3026,7 +3040,7 @@ main() {
           # of showing the menu. This handles the case where a previous
           # run saved the env but the image build or auth step failed.
           local provider
-          provider="$(read_bot_env_value BOT_PROVIDER "$(bot_env_file "$only_slug")")"
+          provider="$(bot_provider_for_slug "$only_slug")"
           printf 'Resuming setup for %s...\n' "$only_slug"
           ensure_provider_image_ready "${provider:-claude}" || return 1
           ensure_provider_auth_ready "${provider:-claude}" || return 1

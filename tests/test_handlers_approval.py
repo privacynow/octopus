@@ -210,7 +210,7 @@ async def test_retry_skip():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "somehash",
@@ -305,7 +305,7 @@ async def test_stale_context_hash():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "definitely_stale_hash",
@@ -359,7 +359,7 @@ async def test_cross_user_approval():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_approval")
         assert pending is not None
-        assert pending["request_user_id"] == "tg:100"
+        assert pending["actor_key"] == "tg:100"
         callback_token = pending["callback_token"]
 
         cb_msg = FakeMessage(chat=chat)
@@ -477,7 +477,7 @@ async def test_denial_preserves_request_user_id():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_retry")
         assert pending is not None
-        assert pending["request_user_id"] == "tg:100"
+        assert pending["actor_key"] == "tg:100"
         assert len(pending.get("denials", [])) > 0
 
 
@@ -494,7 +494,7 @@ async def test_cancel_pending():
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_approval"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "attachment_dicts": [],
@@ -638,7 +638,7 @@ async def test_stale_pending_ttl():
 
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_approval"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "old request",
             "image_paths": [],
             "attachment_dicts": [],

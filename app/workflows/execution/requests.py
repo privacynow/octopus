@@ -165,7 +165,7 @@ async def check_credential_satisfaction(
 ) -> dict[str, str] | None:
     outcome = composition.workflows().runtime_skills.setup.check_satisfaction(
         session,
-        user_id=actor_key,
+        actor_key=actor_key,
         active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
@@ -194,7 +194,7 @@ async def execute_request(
     image_paths: list[str],
     message,
     extra_dirs: list[str] | None = None,
-    request_user_id: int | str = "",
+    actor_key: str = "",
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
@@ -224,7 +224,7 @@ async def execute_request(
     if credential_env is None:
         return None
 
-    await event_sink.on_user_message(prompt, actor=str(request_user_id) if request_user_id else "")
+    await event_sink.on_user_message(prompt, actor=transport.actor)
 
     upload_dir = str(chat_upload_dir(cfg.data_dir, conversation_key))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
@@ -338,7 +338,7 @@ async def execute_request(
         await progress.update(_msg.progress_completed_with_blocked(), force=True)
         session = _load(runtime, conversation_key)
         session.pending_retry = PendingRetry(
-            request_user_id=request_user_id,
+            actor_key=actor_key,
             prompt=prompt,
             image_paths=image_paths,
             context_hash=context_hash,
@@ -420,7 +420,7 @@ async def dispatch_message_request(
     approval_mode: str,
     routed_task_id: str = "",
     skip_approval: bool = False,
-    request_user_id: int | str = "",
+    actor_key: str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     runtime: ExecutionRuntime,
@@ -432,7 +432,7 @@ async def dispatch_message_request(
             image_paths,
             attachments,
             message,
-            request_user_id=request_user_id,
+            actor_key=actor_key,
             trust_tier=trust_tier,
             cancel_event=cancel_event,
             runtime=runtime,
@@ -443,7 +443,7 @@ async def dispatch_message_request(
         prompt,
         image_paths,
         message,
-        request_user_id=request_user_id,
+        actor_key=actor_key,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
         runtime=runtime,
@@ -456,7 +456,7 @@ async def request_approval(
     image_paths: list[str],
     attachments,
     message,
-    request_user_id: int | str = "",
+    actor_key: str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     *,
@@ -537,7 +537,7 @@ async def request_approval(
         for a in attachments
     ]
     session.pending_approval = PendingApproval(
-        request_user_id=request_user_id,
+        actor_key=actor_key,
         prompt=prompt,
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,

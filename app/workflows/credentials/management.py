@@ -28,7 +28,7 @@ class CredentialManagementUseCases(CredentialManagementPort):
         removed = tuple(self._credentials().delete(actor_key, skill_name))
         outcome = get_runtime_skill_setup_use_cases().apply_cleared_credentials(
             session,
-            user_id=actor_key,
+            actor_key=actor_key,
             removed_skills=list(removed),
             skill_name=skill_name,
         )

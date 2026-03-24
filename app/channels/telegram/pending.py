@@ -15,6 +15,7 @@ from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.normalization import normalize_user
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.session_io import (
+    actor_key as _actor_key,
     conversation_key as _conversation_key,
     event_key as _event_key,
     load as _session_io_load,
@@ -93,7 +94,7 @@ async def approve_pending(
         list(outcome.execution_plan.image_paths),
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
-        request_user_id=outcome.execution_plan.request_user_id,
+        actor_key=outcome.execution_plan.actor_key,
         # This exact plan was explicitly approved by the user.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
@@ -175,7 +176,7 @@ async def retry_allow_pending(
         list(outcome.execution_plan.image_paths),
         message,
         extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
-        request_user_id=outcome.execution_plan.request_user_id,
+        actor_key=outcome.execution_plan.actor_key,
         # This retry is the explicit user-approved continuation path.
         skip_permissions=True,
         trust_tier=outcome.execution_plan.trust_tier,
@@ -323,7 +324,7 @@ async def handle_recovery_action(
                     image_paths,
                     list(outcome.replay_plan.event.attachments),
                     message,
-                    request_user_id=outcome.replay_plan.event.user.id,
+                    actor_key=_actor_key(outcome.replay_plan.event.user.id),
                     trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )
@@ -333,7 +334,7 @@ async def handle_recovery_action(
                     prompt,
                     image_paths,
                     message,
-                    request_user_id=outcome.replay_plan.event.user.id,
+                    actor_key=_actor_key(outcome.replay_plan.event.user.id),
                     trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )

@@ -139,7 +139,7 @@ def activation_result(decision: ConversationSkillMutationOutcome) -> dict[str, A
         payload["projected_size"] = decision.projected_size
         payload["prompt_size_threshold"] = decision.prompt_size_threshold
     if decision.status == "foreign_setup":
-        payload["foreign_setup_user"] = decision.foreign_setup.user_id if decision.foreign_setup else ""
+        payload["foreign_setup_user"] = decision.foreign_setup.actor_key if decision.foreign_setup else ""
     return payload
 
 

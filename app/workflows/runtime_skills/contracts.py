@@ -107,7 +107,7 @@ class RuntimeSkillActivationPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome: ...
@@ -122,7 +122,7 @@ class RuntimeSkillActivationPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome: ...
 
@@ -130,7 +130,7 @@ class RuntimeSkillActivationPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome: ...
 
@@ -138,7 +138,7 @@ class RuntimeSkillActivationPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
     ) -> ConversationSkillMutationOutcome: ...
 
 
@@ -264,7 +264,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str,
         requirements: list[SkillRequirement | dict[str, object]],
     ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
@@ -273,7 +273,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         skill_name: str | None = None,
     ) -> RuntimeSkillSetupState: ...
 
@@ -281,7 +281,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         allow_override: bool = False,
     ) -> RuntimeSkillSetupCancellationOutcome: ...
 
@@ -289,7 +289,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         active_skills: list[str],
     ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
 
@@ -297,7 +297,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         raw_value: str,
         validator: CredentialValidator,
     ) -> RuntimeSkillSetupAdvanceOutcome: ...
@@ -306,7 +306,7 @@ class RuntimeSkillSetupPort(Protocol):
         self,
         session: SessionState,
         *,
-        user_id: str,
+        actor_key: str,
         removed_skills: list[str],
         skill_name: str | None,
     ) -> RuntimeSkillCredentialClearOutcome: ...

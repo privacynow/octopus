@@ -21,7 +21,7 @@ def test_setup_machine_start_creates_setup_state() -> None:
     decision = decide_setup_action(
         SetupSnapshot(setup=None),
         StartSetupAction(
-            user_id="tg:42",
+            actor_key="tg:42",
             skill_name="github-integration",
             requirements=(_requirement("GITHUB_TOKEN"),),
         ),
@@ -36,7 +36,7 @@ def test_setup_machine_start_creates_setup_state() -> None:
 
 def test_setup_machine_advance_moves_to_next_requirement() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:42",
+        actor_key="tg:42",
         skill="alpha",
         started_at=1.0,
         remaining=[
@@ -47,7 +47,7 @@ def test_setup_machine_advance_moves_to_next_requirement() -> None:
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        AdvanceSetupAction(user_id="tg:42"),
+        AdvanceSetupAction(actor_key="tg:42"),
     )
 
     assert decision.status == "next_requirement"
@@ -59,7 +59,7 @@ def test_setup_machine_advance_moves_to_next_requirement() -> None:
 
 def test_setup_machine_advance_last_requirement_becomes_ready() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:42",
+        actor_key="tg:42",
         skill="alpha",
         started_at=1.0,
         remaining=[{"key": "TOKEN_A", "prompt": "Enter A", "help_url": None, "validate": None}],
@@ -67,7 +67,7 @@ def test_setup_machine_advance_last_requirement_becomes_ready() -> None:
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        AdvanceSetupAction(user_id="tg:42"),
+        AdvanceSetupAction(actor_key="tg:42"),
     )
 
     assert decision.status == "ready"
@@ -78,7 +78,7 @@ def test_setup_machine_advance_last_requirement_becomes_ready() -> None:
 
 def test_setup_machine_cancel_clears_current_user_setup() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:42",
+        actor_key="tg:42",
         skill="alpha",
         started_at=1.0,
         remaining=[{"key": "TOKEN_A", "prompt": "Enter A"}],
@@ -86,7 +86,7 @@ def test_setup_machine_cancel_clears_current_user_setup() -> None:
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        CancelSetupAction(user_id="tg:42"),
+        CancelSetupAction(actor_key="tg:42"),
     )
 
     assert decision.status == "cancelled"
@@ -95,7 +95,7 @@ def test_setup_machine_cancel_clears_current_user_setup() -> None:
 
 def test_setup_machine_reports_foreign_setup_for_active_other_user() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:99",
+        actor_key="tg:99",
         skill="alpha",
         started_at=9999999999.0,
         remaining=[{"key": "TOKEN_A", "prompt": "Enter A"}],
@@ -103,7 +103,7 @@ def test_setup_machine_reports_foreign_setup_for_active_other_user() -> None:
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        InspectForeignSetupAction(user_id="tg:42", skill_name="alpha"),
+        InspectForeignSetupAction(actor_key="tg:42", skill_name="alpha"),
     )
 
     assert decision.status == "foreign_setup"
@@ -112,7 +112,7 @@ def test_setup_machine_reports_foreign_setup_for_active_other_user() -> None:
 
 def test_setup_machine_start_blocks_active_foreign_setup_for_other_skill() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:99",
+        actor_key="tg:99",
         skill="beta",
         started_at=9999999999.0,
         remaining=[{"key": "TOKEN_B", "prompt": "Enter B"}],
@@ -121,7 +121,7 @@ def test_setup_machine_start_blocks_active_foreign_setup_for_other_skill() -> No
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
         StartSetupAction(
-            user_id="tg:42",
+            actor_key="tg:42",
             skill_name="alpha",
             requirements=(_requirement("TOKEN_A"),),
         ),
@@ -134,7 +134,7 @@ def test_setup_machine_start_blocks_active_foreign_setup_for_other_skill() -> No
 
 def test_setup_machine_start_replaces_stale_foreign_setup() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:99",
+        actor_key="tg:99",
         skill="alpha",
         started_at=0.0,
         remaining=[{"key": "TOKEN_OLD", "prompt": "Enter old"}],
@@ -143,7 +143,7 @@ def test_setup_machine_start_replaces_stale_foreign_setup() -> None:
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
         StartSetupAction(
-            user_id="tg:42",
+            actor_key="tg:42",
             skill_name="alpha",
             requirements=(_requirement("TOKEN_NEW"),),
         ),
@@ -152,13 +152,13 @@ def test_setup_machine_start_replaces_stale_foreign_setup() -> None:
     assert decision.status == "started"
     assert decision.effects.set_setup is not None
     assert decision.setup_state is not None
-    assert decision.setup_state.user_id == "tg:42"
+    assert decision.setup_state.actor_key == "tg:42"
     assert decision.next_requirement == {"key": "TOKEN_NEW", "prompt": "Enter TOKEN_NEW", "help_url": None, "validate": None}
 
 
 def test_setup_machine_clear_skill_clears_stale_foreign_setup() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:99",
+        actor_key="tg:99",
         skill="alpha",
         started_at=0.0,
         remaining=[{"key": "TOKEN_A", "prompt": "Enter A"}],
@@ -166,7 +166,7 @@ def test_setup_machine_clear_skill_clears_stale_foreign_setup() -> None:
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        ClearSkillSetupAction(user_id="tg:42", skill_name="alpha"),
+        ClearSkillSetupAction(actor_key="tg:42", skill_name="alpha"),
     )
 
     assert decision.status == "cleared"
@@ -176,7 +176,7 @@ def test_setup_machine_clear_skill_clears_stale_foreign_setup() -> None:
 
 def test_setup_machine_clear_skill_leaves_other_users_other_skill_setup_unchanged() -> None:
     setup = AwaitingSkillSetup(
-        user_id="tg:99",
+        actor_key="tg:99",
         skill="beta",
         started_at=9999999999.0,
         remaining=[{"key": "TOKEN_B", "prompt": "Enter B"}],
@@ -184,7 +184,7 @@ def test_setup_machine_clear_skill_leaves_other_users_other_skill_setup_unchange
 
     decision = decide_setup_action(
         SetupSnapshot(setup=setup),
-        ClearSkillSetupAction(user_id="tg:42", skill_name="alpha"),
+        ClearSkillSetupAction(actor_key="tg:42", skill_name="alpha"),
     )
 
     assert decision.status == "unchanged"

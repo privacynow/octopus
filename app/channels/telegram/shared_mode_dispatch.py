@@ -29,7 +29,7 @@ from app.channels.telegram.runtime_skills import (
     TelegramRuntimeSkillsRuntime,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
 )
-from app.channels.telegram.session_io import conversation_key, event_key
+from app.channels.telegram.session_io import actor_key as _actor_key, conversation_key, event_key
 from app.channels.telegram.state import TelegramRuntime
 from app.runtime.inbound_types import InboundAction, InboundEnvelope
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
@@ -288,7 +288,7 @@ async def _shared_cancel_command(
         event.chat_id,
         update.effective_message,
         runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
-        actor_user_id=event.user.id,
+        actor_user_id=_actor_key(event.user.id),
         allow_admin_override=access.is_admin_user(runtime.config, event.user),
         update_id=update.update_id,
     )

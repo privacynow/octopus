@@ -339,7 +339,7 @@ async def test_runtime_health_loads_credentials_only_for_resolved_active_skills(
         provider,
         session_context=SessionHealthContext(
             session={},
-            user_id=telegram_actor_key(42),
+            actor_key=telegram_actor_key(42),
             resolved_active_skills=("github-integration",),
         ),
     )

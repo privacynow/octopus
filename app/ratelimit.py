@@ -21,7 +21,7 @@ class RateLimiter:
     def enabled(self) -> bool:
         return self.per_minute > 0 or self.per_hour > 0
 
-    def check(self, user_id: str) -> tuple[bool, int]:
+    def check(self, actor_key: str) -> tuple[bool, int]:
         """Check if a request is allowed.
 
         Returns (allowed, retry_after_seconds).
@@ -32,7 +32,7 @@ class RateLimiter:
             return True, 0
 
         now = time.monotonic()
-        ts = self._timestamps[user_id]
+        ts = self._timestamps[actor_key]
 
         # Prune entries older than 1 hour
         cutoff_hour = now - 3600
@@ -57,9 +57,9 @@ class RateLimiter:
         ts.append(now)
         return True, 0
 
-    def clear(self, user_id: str | None = None) -> None:
-        """Clear rate limit state. If user_id given, clear only that user."""
-        if user_id is not None:
-            self._timestamps.pop(user_id, None)
+    def clear(self, actor_key: str | None = None) -> None:
+        """Clear rate limit state. If actor_key given, clear only that user."""
+        if actor_key is not None:
+            self._timestamps.pop(actor_key, None)
         else:
             self._timestamps.clear()

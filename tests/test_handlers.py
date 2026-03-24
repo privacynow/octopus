@@ -1434,7 +1434,7 @@ async def test_registry_channel_action_retry_skip_clears_pending_retry():
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "Retry this",
             "image_paths": [],
             "context_hash": "",
@@ -1476,7 +1476,7 @@ async def test_registry_channel_action_retry_allow_executes_request():
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
-            "request_user_id": "tg:42",
+            "actor_key": "tg:42",
             "prompt": "Retry this with extra access",
             "image_paths": [],
             "context_hash": "",

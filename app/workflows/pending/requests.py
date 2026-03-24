@@ -64,7 +64,7 @@ class PendingRequestUseCases(PendingRequestPort):
         plan = PendingExecutionPlan(
             prompt=pending.prompt,
             image_paths=tuple(pending.image_paths),
-            request_user_id=pending.request_user_id,
+            actor_key=pending.actor_key,
             trust_tier=getattr(pending, "trust_tier", "trusted"),
             extra_dirs=tuple(extra_dirs_from_denials(denials) if denials else ()),
         )
@@ -128,7 +128,7 @@ class PendingRequestUseCases(PendingRequestPort):
         plan = PendingExecutionPlan(
             prompt=pending.prompt,
             image_paths=tuple(pending.image_paths),
-            request_user_id=pending.request_user_id,
+            actor_key=pending.actor_key,
             trust_tier=getattr(pending, "trust_tier", "trusted"),
             extra_dirs=denial_dirs,
         )

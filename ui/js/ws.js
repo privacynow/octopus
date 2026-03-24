@@ -58,7 +58,7 @@ const WS = (() => {
                 if (msg.pong) return; // ignore pong replies
                 _dispatch(msg);
             } catch (e) {
-                console.warn('WS: failed to parse message', e);
+                console.warn('WS: failed to parse message', evt.data, e);
             }
         };
 
@@ -110,7 +110,7 @@ const WS = (() => {
             const cbs = listeners.get(topic);
             if (cbs) {
                 for (const cb of cbs) {
-                    try { cb(msg); } catch (e) { console.error('WS listener error', e); }
+                    try { cb(msg); } catch (e) { console.error('WS listener error', { topic, type: msg.type, data }, e); }
                 }
             }
         }
@@ -118,7 +118,7 @@ const WS = (() => {
         const wildcardCbs = listeners.get('*');
         if (wildcardCbs) {
             for (const cb of wildcardCbs) {
-                try { cb(msg); } catch (e) { console.error('WS listener error', e); }
+                try { cb(msg); } catch (e) { console.error('WS listener error', { topic: '*', type: msg.type, data }, e); }
             }
         }
     }

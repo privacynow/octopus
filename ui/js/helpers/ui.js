@@ -1,4 +1,9 @@
 window.UI = (() => {
+    const DEFAULT_PAGE_LIMIT = 25;
+    const EVENT_PAGE_LIMIT = 50;
+    let toastRegion = null;
+    let activeCleanupBag = null;
+
     function esc(str) {
         if (str === null || str === undefined) return '';
         const div = document.createElement('div');
@@ -46,6 +51,103 @@ window.UI = (() => {
         } catch {
             return iso;
         }
+    }
+
+    function safeFilename(value, fallback = 'export') {
+        const raw = String(value || fallback).trim();
+        const cleaned = raw
+            .replace(/[\\/:*?"<>|]+/g, '-')
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
+        return cleaned || fallback;
+    }
+
+    function _getToastRegion() {
+        if (toastRegion && document.body.contains(toastRegion)) return toastRegion;
+        toastRegion = document.getElementById('toast-region');
+        if (toastRegion) return toastRegion;
+        toastRegion = document.createElement('div');
+        toastRegion.id = 'toast-region';
+        toastRegion.className = 'toast-region';
+        toastRegion.setAttribute('aria-live', 'polite');
+        toastRegion.setAttribute('aria-atomic', 'false');
+        document.body.appendChild(toastRegion);
+        return toastRegion;
+    }
+
+    function notify(message, tone = 'info', { timeout = 5000 } = {}) {
+        if (!message) return;
+        const region = _getToastRegion();
+        const toast = document.createElement('div');
+        toast.className = ['toast', `toast-${tone}`].join(' ');
+        toast.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
+
+        const text = document.createElement('span');
+        text.className = 'toast-message';
+        text.textContent = message;
+        toast.appendChild(text);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'toast-close';
+        close.setAttribute('aria-label', 'Dismiss notification');
+        close.textContent = '×';
+        close.addEventListener('click', () => toast.remove());
+        toast.appendChild(close);
+
+        region.appendChild(toast);
+        if (timeout > 0) {
+            window.setTimeout(() => {
+                if (toast.isConnected) toast.remove();
+            }, timeout);
+        }
+    }
+
+    function reportError(message, error, { context = '' } = {}) {
+        const errText = error && error.message ? error.message : String(error || '');
+        const userMessage = errText && errText !== message ? `${message}: ${errText}` : message;
+        notify(userMessage, 'danger');
+        if (context) {
+            console.error(context, error);
+        } else {
+            console.error(userMessage, error);
+        }
+    }
+
+    function createCleanupBag() {
+        const fns = [];
+        let flushed = false;
+        return {
+            add(fn) {
+                if (typeof fn === 'function' && !flushed) fns.push(fn);
+                return fn;
+            },
+            flush() {
+                if (flushed) return;
+                flushed = true;
+                while (fns.length) {
+                    const fn = fns.pop();
+                    try {
+                        if (typeof fn === 'function') fn();
+                    } catch (e) {
+                        console.error('Cleanup error', e);
+                    }
+                }
+            },
+        };
+    }
+
+    function setActiveCleanupBag(bag) {
+        activeCleanupBag = bag || null;
+    }
+
+    function beginCleanupScope() {
+        const bag = createCleanupBag();
+        if (activeCleanupBag) {
+            activeCleanupBag.add(() => bag.flush());
+        }
+        return bag;
     }
 
     function makePressable(el, onActivate) {
@@ -306,11 +408,19 @@ window.UI = (() => {
     }
 
     return {
+        DEFAULT_PAGE_LIMIT,
+        EVENT_PAGE_LIMIT,
         esc,
         renderContent,
         relativeTime,
         formatTime,
         formatApprovalTime,
+        safeFilename,
+        notify,
+        reportError,
+        createCleanupBag,
+        setActiveCleanupBag,
+        beginCleanupScope,
         makePressable,
         renderListRow,
         renderSettingsRow,

@@ -2,9 +2,10 @@
  * Task list — routed tasks across agents with pagination, status filter, and inline detail.
  */
 function renderTaskList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
-    const limit = 25;
+    const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentStatus = '';
 
     // Header
@@ -82,9 +83,9 @@ function renderTaskList(container) {
                     badgeText: t.status || 'queued',
                     badgeClass: 'badge-' + (t.status || 'queued'),
                     onClick: () => {
-                        const expanded = !detail.hidden;
-                        detail.hidden = expanded;
-                        row.setAttribute('aria-expanded', String(!expanded));
+                        const nextExpanded = detail.hidden;
+                        detail.hidden = !nextExpanded;
+                        row.setAttribute('aria-expanded', String(nextExpanded));
                     },
                     className: 'task-summary-row',
                 });
@@ -168,6 +169,6 @@ function renderTaskList(container) {
             reloadDebounce = setTimeout(loadPage, 2000);
         }
     });
-
-    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

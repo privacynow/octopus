@@ -2,10 +2,10 @@
  * Approvals — pending conversation approvals that still need operator action.
  */
 function renderApprovalList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
-    const limit = 25;
-    const cleanups = [];
+    const limit = UI.DEFAULT_PAGE_LIMIT;
 
     const header = document.createElement('div');
     header.className = 'page-header';
@@ -121,7 +121,7 @@ function renderApprovalList(container) {
                     await API.conversationAction(item.conversation_id, action, { request_id: item.request_id });
                     loadPage();
                 } catch (err) {
-                    console.error('Approval action failed', err);
+                    UI.reportError('Failed to update the approval', err, { context: 'Approval list action failed' });
                     approveBtn.disabled = expired;
                     rejectBtn.disabled = expired;
                 }
@@ -167,12 +167,8 @@ function renderApprovalList(container) {
             reloadDebounce = setTimeout(loadPage, 1500);
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     loadPage();
-
-    return function cleanup() {
-        clearTimeout(reloadDebounce);
-        cleanups.forEach((fn) => fn());
-    };
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

@@ -2,6 +2,7 @@
  * Usage view — token/cost summary with date range selection.
  */
 function renderUsageView(container) {
+    const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
 
     // Header
@@ -53,10 +54,10 @@ function renderUsageView(container) {
             // Calendar midnight today (not 24h ago)
             since.setHours(0, 0, 0, 0);
         } else if (range === '7d') {
-            since.setDate(since.getDate() - 7);
+            since.setDate(since.getDate() - 6);
             since.setHours(0, 0, 0, 0);
         } else {
-            since.setDate(since.getDate() - 30);
+            since.setDate(since.getDate() - 29);
             since.setHours(0, 0, 0, 0);
         }
         return {
@@ -177,6 +178,6 @@ function renderUsageView(container) {
             reloadDebounce = setTimeout(loadUsage, 5000);
         }
     });
-
-    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

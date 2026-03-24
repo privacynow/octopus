@@ -37,6 +37,14 @@ def test_command_building_new():
     assert "--skip-git-repo-check" in cmd
 
 
+def test_command_building_new_uses_resolved_working_dir():
+    p = CodexProvider(make_config())
+    cmd = p._build_new_cmd("hello world", [], working_dir="/workspace/workspace")
+    assert "-C" in cmd
+    assert "/workspace/workspace" in cmd
+    assert "/home/test" not in cmd
+
+
 def test_command_building_with_model():
     p2 = CodexProvider(make_config(model="o3"))
     cmd2 = p2._build_new_cmd("test", [])
@@ -58,8 +66,18 @@ def test_command_building_resume():
     assert "exec" in cmd4
     assert "resume" in cmd4
     assert "--json" in cmd4
+    assert "-C" in cmd4
+    assert "/home/test" in cmd4
     assert "thread-123" in cmd4
     assert cmd4[-1] == "continue"
+
+
+def test_command_building_resume_uses_resolved_working_dir():
+    p = CodexProvider(make_config())
+    cmd = p._build_resume_cmd("thread-123", "continue", [], working_dir="/workspace/workspace")
+    assert "-C" in cmd
+    assert "/workspace/workspace" in cmd
+    assert "/home/test" not in cmd
 
 
 def test_command_building_full_auto():
@@ -852,6 +870,40 @@ def test_codex_resume_no_add_dir():
     ))
     resume_cmd = p._build_resume_cmd("thread-123", "test", [])
     assert resume_cmd.count("--add-dir") == 0
+
+
+async def test_run_uses_context_working_dir_for_new_and_resume():
+    provider = CodexProvider(make_config())
+    calls: list[tuple[list[str], bool, str]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume, working_dir))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config={},
+        credential_env={},
+        working_dir="/workspace/workspace",
+    )
+
+    await provider.run({"thread_id": None}, "start", [], progress, context=context)
+    cmd_new, is_resume_new, working_dir_new = calls[-1]
+    assert is_resume_new is False
+    assert "-C" in cmd_new
+    assert "/workspace/workspace" in cmd_new
+    assert working_dir_new == "/workspace/workspace"
+
+    await provider.run({"thread_id": "thread-123"}, "continue", [], progress, context=context)
+    cmd_resume, is_resume_resume, working_dir_resume = calls[-1]
+    assert is_resume_resume is True
+    assert "-C" in cmd_resume
+    assert "/workspace/workspace" in cmd_resume
+    assert working_dir_resume == "/workspace/workspace"
 
 
 def test_codex_new_with_runtime_extra_dirs():

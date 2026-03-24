@@ -10,12 +10,12 @@ For a **complete inventory** of operator and product flows (including Octopus me
 2. [Concepts (read this once)](#concepts-read-this-once)
 3. [CLI: lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
 4. [Browser: sign in](#browser-sign-in)
-5. [Browser: every screen](#browser-every-screen) — dashboard, agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, guidance, **deep-linked agent & conversation URLs**
+5. [Browser: every screen](#browser-every-screen) — dashboard, agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, guidance, **deep-linked agent & conversation URLs**, plus a compact **mobile quick look**
 6. [What the UI does *not* do yet](#what-the-ui-does-not-do-yet)
 7. [Verification & troubleshooting](#verification--troubleshooting)
 8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
-**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `01b-approvals`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, and `13-conversation-deep-link` — each has a raw `*.png`, a matching `*.meta.json` from capture, and `*-annotated.png` for the guide.
+**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `01b-approvals`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, `13-conversation-deep-link`, plus the mobile reference captures `14-mobile-dashboard`, `15-mobile-approvals`, and `16-mobile-conversation`. Desktop guide images keep the raw `*.png`, matching `*.meta.json`, and `*-annotated.png`; the mobile references are intentionally kept as raw PNGs so the small-screen layout stays readable.
 
 ---
 
@@ -213,6 +213,22 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 ![Conversation detail via URL](assets/registry/ui/13-conversation-deep-link-annotated.png)
 
 - Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** conversation detail (timeline, compose, cancel, export) as choosing a row from the list — shareable from API responses or task links.
+
+### 14. Mobile quick look
+
+The operator UI is still the same app on mobile: the sidebar becomes a drawer, the dashboard stacks into one column, approvals stay action-first, and the conversation view keeps the reply box and pending decisions visible without forcing you through a desktop layout.
+
+**Dashboard**
+
+![Mobile dashboard](assets/registry/ui/14-mobile-dashboard.png)
+
+**Approvals**
+
+![Mobile approvals](assets/registry/ui/15-mobile-approvals.png)
+
+**Conversation detail**
+
+![Mobile conversation detail](assets/registry/ui/16-mobile-conversation.png)
 
 ---
 

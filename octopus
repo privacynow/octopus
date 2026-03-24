@@ -2886,7 +2886,7 @@ Commands:
     workspace remove-bot <workspace> <bot-slug>
     workspace status [workspace]
     workspace verify [workspace]
-  clean          Stop and remove all bots, registry, volumes, and config
+  clean          Stop and remove all Octopus Docker state and config
   help           Show this help
 
 After ./octopus clean, the next ./octopus run starts fresh as if
@@ -2897,7 +2897,8 @@ HELP
 cmd_clean() {
   echo ""
   echo "This will stop and remove ALL Octopus bots, the local registry,"
-  echo "all Docker volumes, networks, and the .deploy/ directory."
+  echo "repo-owned Docker volumes, networks, images, build cache, and"
+  echo "the .deploy/ directory."
   echo ""
   echo "Provider auth (Claude/Codex login) will also be removed."
   echo "You will need to log in again after the next ./octopus run."
@@ -2923,12 +2924,16 @@ cmd_clean() {
     registry_compose down --remove-orphans 2>/dev/null || true
   fi
 
-  # Remove any remaining octopus- containers that compose missed
+  # Remove any remaining octopus- containers that compose missed, plus
+  # leftover repo test containers that can pin anonymous volumes.
   local container
-  for container in $(docker ps -a --filter "name=octopus-" --format "{{.Names}}" 2>/dev/null); do
+  for container in $(docker ps -a \
+    --filter "name=octopus-" \
+    --filter "name=telegram_bot_test_pg" \
+    --format "{{.Names}}" 2>/dev/null); do
     echo "Removing container: $container"
     docker stop "$container" 2>/dev/null || true
-    docker rm "$container" 2>/dev/null || true
+    docker rm -v "$container" 2>/dev/null || true
   done
 
   # Remove octopus- volumes
@@ -2951,12 +2956,24 @@ cmd_clean() {
     rm -rf .deploy
   fi
 
-  # Remove bot Docker images so the next run rebuilds with current code
+  # Remove bot + registry Docker images so the next run rebuilds with current code
   local image
   for image in $(docker image ls --filter "reference=octopus-agent:*" --format "{{.Repository}}:{{.Tag}}" 2>/dev/null); do
     echo "Removing image: $image"
     docker image rm "$image" 2>/dev/null || true
   done
+  for image in $(docker image ls --filter "reference=octopus-registry-service" --format "{{.Repository}}:{{.Tag}}" 2>/dev/null); do
+    echo "Removing image: $image"
+    docker image rm "$image" 2>/dev/null || true
+  done
+
+  # Octopus uses anonymous volumes for some repo test runs, and Docker stores
+  # build cache outside the named octopus-* image set. Prune unused state so
+  # the next run is actually fresh.
+  echo "Pruning unused Docker volumes"
+  docker volume prune -f 2>/dev/null || true
+  echo "Pruning unused Docker build cache"
+  docker builder prune -af 2>/dev/null || true
 
   # Remove build marker and legacy env files
   rm -f .bot-image-build-rev

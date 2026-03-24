@@ -117,7 +117,7 @@ function renderGuidanceEditor(container) {
                 saveBtn.textContent = 'Saved';
                 setTimeout(() => { saveBtn.textContent = 'Save Draft'; }, 2000);
             } catch (err) {
-                console.error('Save draft failed', err);
+                UI.reportError('Failed to save the draft', err, { context: 'Guidance save draft failed' });
             }
             saveBtn.disabled = false;
         });
@@ -134,7 +134,7 @@ function renderGuidanceEditor(container) {
                 const previewText = result.preview || result.system_prompt || JSON.stringify(result, null, 2);
                 _showPreview(previewText);
             } catch (err) {
-                console.error('Preview failed', err);
+                UI.reportError('Failed to preview the guidance', err, { context: 'Guidance preview failed' });
             }
             previewBtn.disabled = false;
         });
@@ -150,7 +150,7 @@ function renderGuidanceEditor(container) {
                 await API.submitGuidance(currentProvider);
                 loadGuidance();
             } catch (err) {
-                console.error('Submit failed', err);
+                UI.reportError('Failed to submit the guidance', err, { context: 'Guidance submit failed' });
             }
             submitBtn.disabled = false;
         });
@@ -167,7 +167,7 @@ function renderGuidanceEditor(container) {
                     await API.publishGuidance(currentProvider);
                     loadGuidance();
                 } catch (err) {
-                    console.error('Publish failed', err);
+                    UI.reportError('Failed to publish the guidance', err, { context: 'Guidance publish failed' });
                 }
                 publishBtn.disabled = false;
             });
@@ -213,5 +213,4 @@ function renderGuidanceEditor(container) {
 
     loadGuidance();
 
-    return function cleanup() {};
 }

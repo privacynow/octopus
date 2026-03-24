@@ -2,12 +2,12 @@
  * Agent list — home view showing all enrolled agents with pagination.
  */
 function renderAgentList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
-    const limit = 25;
+    const limit = UI.DEFAULT_PAGE_LIMIT;
     let cursorStack = []; // stack of previous cursors for "prev"
     let nameFilter = '';
     let stateFilter = '';
-    const cleanups = [];
 
     // Shell
     const header = document.createElement('div');
@@ -21,10 +21,16 @@ function renderAgentList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Filter by name...';
+    searchInput.placeholder = 'Search agents';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Filter agents by name');
+    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
+
+    const searchHint = document.createElement('span');
+    searchHint.className = 'search-shortcut-hint';
+    searchHint.textContent = 'Shortcut: /';
+    filterBar.appendChild(searchHint);
 
     const stateSelect = document.createElement('select');
     stateSelect.setAttribute('aria-label', 'Filter agents by connectivity state');
@@ -160,12 +166,9 @@ function renderAgentList(container) {
             reloadDebounce = setTimeout(loadPage, 2000);
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     loadPage();
-
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        cleanups.forEach(fn => fn());
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

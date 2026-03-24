@@ -2,7 +2,7 @@
  * Dashboard — action-first registry overview.
  */
 function renderDashboard(container) {
-    const cleanups = [];
+    const cleanups = UI.beginCleanupScope();
 
     const header = document.createElement('div');
     header.className = 'page-header page-header-hero';
@@ -260,12 +260,8 @@ function renderDashboard(container) {
             reloadDebounce = setTimeout(loadSummary, 2000);
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     loadSummary();
-
-    return function cleanup() {
-        clearTimeout(reloadDebounce);
-        cleanups.forEach((fn) => fn());
-    };
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

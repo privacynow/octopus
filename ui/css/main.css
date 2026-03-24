@@ -718,6 +718,13 @@ body {
     margin-bottom: 16px;
 }
 
+.session-card-actions {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
 /* ── Confirmation dialog ── */
 .confirm-overlay {
     position: fixed;
@@ -1417,6 +1424,16 @@ select {
     flex-wrap: wrap;
 }
 
+.search-shortcut-hint {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    white-space: nowrap;
+}
+
+.search-shortcut-inline {
+    margin-top: var(--space-2);
+}
+
 .segmented-control {
     display: inline-flex;
     padding: 0.3rem;
@@ -1493,14 +1510,48 @@ select {
     letter-spacing: 0.04em;
     padding: 0.42rem 0.7rem;
     line-height: 1;
+    font-weight: 700;
+    border: 1px solid transparent;
 }
 
-.badge-open { background: rgba(179, 77, 47, 0.16); color: var(--accent); }
-.badge-running, .badge-connected { background: rgba(35, 121, 90, 0.16); color: var(--success); }
-.badge-completed, .badge-enabled, .badge-installed { background: rgba(52, 83, 63, 0.16); color: var(--success); }
-.badge-failed, .badge-disconnected, .badge-cancelled { background: rgba(176, 58, 46, 0.16); color: var(--danger); }
-.badge-degraded, .badge-queued, .badge-cancelling { background: rgba(160, 107, 0, 0.16); color: var(--warning); }
-.badge-stopped, .badge-disabled { background: rgba(97, 83, 74, 0.16); color: var(--text-muted); }
+.badge-open {
+    background: rgba(179, 77, 47, 0.20);
+    border-color: rgba(179, 77, 47, 0.28);
+    color: #7f2f18;
+}
+.badge-running,
+.badge-connected {
+    background: rgba(35, 121, 90, 0.18);
+    border-color: rgba(35, 121, 90, 0.28);
+    color: #1a5e44;
+}
+.badge-completed,
+.badge-enabled,
+.badge-installed {
+    background: rgba(52, 83, 63, 0.18);
+    border-color: rgba(52, 83, 63, 0.24);
+    color: #24462f;
+}
+.badge-failed,
+.badge-disconnected,
+.badge-cancelled {
+    background: rgba(176, 58, 46, 0.18);
+    border-color: rgba(176, 58, 46, 0.28);
+    color: #8c2a22;
+}
+.badge-degraded,
+.badge-queued,
+.badge-cancelling {
+    background: rgba(160, 107, 0, 0.18);
+    border-color: rgba(160, 107, 0, 0.28);
+    color: #7d5100;
+}
+.badge-stopped,
+.badge-disabled {
+    background: rgba(97, 83, 74, 0.18);
+    border-color: rgba(97, 83, 74, 0.24);
+    color: #55453a;
+}
 
 .empty-state,
 .error-card {
@@ -2183,6 +2234,47 @@ select {
     border-radius: inherit;
 }
 
+.toast-region {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 120;
+    display: grid;
+    gap: var(--space-2);
+    width: min(24rem, calc(100vw - 2rem));
+}
+
+.toast {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: 0.95rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-soft);
+}
+
+.toast-danger {
+    border-color: rgba(176, 58, 46, 0.28);
+}
+
+.toast-message {
+    flex: 1;
+    color: var(--text);
+    font-size: var(--text-sm);
+}
+
+.toast-close {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0.1rem;
+}
+
 .sr-only {
     position: absolute;
     width: 1px;
@@ -2468,6 +2560,38 @@ select {
 
     .approval-actions > * {
         flex: 1;
+    }
+
+    .toast-region {
+        left: 1rem;
+        right: 1rem;
+        width: auto;
+    }
+}
+
+@media (max-width: 360px) {
+    #content {
+        padding-left: var(--space-3);
+        padding-right: var(--space-3);
+    }
+
+    .chat-timeline {
+        padding: var(--space-2);
+    }
+
+    .chat-bubble,
+    .event-card,
+    .approval-card,
+    .conversation-meta {
+        padding: var(--space-3);
+    }
+
+    .event-summary {
+        white-space: normal;
+    }
+
+    .toolbar-actions > * {
+        flex-basis: 100%;
     }
 }
 

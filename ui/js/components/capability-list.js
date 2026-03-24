@@ -2,6 +2,7 @@
  * Capability list — global capability overrides with toggle switches.
  */
 function renderCapabilityList(container) {
+    const cleanups = UI.beginCleanupScope();
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
@@ -72,7 +73,7 @@ function renderCapabilityList(container) {
                                 checkbox.checked = newEnabled;
                             } catch (err) {
                                 checkbox.checked = !newEnabled;
-                                console.error('Toggle capability failed', err);
+                                UI.reportError('Failed to update the capability', err, { context: 'Toggle capability failed' });
                             }
                             checkbox.disabled = false;
                         }
@@ -95,6 +96,6 @@ function renderCapabilityList(container) {
             reloadDebounce = setTimeout(loadCapabilities, 3000);
         }
     });
-
-    return function cleanup() { clearTimeout(reloadDebounce); unsub(); };
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

@@ -4,7 +4,7 @@
 
 The Registry **operator SPA** (`ui/`) lets you inspect enrolled bots, conversations, routed tasks, approvals, usage, and provider guidance from one browser shell. Octopus prints a **`/ui`** URL when the registry runs; sign in with **`REGISTRY_UI_TOKEN`** from **`.deploy/registry/.env`**.
 
-The manual splits the UI into **feature pages** below. **Each page embeds its annotated screenshot** (same assets as [registry-guide.md](../registry-guide.md), under `docs/assets/registry/ui/`). For regeneration, see the registry guide § *Regenerating UI screenshots*.
+The manual splits the UI into **feature pages** below. Most pages embed the same **annotated desktop screenshots** used by [registry-guide.md](../registry-guide.md), under `docs/assets/registry/ui/`; the mobile quick-look page uses raw mobile captures so the narrow layout stays readable. For regeneration, see the registry guide § *Regenerating UI screenshots*.
 
 ## Registry UI — feature pages (read in order)
 
@@ -23,5 +23,6 @@ The manual splits the UI into **feature pages** below. **Each page embeds its an
 13. [Usage](registry-ui/usage.md) — token/cost rollups and date ranges
 14. [Provider guidance](registry-ui/guidance.md) — provider selector, draft editor, lifecycle controls
 15. [Deep links](registry-ui/deep-links.md) — bookmarkable dashboard/detail URLs
+16. [Mobile quick look](registry-ui/mobile.md) — drawer navigation, one-column approvals, and compact conversation detail
 
 **Also:** CLI registry flows (SVG) — [Octopus CLI](02-operator-octopus.md) and [`docs/assets/registry/`](../assets/registry/).

@@ -2,6 +2,7 @@
  * Skill catalog — runtime skills list with install/uninstall actions.
  */
 function renderSkillCatalog(container) {
+    const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
     let currentQ = '';
 
@@ -14,10 +15,16 @@ function renderSkillCatalog(container) {
     // Search
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search skills...';
+    searchInput.placeholder = 'Search skills';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search skills');
+    searchInput.setAttribute('title', 'Press / to focus search');
     container.appendChild(searchInput);
+
+    const searchHint = document.createElement('div');
+    searchHint.className = 'search-shortcut-hint search-shortcut-inline';
+    searchHint.textContent = 'Shortcut: /';
+    container.appendChild(searchHint);
 
     const listEl = document.createElement('div');
     listEl.style.marginTop = '16px';
@@ -113,7 +120,7 @@ function renderSkillCatalog(container) {
                 } catch (err) {
                     actionBtn.disabled = false;
                     actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
-                    console.error('Skill action failed', err);
+                    UI.reportError('Failed to update the skill', err, { context: 'Skill action failed' });
                 }
             });
             actions.appendChild(actionBtn);
@@ -135,9 +142,7 @@ function renderSkillCatalog(container) {
         }
     });
 
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        clearTimeout(reloadDebounce);
-        unsub();
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(unsub);
 }

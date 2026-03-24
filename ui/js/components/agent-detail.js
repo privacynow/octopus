@@ -3,10 +3,10 @@
  */
 function renderAgentDetail(container, params) {
     const agentId = params.id;
-    const cleanups = [];
+    const cleanups = UI.beginCleanupScope();
     let convosCursor = 0;
     let convosCursorStack = [];
-    const convosLimit = 25;
+    const convosLimit = UI.DEFAULT_PAGE_LIMIT;
 
     // Shell
     const header = document.createElement('div');
@@ -249,7 +249,7 @@ function renderAgentDetail(container, params) {
             }
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     // Also reload conversations sub-list on any event for this agent
     const unsubEvents = WS.subscribe('*', (msg) => {
@@ -258,13 +258,10 @@ function renderAgentDetail(container, params) {
             reloadDebounce = setTimeout(loadConversations, 2000);
         }
     });
-    cleanups.push(unsubEvents);
+    cleanups.add(unsubEvents);
 
     loadDetail();
-
-    return function cleanup() {
-        cleanups.forEach(fn => fn());
-    };
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }
 
 /**
@@ -274,7 +271,7 @@ function renderAgentConversations(container, params) {
     const agentId = params.id;
     let cursor = 0;
     let cursorStack = [];
-    const limit = 25;
+    const limit = UI.DEFAULT_PAGE_LIMIT;
 
     const header = document.createElement('div');
     header.className = 'page-header';
@@ -349,5 +346,4 @@ function renderAgentConversations(container, params) {
 
     loadPage();
 
-    return function cleanup() {};
 }

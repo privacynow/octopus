@@ -2,13 +2,13 @@
  * Conversation list — all conversations with search/filter and pagination.
  */
 function renderConversationList(container) {
+    const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
-    const limit = 25;
+    const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = '';
     let currentStatus = '';
     let searchTimeout = null;
-    const cleanups = [];
 
     // Header
     const header = document.createElement('div');
@@ -37,10 +37,16 @@ function renderConversationList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search conversations (3+ chars)...';
+    searchInput.placeholder = 'Search conversations';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search conversations');
+    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
+
+    const searchHint = document.createElement('span');
+    searchHint.className = 'search-shortcut-hint';
+    searchHint.textContent = 'Shortcut: /';
+    filterBar.appendChild(searchHint);
 
     const statusSelect = document.createElement('select');
     statusSelect.setAttribute('aria-label', 'Filter conversations by status');
@@ -156,7 +162,7 @@ function renderConversationList(container) {
             reloadDebounce = setTimeout(loadPage, 2000);
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     function _showNewConversationDialog() {
         const overlay = document.createElement('div');
@@ -205,6 +211,9 @@ function renderConversationList(container) {
                 opt.textContent = a.display_name || a.slug || a.agent_id;
                 agentSelect.appendChild(opt);
             });
+        }).catch((err) => {
+            agentSelect.innerHTML = '<option value="">Failed to load agents</option>';
+            UI.reportError('Failed to load agents for a new conversation', err, { context: 'Load conversation agents failed' });
         });
 
         const actions = document.createElement('div');
@@ -232,7 +241,7 @@ function renderConversationList(container) {
             } catch (err) {
                 createBtn.disabled = false;
                 createBtn.textContent = 'Create';
-                console.error('Create conversation failed', err);
+                UI.reportError('Failed to start the conversation', err, { context: 'Create conversation failed' });
             }
         });
 
@@ -247,9 +256,6 @@ function renderConversationList(container) {
         requestAnimationFrame(() => agentSelect.focus());
     }
 
-    return function cleanup() {
-        clearTimeout(searchTimeout);
-        clearTimeout(reloadDebounce);
-        cleanups.forEach(fn => fn());
-    };
+    cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => clearTimeout(reloadDebounce));
 }

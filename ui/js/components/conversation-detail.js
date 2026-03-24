@@ -3,13 +3,13 @@
  */
 function renderConversationDetail(container, params) {
     const convoId = params.id;
-    const cleanups = [];
+    const cleanups = UI.beginCleanupScope();
     let meta = null;
     let beforeSeq = 0;
     let latestSeq = 0;
     let hasMoreBefore = false;
     let loadingOlder = false;
-    let showConversationView = true;
+    let showConversationView = _readConversationViewParam();
     let topObserver = null;
     const conversationKinds = [
         'message.user',
@@ -128,6 +128,7 @@ function renderConversationDetail(container, params) {
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Send a message to this conversation';
     textarea.setAttribute('aria-label', 'Message text');
+    textarea.setAttribute('title', 'Enter sends. Shift+Enter adds a new line.');
     textarea.rows = 1;
     composer.appendChild(textarea);
 
@@ -156,6 +157,7 @@ function renderConversationDetail(container, params) {
         allBtn.classList.toggle('active', showConversationView);
         messagesBtn.classList.toggle('active', !showConversationView);
         updateTimelineHeader();
+        _writeConversationViewParam(showConversationView);
         reloadEvents();
     }
 
@@ -170,6 +172,9 @@ function renderConversationDetail(container, params) {
             applyFilter(target === allBtn);
         }
     });
+    allBtn.classList.toggle('active', showConversationView);
+    messagesBtn.classList.toggle('active', !showConversationView);
+    updateTimelineHeader();
 
     exportBtn.addEventListener('click', async () => {
         exportBtn.disabled = true;
@@ -179,11 +184,12 @@ function renderConversationDetail(container, params) {
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `conversation-${convoId}.md`;
+            const fileBase = UI.safeFilename(meta && meta.title ? meta.title : `conversation-${convoId}`);
+            link.download = `${fileBase}.md`;
             link.click();
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('Export failed', err);
+            UI.reportError('Failed to export conversation', err, { context: 'Conversation export failed' });
         }
         exportBtn.disabled = false;
     });
@@ -194,7 +200,7 @@ function renderConversationDetail(container, params) {
             try {
                 await API.conversationAction(convoId, 'cancel_conversation');
             } catch (err) {
-                console.error('Cancel failed', err);
+                UI.reportError('Failed to cancel the conversation', err, { context: 'Conversation cancel failed' });
             }
             cancelBtn.disabled = false;
         });
@@ -218,7 +224,7 @@ function renderConversationDetail(container, params) {
             await API.sendMessage(convoId, text);
             textarea.value = '';
         } catch (err) {
-            console.error('Send failed', err);
+            UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
         sendBtn.disabled = false;
         textarea.disabled = false;
@@ -333,7 +339,7 @@ function renderConversationDetail(container, params) {
         clearTimelineForLoad();
         try {
             const result = await API.getEvents(convoId, {
-                limit: 50,
+                limit: UI.EVENT_PAGE_LIMIT,
                 kind: currentKindFilter(),
             });
             const events = result.events || [];
@@ -366,12 +372,12 @@ function renderConversationDetail(container, params) {
         if (loadingOlder || !hasMoreBefore || !beforeSeq) return;
         loadingOlder = true;
         updateHistoryStatus();
-        const previousHeight = timeline.scrollHeight;
-        const previousTop = timeline.scrollTop;
+        const anchor = eventList.firstElementChild;
+        const previousTop = anchor ? anchor.getBoundingClientRect().top : timeline.scrollTop;
         try {
             const result = await API.getEvents(convoId, {
                 before_seq: beforeSeq,
-                limit: 50,
+                limit: UI.EVENT_PAGE_LIMIT,
                 kind: currentKindFilter(),
             });
             const events = result.events || [];
@@ -391,11 +397,13 @@ function renderConversationDetail(container, params) {
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || beforeSeq);
             updateSequenceState(events);
             requestAnimationFrame(() => {
-                const heightDelta = timeline.scrollHeight - previousHeight;
-                timeline.scrollTop = previousTop + heightDelta;
+                if (anchor && anchor.isConnected) {
+                    const nextTop = anchor.getBoundingClientRect().top;
+                    timeline.scrollTop += nextTop - previousTop;
+                }
             });
         } catch (err) {
-            console.error('Load older failed', err);
+            UI.reportError('Failed to load older activity', err, { context: 'Conversation load older failed' });
         }
         loadingOlder = false;
         updateHistoryStatus();
@@ -415,7 +423,7 @@ function renderConversationDetail(container, params) {
             threshold: 0,
         });
         topObserver.observe(sentinel);
-        cleanups.push(() => topObserver && topObserver.disconnect());
+        cleanups.add(() => topObserver && topObserver.disconnect());
     }
 
     function isNearBottom() {
@@ -442,14 +450,33 @@ function renderConversationDetail(container, params) {
             });
         }
     });
-    cleanups.push(unsub);
+    cleanups.add(unsub);
 
     loadConversation();
     reloadEvents();
+}
 
-    return function cleanup() {
-        cleanups.forEach((fn) => fn());
-    };
+function _readConversationViewParam() {
+    try {
+        const url = new URL(window.location.href);
+        return url.searchParams.get('view') !== 'activity';
+    } catch {
+        return true;
+    }
+}
+
+function _writeConversationViewParam(showConversationView) {
+    try {
+        const url = new URL(window.location.href);
+        if (showConversationView) {
+            url.searchParams.delete('view');
+        } else {
+            url.searchParams.set('view', 'activity');
+        }
+        history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+        // Ignore URL update issues; the toggle still works.
+    }
 }
 
 function _createConversationEventElement(event, convoId) {
@@ -492,6 +519,8 @@ function _createConversationEventElement(event, convoId) {
 
     const body = document.createElement('div');
     body.className = 'event-card-body';
+    body.id = `event-body-${UI.safeFilename(event.event_id || `${kind}-${event.seq || Date.now()}`)}`;
+    header.setAttribute('aria-controls', body.id);
     const metadata = event.metadata || {};
 
     switch (kind) {
@@ -684,7 +713,7 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
             await API.conversationAction(convoId, action, { request_id: event.event_id });
             status.textContent = action === 'approve' ? 'Approved' : 'Rejected';
         } catch (err) {
-            console.error('Approval action failed', err);
+            UI.reportError('Failed to update the approval', err, { context: 'Conversation approval action failed' });
             approve.disabled = expired;
             reject.disabled = expired;
             status.textContent = 'Action failed';

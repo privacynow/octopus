@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
+import * as fs from "fs";
+import * as path from "path";
 
 const BASE = "http://127.0.0.1:19987";
 const ENROLL = "guide-capture-enroll-token-2026";
 const UI_TOKEN = "guide-capture-ui-token-2026";
+const REVIEW_OUT = path.join(__dirname, "test-results");
 
 const browserChannel = process.env.PW_BROWSER_CHANNEL || "";
 if (browserChannel) {
@@ -219,8 +222,23 @@ async function publishEvents(token: string, conversationId: string, suffix: stri
   expect(payload.skipped).toBe(0);
 }
 
-test("ui overhaul smoke flow", async ({ page }) => {
-  const suffix = `${Date.now()}`;
+async function waitForViewReady(page: import("@playwright/test").Page, selector?: string) {
+  await page.waitForFunction(() => {
+    const content = document.getElementById("content");
+    const inner = document.querySelector("#content > .content-inner");
+    if (!content || !inner) return false;
+    return (
+      !content.classList.contains("loading-route") &&
+      Number.parseFloat(getComputedStyle(inner).opacity || "1") >= 0.99
+    );
+  });
+  if (selector) {
+    await page.waitForSelector(selector);
+  }
+  await page.waitForTimeout(200);
+}
+
+async function seedSmokeConversation(suffix: string) {
   const primaryDisplay = `Release Coordinator ${suffix}`;
   const reviewerDisplay = `Risk Reviewer ${suffix}`;
   const conversationTitle = `UI overhaul smoke thread ${suffix}`;
@@ -228,6 +246,12 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await enrollAgent(`reviewer-bot-${suffix}`, reviewerDisplay);
   const conversation = await createConversation(primary.token, primary.agentId, `ui-overhaul-${suffix}`, conversationTitle);
   await publishEvents(primary.token, conversation.conversation_id as string, suffix);
+  return { primaryDisplay, reviewerDisplay, conversationTitle, primary, conversation };
+}
+
+test("ui overhaul smoke flow", async ({ page }) => {
+  const suffix = `${Date.now()}`;
+  const { primaryDisplay, conversationTitle, primary, conversation } = await seedSmokeConversation(suffix);
 
   await page.goto("/ui/login");
   await page.getByLabel("Password").fill(UI_TOKEN);
@@ -235,23 +259,28 @@ test("ui overhaul smoke flow", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/ui\/?$/);
   await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
+  await waitForViewReady(page, ".dashboard-shell");
   await expect(page.getByText("Start with the next decision")).toBeVisible();
   await expect(page.getByText("Pending approvals")).toBeVisible();
 
   await page.locator(".nav-links").getByRole("link", { name: /Approvals/ }).click();
   await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+  await waitForViewReady(page, ".approval-card");
   await expect(page.getByText("Retry with production credentials?")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
 
   await page.locator(".nav-links").getByRole("link", { name: /Agents/ }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await waitForViewReady(page, "#agent-list-content .card.clickable");
   await expect(page.getByText(primaryDisplay)).toBeVisible();
 
   await page.locator(".nav-links").getByRole("link", { name: /Conversations/ }).click();
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
+  await waitForViewReady(page, ".card.clickable");
   await page.getByText(conversationTitle).click();
 
   await expect(page.getByRole("heading", { name: conversationTitle })).toBeVisible();
+  await waitForViewReady(page, ".timeline-events .event-card, .timeline-events .chat-bubble");
   await expect(page.getByText("Kick off a release readiness review.")).toBeVisible();
   await expect(page.getByText("Approval needed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
@@ -260,4 +289,43 @@ test("ui overhaul smoke flow", async ({ page }) => {
   await expect(page.getByText("Agent started work")).toBeVisible();
   await expect(page.getByText("Agent finished work")).toBeVisible();
   await expect(page.getByText("Used a tool")).toBeVisible();
+});
+
+test.describe("mobile review", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("mobile operator flow remains readable and navigable", async ({ page }) => {
+    fs.mkdirSync(REVIEW_OUT, { recursive: true });
+    const suffix = `${Date.now()}-mobile`;
+    const { conversationTitle } = await seedSmokeConversation(suffix);
+
+    await page.goto("/ui/login");
+    await page.getByLabel("Password").fill(UI_TOKEN);
+    await page.getByRole("button", { name: /sign in/i }).click();
+
+    await expect(page).toHaveURL(/\/ui\/?$/);
+    await waitForViewReady(page, ".dashboard-shell");
+    await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
+    await expect(page.locator("#hamburger")).toBeVisible();
+    await page.screenshot({ path: path.join(REVIEW_OUT, "mobile-dashboard.png"), fullPage: true });
+
+    await page.locator("#hamburger").click();
+    await expect(page.locator("#sidebar.open")).toBeVisible();
+    await page.locator(".nav-links").getByRole("link", { name: /Approvals/ }).click();
+    await waitForViewReady(page, ".approval-card");
+    await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
+    await page.screenshot({ path: path.join(REVIEW_OUT, "mobile-approvals.png"), fullPage: true });
+
+    await page.locator("#hamburger").click();
+    await expect(page.locator("#sidebar.open")).toBeVisible();
+    await page.locator(".nav-links").getByRole("link", { name: /Conversations/ }).click();
+    await waitForViewReady(page, ".card.clickable");
+    await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
+    await page.getByText(conversationTitle).click();
+
+    await waitForViewReady(page, ".timeline-events .event-card, .timeline-events .chat-bubble");
+    await expect(page.getByRole("heading", { name: conversationTitle })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+    await page.screenshot({ path: path.join(REVIEW_OUT, "mobile-conversation.png"), fullPage: true });
+  });
 });

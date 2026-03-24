@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 153.03140258789062,
+      "y": 150.140625,
       "width": 1060,
       "height": 58,
       "label": "Current-page filters for name and state",
@@ -10,7 +10,7 @@
     },
     {
       "x": 274,
-      "y": 216.03359985351562,
+      "y": 214.140625,
       "width": 1060,
       "height": 130.796875,
       "label": "Agent card → detail",
@@ -18,7 +18,7 @@
     },
     {
       "x": 274,
-      "y": 346.8304748535156,
+      "y": 344.9375,
       "width": 1060,
       "height": 130.796875,
       "label": "Additional enrolled registry member",

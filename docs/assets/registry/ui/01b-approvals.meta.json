@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 272,
-      "y": 151.0372314453125,
+      "y": 148.140625,
       "width": 1064,
       "height": 308.390625,
       "label": "Pending request with clear decision actions",
@@ -10,7 +10,7 @@
     },
     {
       "x": 297,
-      "y": 380.92547607421875,
+      "y": 378.03125,
       "width": 1014,
       "height": 53.5,
       "label": "Approve, reject, or open the full conversation",

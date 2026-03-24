@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 30.25830078125,
+      "y": 26,
       "width": 1060,
       "height": 119.8125,
       "label": "Identity, role, provider, and connectivity",
@@ -10,7 +10,7 @@
     },
     {
       "x": 272,
-      "y": 160.07080078125,
+      "y": 155.8125,
       "width": 1064,
       "height": 385.703125,
       "label": "Registry identity, scope, heartbeat, capabilities, and tags",
@@ -18,7 +18,7 @@
     },
     {
       "x": 272,
-      "y": 540.411865234375,
+      "y": 537.515625,
       "width": 1064,
       "height": 192.0625,
       "label": "Worker state from runtime heartbeat",
@@ -26,7 +26,7 @@
     },
     {
       "x": 272,
-      "y": 732.474365234375,
+      "y": 729.578125,
       "width": 1064,
       "height": 342.390625,
       "label": "Inline conversations for this agent",

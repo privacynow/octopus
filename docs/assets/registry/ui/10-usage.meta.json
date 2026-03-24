@@ -2,7 +2,7 @@
   "rects": [
     {
       "x": 274,
-      "y": 154.39706420898438,
+      "y": 150.140625,
       "width": 1060,
       "height": 40,
       "label": "Date-range shortcuts map to /v1/usage",
@@ -10,7 +10,7 @@
     },
     {
       "x": 274,
-      "y": 200.39706420898438,
+      "y": 196.140625,
       "width": 1060,
       "height": 150,
       "label": "Prompt, completion, and cost summary",
@@ -18,9 +18,9 @@
     },
     {
       "x": 274,
-      "y": 354.3970642089844,
+      "y": 350.140625,
       "width": 1060,
-      "height": 457.7656555175781,
+      "height": 457.765625,
       "label": "Per-conversation usage rollups from provider.response events",
       "color": "#4caf50"
     }

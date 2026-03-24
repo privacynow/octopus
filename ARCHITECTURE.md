@@ -191,6 +191,20 @@ and also supports [Socket Mode](https://docs.slack.dev/tools/bolt-python/concept
 when Slack should deliver events over a websocket instead of an inbound HTTP
 endpoint.
 
+```mermaid
+flowchart LR
+    Slack["Slack"]
+    Bolt["Bolt for Python"]
+    Transport["app/channels/slack<br/>ingress + egress + refs"]
+    Sdk["octopus_sdk<br/>execution + runtime + identity + event sink"]
+    Registry["Registry service"]
+
+    Slack <--> Bolt
+    Bolt --> Transport
+    Transport --> Sdk
+    Sdk <--> Registry
+```
+
 The transport split would look like this:
 
 - Slack/Bolt owns Slack auth, event delivery, signatures or Socket Mode, and Slack API calls

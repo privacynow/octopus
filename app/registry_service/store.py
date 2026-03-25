@@ -27,6 +27,7 @@ from app.capability_service import (
     query_capabilities,
     requested_routed_capabilities,
 )
+from app.exact_aliases import matches_exact_alias
 from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
@@ -852,7 +853,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if selector.kind == "agent":
                 slug = str(row["slug"] or "").strip().lower()
                 agent_id = str(row["agent_id"] or "").strip().lower()
-                if value in {slug, agent_id}:
+                display_name = str(row["display_name"] or "")
+                if matches_exact_alias(
+                    value,
+                    identifier=agent_id,
+                    slug=slug,
+                    display_name=display_name,
+                ):
                     matches.append(row)
             elif selector.kind == "capability":
                 caps = {str(item).strip().lower() for item in decode_json_field(row["skills_json"], []) if item}

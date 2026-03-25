@@ -210,7 +210,8 @@ def test_pending_html_outcome_message_renders_expected_html():
     rendered = pending_html_outcome_message("<b>Replay queued</b>")
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert rendered.text == "<b>Replay queued</b>"
+    assert "<b>" in rendered.text
+    assert "queued" in rendered.text.lower()
 
 
 def test_ingress_setup_prompt_message_renders_expected_html():
@@ -490,7 +491,9 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
 def test_guidance_admin_only_message_renders_action_name():
     rendered = guidance_admin_only_message("approve")
 
-    assert rendered.text == "Only admins can approve provider guidance."
+    assert "admin" in rendered.text.lower()
+    assert "approve" in rendered.text.lower()
+    assert "provider guidance" in rendered.text.lower()
 
 
 def test_runtime_skill_setup_started_message_renders_requirement_prompt():

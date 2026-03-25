@@ -26,10 +26,11 @@ def _card(
     slug: str,
     capabilities: list[str] | None = None,
     *,
+    display_name: str | None = None,
     registry_scope: str = "full",
 ) -> dict:
     return {
-        "display_name": slug,
+        "display_name": display_name or slug,
         "slug": slug,
         "role": "developer",
         "registry_scope": registry_scope,
@@ -50,13 +51,14 @@ def _enroll(
     slug: str,
     capabilities: list[str] | None = None,
     *,
+    display_name: str | None = None,
     registry_scope: str = "full",
 ) -> tuple[str, str]:
-    enrolled = store.enroll(_card(slug, capabilities, registry_scope=registry_scope))
+    enrolled = store.enroll(_card(slug, capabilities, display_name=display_name, registry_scope=registry_scope))
     store.register(
         enrolled["agent_token"],
         {
-            "agent_card": _card(slug, capabilities, registry_scope=registry_scope),
+            "agent_card": _card(slug, capabilities, display_name=display_name, registry_scope=registry_scope),
             "connectivity_state": "connected",
             "current_capacity": 0,
             "max_capacity": 2,
@@ -758,6 +760,84 @@ def test_add_conversation_action_requires_non_empty_action(store):
         store.add_conversation_action(
             conversation["conversation_id"],
             {"action_id": "action-1", "action": "", "payload": {}},
+        )
+
+
+def test_direct_assign_accepts_unique_display_name_alias(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Registry direct assignment",
+        origin_channel="registry",
+        external_conversation_ref="direct-assign-display-name",
+    )
+
+    result = store.add_conversation_action(
+        conversation["conversation_id"],
+        {
+            "action_id": "direct-assign-display-name",
+            "action": "direct_assign",
+            "payload": {
+                "selector": {"kind": "agent", "value": "m2"},
+                "title": "Add numbers",
+                "instructions": "Add 2 and 2 and return the result only.",
+            },
+        },
+    )
+
+    assert result["accepted"] is True
+    assert result["routed_tasks"][0]["target_agent_id"] == target_id
+
+
+def test_direct_assign_rejects_ambiguous_display_name_alias(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    _target_a, _token_a = _enroll(store, "lift-and-shift-m2-a", display_name="M2")
+    _target_b, _token_b = _enroll(store, "lift-and-shift-m2-b", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Registry direct assignment",
+        origin_channel="registry",
+        external_conversation_ref="direct-assign-display-name-ambiguous",
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        store.add_conversation_action(
+            conversation["conversation_id"],
+            {
+                "action_id": "direct-assign-display-name-ambiguous",
+                "action": "direct_assign",
+                "payload": {
+                    "selector": {"kind": "agent", "value": "m2"},
+                    "title": "Add numbers",
+                    "instructions": "Add 2 and 2 and return the result only.",
+                },
+            },
+        )
+
+
+def test_direct_assign_does_not_fuzzy_match_partial_alias(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    _target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Registry direct assignment",
+        origin_channel="registry",
+        external_conversation_ref="direct-assign-no-fuzzy",
+    )
+
+    with pytest.raises(ValueError, match="No connected agent matches"):
+        store.add_conversation_action(
+            conversation["conversation_id"],
+            {
+                "action_id": "direct-assign-no-fuzzy",
+                "action": "direct_assign",
+                "payload": {
+                    "selector": {"kind": "agent", "value": "m"},
+                    "title": "Add numbers",
+                    "instructions": "Add 2 and 2 and return the result only.",
+                },
+            },
         )
 
 

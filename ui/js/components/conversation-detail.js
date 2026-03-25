@@ -4,6 +4,8 @@
 function renderConversationDetail(container, params) {
     const convoId = params.id;
     const cleanups = UI.beginCleanupScope();
+    container.classList.add('conversation-screen');
+    cleanups.add(() => container.classList.remove('conversation-screen'));
     let meta = null;
     let beforeSeq = 0;
     let latestSeq = 0;
@@ -21,6 +23,7 @@ function renderConversationDetail(container, params) {
     let tasksLoaded = false;
     let suggestionMatches = [];
     let suggestionIndex = -1;
+    let suggestionEngine = null;
 
     const header = document.createElement('div');
     header.className = 'page-header page-header-tight';
@@ -237,8 +240,23 @@ function renderConversationDetail(container, params) {
                     detail: 'Capability target',
                 });
             });
+            if (typeof Fuse === 'function') {
+                suggestionEngine = new Fuse(availableTargets, {
+                    includeScore: true,
+                    threshold: 0.34,
+                    ignoreLocation: true,
+                    keys: [
+                        { name: 'label', weight: 0.45 },
+                        { name: 'display', weight: 0.35 },
+                        { name: 'detail', weight: 0.20 },
+                    ],
+                });
+            } else {
+                suggestionEngine = null;
+            }
         } catch {
             availableTargets = [];
+            suggestionEngine = null;
         }
         updateComposerAssist();
     }
@@ -469,21 +487,26 @@ function renderConversationDetail(container, params) {
 
     function renderTargetSuggestions(token) {
         const normalizedToken = String(token || '').trim().toLowerCase();
+        const query = normalizedToken.replace(/^@/, '');
         latestSuggestionToken = normalizedToken;
         clearSuggestions();
         if (!normalizedToken || !normalizedToken.startsWith('@')) {
             return;
         }
-        suggestionMatches = availableTargets
-            .filter((item) => {
-                const haystack = [
-                    item.label,
-                    item.display,
-                    item.detail,
-                ].join(' ').toLowerCase();
-                return haystack.includes(normalizedToken);
-            })
-            .slice(0, 6);
+        if (suggestionEngine) {
+            suggestionMatches = suggestionEngine.search(query).map((match) => match.item).slice(0, 6);
+        } else {
+            suggestionMatches = availableTargets
+                .filter((item) => {
+                    const haystack = [
+                        item.label,
+                        item.display,
+                        item.detail,
+                    ].join(' ').toLowerCase();
+                    return haystack.includes(normalizedToken) || haystack.includes(query);
+                })
+                .slice(0, 6);
+        }
         if (!suggestionMatches.length) {
             return;
         }

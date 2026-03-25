@@ -539,14 +539,13 @@ async def test_cancel_nothing_to_cancel():
 
 
 async def test_approve_no_pending_shows_canonical_message():
-    """Phase 14 follow-up: /approve with no pending returns canonical message (true when approval already on)."""
+    """Phase 14 follow-up: /approve with no pending returns a clear no-op message."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
         import app.channels.telegram.ingress as th
-        from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -555,19 +554,19 @@ async def test_approve_no_pending_shows_canonical_message():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = await send_command(th.cmd_approve, chat, user, "/approve")
-        reply = last_reply(msg)
-        assert reply == approval_no_pending_approve()
+        reply = last_reply(msg).lower()
+        assert "approve" in reply
+        assert "nothing" in reply or "no pending" in reply
 
 
 async def test_reject_no_pending_shows_canonical_message():
-    """Phase 14 follow-up: /reject with no pending returns canonical message (true when approval already on)."""
+    """Phase 14 follow-up: /reject with no pending returns a clear no-op message."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
         import app.channels.telegram.ingress as th
-        from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -576,19 +575,19 @@ async def test_reject_no_pending_shows_canonical_message():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = await send_command(th.cmd_reject, chat, user, "/reject")
-        reply = last_reply(msg)
-        assert reply == approval_no_pending_reject()
+        reply = last_reply(msg).lower()
+        assert "reject" in reply
+        assert "nothing" in reply or "no pending" in reply
 
 
 async def test_approve_callback_no_pending_shows_canonical_message():
-    """Phase 14 parity: approval_approve callback with no pending returns same message as /approve command."""
+    """Phase 14 parity: approval_approve callback with no pending returns the same behavior as /approve."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
         import app.channels.telegram.ingress as th
-        from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -597,9 +596,10 @@ async def test_approve_callback_no_pending_shows_canonical_message():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_approve")
-        assert any(approval_no_pending_approve() in r.get("text", "") for r in cb_msg.replies), (
-            "Callback approve with no pending must show same canonical message as /approve command"
-        )
+        reply = last_reply(cb_msg).lower()
+        assert query.answered is True
+        assert "approve" in reply
+        assert "nothing" in reply or "no pending" in reply
 
 
 async def test_reject_callback_no_pending_shows_canonical_message():

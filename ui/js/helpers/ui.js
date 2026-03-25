@@ -341,24 +341,21 @@ window.UI = (() => {
     }
 
     function reconcileChildren(container, nextNodes) {
-        const nodes = Array.from(nextNodes || []);
-        const keyedExisting = new Map();
-        Array.from(container.children).forEach((child) => {
-            const key = child.dataset && child.dataset.key;
-            if (!key) return;
-            keyedExisting.set(`${child.tagName}:${key}`, child);
+        const target = container.cloneNode(false);
+        Array.from(nextNodes || []).forEach((node) => {
+            target.appendChild(node);
         });
-        const finalNodes = nodes.map((node) => {
-            if (!(node instanceof Element)) return node;
-            const key = node.dataset && node.dataset.key;
-            if (!key) return node;
-            const existing = keyedExisting.get(`${node.tagName}:${key}`);
-            if (existing && existing.isEqualNode(node)) {
-                return existing;
-            }
-            return node;
+        if (typeof morphdom !== 'function') {
+            container.replaceChildren(...Array.from(target.childNodes));
+            return;
+        }
+        morphdom(container, target, {
+            childrenOnly: true,
+            getNodeKey(node) {
+                if (!(node instanceof Element)) return undefined;
+                return (node.dataset && node.dataset.key) || node.id || undefined;
+            },
         });
-        container.replaceChildren(...finalNodes);
     }
 
     function renderError(container, message, retryFn) {

@@ -62,17 +62,24 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
   await expect(page.getByText(/Start with @m2, @cap:review, or @role:reviewer/i)).toBeVisible();
+  await expect(page.getByLabel("Message text")).toBeInViewport();
   const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
-  const targetSlug = await page.evaluate(async ({ targetAgentId }) => {
+  const targetSelector = await page.evaluate(async ({ targetAgentId }) => {
     const response = await fetch("/v1/agents?limit=20", { credentials: "same-origin" });
     if (!response.ok) throw new Error(await response.text());
     const payload = await response.json();
     const match = (payload.agents || []).find((agent) => agent.agent_id === targetAgentId);
     if (!match || !match.slug) throw new Error(`No slug for ${targetAgentId}`);
-    return match.slug;
+    const displayName = String(match.display_name || "").trim();
+    const selectorValue = displayName && !/\s/.test(displayName) ? displayName : match.slug;
+    return {
+      selectorValue,
+      selectorKind: displayName && !/\s/.test(displayName) ? "display_name" : "slug",
+      slug: match.slug,
+    };
   }, { targetAgentId: TARGET_AGENT_ID });
-  await page.getByLabel("Message text").fill(`@${targetSlug} ${liveUiTaskTitle}`);
-  await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSlug)}`))).toBeVisible();
+  await page.getByLabel("Message text").fill(`@${targetSelector.selectorValue} ${liveUiTaskTitle}`);
+  await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSelector.selectorValue)}`))).toBeVisible();
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
   await page.getByRole("button", { name: "Assign" }).click();
   await page.getByRole("tab", { name: "Tasks" }).click();

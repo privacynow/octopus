@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.octopus_cli.envfiles import (
     list_registry_connection_records,
     parse_env_file,
@@ -649,25 +650,30 @@ class OctopusManager:
         )
 
     def bot_aliases(self, bot: BotState) -> set[str]:
-        aliases = {bot.slug.lower()}
-        if bot.display_name:
-            aliases.add(bot.display_name.strip().lower())
-        if bot.telegram_username:
-            aliases.add(bot.telegram_username.strip().lower())
-        return {alias for alias in aliases if alias}
+        return collect_exact_aliases(
+            slug=bot.slug,
+            display_name=bot.display_name,
+            aliases=(bot.telegram_username,),
+        )
 
     def resolve_bot(self, selector: str, state: SystemState) -> BotState:
-        selector = selector.strip().lower()
-        exact = [bot for bot in state.bots if bot.slug.lower() == selector]
-        if len(exact) == 1:
-            return exact[0]
-        alias_matches = [bot for bot in state.bots if selector in self.bot_aliases(bot)]
+        selector = selector.strip()
+        alias_matches = [
+            bot
+            for bot in state.bots
+            if matches_exact_alias(
+                selector,
+                slug=bot.slug,
+                display_name=bot.display_name,
+                aliases=(bot.telegram_username,),
+            )
+        ]
         if len(alias_matches) == 1:
             return alias_matches[0]
         if not alias_matches:
-            raise OctopusError(f"No bot matches '{selector}'.")
+            raise OctopusError(f"No bot matches '{selector.strip().lower()}'.")
         labels = ", ".join(bot.label for bot in alias_matches)
-        raise OctopusError(f"'{selector}' is ambiguous. Candidates: {labels}")
+        raise OctopusError(f"'{selector.strip().lower()}' is ambiguous. Candidates: {labels}")
 
     def resolve_targets(self, selectors: list[str], action: Action, state: SystemState) -> list[ResolvedTarget]:
         if not selectors:

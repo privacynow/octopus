@@ -5,7 +5,7 @@ import threading
 from octopus_sdk.registry.models import RoutedTaskResult
 from app import storage_postgres
 from octopus_sdk.identity import telegram_conversation_key
-from app.session_defaults import default_session
+from octopus_sdk.sessions import default_session
 
 
 def _provider_state_factory(conversation_key: str):

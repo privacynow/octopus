@@ -3,6 +3,9 @@ import re
 
 
 FORBIDDEN_APP_REFERENCES = (
+    "app.session_defaults",
+    "from app.session_defaults",
+    "import app.session_defaults",
     "app.transports.",
     "from app.transports",
     "import app.transports",

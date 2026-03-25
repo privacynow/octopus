@@ -1,9 +1,5 @@
 """Approval flow data shaping. No channel I/O — pure functions only."""
 
-import html
-import json
-from typing import Any
-
 
 def build_preflight_prompt(user_prompt: str, provider_name: str) -> str:
     return (
@@ -20,12 +16,3 @@ def build_preflight_prompt(user_prompt: str, provider_name: str) -> str:
         "- Approve or Reject / ask for clarification\n\n"
         f"User request:\n{user_prompt}"
     )
-
-
-def format_denials_html(denials: list[dict[str, Any]]) -> str:
-    lines = []
-    for d in denials:
-        tool = html.escape(d.get("tool_name", "?"))
-        inp = html.escape(json.dumps(d.get("tool_input", {}))[:200])
-        lines.append(f"\u2022 <b>{tool}</b>: <code>{inp}</code>")
-    return "\n".join(lines)

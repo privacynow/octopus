@@ -9,15 +9,19 @@ import socket
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from urllib.parse import urlparse
 
-from octopus_sdk.sessions import ProjectBinding, field
-from pathlib import Path
-
 from dotenv import dotenv_values
-from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.config import (
+    BotConfigBase,
+    PUBLISH_LEVEL_KINDS,
+    RegistryConnectionConfig,
+    should_publish_event as sdk_should_publish_event,
+)
 from app.agents.state import load_registry_connection_state
 from octopus_sdk.identity import parse_actor_key, telegram_numeric_id
+from octopus_sdk.sessions import ProjectBinding
 from app.providers.codex_security import validate_codex_sandbox
 from app.startup_diagnostics import sanitize_url_for_logging
 
@@ -207,42 +211,8 @@ def _has_valid_postgres_url(raw: str) -> bool:
 
 
 @dataclass(frozen=True)
-class BotConfig:
-    instance: str
+class BotConfig(BotConfigBase):
     telegram_token: str
-    allow_open: bool
-    allowed_actor_keys: frozenset[str]
-    allowed_usernames: frozenset[str]
-    provider_name: str
-    model: str
-    working_dir: Path
-    extra_dirs: tuple[Path, ...]
-    data_dir: Path
-    timeout_seconds: int
-    approval_mode: str
-    autonomous: bool
-    role: str
-    role_from_file: bool  # True if role came from <instance>.role.md
-    default_skills: tuple[str, ...]
-    stream_update_interval_seconds: float
-    typing_interval_seconds: float
-    # Codex-specific
-    codex_sandbox: str
-    codex_skip_git_repo_check: bool
-    codex_full_auto: bool
-    codex_dangerous: bool
-    codex_profile: str
-    # Admin users — gates store install/uninstall/update
-    admin_actor_keys: frozenset[str]
-    admin_usernames: frozenset[str]
-    admin_users_explicit: bool  # True if BOT_ADMIN_USERS was set
-    # Compact mode — mobile-friendly response summarization
-    compact_mode: bool
-    summary_model: str
-    # Rate limiting (0 = disabled)
-    rate_limit_per_minute: int
-    rate_limit_per_hour: int
-    # Transport mode
     bot_mode: str  # "poll" or "webhook"
     webhook_url: str
     webhook_listen: str
@@ -252,79 +222,11 @@ class BotConfig:
     telegram_file_api_base_url: str
     completion_webhook_url: str
     credential_key: str
-    # Projects — optional named working directories
-    projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
-    # Model profiles — stable user-facing tier names mapped to provider model IDs
-    model_profiles: dict[str, str]  # e.g. {"fast": "claude-haiku-4-5-20251001", ...}
-    default_model_profile: str  # "fast", "balanced", "best", or "" (use raw BOT_MODEL)
-    # Public trust profile
-    public_working_dir: str  # forced working dir for public users (empty = use working_dir)
-    public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
-    # Skill registry
-    registry_url: str  # URL to a JSON skill registry index (empty = disabled)
-    # Agent/registry runtime
-    agent_mode: str  # "registry" (default via setup) | "standalone"
-    agent_display_name: str
-    agent_slug: str
-    agent_role: str
-    agent_tags: tuple[str, ...]
-    agent_description: str
-    agent_capabilities: tuple[str, ...]
-    agent_registries: tuple[RegistryConnectionConfig, ...]
-    agent_poll_interval_seconds: float
-    # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
-    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
-    process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
-    claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
-    claim_sweep_interval_seconds: float  # BOT_CLAIM_SWEEP_INTERVAL_SECONDS, periodic stale-claim sweep cadence
-    delegation_timeout_seconds: int  # BOT_DELEGATION_TIMEOUT_SECONDS, max age for pending delegations before expiry
-    # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
-    database_url: str  # BOT_DATABASE_URL (postgresql://...)
-    db_pool_min_size: int
-    db_pool_max_size: int
-    db_connect_timeout_seconds: int
-    # Registry publish level — controls which event kinds are published to the registry UI
-    registry_publish_level: str  # BOT_REGISTRY_PUBLISH_LEVEL: "minimal" | "standard" | "full"
-    # Registry agent IDs — populated from enrollment state at startup. Single writer: enrollment
-    # pipeline writes connection state to disk, load_config reads it into this read model.
-    # Keys are registry_id (e.g. "local"), values are the agent_id assigned by that registry.
-    registry_agent_ids: dict[str, str]  # e.g. {"local": "0ace408e..."}; empty dict if no registries
-
-
-    @property
-    def provider(self) -> str:
-        return self.provider_name
-
-    def agent_id_for_registry(self, registry_id: str) -> str:
-        """Return the agent_id assigned by a specific registry, or empty string."""
-        return self.registry_agent_ids.get(registry_id, "")
-
-
-PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {
-    "minimal": {"message.user", "message.bot", "task.status", "error"},
-    "standard": {
-        "message.user", "message.bot", "task.status", "error",
-        "provider.request", "provider.response", "tool.execution",
-        "approval.requested",
-        "approval.decided",
-        "delegation.proposed", "delegation.submitted", "delegation.completed",
-    },
-    "full": {
-        "message.user", "message.bot", "task.status", "error",
-        "provider.request", "provider.response", "tool.execution",
-        "approval.requested",
-        "approval.decided",
-        "delegation.proposed", "delegation.submitted", "delegation.completed",
-    },
-}
 
 
 def should_publish_event(config: BotConfig, kind: str) -> bool:
     """Return True if the configured publish level includes the given event kind."""
-    allowed = PUBLISH_LEVEL_KINDS.get(config.registry_publish_level)
-    if allowed is None:
-        return False
-    return kind in allowed
+    return sdk_should_publish_event(config, kind)
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:

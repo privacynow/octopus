@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.registry.models import RoutedTaskResult
-from octopus_sdk.sessions import session_from_dict, session_to_dict
-from app.session_defaults import default_session
+from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from app.workflows.delegation.contracts import DelegationUpdateOutcome
 from app.workflows.delegation.coordination import apply_routed_result
 

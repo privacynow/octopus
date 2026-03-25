@@ -790,6 +790,62 @@ def test_direct_assign_accepts_unique_display_name_alias(store):
     assert result["routed_tasks"][0]["target_agent_id"] == target_id
 
 
+def test_direct_assign_persists_visible_operator_message(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    target_id, target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Registry direct assignment history",
+        origin_channel="registry",
+        external_conversation_ref="direct-assign-history",
+    )
+
+    result = store.add_conversation_action(
+        conversation["conversation_id"],
+        {
+            "action_id": "direct-assign-history",
+            "action": "direct_assign",
+            "payload": {
+                "selector": {"kind": "agent", "value": "m2"},
+                "title": "Add numbers",
+                "instructions": "Add 2 and 2 and return the result only.",
+                "message_text": "@m2 add 2 and 2",
+            },
+        },
+    )
+
+    routed_task_id = result["routed_tasks"][0]["routed_task_id"]
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, routed_task_id)
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": f"{routed_task_id}-complete",
+            "summary": "4",
+            "full_text": "4",
+        },
+    )
+
+    events = store.list_events(conversation["conversation_id"])["events"]
+
+    assert events[0]["kind"] == "message.user"
+    assert events[0]["content"] == "@m2 add 2 and 2"
+    assert events[0]["metadata"]["source_action"] == "direct_assign"
+    assert any(
+        event["kind"] == "delegation.submitted"
+        and event["metadata"]["tasks"][0]["routed_task_id"] == routed_task_id
+        for event in events
+    )
+    assert any(
+        event["kind"] == "task.status"
+        and event["metadata"]["status"] == "completed"
+        and event["metadata"]["routed_task_id"] == routed_task_id
+        for event in events
+    )
+
+
 def test_direct_assign_rejects_ambiguous_display_name_alias(store):
     origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
     _target_a, _token_a = _enroll(store, "lift-and-shift-m2-a", display_name="M2")

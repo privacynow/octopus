@@ -3,6 +3,11 @@
  */
 function renderTaskList(container) {
     const cleanups = UI.beginCleanupScope();
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;

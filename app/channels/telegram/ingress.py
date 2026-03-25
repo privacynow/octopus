@@ -850,6 +850,7 @@ async def cmd_delegate(
             selector=selector,
             title=title,
             instructions=instructions,
+            message_text=str(getattr(update.effective_message, "text", "") or ""),
         )
     except Exception as exc:
         await update.effective_message.reply_text(
@@ -1214,6 +1215,7 @@ async def handle_message(
                 selector=selector,
                 title=title,
                 instructions=instructions,
+                message_text=str(msg.text or ""),
             )
         except Exception as exc:
             await update.effective_message.reply_text(

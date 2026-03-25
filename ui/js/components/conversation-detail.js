@@ -6,6 +6,11 @@ function renderConversationDetail(container, params) {
     const cleanups = UI.beginCleanupScope();
     container.classList.add('conversation-screen');
     cleanups.add(() => container.classList.remove('conversation-screen'));
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
     let meta = null;
     let beforeSeq = 0;
     let latestSeq = 0;
@@ -13,11 +18,12 @@ function renderConversationDetail(container, params) {
     let loadingOlder = false;
     let activeView = _readConversationViewParam();
     let topObserver = null;
-    const conversationKinds = [
+    const conversationLoadKinds = [
         'message.user',
         'message.bot',
         'approval.requested',
         'error',
+        'task.status',
     ];
     let relatedTasks = [];
     let tasksLoaded = false;
@@ -127,10 +133,6 @@ function renderConversationDetail(container, params) {
     const taskBoard = document.createElement('div');
     taskBoard.className = 'task-board task-board-conversation';
     taskView.appendChild(taskBoard);
-
-    const taskFeed = document.createElement('div');
-    taskFeed.className = 'conversation-task-feed';
-    taskView.appendChild(taskFeed);
 
     const liveRegion = document.createElement('div');
     liveRegion.className = 'sr-only';
@@ -282,9 +284,9 @@ function renderConversationDetail(container, params) {
                 ? 'Tasks'
                 : 'Full activity';
         const subtitle = activeView === 'conversation'
-            ? 'Operator messages, agent replies, approval requests, and problems'
+            ? 'Operator messages, agent replies, completed work, approval requests, and problems'
             : activeView === 'tasks'
-                ? 'Delegated work, task controls, and current task outcomes'
+                ? 'Delegated work for this conversation'
                 : 'Every stored event, including provider and tool activity';
         timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
         allBtn.classList.toggle('active', activeView === 'conversation');
@@ -380,6 +382,7 @@ function renderConversationDetail(container, params) {
                     selector: directAssignment.selector,
                     title: directAssignment.instructions.slice(0, 120),
                     instructions: directAssignment.instructions,
+                    message_text: text,
                 });
             } else if (selectorOnly) {
                 throw new Error('Add instructions after the target selector to route work directly.');
@@ -531,7 +534,24 @@ function renderConversationDetail(container, params) {
     }
 
     function currentKindFilter() {
-        return activeView === 'conversation' ? conversationKinds.join(',') : undefined;
+        return activeView === 'conversation' ? conversationLoadKinds.join(',') : undefined;
+    }
+
+    function shouldRenderConversationEvent(event) {
+        const kind = event.kind || '';
+        if (kind === 'task.status') {
+            const status = String((event.metadata && event.metadata.status) || '');
+            return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
+        }
+        return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(kind);
+    }
+
+    function visibleTimelineEvents(events) {
+        if (activeView === 'activity') return events;
+        if (activeView === 'conversation') {
+            return events.filter(shouldRenderConversationEvent);
+        }
+        return [];
     }
 
     function renderMetaCard(data) {
@@ -622,7 +642,6 @@ function renderConversationDetail(container, params) {
         renderTaskSummaryStrip(tasks);
         if (!tasks.length) {
             UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated tasks for this conversation yet.', true)]);
-            UI.reconcileChildren(taskFeed, []);
             return;
         }
         const lanes = [
@@ -631,46 +650,30 @@ function renderConversationDetail(container, params) {
             ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
             ['done', 'Done', ['completed']],
         ];
-        const laneNodes = lanes.map(([key, title, statuses]) => {
+        const laneNodes = lanes.flatMap(([key, title, statuses]) => {
+            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
+            if (!laneTasks.length) return [];
             const lane = document.createElement('section');
             lane.className = 'task-lane';
             lane.dataset.key = key;
             lane.dataset.lane = key;
             const laneHeader = document.createElement('div');
             laneHeader.className = 'task-lane-header';
-            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
             laneHeader.innerHTML = `<strong>${UI.esc(title)}</strong><span>${laneTasks.length}</span>`;
             lane.appendChild(laneHeader);
             const laneBody = document.createElement('div');
             laneBody.className = 'task-lane-body';
-            if (!laneTasks.length) {
-                laneBody.appendChild(UI.renderEmptyState('Nothing here right now.', true));
-            } else {
-                laneTasks.forEach((task) => laneBody.appendChild(_createConversationTaskCard(task, convoId)));
-            }
+            laneTasks.forEach((task) => laneBody.appendChild(_createConversationTaskCard(task, convoId)));
             lane.appendChild(laneBody);
-            return lane;
+            return [lane];
         });
+        taskBoard.dataset.laneCount = String(laneNodes.length);
         UI.reconcileChildren(taskBoard, laneNodes);
-
-        const feedHeader = document.createElement('div');
-        feedHeader.className = 'task-feed-header';
-        feedHeader.dataset.key = 'task-feed-header';
-        feedHeader.innerHTML = '<strong>Task log</strong><span>Latest delegated work for this conversation.</span>';
-        const feedList = document.createElement('div');
-        feedList.className = 'task-feed-list';
-        feedList.dataset.key = 'task-feed-list';
-        tasks
-            .slice()
-            .sort((left, right) => String(right.updated_at || right.created_at || '').localeCompare(String(left.updated_at || left.created_at || '')))
-            .forEach((task) => feedList.appendChild(_createConversationTaskCard(task, convoId, { compact: true })));
-        UI.reconcileChildren(taskFeed, [feedHeader, feedList]);
     }
 
     async function loadRelatedTasks({ soft = false } = {}) {
         if (!soft || !tasksLoaded) {
             taskBoard.textContent = '';
-            taskFeed.textContent = '';
             UI.renderSkeletons(taskBoard, 4, 'card');
         }
         try {
@@ -683,7 +686,6 @@ function renderConversationDetail(container, params) {
             tasksLoaded = true;
         } catch (err) {
             taskBoard.textContent = '';
-            taskFeed.textContent = '';
             UI.renderError(taskBoard, 'Failed to load conversation tasks: ' + err.message, loadRelatedTasks);
         }
     }
@@ -737,16 +739,17 @@ function renderConversationDetail(container, params) {
                 kind: currentKindFilter(),
             });
             const events = result.events || [];
+            const visibleEvents = visibleTimelineEvents(events);
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || 0);
             latestSeq = Number(result.next_after_seq || (events[events.length - 1] && events[events.length - 1].seq) || 0);
-            if (!events.length) {
+            if (!visibleEvents.length) {
                 const empty = document.createElement('div');
                 empty.className = 'empty-state';
                 empty.textContent = 'No events yet';
                 UI.reconcileChildren(eventList, [empty]);
             } else {
-                UI.reconcileChildren(eventList, events.map((event) => _createConversationEventElement(event, convoId)));
+                UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -772,18 +775,21 @@ function renderConversationDetail(container, params) {
                 kind: currentKindFilter(),
             });
             const events = result.events || [];
+            const visibleEvents = visibleTimelineEvents(events);
             if (!events.length) {
                 hasMoreBefore = false;
                 updateHistoryStatus();
                 return;
             }
-            const empty = eventList.querySelector('.empty-state');
-            if (empty) empty.remove();
-            const fragment = document.createDocumentFragment();
-            events.forEach((event) => {
-                fragment.appendChild(_createConversationEventElement(event, convoId));
-            });
-            eventList.prepend(fragment);
+            if (visibleEvents.length) {
+                const empty = eventList.querySelector('.empty-state');
+                if (empty) empty.remove();
+                const fragment = document.createDocumentFragment();
+                visibleEvents.forEach((event) => {
+                    fragment.appendChild(_createConversationEventElement(event, convoId));
+                });
+                eventList.prepend(fragment);
+            }
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || beforeSeq);
             updateSequenceState(events);
@@ -840,7 +846,7 @@ function renderConversationDetail(container, params) {
             }
             return;
         }
-        if (activeView === 'conversation' && !conversationKinds.includes(event.kind || '')) return;
+        if (activeView === 'conversation' && !shouldRenderConversationEvent(event)) return;
         const seq = Number(event.seq || 0);
         if (seq && latestSeq && seq <= latestSeq) return;
         const shouldStick = isNearBottom();
@@ -853,7 +859,7 @@ function renderConversationDetail(container, params) {
             meta.updated_at = event.created_at || meta.updated_at;
             renderMetaCard(meta);
         }
-        if (event.kind === 'message.user' || event.kind === 'message.bot' || event.kind === 'approval.requested') {
+        if (event.kind === 'message.user' || event.kind === 'message.bot' || event.kind === 'approval.requested' || event.kind === 'task.status') {
             liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
         }
         if (

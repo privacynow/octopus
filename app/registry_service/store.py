@@ -33,6 +33,7 @@ from app.registry_service.store_base import (
     CapabilityDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
     delegation_event,
+    direct_assignment_message_text,
     routed_task_created_event,
     routed_task_progress_event,
     routed_task_result_event,
@@ -2272,9 +2273,30 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
             if validated_envelope.action == "direct_assign":
                 assignment = action_payload
+                operator_message = direct_assignment_message_text(assignment)
+                routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
                 resolved_target = self._resolve_selector(conn, assignment.selector)
+                inserted_events: list[dict[str, Any]] = []
+                message_event = self._insert_event(
+                    conn,
+                    event_id=f"message.user:{validated_envelope.action_id}",
+                    conversation_id=conversation_id,
+                    agent_id="",
+                    kind="message.user",
+                    actor="operator",
+                    content=operator_message,
+                    metadata={
+                        "source_action": "direct_assign",
+                        "selector_kind": assignment.selector.kind,
+                        "selector_value": assignment.selector.value,
+                        "routed_task_id": routed_task_id,
+                    },
+                    created_at=now,
+                )
+                if message_event is not None:
+                    inserted_events.append(message_event)
                 request = {
-                    "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, 0),
+                    "routed_task_id": routed_task_id,
                     "parent_conversation_id": conversation_id,
                     "origin_agent_id": conversation["target_agent_id"],
                     "target_agent_id": resolved_target["agent_id"],
@@ -2286,6 +2308,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     "created_at": now,
                 }
                 created = self._create_routed_task_in_tx(conn, request, now=now)
+                if created.get("event") is not None:
+                    inserted_events.append(created["event"])
                 routed_tasks.append({
                     "routed_task_id": request["routed_task_id"],
                     "target_agent_id": resolved_target["agent_id"],
@@ -2333,6 +2357,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 duplicate = inserted_event is None
                 if inserted_event is None:
                     inserted_event = _event_from_row(f"delegation.submitted:{validated_envelope.action_id}")
+                elif inserted_event is not None:
+                    inserted_events.append(inserted_event)
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2341,6 +2367,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     duplicate=duplicate,
                     proposal_id=validated_envelope.action_id,
                     routed_tasks=routed_tasks,
+                    inserted_events=inserted_events,
                     event=inserted_event,
                 ).model_dump()
 

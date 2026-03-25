@@ -6,6 +6,7 @@ function renderApprovalList(container) {
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
+    let hasLoaded = false;
 
     const header = document.createElement('div');
     header.className = 'page-header';
@@ -25,19 +26,31 @@ function renderApprovalList(container) {
         pagEl.textContent = '';
     }
 
+    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
+            hasPrev,
+            hasNext,
+            info: '',
+            onPrev,
+            onNext,
+        });
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
+    }
+
     function renderRows(data) {
         const approvals = data.approvals || data || [];
-        listEl.textContent = '';
-        pagEl.textContent = '';
 
         if (!approvals.length) {
-            listEl.appendChild(UI.renderEmptyState('No approvals waiting right now'));
+            UI.reconcileChildren(listEl, [UI.renderEmptyState('No approvals waiting right now')]);
+            UI.reconcileChildren(pagEl, []);
             return;
         }
 
-        approvals.forEach((item) => {
+        const cards = approvals.map((item) => {
             const card = document.createElement('article');
             card.className = 'card approval-card';
+            card.dataset.key = item.request_id || item.approval_id || item.conversation_id;
 
             const headerRow = document.createElement('div');
             headerRow.className = 'approval-card-header';
@@ -133,28 +146,35 @@ function renderApprovalList(container) {
             actions.appendChild(rejectBtn);
             card.appendChild(actions);
 
-            listEl.appendChild(card);
+            return card;
         });
+        UI.reconcileChildren(listEl, cards);
 
-        UI.renderPagination(pagEl, {
+        renderPaginationState({
             hasPrev: cursorStack.length > 0,
             hasNext: !!data.has_more,
-            info: '',
             onPrev: () => {
                 cursor = cursorStack.pop() || 0;
                 loadPage();
             },
             onNext: () => {
-                cursorStack.push(cursor);
-                cursor = data.next_cursor;
-                loadPage();
-            },
+                    cursorStack.push(cursor);
+                    cursor = data.next_cursor;
+                    loadPage();
+                },
         });
+        hasLoaded = true;
     }
 
-    function loadPage() {
-        setLoading();
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            setLoading();
+        }
         API.listApprovals({ cursor, limit }).then(renderRows).catch((err) => {
+            if (soft && hasLoaded) {
+                UI.reportError('Failed to refresh approvals', err, { context: 'Approval list soft refresh failed' });
+                return;
+            }
             listEl.textContent = '';
             UI.renderError(listEl, 'Failed to load approvals: ' + err.message, loadPage);
         });
@@ -163,7 +183,7 @@ function renderApprovalList(container) {
     let reloadDebounce = null;
     const unsub = WS.subscribe('approvals', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadPage, 400);
+        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
     });
     cleanups.add(unsub);
 

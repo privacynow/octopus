@@ -809,12 +809,19 @@ async def resource_add_action(
     # Broadcast action via WebSocket (full stored event)
     conv = store.get_conversation(conversation_id)
     agent_id = conv.get("target_agent_id", "")
-    event_data = result.get("event")
-    if event_data:
-        await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
-        topics = set(_event_invalidation_topics(str(event_data.get("kind", ""))))
+    inserted_events = result.get("inserted_events", []) or []
+    if inserted_events:
+        topics: set[str] = set()
+        for event_data in inserted_events:
+            await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
+            topics.update(_event_invalidation_topics(str(event_data.get("kind", ""))))
     else:
-        topics = {"conversations", "summary"}
+        event_data = result.get("event")
+        if event_data:
+            await _ws_manager.broadcast_event(conversation_id, agent_id, event_data)
+            topics = set(_event_invalidation_topics(str(event_data.get("kind", ""))))
+        else:
+            topics = {"conversations", "summary"}
     await _broadcast_invalidations(
         topics=topics,
         reason="conversation.action_added",

@@ -1329,6 +1329,10 @@ select {
     margin: 0 auto;
 }
 
+#content > .content-inner.workspace-route-wide {
+    max-width: 1560px;
+}
+
 .route-enter {
     opacity: 0;
     transform: translateY(8px);
@@ -1376,6 +1380,10 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
+}
+
+[hidden] {
+    display: none !important;
 }
 
 .card {
@@ -1440,6 +1448,7 @@ select {
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--bg-tertiary);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
 }
 
 .segmented-control-btn {
@@ -1449,11 +1458,15 @@ select {
     padding: 0.6rem 0.95rem;
     border-radius: 999px;
     cursor: pointer;
+    font-weight: 600;
+    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .segmented-control-btn.active {
     background: var(--accent);
     color: #fff;
+    box-shadow: var(--shadow-soft);
+    transform: translateY(-1px);
 }
 
 .search-input,
@@ -1799,7 +1812,7 @@ a.stat-card:hover {
 
 .task-summary-strip {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
     gap: var(--space-3);
 }
 
@@ -1825,7 +1838,7 @@ a.stat-card:hover {
 
 .task-board {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: var(--space-4);
 }
 
@@ -1861,6 +1874,7 @@ a.stat-card:hover {
     display: grid;
     gap: var(--space-3);
     align-content: start;
+    min-height: 0;
 }
 
 .task-board-card,
@@ -1977,7 +1991,7 @@ a.stat-card:hover {
 }
 
 .conversation-meta {
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-3);
 }
 
 .conversation-meta-hero {
@@ -1990,7 +2004,7 @@ a.stat-card:hover {
 
 .conversation-meta-facts {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     gap: var(--space-2);
 }
 
@@ -2074,17 +2088,12 @@ a.stat-card:hover {
     padding: var(--space-3) var(--space-4);
     background: linear-gradient(180deg, var(--bg-tertiary), var(--bg));
     display: grid;
-    gap: var(--space-4);
+    gap: var(--space-3);
     align-content: start;
 }
 
-.conversation-task-feed {
-    display: grid;
-    gap: var(--space-3);
-}
-
 .task-board-conversation {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 
 .timeline-events {
@@ -2729,6 +2738,10 @@ a.stat-card:hover {
     #content {
         padding: 5rem var(--space-4) var(--space-5);
         margin-left: 0;
+    }
+
+    #content > .content-inner.workspace-route-wide {
+        max-width: none;
     }
 
     .conversation-screen {

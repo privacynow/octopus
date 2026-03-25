@@ -593,6 +593,9 @@ class LiveRegistryHarness:
                             f"Read the exact contents of {delegation_secret_path} "
                             "and reply with only that content."
                         ),
+                        "message_text": "@"
+                        + secondary_state.display_name.lower()
+                        + " read the delegated token",
                     },
                 },
             )
@@ -610,6 +613,15 @@ class LiveRegistryHarness:
                 return any(event.get("kind") == "delegation.submitted" for event in _delegation_events())
 
             _poll("direct assignment submission", _assignment_submitted, timeout_seconds=60)
+
+            def _assignment_message_visible() -> bool:
+                return any(
+                    event.get("kind") == "message.user"
+                    and "read the delegated token" in str(event.get("content", "")).lower()
+                    for event in _delegation_events()
+                )
+
+            _poll("direct assignment visible operator history", _assignment_message_visible, timeout_seconds=60)
 
             def _delegated_task_created() -> dict[str, Any] | None:
                 response = client.get("/v1/tasks", params={"limit": 50})

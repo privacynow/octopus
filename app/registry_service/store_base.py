@@ -53,6 +53,19 @@ def stable_routed_task_id(conversation_id: str, action_id: str, index: int) -> s
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
+def direct_assignment_message_text(payload: DirectAssignActionPayload) -> str:
+    raw = str(payload.message_text or "").strip()
+    if raw:
+        return raw
+    if payload.selector.kind == "agent":
+        selector = f"@{payload.selector.value}"
+    elif payload.selector.kind == "capability":
+        selector = f"@cap:{payload.selector.value}"
+    else:
+        selector = f"@role:{payload.selector.value}"
+    return f"{selector} {payload.instructions}".strip()
+
+
 class CapabilityDisabledError(RuntimeError):
     """Raised when routing requests a capability that has been globally disabled."""
 

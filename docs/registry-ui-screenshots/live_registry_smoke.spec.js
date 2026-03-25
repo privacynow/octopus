@@ -63,6 +63,8 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
   await expect(page.getByText(/Start with @m2, @cap:review, or @role:reviewer/i)).toBeVisible();
   await expect(page.getByLabel("Message text")).toBeInViewport();
+  await expect(page.locator(".chat-timeline")).toBeVisible();
+  await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
   const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
   const targetSelector = await page.evaluate(async ({ targetAgentId }) => {
     const response = await fetch("/v1/agents?limit=20", { credentials: "same-origin" });
@@ -82,9 +84,13 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSelector.selectorValue)}`))).toBeVisible();
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
   await page.getByRole("button", { name: "Assign" }).click();
+  await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle, { timeout: 5000 });
   await page.getByRole("tab", { name: "Tasks" }).click();
-  await expect(page.locator(".conversation-task-view")).toContainText("Task log");
-  await expect(page.locator(".conversation-task-view")).toContainText(liveUiTaskTitle);
+  await expect(page.locator(".conversation-task-view")).not.toHaveAttribute("hidden", "");
+  await expect(page.locator(".chat-timeline")).toHaveAttribute("hidden", "");
+  await expect(
+    page.locator(".conversation-task-card-title").filter({ hasText: liveUiTaskTitle })
+  ).toHaveCount(1);
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();

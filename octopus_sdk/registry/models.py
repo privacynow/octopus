@@ -175,6 +175,7 @@ class DirectAssignmentRequest(BaseModel):
     selector: TargetSelector
     title: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
+    message_text: str = ""
     priority: str = "normal"
     requested_capabilities: list[str] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
@@ -277,6 +278,7 @@ class CoordinationActionResult(BaseModel):
     status: str = ""
     proposal_id: str = ""
     routed_tasks: list[RoutedTaskRef] = Field(default_factory=list)
+    inserted_events: list[dict[str, Any]] = Field(default_factory=list)
     event: dict[str, Any] | None = None
 
 

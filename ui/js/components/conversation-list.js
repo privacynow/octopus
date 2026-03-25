@@ -9,6 +9,7 @@ function renderConversationList(container) {
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
     let searchTimeout = null;
+    let hasLoaded = false;
 
     // Header
     const header = document.createElement('div');
@@ -90,10 +91,24 @@ function renderConversationList(container) {
     searchInput.value = currentQ;
     statusSelect.value = currentStatus;
 
-    function loadPage() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 5, 'row');
-        pagEl.textContent = '';
+    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
+            hasPrev,
+            hasNext,
+            info: '',
+            onPrev,
+            onNext,
+        });
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
+    }
+
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            listEl.textContent = '';
+            UI.renderSkeletons(listEl, 5, 'row');
+            pagEl.textContent = '';
+        }
 
         const params = { cursor, limit };
         if (currentQ) params.q = currentQ;
@@ -101,15 +116,14 @@ function renderConversationList(container) {
 
         API.listConversations(params).then(data => {
             const convos = data.conversations || data || [];
-            listEl.textContent = '';
 
             if (convos.length === 0) {
-                listEl.appendChild(UI.renderEmptyState('No conversations found'));
-                pagEl.textContent = '';
+                UI.reconcileChildren(listEl, [UI.renderEmptyState('No conversations found')]);
+                UI.reconcileChildren(pagEl, []);
                 return;
             }
 
-            convos.forEach(c => {
+            const rows = convos.map(c => {
                 const sub = document.createElement('span');
                 const prefixParts = [];
                 if (c.target_display_name || c.target_agent_id) {
@@ -126,20 +140,21 @@ function renderConversationList(container) {
                 if (c.event_count !== undefined) {
                     sub.appendChild(document.createTextNode(' \u00b7 ' + c.event_count + ' events'));
                 }
-                listEl.appendChild(UI.renderListRow({
+                const row = UI.renderListRow({
                     href: '/ui/conversations/' + c.conversation_id,
                     label: c.title || c.conversation_id,
                     sublabelNode: sub,
                     badgeText: c.status || 'open',
                     badgeClass: 'badge-' + (c.status || 'open'),
-                }));
+                });
+                row.dataset.key = c.conversation_id;
+                return row;
             });
+            UI.reconcileChildren(listEl, rows);
 
-            pagEl.textContent = '';
-            UI.renderPagination(pagEl, {
+            renderPaginationState({
                 hasPrev: cursorStack.length > 0,
                 hasNext: !!data.has_more,
-                info: '',
                 onPrev: () => {
                     cursor = cursorStack.pop() || 0;
                     loadPage();
@@ -150,7 +165,12 @@ function renderConversationList(container) {
                     loadPage();
                 },
             });
+            hasLoaded = true;
         }).catch(err => {
+            if (soft && hasLoaded) {
+                UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });
+                return;
+            }
             listEl.textContent = '';
             UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
         });
@@ -161,7 +181,7 @@ function renderConversationList(container) {
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('conversations', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadPage, 400);
+        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
     }));
 
     function _showNewConversationDialog() {

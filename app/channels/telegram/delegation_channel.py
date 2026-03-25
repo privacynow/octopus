@@ -209,6 +209,7 @@ async def submit_direct_assignment(
     selector: TargetSelector,
     title: str,
     instructions: str,
+    message_text: str = "",
 ):
     conversation_id = await _coordination_conversation_id(
         runtime,
@@ -223,6 +224,7 @@ async def submit_direct_assignment(
             selector=selector,
             title=title,
             instructions=instructions,
+            message_text=message_text,
         ).model_dump(exclude_unset=True),
     )
     return await runtime.services.control_plane.conversation_projection.submit_action(

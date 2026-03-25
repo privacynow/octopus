@@ -3,6 +3,11 @@
  */
 function renderAgentList(container) {
     const cleanups = UI.beginCleanupScope();
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
     let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let cursorStack = []; // stack of previous cursors for "prev"
@@ -10,11 +15,18 @@ function renderAgentList(container) {
     let stateFilter = UI.readQueryParam('state', '');
     let hasLoaded = false;
     let activeConversationOpen = '';
+    const stateOptions = [
+        { label: 'All', value: '' },
+        { label: 'Connected', value: 'connected' },
+        { label: 'Degraded', value: 'degraded' },
+        { label: 'Disconnected', value: 'disconnected' },
+        { label: 'Offline', value: 'offline' },
+    ];
 
     // Shell
     const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Agents</h2><p>See which agents are healthy, which ones are struggling, and where to drill in when work slows down.</p>';
+    header.className = 'page-header page-header-tight';
+    header.innerHTML = '<h2>Agents</h2>';
     container.appendChild(header);
 
     // Filter bar
@@ -23,25 +35,16 @@ function renderAgentList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search agents';
+    searchInput.placeholder = 'Search';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Filter agents by name');
-    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
 
-    const searchHint = document.createElement('span');
-    searchHint.className = 'search-shortcut-hint';
-    searchHint.textContent = 'Shortcut: /';
-    filterBar.appendChild(searchHint);
-
-    const stateSelect = document.createElement('select');
-    stateSelect.setAttribute('aria-label', 'Filter agents by connectivity state');
-    stateSelect.innerHTML = '<option value="">All states</option>' +
-        '<option value="connected">Connected</option>' +
-        '<option value="degraded">Degraded</option>' +
-        '<option value="disconnected">Disconnected</option>' +
-        '<option value="offline">Offline</option>';
-    filterBar.appendChild(stateSelect);
+    const stateBar = document.createElement('div');
+    stateBar.className = 'segmented-control';
+    stateBar.setAttribute('role', 'tablist');
+    stateBar.setAttribute('aria-label', 'Filter agents by connectivity state');
+    filterBar.appendChild(stateBar);
 
     container.appendChild(filterBar);
 
@@ -67,15 +70,31 @@ function renderAgentList(container) {
         }, 300);
     });
 
-    stateSelect.addEventListener('change', () => {
-        stateFilter = stateSelect.value;
-        cursor = 0;
-        cursorStack = [];
-        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
-        loadPage();
-    });
     searchInput.value = nameFilter;
-    stateSelect.value = stateFilter;
+    function renderStateFilters() {
+        const buttons = stateOptions.map((option) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `segmented-control-btn${option.value === stateFilter ? ' active' : ''}`;
+            btn.textContent = option.label;
+            btn.setAttribute('role', 'tab');
+            btn.setAttribute('aria-selected', String(option.value === stateFilter));
+            btn.tabIndex = option.value === stateFilter ? 0 : -1;
+            btn.dataset.key = option.value || 'all';
+            btn.addEventListener('click', () => {
+                if (option.value === stateFilter) return;
+                stateFilter = option.value;
+                cursor = 0;
+                cursorStack = [];
+                UI.updateQueryParams({ q: nameFilter, state: stateFilter });
+                renderStateFilters();
+                loadPage();
+            });
+            return btn;
+        });
+        UI.reconcileChildren(stateBar, buttons);
+    }
+    renderStateFilters();
 
     function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
@@ -95,7 +114,7 @@ function renderAgentList(container) {
 
     function renderCards(agents, hasMore, nextCursor) {
         if (agents.length === 0) {
-            UI.reconcileChildren(listEl, [UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled')]);
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(nameFilter || stateFilter ? 'No matches.' : 'No agents yet.', true)]);
             UI.reconcileChildren(pagEl, []);
             return;
         }
@@ -131,7 +150,7 @@ function renderAgentList(container) {
             const actionBtn = document.createElement('button');
             actionBtn.type = 'button';
             actionBtn.className = 'btn btn-sm list-row-action';
-            actionBtn.textContent = 'Open conversation';
+            actionBtn.textContent = 'Chat';
             actionBtn.setAttribute('aria-label', `Open or start a conversation with ${a.display_name || a.slug || a.agent_id}`);
             actionBtn.addEventListener('click', async () => {
                 if (activeConversationOpen === a.agent_id) return;
@@ -146,7 +165,7 @@ function renderAgentList(container) {
                 } catch (err) {
                     UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent list open conversation failed' });
                     actionBtn.disabled = false;
-                    actionBtn.textContent = 'Open conversation';
+                    actionBtn.textContent = 'Chat';
                     activeConversationOpen = '';
                 }
             });

@@ -9,8 +9,8 @@ function renderApprovalList(container) {
     let hasLoaded = false;
 
     const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Approvals</h2><p>Review requests that need a decision before work can continue.</p>';
+    header.className = 'page-header page-header-tight';
+    header.innerHTML = '<h2>Approvals</h2>';
     container.appendChild(header);
 
     const listEl = document.createElement('div');
@@ -41,7 +41,7 @@ function renderApprovalList(container) {
         const approvals = data.approvals || data || [];
 
         if (!approvals.length) {
-            UI.reconcileChildren(listEl, [UI.renderEmptyState('No approvals waiting right now')]);
+            UI.reconcileChildren(listEl, [UI.renderEmptyState('Clear', true)]);
             UI.reconcileChildren(pagEl, []);
             return;
         }
@@ -80,7 +80,7 @@ function renderApprovalList(container) {
 
             const summary = document.createElement('div');
             summary.className = 'approval-summary';
-            summary.textContent = item.content || 'Approval required before the agent can continue.';
+            summary.textContent = item.content || 'Waiting for a decision.';
             card.appendChild(summary);
 
             const facts = document.createElement('div');

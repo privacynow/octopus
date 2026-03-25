@@ -10,6 +10,8 @@ function renderConversationDetail(container, params) {
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+        contentInner.classList.add('workspace-route-conversation');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-conversation'));
     }
     let meta = null;
     let beforeSeq = 0;
@@ -22,6 +24,7 @@ function renderConversationDetail(container, params) {
         'message.user',
         'message.bot',
         'approval.requested',
+        'delegation.proposed',
         'delegation.submitted',
         'delegation.completed',
         'error',
@@ -38,7 +41,7 @@ function renderConversationDetail(container, params) {
     container.appendChild(page);
 
     const shell = document.createElement('section');
-    shell.className = 'card conversation-shell';
+    shell.className = 'conversation-shell';
     page.appendChild(shell);
 
     const metaCard = document.createElement('div');
@@ -301,7 +304,7 @@ function renderConversationDetail(container, params) {
         timelinePanel.dataset.view = activeView;
         timeline.hidden = activeView === 'tasks';
         taskView.hidden = activeView !== 'tasks';
-        syncConversationDensity(activeView !== 'tasks' && !eventList.childElementCount);
+        syncConversationDensity(activeView !== 'tasks' && eventList.childElementCount <= 3);
     }
 
     function applyFilter(nextView) {
@@ -580,7 +583,7 @@ function renderConversationDetail(container, params) {
             const status = String((event.metadata && event.metadata.status) || '');
             return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
         }
-        return ['message.user', 'message.bot', 'approval.requested', 'delegation.submitted', 'delegation.completed', 'error'].includes(kind);
+        return ['message.user', 'message.bot', 'approval.requested', 'delegation.proposed', 'delegation.submitted', 'delegation.completed', 'error'].includes(kind);
     }
 
     function visibleTimelineEvents(events) {
@@ -601,12 +604,6 @@ function renderConversationDetail(container, params) {
         const info = document.createElement('div');
         info.className = 'conversation-meta-copy';
 
-        const backLink = document.createElement('a');
-        backLink.href = '/ui/conversations';
-        backLink.className = 'conversation-back-link';
-        backLink.textContent = 'All conversations';
-        info.appendChild(backLink);
-
         const titleEl = document.createElement('h2');
         titleEl.className = 'conversation-meta-title';
         titleEl.textContent = title;
@@ -615,12 +612,15 @@ function renderConversationDetail(container, params) {
         const sub = document.createElement('div');
         sub.className = 'conversation-meta-subtitle';
         const parts = [];
-        if (data.target_display_name || data.target_agent_id) {
-            parts.push(`With ${data.target_display_name || data.target_agent_id}`);
+        const targetLabel = data.target_display_name || data.target_agent_id || '';
+        if (targetLabel && !String(title).toLowerCase().includes(String(targetLabel).toLowerCase())) {
+            parts.push(targetLabel);
         }
-        if (data.origin_channel) parts.push(`Started on ${data.origin_channel}`);
-        sub.textContent = parts.join(' \u00b7 ');
-        info.appendChild(sub);
+        if (data.origin_channel) parts.push(data.origin_channel);
+        if (parts.length) {
+            sub.textContent = parts.join(' \u00b7 ');
+            info.appendChild(sub);
+        }
         hero.appendChild(info);
 
         const statusWrap = document.createElement('div');
@@ -642,19 +642,18 @@ function renderConversationDetail(container, params) {
         const facts = document.createElement('div');
         facts.className = 'conversation-meta-facts';
         facts.dataset.key = 'meta-facts';
-        [
-            ['Agent', data.target_display_name || data.target_agent_id || '—'],
-            ['Source', data.origin_channel || 'registry'],
-            ['Reference', data.external_conversation_ref || '—'],
-            ['Events', data.event_count !== undefined ? String(data.event_count) : '—'],
-        ].forEach(([label, value]) => {
+        const factItems = [
+            data.external_conversation_ref ? `Ref ${data.external_conversation_ref}` : '',
+            data.event_count !== undefined ? `${data.event_count} event${Number(data.event_count) === 1 ? '' : 's'}` : '',
+        ].filter(Boolean);
+        factItems.forEach((value) => {
             const item = document.createElement('div');
-            item.className = 'conversation-meta-fact';
-            item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
+            item.className = 'conversation-meta-chip';
+            item.textContent = value;
             facts.appendChild(item);
         });
 
-        UI.reconcileChildren(metaCard, [hero, facts]);
+        UI.reconcileChildren(metaCard, factItems.length ? [hero, facts] : [hero]);
     }
 
     function renderTaskSummaryStrip(tasks) {
@@ -785,9 +784,9 @@ function renderConversationDetail(container, params) {
             if (!visibleEvents.length) {
                 UI.reconcileChildren(eventList, [UI.renderEmptyState(
                     activeView === 'conversation'
-                        ? 'No messages or routed-work milestones yet. Start below.'
+                        ? 'Start below.'
                         : activeView === 'activity'
-                            ? 'No activity yet.'
+                            ? 'No activity.'
                             : 'No events yet.',
                     true,
                 )]);
@@ -797,7 +796,7 @@ function renderConversationDetail(container, params) {
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
-                syncConversationDensity(false);
+                syncConversationDensity(activeView === 'conversation' && visibleEvents.length <= 3);
             }
             updateHistoryStatus();
             initHistoryObserver();
@@ -838,6 +837,7 @@ function renderConversationDetail(container, params) {
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || beforeSeq);
             updateSequenceState(events);
+            syncConversationDensity(activeView === 'conversation' && eventList.childElementCount <= 3);
             requestAnimationFrame(() => {
                 if (anchor && anchor.isConnected) {
                     const nextTop = anchor.getBoundingClientRect().top;
@@ -898,7 +898,7 @@ function renderConversationDetail(container, params) {
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId));
-        syncConversationDensity(false);
+        syncConversationDensity(activeView === 'conversation' && eventList.childElementCount <= 3);
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (meta) {
             meta.event_count = Number(meta.event_count || 0) + 1;

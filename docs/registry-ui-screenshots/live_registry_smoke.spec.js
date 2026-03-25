@@ -43,9 +43,8 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
   await expect(page.getByRole("heading", { name: /registry/i })).toBeVisible();
-  await expect(page.getByText("Operator workspace").first()).toBeVisible();
-  await expect(page.getByText("Blocking approvals").first()).toBeVisible();
-  await expect(page.getByText("Open conversations").first()).toBeVisible();
+  await expect(page.locator(".dashboard-summary-rail")).toBeVisible();
+  await expect(page.getByText("Operator workspace")).toHaveCount(0);
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
@@ -62,7 +61,8 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  await expect(page.getByText("Task board").first()).toBeVisible();
+  await expect(page.getByText("Task board")).toHaveCount(0);
+  await expect(page.locator(".task-summary-strip")).toBeVisible();
   await expect(page.getByText(EXISTING_TASK_TITLE).first()).toBeVisible();
   const existingTaskItem = page.locator(".task-list-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
   await existingTaskItem.locator(".task-summary-row").click();
@@ -74,6 +74,7 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.locator(".compose-hint")).toBeHidden();
   await expect(page.getByLabel("Message text")).toBeInViewport();
   await expect(page.locator(".conversation-panel-header")).toHaveCount(0);
+  await expect(page.locator(".conversation-back-link")).toHaveCount(0);
   await expect(page.locator(".chat-timeline")).toBeVisible();
   await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
   const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
@@ -109,10 +110,11 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
-  await expect(page.locator(".conversation-launcher-button")).toHaveCount(2);
+  await expect(page.getByText("Choose an agent")).toHaveCount(0);
+  await expect(page.locator(".conversation-launcher-chip")).toHaveCount(2);
   await Promise.all([
     page.waitForURL(/\/ui\/conversations\//, { timeout: 5000 }),
-    page.locator(".conversation-launcher-button").nth(0).click(),
+    page.locator(".conversation-launcher-chip").nth(0).click(),
   ]);
   await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 5000 });
   await expect(page.locator(".conversation-meta")).toBeVisible();

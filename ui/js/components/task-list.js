@@ -15,9 +15,18 @@ function renderTaskList(container) {
     let boardLoaded = false;
     let listLoaded = false;
 
+    const statusOptions = [
+        { label: 'All', value: '' },
+        { label: 'Queued', value: 'queued' },
+        { label: 'Running', value: 'running' },
+        { label: 'Done', value: 'completed' },
+        { label: 'Failed', value: 'failed' },
+        { label: 'Cancelled', value: 'cancelled' },
+    ];
+
     const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Tasks</h2><p>See queued, active, blocked, and completed delegated work without digging through raw activity.</p>';
+    header.className = 'page-header page-header-tight';
+    header.innerHTML = '<h2>Tasks</h2>';
     container.appendChild(header);
 
     const boardShell = document.createElement('section');
@@ -27,16 +36,11 @@ function renderTaskList(container) {
     const filterBar = document.createElement('div');
     filterBar.className = 'filter-bar';
 
-    const statusSelect = document.createElement('select');
-    statusSelect.setAttribute('aria-label', 'Filter task log by status');
-    statusSelect.innerHTML =
-        '<option value="">All statuses</option>' +
-        '<option value="queued">Queued</option>' +
-        '<option value="running">Running</option>' +
-        '<option value="completed">Completed</option>' +
-        '<option value="failed">Failed</option>' +
-        '<option value="cancelled">Cancelled</option>';
-    filterBar.appendChild(statusSelect);
+    const statusBar = document.createElement('div');
+    statusBar.className = 'segmented-control';
+    statusBar.setAttribute('role', 'tablist');
+    statusBar.setAttribute('aria-label', 'Filter task log by status');
+    filterBar.appendChild(statusBar);
     container.appendChild(filterBar);
 
     const listSection = document.createElement('section');
@@ -45,7 +49,7 @@ function renderTaskList(container) {
 
     const listHeader = document.createElement('div');
     listHeader.className = 'task-feed-header';
-    listHeader.innerHTML = '<strong>Task log</strong><span>Recent routed work with details, actions, and parent conversation links.</span>';
+    listHeader.innerHTML = '<strong>Recent</strong>';
     listSection.appendChild(listHeader);
 
     const listEl = document.createElement('div');
@@ -55,14 +59,30 @@ function renderTaskList(container) {
     const pagEl = document.createElement('div');
     listSection.appendChild(pagEl);
 
-    statusSelect.addEventListener('change', () => {
-        currentStatus = statusSelect.value;
-        cursor = 0;
-        cursorStack = [];
-        UI.updateQueryParams({ status: currentStatus });
-        loadList();
-    });
-    statusSelect.value = currentStatus;
+    function renderStatusFilters() {
+        const buttons = statusOptions.map((option) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `segmented-control-btn${option.value === currentStatus ? ' active' : ''}`;
+            btn.textContent = option.label;
+            btn.setAttribute('role', 'tab');
+            btn.setAttribute('aria-selected', String(option.value === currentStatus));
+            btn.tabIndex = option.value === currentStatus ? 0 : -1;
+            btn.dataset.key = option.value || 'all';
+            btn.addEventListener('click', () => {
+                if (option.value === currentStatus) return;
+                currentStatus = option.value;
+                cursor = 0;
+                cursorStack = [];
+                UI.updateQueryParams({ status: currentStatus });
+                renderStatusFilters();
+                loadList();
+            });
+            return btn;
+        });
+        UI.reconcileChildren(statusBar, buttons);
+    }
+    renderStatusFilters();
 
     function _taskSummary(task) {
         return task.result_summary || task.result_text || task.summary || task.instructions || '';
@@ -161,11 +181,6 @@ function renderTaskList(container) {
     }
 
     function renderBoard(tasks) {
-        const head = document.createElement('div');
-        head.className = 'task-feed-header';
-        head.dataset.key = 'board-header';
-        head.innerHTML = '<strong>Task board</strong><span>Grouped by current status so you can spot stalled or unhealthy work at a glance.</span>';
-
         const counts = {
             total: tasks.length,
             queued: tasks.filter((task) => ['queued', 'submitted', 'leased'].includes(task.status || '')).length,
@@ -197,9 +212,10 @@ function renderTaskList(container) {
             ['queued', 'Queued', ['queued', 'submitted', 'leased']],
             ['running', 'Running', ['running']],
             ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
-            ['done', 'Done', ['completed']],
         ];
-        lanes.forEach(([laneKey, title, statuses]) => {
+        const laneNodes = lanes.flatMap(([laneKey, title, statuses]) => {
+            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
+            if (!laneTasks.length) return [];
             const lane = document.createElement('section');
             lane.className = 'task-lane';
             lane.dataset.key = laneKey;
@@ -207,26 +223,31 @@ function renderTaskList(container) {
 
             const laneHeader = document.createElement('div');
             laneHeader.className = 'task-lane-header';
-            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
             laneHeader.innerHTML = `<strong>${UI.esc(title)}</strong><span>${laneTasks.length}</span>`;
             lane.appendChild(laneHeader);
 
             const laneBody = document.createElement('div');
             laneBody.className = 'task-lane-body';
-            if (!laneTasks.length) {
-                laneBody.appendChild(UI.renderEmptyState('Nothing here right now.', true));
-            } else {
-                laneTasks.slice(0, 12).forEach((task) => laneBody.appendChild(_createBoardTaskCard(task)));
-            }
+            laneTasks.slice(0, 12).forEach((task) => laneBody.appendChild(_createBoardTaskCard(task)));
             lane.appendChild(laneBody);
-            board.appendChild(lane);
+            return [lane];
         });
-        UI.reconcileChildren(boardShell, [head, summaryStrip, board]);
+
+        if (!tasks.length) {
+            UI.reconcileChildren(boardShell, [UI.renderEmptyState('No tasks.', true)]);
+            return;
+        }
+        if (!laneNodes.length) {
+            UI.reconcileChildren(boardShell, [summaryStrip, UI.renderEmptyState('No active tasks.', true)]);
+            return;
+        }
+        laneNodes.forEach((node) => board.appendChild(node));
+        UI.reconcileChildren(boardShell, [summaryStrip, board]);
     }
 
     function renderList(tasks, data) {
         if (tasks.length === 0) {
-            UI.reconcileChildren(listEl, [UI.renderEmptyState('No tasks match this filter.')]);
+            UI.reconcileChildren(listEl, [UI.renderEmptyState('No tasks.', true)]);
             UI.reconcileChildren(pagEl, []);
             return;
         }

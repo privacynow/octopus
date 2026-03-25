@@ -10,40 +10,36 @@ function renderDashboard(container) {
     }
 
     const header = document.createElement('div');
-    header.className = 'page-header page-header-hero';
-    header.innerHTML = '<h2>Registry</h2><p>Start with the next blocked decision, then move the active work queues.</p>';
+    header.className = 'page-header page-header-tight';
+    header.innerHTML = '<h2>Registry</h2>';
     container.appendChild(header);
 
     const content = document.createElement('div');
     content.className = 'dashboard-shell';
     container.appendChild(content);
 
-    function pickPrimaryAction(summary) {
-        if ((summary.conversations?.pending_approvals || 0) > 0) {
-            return ['/ui/approvals', 'Approvals are blocking work.'];
-        }
-        if ((summary.tasks?.failed_24h || 0) > 0) {
-            return ['/ui/tasks', 'Failed delegated work needs follow-up.'];
-        }
-        if ((summary.agents?.degraded || 0) > 0 || (summary.agents?.disconnected || 0) > 0) {
-            return ['/ui/agents', 'Agent health needs review.'];
-        }
-        return ['/ui/conversations', 'Active conversations need operator attention.'];
-    }
-
-    function createPreviewList(key, title, subtitle, emptyText, items, href) {
+    function createPreviewList(key, title, emptyText, items, href, count = null) {
         const section = document.createElement('section');
         section.className = 'card dashboard-section';
         section.dataset.key = key;
 
         const head = document.createElement('div');
         head.className = 'dashboard-section-header';
-        head.innerHTML = `<div><strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span></div>`;
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'dashboard-section-title';
+        titleWrap.innerHTML = `<strong>${UI.esc(title)}</strong>`;
+        if (count !== null) {
+            const countBadge = document.createElement('span');
+            countBadge.className = 'dashboard-section-count';
+            countBadge.textContent = String(count);
+            titleWrap.appendChild(countBadge);
+        }
+        head.appendChild(titleWrap);
         if (href) {
             const link = document.createElement('a');
             link.href = href;
             link.className = 'section-link';
-            link.textContent = 'View all';
+            link.textContent = 'Open';
             head.appendChild(link);
         }
         section.appendChild(head);
@@ -81,54 +77,29 @@ function renderDashboard(container) {
     }
 
     function renderDashboardView(summary, approvalsData, conversationsData, tasksData, agentsData) {
-        const [primaryHref, primaryCopy] = pickPrimaryAction(summary);
-
-        const commandCard = document.createElement('section');
-        commandCard.className = 'card dashboard-command';
-        commandCard.dataset.key = 'dashboard-command';
-        commandCard.innerHTML = `
-            <div class="dashboard-command-copy">
-                <h3>Operator workspace</h3>
-                <p>${UI.esc(primaryCopy)}</p>
-            </div>
-        `;
-        const commandActions = document.createElement('div');
-        commandActions.className = 'dashboard-command-actions';
-        const primaryAction = document.createElement('a');
-        primaryAction.href = primaryHref;
-        primaryAction.className = 'btn btn-primary';
-        primaryAction.textContent = 'Open next queue';
-        const secondaryAction = document.createElement('a');
-        secondaryAction.href = '/ui/conversations?status=open';
-        secondaryAction.className = 'btn';
-        secondaryAction.textContent = 'Open conversations';
-        commandActions.appendChild(primaryAction);
-        commandActions.appendChild(secondaryAction);
-        commandCard.appendChild(commandActions);
-
         const summaryRail = document.createElement('div');
         summaryRail.className = 'dashboard-summary-rail';
         summaryRail.dataset.key = 'dashboard-summary';
         const approvalsCard = UI.renderStatCard({
             value: String(summary.conversations?.pending_approvals || 0),
-            label: 'Pending approvals',
-            detail: 'Blocking decisions',
+            label: 'Approvals',
+            detail: 'Waiting',
             href: '/ui/approvals',
         });
         approvalsCard.dataset.key = 'pending-approvals';
         summaryRail.appendChild(approvalsCard);
         const runningCard = UI.renderStatCard({
             value: String(summary.tasks?.running || 0),
-            label: 'Running tasks',
-            detail: `${summary.tasks?.pending || 0} queued or submitted`,
+            label: 'Running',
+            detail: `${summary.tasks?.pending || 0} queued`,
             href: '/ui/tasks?status=running',
         });
         runningCard.dataset.key = 'running-tasks';
         summaryRail.appendChild(runningCard);
         const followUpCard = UI.renderStatCard({
             value: String(summary.tasks?.failed_24h || 0),
-            label: 'Needs follow-up',
-            detail: 'Failed in the last 24h',
+            label: 'Follow-up',
+            detail: 'Last 24h',
             href: '/ui/tasks?status=failed',
         });
         followUpCard.dataset.key = 'needs-follow-up';
@@ -158,14 +129,16 @@ function renderDashboard(container) {
             badgeClass: 'badge badge-queued',
             href: '/ui/approvals',
         }));
-        workGrid.appendChild(createPreviewList(
-            'blocking-approvals',
-            'Blocking approvals',
-            'Requests that need an operator decision right now.',
-            'Nothing is blocked on approval.',
-            approvalRows,
-            '/ui/approvals',
-        ));
+        if (approvalRows.length) {
+            workGrid.appendChild(createPreviewList(
+                'blocking-approvals',
+                'Approvals',
+                'Clear',
+                approvalRows,
+                '/ui/approvals',
+                approvalsData.approvals ? approvalsData.approvals.length : approvalRows.length,
+            ));
+        }
 
         const conversationRows = (conversationsData.conversations || []).map((item) => createPreviewRow({
             key: item.conversation_id,
@@ -178,14 +151,16 @@ function renderDashboard(container) {
             badgeClass: `badge badge-${item.status || 'open'}`,
             href: '/ui/conversations/' + item.conversation_id,
         }));
-        workGrid.appendChild(createPreviewList(
-            'open-conversations',
-            'Open conversations',
-            'The most recently updated live threads.',
-            'No open conversations right now.',
-            conversationRows,
-            '/ui/conversations?status=open',
-        ));
+        if (conversationRows.length) {
+            workGrid.appendChild(createPreviewList(
+                'open-conversations',
+                'Conversations',
+                'Quiet',
+                conversationRows,
+                '/ui/conversations?status=open',
+                conversationsData.conversations ? conversationsData.conversations.length : conversationRows.length,
+            ));
+        }
 
         const taskRows = (tasksData.tasks || []).map((item) => createPreviewRow({
             key: item.routed_task_id,
@@ -198,14 +173,16 @@ function renderDashboard(container) {
             badgeClass: `badge badge-${item.status || 'failed'}`,
             href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
         }));
-        workGrid.appendChild(createPreviewList(
-            'task-follow-up',
-            'Task follow-up',
-            'Failed or stalled work that needs a next step.',
-            'No failed delegated work right now.',
-            taskRows,
-            '/ui/tasks',
-        ));
+        if (taskRows.length) {
+            workGrid.appendChild(createPreviewList(
+                'task-follow-up',
+                'Tasks',
+                'Clear',
+                taskRows,
+                '/ui/tasks',
+                tasksData.tasks ? tasksData.tasks.length : taskRows.length,
+            ));
+        }
 
         const riskyAgents = (agentsData.agents || agentsData || []).filter((item) => ['degraded', 'disconnected', 'offline'].includes(item.connectivity_state || ''));
         const agentRows = riskyAgents.map((item) => createPreviewRow({
@@ -220,16 +197,27 @@ function renderDashboard(container) {
             badgeClass: `badge badge-${item.connectivity_state || 'connected'}`,
             href: '/ui/agents/' + item.agent_id,
         }));
-        workGrid.appendChild(createPreviewList(
-            'agents-at-risk',
-            'Agents at risk',
-            'Connectivity or health problems that can stall work.',
-            'All visible agents look healthy.',
-            agentRows,
-            '/ui/agents',
-        ));
+        if (agentRows.length) {
+            workGrid.appendChild(createPreviewList(
+                'agents-at-risk',
+                'Agents',
+                'Healthy',
+                agentRows,
+                '/ui/agents',
+                riskyAgents.length,
+            ));
+        }
 
-        UI.reconcileChildren(content, [commandCard, summaryRail, workGrid]);
+        if (!workGrid.childElementCount) {
+            const quiet = document.createElement('section');
+            quiet.className = 'card dashboard-section dashboard-section-quiet';
+            quiet.dataset.key = 'dashboard-quiet';
+            quiet.appendChild(UI.renderEmptyState('Quiet', true));
+            workGrid.appendChild(quiet);
+        }
+        workGrid.classList.toggle('dashboard-work-grid-single', workGrid.childElementCount <= 1);
+
+        UI.reconcileChildren(content, [summaryRail, workGrid]);
     }
 
     let hasLoaded = false;

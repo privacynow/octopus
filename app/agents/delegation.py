@@ -12,6 +12,7 @@ from app.agents.registry_capabilities import registry_id_from_authority_ref
 from app.agents.state import runtime_registry_agent_id
 from app.config import BotConfig
 from octopus_sdk.agent_directory import AgentDirectoryPort
+from octopus_sdk.identity import normalize_conversation_id
 from octopus_sdk.registry.models import RoutedTaskRequest
 from octopus_sdk.task_routing import TaskRoutingPort
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
@@ -241,7 +242,9 @@ async def handle_delegation_approve(
                 return
             request = RoutedTaskRequest(
                 routed_task_id=task.routed_task_id,
-                parent_conversation_id=delegation.conversation_ref,
+                parent_conversation_id=normalize_conversation_id(
+                    delegation.conversation_ref
+                ),
                 origin_agent_id=origin_agent_id,
                 target_agent_id=task.target_agent_id,
                 title=task.title,

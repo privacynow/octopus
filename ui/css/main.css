@@ -1985,24 +1985,27 @@ a.stat-card:hover {
     min-height: calc(100vh - 6rem);
 }
 
-.conversation-screen > .page-header {
-    margin-bottom: var(--space-3);
-}
-
 .conversation-page {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: var(--space-3);
     flex: 1;
     min-height: 0;
 }
 
 .conversation-page.conversation-page-compact {
-    grid-template-rows: auto auto auto;
+    grid-template-rows: auto auto;
+}
+
+.conversation-shell {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
 }
 
 .conversation-meta {
-    padding: var(--space-3);
+    display: grid;
+    gap: var(--space-3);
 }
 
 .conversation-meta-hero {
@@ -2010,27 +2013,53 @@ a.stat-card:hover {
     align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
-    margin-bottom: var(--space-3);
+}
+
+.conversation-meta-copy {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.conversation-back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.conversation-back-link:hover {
+    color: var(--accent);
+}
+
+.conversation-meta-title {
+    margin: 0;
+    font-size: clamp(1.55rem, 2vw, 2rem);
+    line-height: 1.12;
+}
+
+.conversation-meta-subtitle {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
 }
 
 .conversation-meta-facts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
 }
 
 .conversation-meta-fact {
-    padding: 0.72rem 0.85rem;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg-tertiary);
 }
 
 .conversation-meta-fact span {
-    display: block;
     color: var(--text-muted);
-    font-size: 0.78rem;
-    margin-bottom: 0.35rem;
+    font-size: 0.76rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -2038,6 +2067,7 @@ a.stat-card:hover {
 .conversation-meta-fact strong {
     color: var(--text);
     word-break: break-word;
+    font-size: 0.92rem;
 }
 
 .meta-badge-stack {
@@ -2075,21 +2105,6 @@ a.stat-card:hover {
 
 .conversation-panel.conversation-panel-compact {
     height: auto;
-}
-
-.conversation-panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border);
-}
-
-.conversation-panel-header span {
-    display: block;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-    margin-top: 0.2rem;
 }
 
 .chat-timeline {
@@ -2195,6 +2210,85 @@ a.stat-card:hover {
     background: rgba(150, 67, 39, 0.08);
     color: var(--text);
     font-size: 0.92rem;
+}
+
+.conversation-toolbar-shell {
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
+    margin-bottom: 0;
+}
+
+.conversation-launcher-panel {
+    padding: var(--space-4);
+}
+
+.conversation-launcher {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.conversation-launcher-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: flex-start;
+}
+
+.conversation-launcher-head strong {
+    display: block;
+    font-size: 1rem;
+}
+
+.conversation-launcher-head span {
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+}
+
+.conversation-launcher-links {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.conversation-launcher-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.conversation-launcher-button {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 12rem;
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.conversation-launcher-button:hover,
+.conversation-launcher-button:focus-visible {
+    border-color: rgba(150, 67, 39, 0.35);
+    box-shadow: var(--shadow-soft);
+    transform: translateY(-1px);
+}
+
+.conversation-launcher-button strong {
+    font-size: 0.97rem;
+}
+
+.conversation-launcher-button span {
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+}
+
+.conversation-launcher-button.busy {
+    opacity: 0.72;
 }
 
 .compose-suggestions {
@@ -2883,12 +2977,20 @@ a.stat-card:hover {
         align-items: stretch;
     }
 
+    .conversation-launcher-head,
+    .toolbar-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .conversation-launcher-links,
     .toolbar-actions {
         margin-left: 0;
         width: 100%;
         justify-content: flex-start;
     }
 
+    .conversation-launcher-button,
     .toolbar-actions > * {
         flex: 1 1 0;
         min-width: 0;
@@ -2901,6 +3003,10 @@ a.stat-card:hover {
     .conversation-meta-hero,
     .approval-card-header {
         flex-direction: column;
+    }
+
+    .conversation-shell {
+        padding: var(--space-3);
     }
 
     .conversation-meta-facts,

@@ -22,6 +22,8 @@ function renderConversationDetail(container, params) {
         'message.user',
         'message.bot',
         'approval.requested',
+        'delegation.submitted',
+        'delegation.completed',
         'error',
         'task.status',
     ];
@@ -31,22 +33,21 @@ function renderConversationDetail(container, params) {
     let suggestionIndex = -1;
     let suggestionEngine = null;
 
-    const header = document.createElement('div');
-    header.className = 'page-header page-header-tight';
-    header.innerHTML = `<h2>Conversation</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
-    container.appendChild(header);
-
     const page = document.createElement('section');
     page.className = 'conversation-page';
     container.appendChild(page);
 
+    const shell = document.createElement('section');
+    shell.className = 'card conversation-shell';
+    page.appendChild(shell);
+
     const metaCard = document.createElement('div');
-    metaCard.className = 'card conversation-meta';
-    page.appendChild(metaCard);
+    metaCard.className = 'conversation-meta';
+    shell.appendChild(metaCard);
 
     const toolbar = document.createElement('div');
-    toolbar.className = 'conversation-toolbar';
-    page.appendChild(toolbar);
+    toolbar.className = 'conversation-toolbar conversation-toolbar-shell';
+    shell.appendChild(toolbar);
 
     const filterGroup = document.createElement('div');
     filterGroup.className = 'segmented-control';
@@ -111,11 +112,6 @@ function renderConversationDetail(container, params) {
     timelinePanel.setAttribute('role', 'tabpanel');
     timelinePanel.setAttribute('aria-labelledby', allBtn.id);
     layout.appendChild(timelinePanel);
-
-    const timelineHeader = document.createElement('div');
-    timelineHeader.className = 'conversation-panel-header';
-    timelineHeader.innerHTML = '<div><strong>Conversation</strong><span>Replies, approvals, delegation milestones, and errors</span></div>';
-    timelinePanel.appendChild(timelineHeader);
 
     const timeline = document.createElement('div');
     timeline.className = 'chat-timeline';
@@ -291,17 +287,6 @@ function renderConversationDetail(container, params) {
     }
 
     function updateTimelineHeader() {
-        const label = activeView === 'conversation'
-            ? 'Conversation'
-            : activeView === 'tasks'
-                ? 'Tasks'
-                : 'Full activity';
-        const subtitle = activeView === 'conversation'
-            ? 'Operator messages, agent replies, completed work, approval requests, and problems'
-            : activeView === 'tasks'
-                ? 'Delegated work for this conversation'
-                : 'Every stored event, including provider and tool activity';
-        timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
         allBtn.classList.toggle('active', activeView === 'conversation');
         tasksBtn.classList.toggle('active', activeView === 'tasks');
         messagesBtn.classList.toggle('active', activeView === 'activity');
@@ -313,6 +298,7 @@ function renderConversationDetail(container, params) {
         messagesBtn.tabIndex = activeView === 'activity' ? 0 : -1;
         const labelledBy = activeView === 'tasks' ? tasksBtn.id : activeView === 'activity' ? messagesBtn.id : allBtn.id;
         timelinePanel.setAttribute('aria-labelledby', labelledBy);
+        timelinePanel.dataset.view = activeView;
         timeline.hidden = activeView === 'tasks';
         taskView.hidden = activeView !== 'tasks';
         syncConversationDensity(activeView !== 'tasks' && !eventList.childElementCount);
@@ -594,7 +580,7 @@ function renderConversationDetail(container, params) {
             const status = String((event.metadata && event.metadata.status) || '');
             return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
         }
-        return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(kind);
+        return ['message.user', 'message.bot', 'approval.requested', 'delegation.submitted', 'delegation.completed', 'error'].includes(kind);
     }
 
     function visibleTimelineEvents(events) {
@@ -608,20 +594,26 @@ function renderConversationDetail(container, params) {
     function renderMetaCard(data) {
         meta = data;
         const title = data.title || convoId;
-        header.innerHTML = `<h2>${UI.esc(title)}</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
-
         const hero = document.createElement('div');
         hero.className = 'conversation-meta-hero';
         hero.dataset.key = 'meta-hero';
 
         const info = document.createElement('div');
-        const titleEl = document.createElement('div');
-        titleEl.className = 'card-title';
+        info.className = 'conversation-meta-copy';
+
+        const backLink = document.createElement('a');
+        backLink.href = '/ui/conversations';
+        backLink.className = 'conversation-back-link';
+        backLink.textContent = 'All conversations';
+        info.appendChild(backLink);
+
+        const titleEl = document.createElement('h2');
+        titleEl.className = 'conversation-meta-title';
         titleEl.textContent = title;
         info.appendChild(titleEl);
 
         const sub = document.createElement('div');
-        sub.className = 'card-subtitle';
+        sub.className = 'conversation-meta-subtitle';
         const parts = [];
         if (data.target_display_name || data.target_agent_id) {
             parts.push(`With ${data.target_display_name || data.target_agent_id}`);
@@ -724,8 +716,7 @@ function renderConversationDetail(container, params) {
 
     async function loadRelatedTasks({ soft = false } = {}) {
         if (!soft || !tasksLoaded) {
-            taskBoard.textContent = '';
-            UI.renderSkeletons(taskBoard, 4, 'card');
+            UI.reconcileChildren(taskBoard, UI.createSkeletonNodes(4, 'card'));
         }
         try {
             const data = await API.listTasks({
@@ -736,8 +727,7 @@ function renderConversationDetail(container, params) {
             renderRelatedTasks(relatedTasks);
             tasksLoaded = true;
         } catch (err) {
-            taskBoard.textContent = '';
-            UI.renderError(taskBoard, 'Failed to load conversation tasks: ' + err.message, loadRelatedTasks);
+            UI.reconcileChildren(taskBoard, [UI.createErrorCard('Failed to load conversation tasks: ' + err.message, loadRelatedTasks)]);
         }
     }
 
@@ -747,8 +737,7 @@ function renderConversationDetail(container, params) {
         hasMoreBefore = false;
         loadingOlder = false;
         historyStatus.textContent = '';
-        eventList.textContent = '';
-        UI.renderSkeletons(eventList, 4, 'card');
+        UI.reconcileChildren(eventList, UI.createSkeletonNodes(4, 'card'));
     }
 
     function updateHistoryStatus() {
@@ -772,8 +761,7 @@ function renderConversationDetail(container, params) {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
         } catch (err) {
-            metaCard.textContent = '';
-            UI.renderError(metaCard, 'Failed to load conversation metadata', loadConversation);
+            UI.reconcileChildren(metaCard, [UI.createErrorCard('Failed to load conversation metadata', loadConversation)]);
         }
     }
 
@@ -795,10 +783,14 @@ function renderConversationDetail(container, params) {
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || 0);
             latestSeq = Number(result.next_after_seq || (events[events.length - 1] && events[events.length - 1].seq) || 0);
             if (!visibleEvents.length) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No events yet';
-                UI.reconcileChildren(eventList, [empty]);
+                UI.reconcileChildren(eventList, [UI.renderEmptyState(
+                    activeView === 'conversation'
+                        ? 'No messages or routed-work milestones yet. Start below.'
+                        : activeView === 'activity'
+                            ? 'No activity yet.'
+                            : 'No events yet.',
+                    true,
+                )]);
                 syncConversationDensity(activeView === 'conversation');
             } else {
                 UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId)));
@@ -810,8 +802,7 @@ function renderConversationDetail(container, params) {
             updateHistoryStatus();
             initHistoryObserver();
         } catch (err) {
-            eventList.textContent = '';
-            UI.renderError(eventList, 'Failed to load events: ' + err.message, reloadEvents);
+            UI.reconcileChildren(eventList, [UI.createErrorCard('Failed to load events: ' + err.message, reloadEvents)]);
             syncConversationDensity(false);
         }
     }
@@ -914,7 +905,14 @@ function renderConversationDetail(container, params) {
             meta.updated_at = event.created_at || meta.updated_at;
             renderMetaCard(meta);
         }
-        if (event.kind === 'message.user' || event.kind === 'message.bot' || event.kind === 'approval.requested' || event.kind === 'task.status') {
+        if (
+            event.kind === 'message.user'
+            || event.kind === 'message.bot'
+            || event.kind === 'approval.requested'
+            || event.kind === 'delegation.submitted'
+            || event.kind === 'delegation.completed'
+            || event.kind === 'task.status'
+        ) {
             liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
         }
         if (
@@ -1100,7 +1098,7 @@ function _createConversationEventElement(event, convoId) {
             break;
     }
 
-    const startExpanded = kind === 'approval.requested';
+    const startExpanded = kind === 'approval.requested' || kind === 'delegation.submitted';
     body.classList.toggle('expanded', startExpanded);
     header.setAttribute('aria-expanded', String(startExpanded));
     header.addEventListener('click', () => {

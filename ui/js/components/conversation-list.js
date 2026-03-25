@@ -10,6 +10,8 @@ function renderConversationList(container) {
     let currentStatus = UI.readQueryParam('status', '');
     let searchTimeout = null;
     let hasLoaded = false;
+    let quickStartLoaded = false;
+    let openingConversationFor = '';
 
     // Header
     const header = document.createElement('div');
@@ -17,20 +19,9 @@ function renderConversationList(container) {
     header.innerHTML = '<h2>Conversations</h2><p>Follow active threads, send replies, and jump into work that still needs a decision.</p>';
     container.appendChild(header);
 
-    const actions = document.createElement('div');
-    actions.className = 'action-bar';
-    const newBtn = document.createElement('a');
-    newBtn.className = 'btn btn-primary';
-    newBtn.href = '/ui/agents';
-    newBtn.textContent = 'Choose an agent';
-    actions.appendChild(newBtn);
-
-    const approvalLink = document.createElement('a');
-    approvalLink.href = '/ui/approvals';
-    approvalLink.className = 'btn';
-    approvalLink.textContent = 'Review approvals';
-    actions.appendChild(approvalLink);
-    container.appendChild(actions);
+    const quickStart = document.createElement('section');
+    quickStart.className = 'card conversation-launcher-panel';
+    container.appendChild(quickStart);
 
     // Filter bar
     const filterBar = document.createElement('div');
@@ -103,11 +94,104 @@ function renderConversationList(container) {
         UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
     }
 
+    function renderQuickStart(agents) {
+        const shell = document.createElement('div');
+        shell.className = 'conversation-launcher';
+        shell.dataset.key = 'launcher-shell';
+
+        const head = document.createElement('div');
+        head.className = 'conversation-launcher-head';
+        head.innerHTML = '<div><strong>Start or reopen with</strong><span>Jump straight into a conversation with a connected agent.</span></div>';
+        const links = document.createElement('div');
+        links.className = 'conversation-launcher-links';
+
+        const allAgents = document.createElement('a');
+        allAgents.href = '/ui/agents';
+        allAgents.className = 'section-link';
+        allAgents.textContent = 'All agents';
+        links.appendChild(allAgents);
+
+        const approvals = document.createElement('a');
+        approvals.href = '/ui/approvals';
+        approvals.className = 'section-link';
+        approvals.textContent = 'Review approvals';
+        links.appendChild(approvals);
+
+        head.appendChild(links);
+        shell.appendChild(head);
+
+        const launcherList = document.createElement('div');
+        launcherList.className = 'conversation-launcher-list';
+        launcherList.dataset.key = 'launcher-list';
+
+        if (!agents.length) {
+            launcherList.appendChild(UI.renderEmptyState('No connected agents are ready right now.', true));
+        } else {
+            agents.forEach((agent) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'conversation-launcher-button';
+                button.dataset.key = agent.agent_id;
+                button.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
+
+                const title = document.createElement('strong');
+                title.textContent = agent.display_name || agent.slug || agent.agent_id;
+                button.appendChild(title);
+
+                const subtitle = document.createElement('span');
+                subtitle.textContent = [
+                    agent.role || 'agent',
+                    agent.provider || '',
+                    agent.slug || '',
+                ].filter(Boolean).join(' · ');
+                button.appendChild(subtitle);
+
+                button.addEventListener('click', async () => {
+                    if (openingConversationFor === agent.agent_id) return;
+                    openingConversationFor = agent.agent_id;
+                    button.disabled = true;
+                    button.classList.add('busy');
+                    try {
+                        const conversation = await API.openConversationForAgent(agent.agent_id, {
+                            title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
+                        });
+                        Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                    } catch (err) {
+                        openingConversationFor = '';
+                        button.disabled = false;
+                        button.classList.remove('busy');
+                        UI.reportError('Failed to open a conversation for this agent', err, { context: 'Conversation list quick start failed' });
+                    }
+                });
+
+                launcherList.appendChild(button);
+            });
+        }
+
+        shell.appendChild(launcherList);
+        UI.reconcileChildren(quickStart, [shell]);
+    }
+
+    function loadQuickStart({ soft = false } = {}) {
+        if (!soft || !quickStartLoaded) {
+            UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
+        }
+        API.listAgents({ state: 'connected', limit: 8 }).then((data) => {
+            renderQuickStart(data.agents || data || []);
+            quickStartLoaded = true;
+        }).catch((err) => {
+            if (soft && quickStartLoaded) {
+                UI.reportError('Failed to refresh connected agents', err, { context: 'Conversation quick start soft refresh failed' });
+                return;
+            }
+            UI.reconcileChildren(quickStart, [UI.createErrorCard('Failed to load connected agents: ' + err.message, loadQuickStart)]);
+        });
+    }
+
     function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
-            listEl.textContent = '';
-            UI.renderSkeletons(listEl, 5, 'row');
-            pagEl.textContent = '';
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+            UI.reconcileChildren(pagEl, []);
         }
 
         const params = { cursor, limit };
@@ -171,17 +255,22 @@ function renderConversationList(container) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });
                 return;
             }
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed: ' + err.message, loadPage)]);
+            UI.reconcileChildren(pagEl, []);
         });
     }
 
+    loadQuickStart();
     loadPage();
 
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('conversations', () => {
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
+    }));
+    cleanups.add(WS.subscribe('agents', () => {
+        clearTimeout(reloadDebounce);
+        reloadDebounce = setTimeout(() => loadQuickStart({ soft: true }), 400);
     }));
 
     cleanups.add(() => clearTimeout(searchTimeout));

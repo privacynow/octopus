@@ -79,9 +79,8 @@ function renderAgentList(container) {
 
     function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
-            listEl.textContent = '';
-            UI.renderSkeletons(listEl, 5, 'row');
-            pagEl.textContent = '';
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+            UI.reconcileChildren(pagEl, []);
         }
 
         API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then(data => {
@@ -89,15 +88,15 @@ function renderAgentList(container) {
             renderCards(agents, data.has_more, data.next_cursor);
             hasLoaded = true;
         }).catch(err => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed to load agents: ' + err.message, loadPage);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load agents: ' + err.message, loadPage)]);
+            UI.reconcileChildren(pagEl, []);
         });
     }
 
     function renderCards(agents, hasMore, nextCursor) {
         if (agents.length === 0) {
             UI.reconcileChildren(listEl, [UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled')]);
-            pagEl.textContent = '';
+            UI.reconcileChildren(pagEl, []);
             return;
         }
 
@@ -157,8 +156,8 @@ function renderAgentList(container) {
         UI.reconcileChildren(listEl, rows);
 
         // Pagination
-        pagEl.textContent = '';
-        UI.renderPagination(pagEl, {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!hasMore,
             info: '',
@@ -172,6 +171,7 @@ function renderAgentList(container) {
                 loadPage();
             },
         });
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
     }
 
     let reloadDebounce = null;

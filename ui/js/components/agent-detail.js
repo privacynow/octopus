@@ -49,20 +49,15 @@ function renderAgentDetail(container, params) {
     const content = document.createElement('div');
     content.id = 'agent-detail-content';
     container.appendChild(content);
-    UI.renderSkeletons(content, 3, 'card');
+    UI.reconcileChildren(content, UI.createSkeletonNodes(3, 'card'));
 
     function loadDetail({ soft = false } = {}) {
         if (!soft || !detailLoaded) {
-            content.textContent = '';
-            UI.renderSkeletons(content, 3, 'card');
+            UI.reconcileChildren(content, UI.createSkeletonNodes(3, 'card'));
         }
         API.getAgentStatus(agentId).then(status => {
             if (!status) {
-                content.textContent = '';
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'Agent not found';
-                content.appendChild(empty);
+                UI.reconcileChildren(content, [UI.renderEmptyState('Agent not found')]);
                 return;
             }
             const a = status.agent || status;
@@ -73,10 +68,8 @@ function renderAgentDetail(container, params) {
             const workers = status.workers || [];
 
             // Update header
-            header.textContent = '';
             const h2 = document.createElement('h2');
             h2.textContent = a.display_name || a.slug;
-            header.appendChild(h2);
 
             const p = document.createElement('p');
             const badge = document.createElement('span');
@@ -85,7 +78,7 @@ function renderAgentDetail(container, params) {
             badge.textContent = a.connectivity_state || 'unknown';
             p.textContent = (a.role || 'agent') + ' \u00b7 ' + (a.provider || '') + ' ';
             p.appendChild(badge);
-            header.appendChild(p);
+            UI.reconcileChildren(header, [h2, p]);
 
             // Info card
             const infoCard = document.createElement('div');
@@ -219,8 +212,7 @@ function renderAgentDetail(container, params) {
             detailLoaded = true;
 
         }).catch(err => {
-            content.textContent = '';
-            UI.renderError(content, 'Failed to load agent: ' + err.message, loadDetail);
+            UI.reconcileChildren(content, [UI.createErrorCard('Failed to load agent: ' + err.message, loadDetail)]);
         });
     }
 
@@ -229,15 +221,14 @@ function renderAgentDetail(container, params) {
         const pag = document.getElementById('agent-convos-pag');
         if (!list) return;
         if (!soft || !conversationsLoaded) {
-            list.textContent = '';
             list.className = 'list-container';
-            UI.renderSkeletons(list, 3, 'row');
+            UI.reconcileChildren(list, UI.createSkeletonNodes(3, 'row'));
+            if (pag) UI.reconcileChildren(pag, []);
         }
 
         API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit }).then(data => {
             const convos = data.conversations || data || [];
-            list.textContent = '';
-            if (pag) pag.textContent = '';
+            if (pag) UI.reconcileChildren(pag, []);
 
             if (convos.length === 0) {
                 UI.reconcileChildren(list, [UI.renderEmptyState('No conversations')]);
@@ -264,7 +255,8 @@ function renderAgentDetail(container, params) {
             UI.reconcileChildren(list, rows);
 
             if (pag) {
-                UI.renderPagination(pag, {
+                const wrapper = document.createElement('div');
+                UI.renderPagination(wrapper, {
                     hasPrev: convosCursorStack.length > 0,
                     hasNext: !!data.has_more,
                     info: '',
@@ -278,11 +270,12 @@ function renderAgentDetail(container, params) {
                         loadConversations();
                     },
                 });
+                UI.reconcileChildren(pag, Array.from(wrapper.childNodes));
             }
             conversationsLoaded = true;
         }).catch(err => {
-            list.textContent = '';
-            UI.renderError(list, 'Failed to load conversations: ' + err.message, loadConversations);
+            UI.reconcileChildren(list, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadConversations)]);
+            if (pag) UI.reconcileChildren(pag, []);
         });
     }
 
@@ -342,37 +335,39 @@ function renderAgentConversations(container, params) {
     container.appendChild(pagEl);
 
     function loadPage() {
-        listEl.textContent = '';
         listEl.className = 'list-container';
-        UI.renderSkeletons(listEl, 5, 'row');
+        UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+        UI.reconcileChildren(pagEl, []);
 
         API.getAgentConversations(agentId, { cursor, limit }).then(data => {
             const convos = data.conversations || data || [];
-            listEl.textContent = '';
-            pagEl.textContent = '';
 
             if (convos.length === 0) {
-                listEl.appendChild(UI.renderEmptyState('No conversations'));
+                UI.reconcileChildren(listEl, [UI.renderEmptyState('No conversations')]);
                 return;
             }
 
-            convos.forEach(c => {
+            const rows = convos.map((c) => {
                 const sub = document.createElement('span');
                 const ts = document.createElement('span');
                 ts.setAttribute('data-timestamp', c.created_at || '');
                 ts.textContent = UI.relativeTime(c.created_at);
                 sub.appendChild(document.createTextNode((c.origin_channel || '') + ' \u00b7 '));
                 sub.appendChild(ts);
-                listEl.appendChild(UI.renderListRow({
+                const row = UI.renderListRow({
                     href: '/ui/conversations/' + c.conversation_id,
                     label: c.title || c.conversation_id,
                     sublabelNode: sub,
                     badgeText: c.status || 'open',
                     badgeClass: 'badge-' + (c.status || 'open'),
-                }));
+                });
+                row.dataset.key = c.conversation_id;
+                return row;
             });
+            UI.reconcileChildren(listEl, rows);
 
-            UI.renderPagination(pagEl, {
+            const wrapper = document.createElement('div');
+            UI.renderPagination(wrapper, {
                 hasPrev: cursorStack.length > 0,
                 hasNext: !!data.has_more,
                 info: '',
@@ -386,9 +381,10 @@ function renderAgentConversations(container, params) {
                     loadPage();
                 },
             });
+            UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
         }).catch(err => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed: ' + err.message, loadPage)]);
+            UI.reconcileChildren(pagEl, []);
         });
     }
 

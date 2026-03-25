@@ -227,7 +227,7 @@ function renderTaskList(container) {
     function renderList(tasks, data) {
         if (tasks.length === 0) {
             UI.reconcileChildren(listEl, [UI.renderEmptyState('No tasks match this filter.')]);
-            pagEl.textContent = '';
+            UI.reconcileChildren(pagEl, []);
             return;
         }
 
@@ -321,8 +321,8 @@ function renderTaskList(container) {
         });
         UI.reconcileChildren(listEl, items);
 
-        pagEl.textContent = '';
-        UI.renderPagination(pagEl, {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!data.has_more,
             info: '',
@@ -336,27 +336,25 @@ function renderTaskList(container) {
                 loadList();
             },
         });
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
     }
 
     function loadBoard({ soft = false } = {}) {
         if (!soft || !boardLoaded) {
-            boardShell.textContent = '';
-            UI.renderSkeletons(boardShell, 4, 'card');
+            UI.reconcileChildren(boardShell, UI.createSkeletonNodes(4, 'card'));
         }
         API.listTasks({ limit: 100 }).then((data) => {
             renderBoard(data.tasks || data || []);
             boardLoaded = true;
         }).catch((err) => {
-            boardShell.textContent = '';
-            UI.renderError(boardShell, 'Failed to load task board: ' + err.message, loadBoard);
+            UI.reconcileChildren(boardShell, [UI.createErrorCard('Failed to load task board: ' + err.message, loadBoard)]);
         });
     }
 
     function loadList({ soft = false } = {}) {
         if (!soft || !listLoaded) {
-            listEl.textContent = '';
-            UI.renderSkeletons(listEl, 5, 'row');
-            pagEl.textContent = '';
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+            UI.reconcileChildren(pagEl, []);
         }
 
         const params = { cursor, limit };
@@ -366,8 +364,8 @@ function renderTaskList(container) {
             renderList(data.tasks || data || [], data);
             listLoaded = true;
         }).catch((err) => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed to load tasks: ' + err.message, loadList);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load tasks: ' + err.message, loadList)]);
+            UI.reconcileChildren(pagEl, []);
         });
     }
 

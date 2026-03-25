@@ -302,13 +302,36 @@ window.UI = (() => {
         return card;
     }
 
-    function renderSkeletons(container, count, type) {
+    function createSkeletonNodes(count, type) {
         const cls = type === 'row' ? 'skeleton skeleton-row' : 'skeleton skeleton-card';
-        for (let i = 0; i < count; i++) {
+        return Array.from({ length: count }, (_, index) => {
             const div = document.createElement('div');
             div.className = cls;
-            container.appendChild(div);
+            div.dataset.key = `skeleton-${type}-${index}`;
+            return div;
+        });
+    }
+
+    function renderSkeletons(container, count, type) {
+        createSkeletonNodes(count, type).forEach((node) => container.appendChild(node));
+    }
+
+    function createErrorCard(message, retryFn) {
+        const card = document.createElement('div');
+        card.className = 'error-card';
+        card.dataset.key = `error-${safeFilename(message || 'error')}`;
+        const p = document.createElement('p');
+        p.textContent = message;
+        card.appendChild(p);
+        if (retryFn) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-primary';
+            btn.textContent = 'Retry';
+            btn.addEventListener('click', retryFn);
+            card.appendChild(btn);
         }
+        return card;
     }
 
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
@@ -359,20 +382,7 @@ window.UI = (() => {
     }
 
     function renderError(container, message, retryFn) {
-        const card = document.createElement('div');
-        card.className = 'error-card';
-        const p = document.createElement('p');
-        p.textContent = message;
-        card.appendChild(p);
-        if (retryFn) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'btn btn-primary';
-            btn.textContent = 'Retry';
-            btn.addEventListener('click', retryFn);
-            card.appendChild(btn);
-        }
-        container.appendChild(card);
+        container.appendChild(createErrorCard(message, retryFn));
     }
 
     function showConfirm(title, message, onConfirm) {
@@ -479,9 +489,11 @@ window.UI = (() => {
         renderSettingsRow,
         renderEmptyState,
         renderStatCard,
+        createSkeletonNodes,
         renderSkeletons,
         renderPagination,
         reconcileChildren,
+        createErrorCard,
         renderError,
         showConfirm,
     };

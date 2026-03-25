@@ -236,8 +236,7 @@ function renderDashboard(container) {
 
     function loadSummary({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
-            content.textContent = '';
-            UI.renderSkeletons(content, 5, 'card');
+            UI.reconcileChildren(content, UI.createSkeletonNodes(5, 'card'));
         }
         Promise.all([
             API.getSummary(),
@@ -253,8 +252,7 @@ function renderDashboard(container) {
                 UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });
                 return;
             }
-            content.textContent = '';
-            UI.renderError(content, 'Failed to load dashboard: ' + err.message, loadSummary);
+            UI.reconcileChildren(content, [UI.createErrorCard('Failed to load dashboard: ' + err.message, loadSummary)]);
         });
     }
 

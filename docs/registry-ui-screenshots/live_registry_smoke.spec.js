@@ -73,6 +73,7 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
   await expect(page.locator(".compose-hint")).toBeHidden();
   await expect(page.getByLabel("Message text")).toBeInViewport();
+  await expect(page.locator(".conversation-panel-header")).toHaveCount(0);
   await expect(page.locator(".chat-timeline")).toBeVisible();
   await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
   const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
@@ -98,6 +99,7 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
   await page.getByRole("button", { name: "Assign" }).click();
   await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle, { timeout: 5000 });
+  await expect(page.locator(".timeline-events")).toContainText("Delegated work started", { timeout: 5000 });
   await page.getByRole("tab", { name: "Tasks" }).click();
   await expect(page.locator(".conversation-task-view")).not.toHaveAttribute("hidden", "");
   await expect(page.locator(".chat-timeline")).toHaveAttribute("hidden", "");
@@ -107,6 +109,14 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
+  await expect(page.locator(".conversation-launcher-button")).toHaveCount(2);
+  await Promise.all([
+    page.waitForURL(/\/ui\/conversations\//, { timeout: 5000 }),
+    page.locator(".conversation-launcher-button").nth(0).click(),
+  ]);
+  await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 5000 });
+  await expect(page.locator(".conversation-meta")).toBeVisible();
+  await page.goto("/ui/conversations");
   await expect(page.getByText(EXISTING_BASIC_TITLE).first()).toBeVisible();
   await expect(page.getByText(DELEGATION_CONVERSATION_TITLE).first()).toBeVisible();
   const csrf = await fetchCsrf(page);

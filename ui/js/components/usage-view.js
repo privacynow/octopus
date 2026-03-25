@@ -69,10 +69,8 @@ function renderUsageView(container) {
 
     function loadUsage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
-            summaryEl.textContent = '';
-            tableEl.textContent = '';
-            UI.renderSkeletons(summaryEl, 1, 'card');
-            UI.renderSkeletons(tableEl, 3, 'row');
+            UI.reconcileChildren(summaryEl, UI.createSkeletonNodes(1, 'card'));
+            UI.reconcileChildren(tableEl, UI.createSkeletonNodes(3, 'row'));
         }
 
         const params = _rangeToParams(currentRange);
@@ -160,9 +158,8 @@ function renderUsageView(container) {
                 UI.reportError('Failed to refresh usage', err, { context: 'Usage soft refresh failed' });
                 return;
             }
-            summaryEl.textContent = '';
-            tableEl.textContent = '';
-            UI.renderError(tableEl, 'Failed: ' + err.message, loadUsage);
+            UI.reconcileChildren(summaryEl, []);
+            UI.reconcileChildren(tableEl, [UI.createErrorCard('Failed: ' + err.message, loadUsage)]);
         });
     }
 

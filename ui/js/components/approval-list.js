@@ -21,9 +21,8 @@ function renderApprovalList(container) {
     container.appendChild(pagEl);
 
     function setLoading() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 4, 'card');
-        pagEl.textContent = '';
+        UI.reconcileChildren(listEl, UI.createSkeletonNodes(4, 'card'));
+        UI.reconcileChildren(pagEl, []);
     }
 
     function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
@@ -175,8 +174,8 @@ function renderApprovalList(container) {
                 UI.reportError('Failed to refresh approvals', err, { context: 'Approval list soft refresh failed' });
                 return;
             }
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed to load approvals: ' + err.message, loadPage);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load approvals: ' + err.message, loadPage)]);
+            UI.reconcileChildren(pagEl, []);
         });
     }
 

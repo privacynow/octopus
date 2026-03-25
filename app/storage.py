@@ -13,7 +13,7 @@ from app.workflows.delegation.contracts import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
-from app.session_defaults import default_session  # re-export for callers
+from octopus_sdk.sessions import default_session  # re-export for callers
 
 
 # ---------------------------------------------------------------------------

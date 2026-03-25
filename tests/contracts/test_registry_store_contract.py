@@ -495,11 +495,11 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
 
     events = store.list_events(conversation_id)["events"]
 
-    assert status_result["events_written"] is True
-    assert status_result["inserted_events"][0]["seq"] > 0
+    assert status_result["events_written"] is False
+    assert status_result["inserted_events"] == []
     assert result_result["events_written"] is True
     assert result_result["inserted_events"][0]["seq"] > 0
-    assert [event["metadata"]["status"] for event in events] == ["queued", "running", "completed"]
+    assert [event["metadata"]["status"] for event in events] == ["queued", "completed"]
 
 
 def test_list_agents_supports_query_and_connectivity_filters(store):

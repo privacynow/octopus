@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import InvalidToken, NetworkError
 
-from octopus_sdk.config import RegistryConnectionConfig
-from app.config import PUBLISH_LEVEL_KINDS, _parse_projects, load_config, load_dotenv_file, parse_allowed_users, should_publish_event, validate_config
+from octopus_sdk.config import BotConfigBase, RegistryConnectionConfig
+from app.config import BotConfig, PUBLISH_LEVEL_KINDS, _parse_projects, load_config, load_dotenv_file, parse_allowed_users, should_publish_event, validate_config
 from app.runtime.services import BotServices
 from octopus_sdk.sessions import ProjectBinding
 from tests.support.config_support import make_config, make_registry_connection
@@ -23,6 +23,10 @@ from tests.support.config_support import make_config, make_registry_connection
 @pytest.fixture(autouse=True)
 def _normalize_codex_sandbox_env(monkeypatch):
     monkeypatch.setenv("CODEX_SANDBOX", "workspace-write")
+
+
+def test_bot_config_extends_sdk_base() -> None:
+    assert issubclass(BotConfig, BotConfigBase)
 
 
 # -- load_dotenv_file --

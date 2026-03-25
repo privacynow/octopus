@@ -27,11 +27,58 @@ from octopus_sdk.runtime_dispatch import (
     run_provider_request,
 )
 from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
-from octopus_sdk import user_messages as _msg
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 
 _log = logging.getLogger(__name__)
 _DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
+
+
+def _progress_working() -> str:
+    return "Working…"
+
+
+def _progress_resuming() -> str:
+    return "Resuming…"
+
+
+def _cancel_live_completed() -> str:
+    return "Cancelled."
+
+
+def _progress_request_timed_out(seconds: int) -> str:
+    return f"Request timed out after {seconds} seconds."
+
+
+def _progress_session_not_resumed() -> str:
+    return "\n\n<i>Session could not be resumed — your next message will start fresh.</i>"
+
+
+def _progress_completed_with_blocked() -> str:
+    return "Completed, but some actions were blocked."
+
+
+def _progress_completed() -> str:
+    return "Completed."
+
+
+def _approval_already_waiting() -> str:
+    return "A plan is already waiting. Use /approve or /reject first."
+
+
+def _approval_preparing() -> str:
+    return "Preparing your plan…"
+
+
+def _approval_timeout() -> str:
+    return "Preparing the plan took too long."
+
+
+def _approval_check_failed_prefix() -> str:
+    return "Plan check failed:"
+
+
+def _approval_required() -> str:
+    return "Review the plan below, then approve or reject."
 
 
 @dataclass(frozen=True)
@@ -420,7 +467,7 @@ async def execute_request(
         image_count=len(image_paths),
         prompt_char_count=len(provider_request_content),
     )
-    label = _msg.progress_resuming() if is_resume else _msg.progress_working()
+    label = _progress_resuming() if is_resume else _progress_working()
 
     dispatched = await run_provider_request(
         conversation_key,
@@ -440,7 +487,7 @@ async def execute_request(
     if result.cancelled:
         session.provider_state.update(result.provider_state_updates)
         _save(runtime, conversation_key, session)
-        await progress.update(_msg.cancel_live_completed(), force=True)
+        await progress.update(_cancel_live_completed(), force=True)
         return RequestExecutionOutcome(status="cancelled")
 
     if runtime.dispatch.run_result_was_interrupted(result.returncode):
@@ -468,20 +515,20 @@ async def execute_request(
         await event_sink.on_tool_execution(record, index=index)
 
     if result.timed_out:
-        await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
+        await progress.update(_progress_request_timed_out(cfg.timeout_seconds), force=True)
         return RequestExecutionOutcome(status="timed_out")
 
     if result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
         error_text = runtime.render_provider_error(error_text)
         if result.resume_failed:
-            error_text += runtime.render_provider_error(_msg.progress_session_not_resumed())
+            error_text += runtime.render_provider_error(_progress_session_not_resumed())
         await progress.update(error_text, force=True)
         await event_sink.on_error(error_text, error_type="provider_error", message=error_text[:500])
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
-        await progress.update(_msg.progress_completed_with_blocked(), force=True)
+        await progress.update(_progress_completed_with_blocked(), force=True)
         session = _load(runtime, conversation_key)
         session.pending_retry = PendingRetry(
             actor_key=transport.actor,
@@ -547,7 +594,7 @@ async def execute_request(
             result=result,
         )
 
-    await progress.update(_msg.progress_completed(), force=True)
+    await progress.update(_progress_completed(), force=True)
     cleaned_reply, directives = extract_send_directives(result.text)
     slot = runtime.services.artifacts.save_raw(conversation_key, prompt, cleaned_reply)
 
@@ -623,7 +670,7 @@ async def request_approval(
     session = _load(runtime, conversation_key)
 
     if session.has_pending:
-        await message.reply_text(_msg.approval_already_waiting())
+        await message.reply_text(_approval_already_waiting())
         return
 
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
@@ -659,7 +706,7 @@ async def request_approval(
         message=message,
         context=preflight_context,
         cancel_event=cancel_event,
-        label=_msg.approval_preparing(),
+        label=_approval_preparing(),
         runtime=runtime.dispatch,
         timeline_callback=transport.timeline_callback,
     )
@@ -667,20 +714,20 @@ async def request_approval(
     plan_result = dispatched.result
 
     if plan_result.cancelled:
-        await progress.update(_msg.cancel_live_completed(), force=True)
+        await progress.update(_cancel_live_completed(), force=True)
         return
 
     if runtime.dispatch.run_result_was_interrupted(plan_result.returncode):
         raise runtime.interrupted_exc()
 
     if plan_result.timed_out:
-        await progress.update(_msg.approval_timeout(), force=True)
+        await progress.update(_approval_timeout(), force=True)
         return
 
     if plan_result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(plan_result.text, plan_result.returncode)
         rendered_error = runtime.render_provider_error(
-            f"{_msg.approval_check_failed_prefix()}\n{error_text}"
+            f"{_approval_check_failed_prefix()}\n{error_text}"
         )
         await progress.update(rendered_error, force=True)
         return
@@ -710,7 +757,7 @@ async def request_approval(
         request_id=_approval_event_id(conversation_key, session.pending_approval.callback_token),
     )
 
-    await progress.update(_msg.approval_required(), force=True)
+    await progress.update(_approval_required(), force=True)
     runtime.services.artifacts.save_raw(conversation_key, prompt, plan_text, kind="approval")
     await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
     await runtime.send_approval_prompt(message, session.pending_approval.callback_token)

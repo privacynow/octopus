@@ -101,11 +101,13 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
         agent_token="secret-token",
         poll_cursor="1",
         registered_slug="prod-bot",
+        registered_card_hash=state.registered_card_hash,
         connectivity_state="connected",
         last_successful_contact_at=state.last_successful_contact_at,
         last_error="",
         last_error_detail="",
     )
+    assert state.registered_card_hash
 
 
 async def test_agent_runtime_default_registry_persists_only_connection_state(tmp_path: Path):

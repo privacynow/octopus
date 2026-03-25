@@ -19,11 +19,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from octopus_sdk.execution_context import resolve_execution_context
-from octopus_sdk.user_messages import (
-    approval_context_changed,
-    approval_expired,
-    approval_expired_fallback,
-)
 from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
 
 if TYPE_CHECKING:
@@ -33,6 +28,18 @@ if TYPE_CHECKING:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _approval_expired(minutes: int) -> str:
+    return f"This request has expired (it was created {minutes} minutes ago). Please send your message again."
+
+
+def _approval_expired_fallback() -> str:
+    return "This request has expired."
+
+
+def _approval_context_changed() -> str:
+    return "This request can't continue because the chat context changed. Please send your message again."
 
 
 def _age_seconds(created_at: float | str, *, now: datetime) -> float | None:
@@ -65,7 +72,7 @@ def pending_expired(
     age = _age_seconds(created_at, now=_utc_now())
     if age is not None and age > ttl:
         minutes = int(age // 60)
-        return approval_expired(minutes)
+        return _approval_expired(minutes)
     return None
 
 
@@ -141,9 +148,9 @@ def validate_pending(
         catalog=catalog,
     )
     if kind == "expired":
-        return pending_expired(pending, config.timeout_seconds) or approval_expired_fallback()
+        return pending_expired(pending, config.timeout_seconds) or _approval_expired_fallback()
     if kind == "context_changed":
-        return approval_context_changed()
+        return _approval_context_changed()
     return None
 
 

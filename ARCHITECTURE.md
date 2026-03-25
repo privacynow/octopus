@@ -38,15 +38,31 @@ it shows code ownership boundaries and the main dependency direction between
 
 ```mermaid
 flowchart TB
-    Ops["Operator surfaces<br/>./octopus and Registry SPA"]
-    App["Application layer (app/)<br/>composition root, channels, providers,<br/>workflows, control-plane adapters"]
-    SDK["Shared SDK (octopus_sdk)<br/>contracts, runtime orchestration,<br/>registry client and models"]
-    Registry["Registry service<br/>HTTP, websocket, persistence"]
+    CLI["./octopus"]
+    UI["Registry SPA"]
+    Main["app/main"]
+    Telegram["Telegram transport"]
+    Slack["Slack transport (later)"]
+    Providers["Providers"]
+    Workflows["Workflows / adapters"]
+    SDK["octopus_sdk"]
+    Api["Registry API"]
+    Store["Registry store"]
 
-    Ops --> App
-    Ops --> Registry
-    App --> SDK
-    App --> Registry
+    CLI --> Main
+    UI --> Api
+    Main --> Api
+    Api --> Store
+
+    Main --> Telegram
+    Main --> Slack
+    Main --> Providers
+    Main --> Workflows
+
+    Telegram --> Api
+    Slack --> Api
+    Providers --> SDK
+    Workflows --> SDK
 ```
 
 ## Deployment And Process Model

@@ -73,7 +73,12 @@ test("live registry ui smoke", async ({ page }) => {
     openConversationButtons.nth(1).click(),
   ]);
   await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 5000 });
-  await expect(page.locator(".conversation-meta")).toContainText(SECONDARY_LABEL);
+  await expect(page.locator(".conversation-meta")).toContainText(`With ${SECONDARY_LABEL}`);
+  await expect(page.locator(".conversation-meta")).toContainText("Started in registry");
+  await expect(page.locator(".conversation-meta")).toContainText("Activity (");
+  await expect(page.locator(".conversation-meta")).not.toContainText("Agent");
+  await expect(page.locator(".conversation-meta")).not.toContainText("Source");
+  await expect(page.locator(".conversation-meta")).not.toContainText("Events");
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
@@ -125,7 +130,10 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
   await page.getByRole("button", { name: "Assign" }).click();
   await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle, { timeout: 5000 });
-  await expect(page.locator(".timeline-events")).toContainText("Delegated work started", { timeout: 5000 });
+  await expect(page.locator(".timeline-events")).toContainText("Task submitted", { timeout: 5000 });
+  await expect(page.locator(".conversation-meta")).toContainText(`Assigned to ${targetSelector.selectorValue}`, { timeout: 5000 });
+  await expect(page.locator(".timeline-events")).toContainText(`Assigned to ${targetSelector.selectorValue}`, { timeout: 5000 });
+  await expect(page.locator(".timeline-events")).not.toContainText(`${liveUiTaskTitle}${TARGET_AGENT_ID}`);
 
   await page.getByRole("tab", { name: "Tasks" }).click();
   await expect(page.locator(".conversation-task-view")).not.toHaveAttribute("hidden", "");
@@ -136,7 +144,7 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByRole("tab", { name: "Full activity" }).click();
   await expect(page.locator(".chat-timeline")).not.toHaveAttribute("hidden", "");
   await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
-  await expect(page.locator(".timeline-events")).toContainText("Delegated work started");
+  await expect(page.locator(".timeline-events")).toContainText("Task submitted");
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();

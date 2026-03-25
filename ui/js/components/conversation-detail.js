@@ -9,7 +9,9 @@ function renderConversationDetail(container, params) {
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
+        contentInner.classList.add('conversation-route-shell');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+        cleanups.add(() => contentInner.classList.remove('conversation-route-shell'));
     }
     let meta = null;
     let beforeSeq = 0;
@@ -605,18 +607,26 @@ function renderConversationDetail(container, params) {
         metaRow.dataset.key = 'meta-inline';
 
         const metaParts = [];
-        if (data.target_display_name || data.target_agent_id) {
-            metaParts.push(['Agent', data.target_display_name || data.target_agent_id]);
+        const conversationWith = String(data.target_display_name || data.target_agent_id || '').trim();
+        const assignedTo = _conversationAssignedTargetLabel(relatedTasks, conversationWith);
+        if (conversationWith) {
+            metaParts.push(`With ${conversationWith}`);
         }
-        metaParts.push(['Source', data.origin_channel || 'registry']);
-        if (data.external_conversation_ref) metaParts.push(['Ref', data.external_conversation_ref]);
-        if (data.event_count !== undefined) metaParts.push(['Events', String(data.event_count)]);
-        if (data.updated_at) metaParts.push(['Updated', UI.relativeTime(data.updated_at)]);
+        if (assignedTo) {
+            metaParts.push(`Assigned to ${assignedTo}`);
+        }
+        const originLabel = _originChannelLabel(data.origin_channel || 'registry');
+        if (originLabel) {
+            metaParts.push(`Started in ${originLabel}`);
+        }
+        if (data.updated_at) {
+            metaParts.push(`Updated ${UI.relativeTime(data.updated_at)}`);
+        }
 
-        metaParts.forEach(([label, value], index) => {
+        metaParts.forEach((value, index) => {
             const item = document.createElement('span');
-            item.className = label === 'Ref' ? 'meta-inline-item meta-inline-item-mono' : 'meta-inline-item';
-            item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
+            item.className = 'meta-inline-item meta-inline-statement';
+            item.textContent = value;
             metaRow.appendChild(item);
             if (index < metaParts.length - 1) {
                 const sep = document.createElement('span');
@@ -628,8 +638,43 @@ function renderConversationDetail(container, params) {
 
         const status = document.createElement('span');
         status.className = `badge badge-${data.status || 'open'}`;
-        status.textContent = data.status || 'open';
+        status.textContent = _formatConversationStatusLabel(data.status || 'open');
         metaRow.appendChild(status);
+
+        if (data.event_count !== undefined) {
+            const activityBtn = document.createElement('button');
+            activityBtn.type = 'button';
+            activityBtn.className = 'meta-inline-action';
+            activityBtn.textContent = `Activity (${String(data.event_count)})`;
+            activityBtn.addEventListener('click', () => applyFilter('activity'));
+            metaRow.appendChild(activityBtn);
+        }
+        if (data.external_conversation_ref) {
+            const copyRefBtn = document.createElement('button');
+            copyRefBtn.type = 'button';
+            copyRefBtn.className = 'meta-inline-action meta-inline-action-mono';
+            copyRefBtn.textContent = 'Copy ref';
+            copyRefBtn.title = data.external_conversation_ref;
+            copyRefBtn.addEventListener('click', async () => {
+                const ref = String(data.external_conversation_ref || '').trim();
+                if (!ref) return;
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(ref);
+                        copyRefBtn.textContent = 'Copied';
+                        setTimeout(() => {
+                            copyRefBtn.textContent = 'Copy ref';
+                        }, 1600);
+                    }
+                } catch {
+                    copyRefBtn.textContent = ref;
+                    setTimeout(() => {
+                        copyRefBtn.textContent = 'Copy ref';
+                    }, 2400);
+                }
+            });
+            metaRow.appendChild(copyRefBtn);
+        }
 
         UI.reconcileChildren(metaCard, [titleRow, metaRow]);
     }
@@ -695,8 +740,8 @@ function renderConversationDetail(container, params) {
         UI.reconcileChildren(taskBoard, laneNodes);
     }
 
-    async function loadRelatedTasks({ soft = false } = {}) {
-        if (!soft || !tasksLoaded) {
+    async function loadRelatedTasks({ soft = false, silent = false } = {}) {
+        if (activeView === 'tasks' && (!soft || !tasksLoaded)) {
             UI.reconcileChildren(taskBoard, UI.createSkeletonNodes(4, 'card'));
         }
         try {
@@ -705,10 +750,15 @@ function renderConversationDetail(container, params) {
                 limit: 100,
             });
             relatedTasks = data.tasks || data || [];
-            renderRelatedTasks(relatedTasks);
             tasksLoaded = true;
+            if (meta) renderMetaCard(meta);
+            if (activeView === 'tasks') {
+                renderRelatedTasks(relatedTasks);
+            }
         } catch (err) {
-            UI.reconcileChildren(taskBoard, [UI.createErrorCard('Failed to load conversation tasks: ' + err.message, loadRelatedTasks)]);
+            if (activeView === 'tasks' && !silent) {
+                UI.reconcileChildren(taskBoard, [UI.createErrorCard('Failed to load conversation tasks: ' + err.message, loadRelatedTasks)]);
+            }
         }
     }
 
@@ -774,7 +824,7 @@ function renderConversationDetail(container, params) {
                 )]);
                 syncConversationDensityForCurrentView();
             } else {
-                UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId)));
+                UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId, relatedTasks)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -812,7 +862,7 @@ function renderConversationDetail(container, params) {
                 if (empty) empty.remove();
                 const fragment = document.createDocumentFragment();
                 visibleEvents.forEach((event) => {
-                    fragment.appendChild(_createConversationEventElement(event, convoId));
+                    fragment.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
                 });
                 eventList.prepend(fragment);
             }
@@ -878,7 +928,7 @@ function renderConversationDetail(container, params) {
         const shouldStick = isNearBottom();
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
-        eventList.appendChild(_createConversationEventElement(event, convoId));
+        eventList.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (meta) {
@@ -916,6 +966,7 @@ function renderConversationDetail(container, params) {
     if (activeView === 'tasks') {
         loadRelatedTasks();
     } else {
+        loadRelatedTasks({ soft: true, silent: true });
         reloadEvents();
     }
     cleanups.add(() => clearTimeout(progressTimer));
@@ -1007,7 +1058,7 @@ function _writeConversationViewParam(activeView) {
     }
 }
 
-function _createConversationEventElement(event, convoId) {
+function _createConversationEventElement(event, convoId, taskContext = []) {
     const kind = event.kind || '';
     if (kind === 'message.user' || kind === 'message.bot') {
         return _renderMessageBubble(event, kind);
@@ -1025,19 +1076,20 @@ function _createConversationEventElement(event, convoId) {
     titleGroup.className = 'event-card-heading';
     const title = document.createElement('span');
     title.className = 'kind';
-    title.textContent = _eventKindLabel(kind);
+    title.textContent = _eventPrimaryLabel(event);
     titleGroup.appendChild(title);
-    if (event.actor) {
+    const actorLabel = _eventActorLabel(event);
+    if (actorLabel) {
         const actor = document.createElement('span');
         actor.className = 'event-card-actor';
-        actor.textContent = event.actor;
+        actor.textContent = actorLabel;
         titleGroup.appendChild(actor);
     }
     header.appendChild(titleGroup);
 
     const summary = document.createElement('span');
     summary.className = 'event-summary';
-    summary.textContent = _eventSummary(kind, event);
+    summary.textContent = _eventSummary(kind, event, taskContext);
     header.appendChild(summary);
 
     const time = document.createElement('span');
@@ -1071,7 +1123,7 @@ function _createConversationEventElement(event, convoId) {
         case 'delegation.proposed':
         case 'delegation.submitted':
         case 'delegation.completed':
-            _renderDelegationCard(body, metadata);
+            _renderDelegationCard(body, kind, metadata, taskContext);
             break;
         case 'task.status':
             _renderTaskStatusCard(body, event, metadata, convoId);
@@ -1084,7 +1136,7 @@ function _createConversationEventElement(event, convoId) {
             break;
     }
 
-    const startExpanded = kind === 'approval.requested' || kind === 'delegation.submitted';
+    const startExpanded = kind === 'approval.requested';
     body.classList.toggle('expanded', startExpanded);
     header.setAttribute('aria-expanded', String(startExpanded));
     header.addEventListener('click', () => {
@@ -1267,27 +1319,51 @@ function _renderApprovalDecidedCard(body, metadata) {
     ]));
 }
 
-function _renderDelegationCard(body, metadata) {
+function _renderDelegationCard(body, kind, metadata, taskContext = []) {
     const tasks = Array.isArray(metadata.tasks) ? metadata.tasks : [];
     if (!tasks.length) {
         _renderGenericMetadata(body, metadata);
         return;
     }
-    const list = document.createElement('ul');
-    list.className = 'delegation-list';
+    const list = document.createElement('div');
+    list.className = 'delegation-milestone-list';
     tasks.forEach((task) => {
-        const item = document.createElement('li');
-        item.innerHTML = `<strong>${UI.esc(task.title || '')}</strong><span>${UI.esc(task.target || '')}</span><em>${UI.esc(task.status || '')}</em>`;
+        const item = document.createElement('div');
+        item.className = 'delegation-milestone-item';
+        const title = document.createElement('strong');
+        title.textContent = task.title || 'Delegated task';
+        item.appendChild(title);
+        const meta = document.createElement('span');
+        meta.className = 'delegation-milestone-meta';
+        const parts = [];
+        const target = _delegationTaskTargetLabel(task, taskContext);
+        if (target) {
+            parts.push(kind === 'delegation.completed' ? `Handled by ${target}` : `Assigned to ${target}`);
+        }
+        const status = _taskStatusPhrase(task.status || '');
+        if (kind === 'delegation.completed' && status) {
+            parts.push(status);
+        }
+        meta.textContent = parts.join(' · ');
+        if (meta.textContent) {
+            item.appendChild(meta);
+        }
         list.appendChild(item);
     });
     body.appendChild(list);
 }
 
 function _renderTaskStatusCard(body, event, metadata, convoId) {
-    body.appendChild(_metadataGrid([
-        ['Status', metadata.status || ''],
-        ['Progress', metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '—'],
-    ]));
+    const status = String(metadata.status || '').trim();
+    const progressValue = metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '';
+    const facts = [];
+    if (progressValue) facts.push(['Progress', progressValue]);
+    if (status && !['completed', 'failed', 'cancelled', 'timed_out'].includes(status)) {
+        facts.push(['State', _taskStatusPhrase(status)]);
+    }
+    if (facts.length) {
+        body.appendChild(_metadataGrid(facts));
+    }
     if (metadata.progress !== null && metadata.progress !== undefined) {
         const progress = document.createElement('div');
         progress.className = 'progress-track';
@@ -1300,11 +1376,10 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Update</strong><p>${UI.esc(event.content)}</p>`;
+        content.innerHTML = `<p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
     const taskId = String(metadata.routed_task_id || '').trim();
-    const status = String(metadata.status || '').trim();
     if (taskId && ['queued', 'submitted', 'leased', 'running', 'failed', 'cancelled', 'timed_out'].includes(status)) {
         const actions = document.createElement('div');
         actions.className = 'task-action-row';
@@ -1513,7 +1588,7 @@ function _createInlineMetric(value, label) {
     return metric;
 }
 
-function _eventSummary(kind, event) {
+function _eventSummary(kind, event, taskContext = []) {
     const metadata = event.metadata || {};
     switch (kind) {
         case 'provider.request':
@@ -1536,13 +1611,24 @@ function _eventSummary(kind, event) {
         case 'delegation.proposed':
         case 'delegation.submitted':
         case 'delegation.completed': {
-            const tasks = Array.isArray(metadata.tasks) ? metadata.tasks.length : 0;
-            const label = kind.split('.')[1];
-            return `${tasks} task${tasks === 1 ? '' : 's'} ${label}`;
+            const tasks = Array.isArray(metadata.tasks) ? metadata.tasks : [];
+            const targets = _uniqueDelegationTargets(tasks, taskContext);
+            if (kind === 'delegation.submitted' && targets.length === 1) {
+                return `Assigned to ${targets[0]}`;
+            }
+            if (kind === 'delegation.completed' && targets.length === 1) {
+                return `Finished by ${targets[0]}`;
+            }
+            const taskCount = tasks.length;
+            if (taskCount) {
+                const label = kind === 'delegation.completed' ? 'finished' : kind === 'delegation.proposed' ? 'proposed' : 'submitted';
+                return `${taskCount} task${taskCount === 1 ? '' : 's'} ${label}`;
+            }
+            return '';
         }
         case 'task.status':
             return [
-                metadata.status || 'update',
+                _taskStatusSummary(event),
                 metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '',
             ].filter(Boolean).join(' · ');
         case 'error':
@@ -1582,4 +1668,134 @@ function _eventCardClass(kind) {
     if (kind === 'task.status') return 'task';
     if (kind === 'error') return 'error';
     return 'generic';
+}
+
+function _eventPrimaryLabel(event) {
+    const kind = event.kind || '';
+    const metadata = event.metadata || {};
+    if (kind === 'delegation.submitted') return 'Task submitted';
+    if (kind === 'delegation.completed') return 'Delegated work finished';
+    if (kind === 'delegation.proposed') return 'Delegation proposed';
+    if (kind === 'task.status') {
+        const status = String(metadata.status || '').trim();
+        if (status === 'completed') return 'Task completed';
+        if (['failed', 'cancelled', 'timed_out'].includes(status)) return 'Task needs follow-up';
+        if (status === 'running') return 'Task in progress';
+        if (['queued', 'submitted', 'leased'].includes(status)) return 'Task queued';
+    }
+    return _eventKindLabel(kind);
+}
+
+function _eventActorLabel(event) {
+    const kind = event.kind || '';
+    if (['delegation.proposed', 'delegation.submitted', 'delegation.completed', 'task.status'].includes(kind)) {
+        return '';
+    }
+    return event.actor || '';
+}
+
+function _delegationTaskTargetLabel(task, taskContext = []) {
+    const routedTaskId = String(task.routed_task_id || '').trim();
+    if (routedTaskId) {
+        const match = (Array.isArray(taskContext) ? taskContext : []).find((candidate) => String(candidate.routed_task_id || '').trim() === routedTaskId);
+        if (match) {
+            return String(
+                match.target_display_name
+                || match.target
+                || match.target_agent_id
+                || ''
+            ).trim();
+        }
+    }
+    const targetAgentId = String(task.target_agent_id || task.target || '').trim();
+    if (targetAgentId) {
+        const matchByTarget = (Array.isArray(taskContext) ? taskContext : []).find((candidate) => {
+            const candidateTarget = String(candidate.target_agent_id || candidate.target || '').trim();
+            return candidateTarget && candidateTarget === targetAgentId;
+        });
+        if (matchByTarget) {
+            return String(
+                matchByTarget.target_display_name
+                || matchByTarget.target
+                || matchByTarget.target_agent_id
+                || ''
+            ).trim();
+        }
+    }
+    return String(
+        task.target_display_name
+        || task.target
+        || task.target_agent_id
+        || task.authority_ref
+        || ''
+    ).trim();
+}
+
+function _uniqueDelegationTargets(tasks, taskContext = []) {
+    return Array.from(new Set(
+        (Array.isArray(tasks) ? tasks : [])
+            .map((task) => _delegationTaskTargetLabel(task, taskContext))
+            .filter(Boolean)
+    ));
+}
+
+function _taskStatusPhrase(status) {
+    const value = String(status || '').trim().toLowerCase();
+    switch (value) {
+        case 'queued':
+            return 'Queued';
+        case 'submitted':
+            return 'Submitted';
+        case 'leased':
+            return 'Leased';
+        case 'running':
+            return 'Running';
+        case 'completed':
+            return 'Completed';
+        case 'failed':
+            return 'Failed';
+        case 'cancelled':
+            return 'Cancelled';
+        case 'timed_out':
+            return 'Timed out';
+        default:
+            return value ? value.charAt(0).toUpperCase() + value.slice(1) : '';
+    }
+}
+
+function _taskStatusSummary(event) {
+    const metadata = event.metadata || {};
+    const status = String(metadata.status || '').trim().toLowerCase();
+    const content = String(event.content || '').trim().split('\n')[0].trim();
+    if (status === 'completed' && content) {
+        return content.slice(0, 96);
+    }
+    return _taskStatusPhrase(status || 'update');
+}
+
+function _originChannelLabel(originChannel) {
+    const value = String(originChannel || '').trim();
+    return value || '';
+}
+
+function _formatConversationStatusLabel(status) {
+    const value = String(status || '').trim().toLowerCase();
+    if (!value) return 'Open';
+    return value.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function _conversationAssignedTargetLabel(tasks, conversationWith) {
+    const normalizedWith = String(conversationWith || '').trim().toLowerCase();
+    const sorted = (Array.isArray(tasks) ? tasks.slice() : []).sort((left, right) => {
+        const leftStamp = Date.parse(String(left.updated_at || left.created_at || '')) || 0;
+        const rightStamp = Date.parse(String(right.updated_at || right.created_at || '')) || 0;
+        return rightStamp - leftStamp;
+    });
+    const preferred = sorted.find((task) => ['queued', 'submitted', 'leased', 'running'].includes(String(task.status || '')))
+        || sorted[0];
+    if (!preferred) return '';
+    const label = _delegationTaskTargetLabel(preferred);
+    if (!label) return '';
+    if (normalizedWith && label.toLowerCase() === normalizedWith) return '';
+    return label;
 }

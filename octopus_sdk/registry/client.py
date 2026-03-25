@@ -257,10 +257,14 @@ class RegistryClient:
         request: RoutedTaskRequest | Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = _validated_model(request, RoutedTaskRequest)
+        body = payload.model_dump(exclude_unset=True)
+        # created_at is server-visible request identity and must survive the client dump
+        # even when populated by the model default.
+        body["created_at"] = payload.created_at
         return await self._request(
             "POST",
             "/v1/agents/routed-tasks",
-            json=payload.model_dump(exclude_unset=True),
+            json=body,
         )
 
     async def routed_task_status(
@@ -269,10 +273,14 @@ class RegistryClient:
         update: RoutedTaskUpdate | Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = _validated_model(update, RoutedTaskUpdate)
+        body = payload.model_dump(exclude_unset=True)
+        # The routed task id is carried in the URL path; the registry rejects it in the body.
+        body.pop("routed_task_id", None)
+        body["updated_at"] = payload.updated_at
         return await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/status",
-            json=payload.model_dump(exclude_unset=True),
+            json=body,
         )
 
     async def routed_task_result(
@@ -281,10 +289,14 @@ class RegistryClient:
         result: RoutedTaskResult | Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = _validated_model(result, RoutedTaskResult)
+        body = payload.model_dump(exclude_unset=True)
+        # The routed task id is carried in the URL path; the registry rejects it in the body.
+        body.pop("routed_task_id", None)
+        body["completed_at"] = payload.completed_at
         return await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/result",
-            json=payload.model_dump(exclude_unset=True),
+            json=body,
         )
 
     async def poll(

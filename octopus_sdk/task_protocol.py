@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Iterable, Literal
 
 from statemachine import State, StateMachine
 
@@ -26,6 +26,25 @@ TaskTransition = Literal[
     "cancel",
     "time_out",
 ]
+DelegatedTaskStatus = Literal[
+    "pending",
+    "proposed",
+    "submitted",
+    "queued",
+    "leased",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+]
+PendingDelegationStatus = Literal[
+    "proposed",
+    "submitted",
+    "completed",
+    "partial_failed",
+    "cancelled",
+]
 
 ROUTED_TASK_STATES = frozenset(
     {
@@ -38,6 +57,25 @@ ROUTED_TASK_STATES = frozenset(
         "timed_out",
     }
 )
+DELEGATED_TASK_STATES = frozenset({"pending", "proposed", "submitted", *ROUTED_TASK_STATES})
+DELEGATED_TASK_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "timed_out"})
+DELEGATED_TASK_ACTIVE_STATES = frozenset({"pending", "proposed", "submitted", "queued", "leased", "running"})
+PENDING_DELEGATION_TERMINAL_STATES = frozenset({"completed", "partial_failed", "cancelled"})
+
+_ROUTED_ALLOWED_NEXT_STATES = {
+    "queued": frozenset({"queued", "leased", "completed", "failed", "cancelled", "timed_out"}),
+    "leased": frozenset({"leased", "running", "completed", "failed", "cancelled", "timed_out"}),
+    "running": frozenset({"running", "completed", "failed", "cancelled", "timed_out"}),
+    "completed": frozenset({"completed"}),
+    "failed": frozenset({"failed"}),
+    "cancelled": frozenset({"cancelled"}),
+    "timed_out": frozenset({"timed_out"}),
+}
+_PRE_ROUTED_ALLOWED_NEXT_STATES = {
+    "pending": frozenset({"pending", "submitted", *ROUTED_TASK_STATES}),
+    "proposed": frozenset({"proposed", "submitted", *ROUTED_TASK_STATES}),
+    "submitted": frozenset({"submitted", *ROUTED_TASK_STATES}),
+}
 
 
 @dataclass(frozen=True)
@@ -71,6 +109,49 @@ class TaskTransitionResult:
     reason: str = ""
     duplicate: bool = False
     new_version: int = 0
+
+
+def normalize_delegated_task_status(status: str) -> str:
+    text = (status or "").strip().lower()
+    return text or "proposed"
+
+
+def derive_pending_delegation_status(task_statuses: Iterable[str]) -> PendingDelegationStatus:
+    statuses = [normalize_delegated_task_status(status) for status in task_statuses]
+    if not statuses:
+        return "proposed"
+    if all(status in DELEGATED_TASK_TERMINAL_STATES for status in statuses):
+        if any(status != "completed" for status in statuses):
+            return "partial_failed"
+        return "completed"
+    if any(status in DELEGATED_TASK_ACTIVE_STATES for status in statuses):
+        return "submitted"
+    return "proposed"
+
+
+def validate_delegated_task_transition(current_status: str, next_status: str) -> TaskTransitionResult:
+    current = normalize_delegated_task_status(current_status)
+    target = normalize_delegated_task_status(next_status)
+    if current not in DELEGATED_TASK_STATES:
+        raise ValueError(f"unknown delegated-task state {current_status!r}")
+    if target not in DELEGATED_TASK_STATES:
+        raise ValueError(f"unknown delegated-task state {next_status!r}")
+    if current in _PRE_ROUTED_ALLOWED_NEXT_STATES:
+        allowed = _PRE_ROUTED_ALLOWED_NEXT_STATES[current]
+    else:
+        allowed = _ROUTED_ALLOWED_NEXT_STATES[current]
+    if target not in allowed:
+        return TaskTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=f"{current} cannot transition to {target}",
+        )
+    return TaskTransitionResult(
+        ok=True,
+        old_state=current,
+        new_state=target,
+    )
 
 
 class _TaskLifecycle(StateMachine):

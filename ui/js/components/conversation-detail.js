@@ -15,10 +15,6 @@ function renderConversationDetail(container, params) {
         'message.user',
         'message.bot',
         'approval.requested',
-        'approval.decided',
-        'delegation.proposed',
-        'delegation.submitted',
-        'delegation.completed',
         'error',
     ];
 
@@ -129,29 +125,19 @@ function renderConversationDetail(container, params) {
     composer.className = 'compose-box';
     timelinePanel.appendChild(composer);
 
-    const composeControls = document.createElement('div');
-    composeControls.className = 'compose-controls';
-    composer.appendChild(composeControls);
+    const composeMeta = document.createElement('div');
+    composeMeta.className = 'compose-meta';
+    composer.appendChild(composeMeta);
 
-    const modeSelect = document.createElement('select');
-    modeSelect.setAttribute('aria-label', 'Compose mode');
-    modeSelect.innerHTML =
-        '<option value="message">Message</option>' +
-        '<option value="direct_assign">Send directly</option>';
-    composeControls.appendChild(modeSelect);
+    const composeHint = document.createElement('div');
+    composeHint.className = 'compose-hint';
+    composeHint.textContent = 'Start with @m2, @cap:review, or @role:reviewer to route work directly.';
+    composeMeta.appendChild(composeHint);
 
-    const targetInput = document.createElement('input');
-    targetInput.type = 'text';
-    targetInput.placeholder = '@agent or @cap:capability or @role:role';
-    targetInput.setAttribute('aria-label', 'Direct target');
-    targetInput.hidden = true;
-    const targetListId = `conversation-targets-${UI.safeFilename(convoId)}`;
-    targetInput.setAttribute('list', targetListId);
-    composeControls.appendChild(targetInput);
-
-    const targetList = document.createElement('datalist');
-    targetList.id = targetListId;
-    composeControls.appendChild(targetList);
+    const targetPreview = document.createElement('div');
+    targetPreview.className = 'compose-target-preview';
+    targetPreview.hidden = true;
+    composeMeta.appendChild(targetPreview);
 
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Send a message to this conversation';
@@ -167,29 +153,62 @@ function renderConversationDetail(container, params) {
     sendBtn.setAttribute('aria-label', 'Send message');
     composer.appendChild(sendBtn);
 
-    let progressTimer = null;
+    const suggestionList = document.createElement('div');
+    suggestionList.className = 'compose-suggestions';
+    suggestionList.hidden = true;
+    composer.appendChild(suggestionList);
 
-    function updateComposeMode() {
-        const direct = modeSelect.value === 'direct_assign';
-        targetInput.hidden = !direct;
-        textarea.placeholder = direct
-            ? 'Describe the delegated task'
-            : 'Send a message to this conversation';
-    }
+    let progressTimer = null;
+    let availableTargets = [];
+    let latestSuggestionToken = '';
 
     async function loadTargetSuggestions() {
         try {
-            const data = await API.listAgents({ state: 'connected', limit: 100 });
-            const agents = data.agents || data || [];
-            targetList.textContent = '';
+            const [agentData, capabilityData] = await Promise.all([
+                API.listAgents({ state: 'connected', limit: 100 }),
+                API.listCapabilities().catch(() => []),
+            ]);
+            const agents = agentData.agents || agentData || [];
+            const capabilities = capabilityData.capabilities || capabilityData || [];
+            const seen = new Set();
+            availableTargets = [];
             agents.forEach((agent) => {
-                const option = document.createElement('option');
-                option.value = '@' + (agent.slug || agent.agent_id || '');
-                targetList.appendChild(option);
+                const slug = (agent.slug || agent.agent_id || '').trim();
+                if (!slug || seen.has(`agent:${slug}`)) return;
+                seen.add(`agent:${slug}`);
+                availableTargets.push({
+                    label: '@' + slug,
+                    kind: 'agent',
+                    display: agent.display_name || slug,
+                    detail: [agent.role || '', (agent.capabilities || []).slice(0, 2).join(', ')].filter(Boolean).join(' · '),
+                });
+            });
+            agents.forEach((agent) => {
+                const role = String(agent.role || '').trim();
+                if (!role || seen.has(`role:${role}`)) return;
+                seen.add(`role:${role}`);
+                availableTargets.push({
+                    label: '@role:' + role,
+                    kind: 'role',
+                    display: role,
+                    detail: 'Role target',
+                });
+            });
+            capabilities.forEach((capability) => {
+                const value = String(capability.name || capability.capability || capability || '').trim();
+                if (!value || seen.has(`capability:${value}`)) return;
+                seen.add(`capability:${value}`);
+                availableTargets.push({
+                    label: '@cap:' + value,
+                    kind: 'capability',
+                    display: value,
+                    detail: 'Capability target',
+                });
             });
         } catch {
-            targetList.textContent = '';
+            availableTargets = [];
         }
+        updateComposerAssist();
     }
 
     function clearProgressBanner() {
@@ -209,7 +228,7 @@ function renderConversationDetail(container, params) {
     function updateTimelineHeader() {
         const label = showConversationView ? 'Conversation' : 'Full activity';
         const subtitle = showConversationView
-            ? 'Replies, approvals, delegation milestones, and errors'
+            ? 'Operator messages, agent replies, approval requests, and problems'
             : 'Every stored event, including provider and tool activity';
         timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
         allBtn.setAttribute('aria-selected', String(showConversationView));
@@ -281,39 +300,105 @@ function renderConversationDetail(container, params) {
     });
 
     sendBtn.addEventListener('click', sendMessage);
-    modeSelect.addEventListener('change', updateComposeMode);
+    textarea.addEventListener('input', updateComposerAssist);
 
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
+        const directAssignment = _extractConversationTargetSelectorMessage(text);
+        const selectorOnly = !directAssignment && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
         sendBtn.disabled = true;
         textarea.disabled = true;
-        modeSelect.disabled = true;
-        targetInput.disabled = true;
+        suggestionList.hidden = true;
         try {
-            if (modeSelect.value === 'direct_assign') {
-                const selector = _parseConversationTargetSelector(targetInput.value);
-                if (!selector) {
-                    throw new Error('Choose a target like @m2, @cap:review, or @role:reviewer.');
-                }
+            if (directAssignment) {
                 await API.conversationAction(convoId, 'direct_assign', {
-                    selector,
-                    title: text.slice(0, 120),
-                    instructions: text,
+                    selector: directAssignment.selector,
+                    title: directAssignment.instructions.slice(0, 120),
+                    instructions: directAssignment.instructions,
                 });
-                targetInput.value = '';
+            } else if (selectorOnly) {
+                throw new Error('Add instructions after the target selector to route work directly.');
             } else {
                 await API.sendMessage(convoId, text);
             }
             textarea.value = '';
+            updateComposerAssist();
         } catch (err) {
             UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
         sendBtn.disabled = false;
         textarea.disabled = false;
-        modeSelect.disabled = false;
-        targetInput.disabled = false;
         textarea.focus();
+    }
+
+    function updateComposerAssist() {
+        const text = textarea.value.trim();
+        const directAssignment = _extractConversationTargetSelectorMessage(text);
+        const selectorToken = _leadingConversationTargetToken(text);
+        const selector = selectorToken ? _parseConversationTargetSelector(selectorToken) : null;
+        if (directAssignment) {
+            targetPreview.hidden = false;
+            targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(directAssignment.selector)}.`;
+            composeHint.textContent = 'Direct assignments create a routed task immediately.';
+            textarea.placeholder = 'Describe the delegated task';
+            sendBtn.textContent = 'Assign';
+            sendBtn.setAttribute('aria-label', 'Assign task');
+            renderTargetSuggestions('');
+            suggestionList.hidden = true;
+            return;
+        }
+        if (selector) {
+            targetPreview.hidden = false;
+            targetPreview.textContent = `Target ${_formatConversationTargetLabel(selector)} selected. Add instructions to assign work.`;
+            composeHint.textContent = 'Press Enter to assign once the task instructions are complete.';
+            textarea.placeholder = 'Describe the delegated task';
+            sendBtn.textContent = 'Assign';
+            sendBtn.setAttribute('aria-label', 'Assign task');
+            renderTargetSuggestions(selectorToken);
+            return;
+        }
+        targetPreview.hidden = true;
+        composeHint.textContent = 'Start with @m2, @cap:review, or @role:reviewer to route work directly.';
+        textarea.placeholder = 'Send a message to this conversation';
+        sendBtn.textContent = 'Send';
+        sendBtn.setAttribute('aria-label', 'Send message');
+        renderTargetSuggestions('');
+        suggestionList.hidden = true;
+    }
+
+    function renderTargetSuggestions(token) {
+        const normalizedToken = String(token || '').trim().toLowerCase();
+        if (!normalizedToken || normalizedToken === latestSuggestionToken && suggestionList.childElementCount) {
+            latestSuggestionToken = normalizedToken;
+        } else {
+            latestSuggestionToken = normalizedToken;
+        }
+        suggestionList.textContent = '';
+        if (!normalizedToken || !normalizedToken.startsWith('@')) {
+            suggestionList.hidden = true;
+            return;
+        }
+        const matches = availableTargets
+            .filter((item) => item.label.toLowerCase().startsWith(normalizedToken))
+            .slice(0, 6);
+        if (!matches.length) {
+            suggestionList.hidden = true;
+            return;
+        }
+        matches.forEach((item) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'compose-suggestion';
+            button.innerHTML = `<strong>${UI.esc(item.label)}</strong><span>${UI.esc(item.display)}</span>${item.detail ? `<em>${UI.esc(item.detail)}</em>` : ''}`;
+            button.addEventListener('click', () => {
+                textarea.value = _replaceLeadingConversationSelector(textarea.value, item.label);
+                textarea.focus();
+                updateComposerAssist();
+            });
+            suggestionList.appendChild(button);
+        });
+        suggestionList.hidden = false;
     }
 
     function currentKindFilter() {
@@ -559,7 +644,7 @@ function renderConversationDetail(container, params) {
     loadTargetSuggestions();
     reloadEvents();
     cleanups.add(() => clearTimeout(progressTimer));
-    updateComposeMode();
+    updateComposerAssist();
 }
 
 function _parseConversationTargetSelector(raw) {
@@ -576,7 +661,41 @@ function _parseConversationTargetSelector(raw) {
     }
     const value = body.trim();
     if (!value) return null;
-    return { kind: 'agent', value, preferred_agent_id: value };
+    return { kind: 'agent', value };
+}
+
+function _leadingConversationTargetToken(raw) {
+    const text = String(raw || '').trim();
+    if (!text.startsWith('@')) return '';
+    const token = text.split(/\s+/, 1)[0] || '';
+    return token.trim();
+}
+
+function _extractConversationTargetSelectorMessage(raw) {
+    const text = String(raw || '').trim();
+    const selectorToken = _leadingConversationTargetToken(text);
+    if (!selectorToken) return null;
+    const selector = _parseConversationTargetSelector(selectorToken);
+    if (!selector) return null;
+    const instructions = text.slice(selectorToken.length).trim();
+    if (!instructions) return null;
+    return { selector, instructions };
+}
+
+function _replaceLeadingConversationSelector(raw, selectorLabel) {
+    const text = String(raw || '').trimStart();
+    const token = _leadingConversationTargetToken(text);
+    if (!token) return selectorLabel + ' ';
+    const remainder = text.slice(token.length).trimStart();
+    return selectorLabel + (remainder ? ` ${remainder}` : ' ');
+}
+
+function _formatConversationTargetLabel(selector) {
+    if (!selector) return '';
+    if (selector.kind === 'agent') {
+        return '@' + (selector.preferred_agent_id || selector.value);
+    }
+    return '@' + selector.kind + ':' + selector.value;
 }
 
 function _readConversationViewParam() {
@@ -668,7 +787,7 @@ function _createConversationEventElement(event, convoId) {
             _renderDelegationCard(body, metadata);
             break;
         case 'task.status':
-            _renderTaskStatusCard(body, event, metadata);
+            _renderTaskStatusCard(body, event, metadata, convoId);
             break;
         case 'error':
             _renderErrorCard(body, event, metadata);
@@ -876,7 +995,7 @@ function _renderDelegationCard(body, metadata) {
     body.appendChild(list);
 }
 
-function _renderTaskStatusCard(body, event, metadata) {
+function _renderTaskStatusCard(body, event, metadata, convoId) {
     body.appendChild(_metadataGrid([
         ['Status', metadata.status || ''],
         ['Progress', metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '—'],
@@ -895,6 +1014,56 @@ function _renderTaskStatusCard(body, event, metadata) {
         content.className = 'event-text-block';
         content.innerHTML = `<strong>Update</strong><p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
+    }
+    const taskId = String(metadata.routed_task_id || '').trim();
+    const status = String(metadata.status || '').trim();
+    if (taskId && ['queued', 'submitted', 'leased', 'running', 'failed', 'cancelled', 'timed_out'].includes(status)) {
+        const actions = document.createElement('div');
+        actions.className = 'task-action-row';
+        const statusText = document.createElement('span');
+        statusText.className = 'task-action-status';
+        actions.appendChild(statusText);
+        if (['queued', 'submitted', 'leased', 'running'].includes(status)) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn btn-sm btn-danger';
+            cancelBtn.textContent = 'Cancel task';
+            cancelBtn.addEventListener('click', async () => {
+                cancelBtn.disabled = true;
+                statusText.textContent = 'Cancelling…';
+                try {
+                    await API.conversationAction(convoId, 'cancel_task', { routed_task_id: taskId });
+                    statusText.textContent = 'Cancel requested.';
+                } catch (err) {
+                    cancelBtn.disabled = false;
+                    statusText.textContent = 'Cancel failed.';
+                    UI.reportError('Failed to cancel the task', err, { context: 'Task cancel failed' });
+                }
+            });
+            actions.appendChild(cancelBtn);
+        }
+        if (['failed', 'cancelled', 'timed_out'].includes(status)) {
+            const retryBtn = document.createElement('button');
+            retryBtn.type = 'button';
+            retryBtn.className = 'btn btn-sm';
+            retryBtn.textContent = 'Retry task';
+            retryBtn.addEventListener('click', async () => {
+                retryBtn.disabled = true;
+                statusText.textContent = 'Retrying…';
+                try {
+                    await API.conversationAction(convoId, 'retry_task', { routed_task_id: taskId });
+                    statusText.textContent = 'Retry queued.';
+                } catch (err) {
+                    retryBtn.disabled = false;
+                    statusText.textContent = 'Retry failed.';
+                    UI.reportError('Failed to retry the task', err, { context: 'Task retry failed' });
+                }
+            });
+            actions.appendChild(retryBtn);
+        }
+        if (actions.childElementCount > 1) {
+            body.appendChild(actions);
+        }
     }
 }
 

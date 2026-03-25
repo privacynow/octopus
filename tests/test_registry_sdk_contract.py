@@ -1,9 +1,20 @@
-"""Contract tests for octopus_sdk registry models and client wire format."""
+"""Contract tests for octopus_sdk registry models, event sinks, and client wire format."""
 
 import asyncio
+import pathlib
+import tempfile
 
+import pytest
+
+from octopus_sdk.event_sink import RegistryEventSink
+from octopus_sdk.execution import TransportIdentity
 from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
-from octopus_sdk.registry.models import ConversationCreate
+from octopus_sdk.registry.models import (
+    ConversationCreate,
+    extract_target_selector_message,
+    parse_target_selector,
+)
+from tests.support.config_support import make_config
 
 
 def test_conversation_event_uses_created_at_not_timestamp():
@@ -121,7 +132,6 @@ def test_validate_event_metadata_rejects_extra_fields():
 
 
 def test_conversation_create_rejects_blank_fields():
-    import pytest
     with pytest.raises(Exception):
         ConversationCreate(target_agent_id="", origin_channel="telegram", external_conversation_ref="123")
     with pytest.raises(Exception):
@@ -248,6 +258,105 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
                 },
             )
         )
+
+
+def test_parse_target_selector_accepts_agent_capability_and_role():
+    agent = parse_target_selector("@m2")
+    assert agent is not None
+    assert agent.kind == "agent"
+    assert agent.value == "m2"
+    assert agent.preferred_agent_id == ""
+
+    capability = parse_target_selector("@cap:review")
+    assert capability is not None
+    assert capability.kind == "capability"
+    assert capability.value == "review"
+
+    role = parse_target_selector("@role:reviewer")
+    assert role is not None
+    assert role.kind == "role"
+    assert role.value == "reviewer"
+
+
+def test_extract_target_selector_message_requires_instructions():
+    assert extract_target_selector_message("@m2") is None
+    extracted = extract_target_selector_message("@m2 return only the answer")
+    assert extracted is not None
+    selector, instructions = extracted
+    assert selector.kind == "agent"
+    assert selector.value == "m2"
+    assert instructions == "return only the answer"
+
+
+@pytest.mark.asyncio
+async def test_registry_event_sink_skips_user_message_mirror_for_registry_conversation():
+    class _Projection:
+        def __init__(self) -> None:
+            self.created: list[dict] = []
+            self.published: list[dict] = []
+
+        async def create_conversation(self, **kwargs):
+            self.created.append(kwargs)
+            return "conv-1"
+
+        async def publish_events(self, *, conversation_id, events):
+            self.published.append({"conversation_id": conversation_id, "events": list(events)})
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = make_config(data_dir=pathlib.Path(d))
+        projection = _Projection()
+        sink = RegistryEventSink(
+            projection=projection,
+            transport=TransportIdentity(
+                conversation_key="registry:local:conversation:conv-1",
+                origin_channel="registry",
+                external_conversation_ref="ext-1",
+                conversation_ref="registry:local:conversation:conv-1",
+                target_agent_id="agent-1",
+                actor="operator",
+            ),
+            config=cfg,
+        )
+
+        await sink.on_user_message("hello", actor="operator")
+
+        assert projection.created == []
+        assert projection.published == []
+
+
+@pytest.mark.asyncio
+async def test_registry_event_sink_skips_bot_reply_mirror_for_registry_conversation():
+    class _Projection:
+        def __init__(self) -> None:
+            self.created: list[dict] = []
+            self.published: list[dict] = []
+
+        async def create_conversation(self, **kwargs):
+            self.created.append(kwargs)
+            return "conv-1"
+
+        async def publish_events(self, *, conversation_id, events):
+            self.published.append({"conversation_id": conversation_id, "events": list(events)})
+
+    with tempfile.TemporaryDirectory() as d:
+        cfg = make_config(data_dir=pathlib.Path(d))
+        projection = _Projection()
+        sink = RegistryEventSink(
+            projection=projection,
+            transport=TransportIdentity(
+                conversation_key="registry:local:conversation:conv-1",
+                origin_channel="registry",
+                external_conversation_ref="ext-1",
+                conversation_ref="registry:local:conversation:conv-1",
+                target_agent_id="agent-1",
+            ),
+            config=cfg,
+        )
+
+        await sink.on_bot_reply("hello")
+
+        assert projection.created == []
+        assert projection.published == []
 
 
 def test_sdk_client_submit_routed_task_includes_created_at_from_model_default():

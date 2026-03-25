@@ -6,7 +6,7 @@ function renderDashboard(container) {
 
     const header = document.createElement('div');
     header.className = 'page-header page-header-hero';
-    header.innerHTML = '<h2>Registry</h2><p>Start with what needs a decision, then check health and ongoing conversations.</p>';
+    header.innerHTML = '<h2>Registry</h2><p>Review blockers, check health, and keep active work moving.</p>';
     container.appendChild(header);
 
     const content = document.createElement('div');
@@ -111,9 +111,8 @@ function renderDashboard(container) {
         lead.className = 'card dashboard-lead';
         lead.innerHTML = `
             <div class="dashboard-lead-copy">
-                <span class="eyebrow">Operator workspace</span>
-                <h3>Start with the next decision, not the raw telemetry.</h3>
-                <p>The registry keeps the system state underneath, but your first job here is to review blockers, monitor health, and keep conversations moving.</p>
+                <h3>${UI.esc(primaryAction[1])}</h3>
+                <p>${UI.esc(primaryAction[2])}</p>
             </div>
         `;
         const leadActions = document.createElement('div');
@@ -121,10 +120,11 @@ function renderDashboard(container) {
         const primary = document.createElement('a');
         primary.href = primaryAction[0];
         primary.className = 'btn btn-primary';
-        primary.textContent = primaryAction[1];
-        const secondary = document.createElement('div');
-        secondary.className = 'dashboard-lead-note';
-        secondary.textContent = primaryAction[2];
+        primary.textContent = 'Open queue';
+        const secondary = document.createElement('a');
+        secondary.href = '/ui/conversations?status=open';
+        secondary.className = 'btn';
+        secondary.textContent = 'Open conversations';
         leadActions.appendChild(primary);
         leadActions.appendChild(secondary);
         lead.appendChild(leadActions);
@@ -157,34 +157,6 @@ function renderDashboard(container) {
             tone: (summary.tasks?.failed_24h || 0) > 0 ? 'danger' : 'calm',
         }));
         content.appendChild(attentionGrid);
-
-        const healthGrid = document.createElement('div');
-        healthGrid.className = 'stat-grid stat-grid-hero stat-grid-simple';
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.agents?.connected || 0),
-            label: 'Connected agents',
-            detail: `${summary.agents?.total || 0} enrolled`,
-            href: '/ui/agents?state=connected',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.conversations?.active || 0),
-            label: 'Open conversations',
-            detail: `${summary.conversations?.total || 0} total`,
-            href: '/ui/conversations?status=open',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.tasks?.running || 0),
-            label: 'Running tasks',
-            detail: `${summary.tasks?.pending || 0} pending`,
-            href: '/ui/tasks?status=running',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: `$${Number(summary.usage_24h?.cost_usd || 0).toFixed(2)}`,
-            label: '24h cost',
-            detail: `${Number(summary.usage_24h?.prompt_tokens || 0).toLocaleString()} prompt tokens`,
-            href: '/ui/usage',
-        }));
-        content.appendChild(healthGrid);
 
         const lowerGrid = document.createElement('div');
         lowerGrid.className = 'dashboard-grid dashboard-grid-wide';
@@ -247,12 +219,16 @@ function renderDashboard(container) {
         content.appendChild(lowerGrid);
     }
 
-    function loadSummary() {
-        content.textContent = '';
-        const shell = document.createElement('div');
-        shell.className = 'dashboard-shell';
-        UI.renderSkeletons(shell, 6, 'card');
-        content.appendChild(shell);
+    let hasLoaded = false;
+
+    function loadSummary({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            content.textContent = '';
+            const shell = document.createElement('div');
+            shell.className = 'dashboard-shell';
+            UI.renderSkeletons(shell, 4, 'card');
+            content.appendChild(shell);
+        }
 
         Promise.all([
             API.getSummary(),
@@ -261,6 +237,7 @@ function renderDashboard(container) {
             API.listTasks({ limit: 4, status: 'failed' }),
         ]).then(([summary, approvals, conversations, failedTasks]) => {
             renderDashboardView(summary, approvals, conversations, failedTasks);
+            hasLoaded = true;
         }).catch((err) => {
             content.textContent = '';
             UI.renderError(content, 'Failed to load dashboard: ' + err.message, loadSummary);
@@ -271,7 +248,7 @@ function renderDashboard(container) {
     ['summary', 'agents', 'conversations', 'tasks', 'approvals', 'usage'].forEach((topic) => {
         cleanups.add(WS.subscribe(topic, () => {
             clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadSummary, 400);
+            reloadDebounce = setTimeout(() => loadSummary({ soft: true }), 400);
         }));
     });
 

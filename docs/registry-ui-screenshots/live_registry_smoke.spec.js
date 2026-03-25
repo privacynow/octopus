@@ -42,7 +42,8 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
   await expect(page.getByRole("heading", { name: /registry/i })).toBeVisible();
   await expect(page.locator(".attention-card")).toHaveCount(3);
-  await expect(page.getByText("Connected agents")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Open conversations" })).toBeVisible();
+  await expect(page.getByText("Pending approvals").first()).toBeVisible();
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
@@ -56,10 +57,26 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("link", { name: "View parent conversation" }).first()).toBeVisible();
 
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
-  await expect(page.getByRole("heading", { name: "Conversation" })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
+  await expect(page.getByText(/Start with @m2, @cap:review, or @role:reviewer/i)).toBeVisible();
+  const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
+  const targetSlug = await page.evaluate(async ({ targetAgentId }) => {
+    const response = await fetch("/v1/agents?limit=20", { credentials: "same-origin" });
+    if (!response.ok) throw new Error(await response.text());
+    const payload = await response.json();
+    const match = (payload.agents || []).find((agent) => agent.agent_id === targetAgentId);
+    if (!match || !match.slug) throw new Error(`No slug for ${targetAgentId}`);
+    return match.slug;
+  }, { targetAgentId: TARGET_AGENT_ID });
+  await page.getByLabel("Message text").fill(`@${targetSlug} ${liveUiTaskTitle}`);
+  await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSlug)}`))).toBeVisible();
+  await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
+  await page.getByRole("button", { name: "Assign" }).click();
   await page.getByRole("tab", { name: "Full activity" }).click();
   await expect(page.locator(".timeline-events")).toContainText(EXISTING_TASK_TITLE);
+  await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle);
+  await expect(page.locator(".timeline-events")).toContainText("Work update");
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();

@@ -7,21 +7,18 @@ from dataclasses import dataclass, replace
 
 from octopus_sdk.registry.models import DelegationTaskDraft
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
+from octopus_sdk.task_protocol import (
+    DELEGATED_TASK_ACTIVE_STATES,
+    DELEGATED_TASK_TERMINAL_STATES,
+    PENDING_DELEGATION_TERMINAL_STATES,
+    derive_pending_delegation_status,
+    normalize_delegated_task_status,
+    validate_delegated_task_transition,
+)
 
-CHILD_ACTIVE_STATUSES = frozenset({"pending", "proposed", "queued", "leased", "running", "submitted"})
-CHILD_TERMINAL_STATUSES = frozenset({"completed", "failed"})
-PARENT_TERMINAL_STATUSES = frozenset({"completed", "partial_failed", "cancelled"})
-
-_ALLOWED_CHILD_TRANSITIONS = {
-    "pending": frozenset({"pending", "submitted", "queued", "leased", "running", "completed", "failed"}),
-    "proposed": frozenset({"proposed", "submitted", "queued", "leased", "running", "completed", "failed"}),
-    "submitted": frozenset({"submitted", "queued", "leased", "running", "completed", "failed"}),
-    "queued": frozenset({"queued", "leased", "running", "completed", "failed"}),
-    "leased": frozenset({"leased", "running", "completed", "failed"}),
-    "running": frozenset({"running", "completed", "failed"}),
-    "completed": frozenset({"completed"}),
-    "failed": frozenset({"failed"}),
-}
+CHILD_ACTIVE_STATUSES = DELEGATED_TASK_ACTIVE_STATES
+CHILD_TERMINAL_STATUSES = DELEGATED_TASK_TERMINAL_STATES
+PARENT_TERMINAL_STATUSES = PENDING_DELEGATION_TERMINAL_STATES
 
 
 def normalize_parent_status(status: str) -> str:
@@ -30,8 +27,7 @@ def normalize_parent_status(status: str) -> str:
 
 
 def normalize_child_status(status: str) -> str:
-    text = (status or "").strip().lower()
-    return text or "proposed"
+    return normalize_delegated_task_status(status)
 
 
 def all_tasks_terminal(pending: PendingDelegation | None) -> bool:
@@ -50,17 +46,6 @@ def delegation_ready_to_resume(pending: PendingDelegation | None) -> bool:
     if pending is None:
         return False
     return normalize_parent_status(pending.status) in {"completed", "partial_failed"}
-
-
-def _derive_parent_status(tasks: tuple[DelegatedTask, ...]) -> str:
-    if not tasks:
-        return "proposed"
-    statuses = [normalize_child_status(task.status) for task in tasks]
-    if all(status in CHILD_TERMINAL_STATUSES for status in statuses):
-        return "partial_failed" if "failed" in statuses else "completed"
-    if any(status in {"pending", "submitted", "queued", "leased", "running"} for status in statuses):
-        return "submitted"
-    return "proposed"
 
 
 @dataclass(frozen=True)
@@ -132,8 +117,8 @@ DelegationAction = (
 def _task_with_status(task: DelegatedTask, action: UpdateTaskStatusAction) -> DelegatedTask:
     next_status = normalize_child_status(action.status)
     current_status = normalize_child_status(task.status)
-    allowed = _ALLOWED_CHILD_TRANSITIONS.get(current_status, frozenset())
-    if next_status not in allowed:
+    decision = validate_delegated_task_transition(current_status, next_status)
+    if not decision.ok:
         return task
     submitted_at = task.submitted_at
     if next_status == "submitted":
@@ -224,7 +209,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         updated_pending = replace(
             pending,
             tasks=tasks,
-            status=_derive_parent_status(tuple(tasks)),
+            status=derive_pending_delegation_status(task.status for task in tasks),
         )
         return DelegationDecision(
             status=normalize_parent_status(updated_pending.status),

@@ -119,6 +119,35 @@ class TargetSelector(BaseModel):
         return text
 
 
+def parse_target_selector(raw: str) -> TargetSelector | None:
+    text = str(raw or "").strip()
+    if not text.startswith("@"):
+        return None
+    body = text[1:].strip()
+    if not body:
+        return None
+    if body.startswith("cap:"):
+        value = body[4:].strip()
+        return TargetSelector(kind="capability", value=value) if value else None
+    if body.startswith("role:"):
+        value = body[5:].strip()
+        return TargetSelector(kind="role", value=value) if value else None
+    return TargetSelector(kind="agent", value=body)
+
+
+def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | None:
+    text = str(raw or "").strip()
+    if not text.startswith("@"):
+        return None
+    parts = text.split(None, 1)
+    selector_token = parts[0]
+    selector = parse_target_selector(selector_token)
+    if selector is None:
+        return None
+    instructions = parts[1].strip() if len(parts) > 1 else ""
+    return (selector, instructions) if instructions else None
+
+
 class DelegationTaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

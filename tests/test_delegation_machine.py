@@ -75,6 +75,32 @@ def test_delegation_machine_tracks_task_progression_to_completion() -> None:
     assert pending.status == "completed"
 
 
+def test_delegation_machine_rejects_child_transition_that_store_would_reject() -> None:
+    pending = decide_delegation_action(
+        DelegationSnapshot(pending=None),
+        ProposeDelegationAction(
+            conversation_ref="registry:conv-strict",
+            title="Feature delegation",
+            resume_instruction="Resume after children finish.",
+            tasks=(_draft("task-1"),),
+        ),
+    ).pending
+    assert pending is not None
+
+    queued = decide_delegation_action(
+        DelegationSnapshot(pending=pending),
+        UpdateTaskStatusAction(routed_task_id="task-1", status="queued"),
+    )
+    assert queued.pending is not None
+    unchanged = decide_delegation_action(
+        DelegationSnapshot(pending=queued.pending),
+        UpdateTaskStatusAction(routed_task_id="task-1", status="running"),
+    )
+    assert unchanged.pending is not None
+    assert unchanged.pending.tasks[0].status == "queued"
+    assert unchanged.pending.status == "submitted"
+
+
 def test_delegation_machine_cancel_before_send_clears_plan() -> None:
     pending = decide_delegation_action(
         DelegationSnapshot(pending=None),

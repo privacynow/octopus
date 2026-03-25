@@ -7,6 +7,7 @@ function renderTaskList(container) {
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentStatus = UI.readQueryParam('status', '');
+    let hasLoaded = false;
 
     // Header
     const header = document.createElement('div');
@@ -45,10 +46,12 @@ function renderTaskList(container) {
     });
     statusSelect.value = currentStatus;
 
-    function loadPage() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 5, 'row');
-        pagEl.textContent = '';
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            listEl.textContent = '';
+            UI.renderSkeletons(listEl, 5, 'row');
+            pagEl.textContent = '';
+        }
 
         const params = { cursor, limit };
         if (currentStatus) params.status = currentStatus;
@@ -136,6 +139,61 @@ function renderTaskList(container) {
                     detail.appendChild(linkWrap);
                 }
 
+                const actions = document.createElement('div');
+                actions.className = 'task-action-row';
+                const statusText = document.createElement('span');
+                statusText.className = 'task-action-status';
+                actions.appendChild(statusText);
+                if (['queued', 'submitted', 'leased', 'running'].includes(t.status || '')) {
+                    const cancelBtn = document.createElement('button');
+                    cancelBtn.type = 'button';
+                    cancelBtn.className = 'btn btn-sm btn-danger';
+                    cancelBtn.textContent = 'Cancel task';
+                    cancelBtn.addEventListener('click', async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        cancelBtn.disabled = true;
+                        statusText.textContent = 'Cancelling…';
+                        try {
+                            await API.conversationAction(t.parent_conversation_id, 'cancel_task', {
+                                routed_task_id: t.routed_task_id,
+                            });
+                            statusText.textContent = 'Cancel requested.';
+                        } catch (err) {
+                            cancelBtn.disabled = false;
+                            statusText.textContent = 'Cancel failed.';
+                            UI.reportError('Failed to cancel the task', err, { context: 'Task cancel failed' });
+                        }
+                    });
+                    actions.appendChild(cancelBtn);
+                }
+                if (['failed', 'cancelled', 'timed_out'].includes(t.status || '')) {
+                    const retryBtn = document.createElement('button');
+                    retryBtn.type = 'button';
+                    retryBtn.className = 'btn btn-sm';
+                    retryBtn.textContent = 'Retry task';
+                    retryBtn.addEventListener('click', async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        retryBtn.disabled = true;
+                        statusText.textContent = 'Retrying…';
+                        try {
+                            await API.conversationAction(t.parent_conversation_id, 'retry_task', {
+                                routed_task_id: t.routed_task_id,
+                            });
+                            statusText.textContent = 'Retry queued.';
+                        } catch (err) {
+                            retryBtn.disabled = false;
+                            statusText.textContent = 'Retry failed.';
+                            UI.reportError('Failed to retry the task', err, { context: 'Task retry failed' });
+                        }
+                    });
+                    actions.appendChild(retryBtn);
+                }
+                if (actions.childElementCount > 1) {
+                    detail.appendChild(actions);
+                }
+
                 item.appendChild(detail);
                 listEl.appendChild(item);
             });
@@ -155,6 +213,7 @@ function renderTaskList(container) {
                     loadPage();
                 },
             });
+            hasLoaded = true;
         }).catch(err => {
             listEl.textContent = '';
             UI.renderError(listEl, 'Failed: ' + err.message, loadPage);
@@ -166,7 +225,7 @@ function renderTaskList(container) {
     let reloadDebounce = null;
     const unsub = WS.subscribe('tasks', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadPage, 400);
+        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
     });
     cleanups.add(() => clearTimeout(reloadDebounce));
     cleanups.add(unsub);

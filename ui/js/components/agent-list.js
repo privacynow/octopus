@@ -8,6 +8,7 @@ function renderAgentList(container) {
     let cursorStack = []; // stack of previous cursors for "prev"
     let nameFilter = UI.readQueryParam('q', '');
     let stateFilter = UI.readQueryParam('state', '');
+    let hasLoaded = false;
 
     // Shell
     const header = document.createElement('div');
@@ -75,14 +76,17 @@ function renderAgentList(container) {
     searchInput.value = nameFilter;
     stateSelect.value = stateFilter;
 
-    function loadPage() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 5, 'row');
-        pagEl.textContent = '';
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            listEl.textContent = '';
+            UI.renderSkeletons(listEl, 5, 'row');
+            pagEl.textContent = '';
+        }
 
         API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then(data => {
             const agents = data.agents || data || [];
             renderCards(agents, data.has_more, data.next_cursor);
+            hasLoaded = true;
         }).catch(err => {
             listEl.textContent = '';
             UI.renderError(listEl, 'Failed to load agents: ' + err.message, loadPage);
@@ -143,7 +147,7 @@ function renderAgentList(container) {
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadPage, 400);
+        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
     }));
 
     loadPage();

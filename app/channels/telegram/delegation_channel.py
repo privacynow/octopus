@@ -27,6 +27,7 @@ from octopus_sdk.registry.models import (
     CoordinationActionEnvelope,
     DelegateTasksActionPayload,
     DirectAssignActionPayload,
+    parse_target_selector,
     TargetSelector,
 )
 from octopus_sdk.sessions import PendingDelegation, SessionState
@@ -197,27 +198,6 @@ async def _preview_intent_targets(
                 )
             )
     return tuple(previews)
-
-
-def parse_target_selector(token: str) -> TargetSelector | None:
-    raw = str(token or "").strip()
-    if not raw.startswith("@"):
-        return None
-    body = raw[1:]
-    if body.startswith("cap:"):
-        value = body[4:].strip()
-        if not value:
-            return None
-        return TargetSelector(kind="capability", value=value)
-    if body.startswith("role:"):
-        value = body[5:].strip()
-        if not value:
-            return None
-        return TargetSelector(kind="role", value=value)
-    value = body.strip()
-    if not value:
-        return None
-    return TargetSelector(kind="agent", value=value, preferred_agent_id=value)
 
 
 async def submit_direct_assignment(

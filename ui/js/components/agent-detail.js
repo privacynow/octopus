@@ -7,6 +7,8 @@ function renderAgentDetail(container, params) {
     let convosCursor = 0;
     let convosCursorStack = [];
     const convosLimit = UI.DEFAULT_PAGE_LIMIT;
+    let detailLoaded = false;
+    let conversationsLoaded = false;
 
     // Shell
     const header = document.createElement('div');
@@ -19,7 +21,11 @@ function renderAgentDetail(container, params) {
     container.appendChild(content);
     UI.renderSkeletons(content, 3, 'card');
 
-    function loadDetail() {
+    function loadDetail({ soft = false } = {}) {
+        if (!soft || !detailLoaded) {
+            content.textContent = '';
+            UI.renderSkeletons(content, 3, 'card');
+        }
         API.getAgentStatus(agentId).then(status => {
             if (!status) {
                 content.textContent = '';
@@ -175,6 +181,7 @@ function renderAgentDetail(container, params) {
             content.appendChild(convosSection);
 
             loadConversations();
+            detailLoaded = true;
 
         }).catch(err => {
             content.textContent = '';
@@ -182,13 +189,15 @@ function renderAgentDetail(container, params) {
         });
     }
 
-    function loadConversations() {
+    function loadConversations({ soft = false } = {}) {
         const list = document.getElementById('agent-convos-list');
         const pag = document.getElementById('agent-convos-pag');
         if (!list) return;
-        list.textContent = '';
-        list.className = 'list-container';
-        UI.renderSkeletons(list, 3, 'row');
+        if (!soft || !conversationsLoaded) {
+            list.textContent = '';
+            list.className = 'list-container';
+            UI.renderSkeletons(list, 3, 'row');
+        }
 
         API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit }).then(data => {
             const convos = data.conversations || data || [];
@@ -232,6 +241,7 @@ function renderAgentDetail(container, params) {
                     },
                 });
             }
+            conversationsLoaded = true;
         }).catch(err => {
             list.textContent = '';
             UI.renderError(list, 'Failed to load conversations: ' + err.message, loadConversations);
@@ -252,12 +262,12 @@ function renderAgentDetail(container, params) {
 
     const unsubEvents = WS.subscribe('conversations', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadConversations, 400);
+        reloadDebounce = setTimeout(() => loadConversations({ soft: true }), 400);
     });
     cleanups.add(unsubEvents);
     cleanups.add(WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadDetail, 400);
+        reloadDebounce = setTimeout(() => loadDetail({ soft: true }), 400);
     }));
 
     loadDetail();

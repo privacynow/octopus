@@ -175,6 +175,25 @@ async def test_registry_channel_rate_limits_progress_events(tmp_path, monkeypatc
     assert len(progress_events) == 0
 
 
+async def test_registry_channel_does_not_persist_ephemeral_working_status(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+    projection = _ProjectionRecorder()
+    channel_egress = RegistryChannelEgress(
+        cfg,
+        conversation_ref=registry_conversation_ref("default", "conv-ephemeral"),
+        services=_services(projection),
+    )
+
+    await channel_egress.send_text("Working…")
+    await channel_egress.send_text("Resuming…")
+
+    assert projection.event_calls == []
+
+
 async def test_registry_channel_swallows_projection_failures(tmp_path):
     cfg = make_config(
         data_dir=tmp_path,

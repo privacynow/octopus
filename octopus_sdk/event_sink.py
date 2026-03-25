@@ -110,6 +110,13 @@ class RegistryEventSink:
             and ":conversation:" in conversation_ref
         )
 
+    def _skip_bot_reply_mirror(self) -> bool:
+        conversation_ref = self._transport.conversation_ref or ""
+        return (
+            self._transport.origin_channel == "registry"
+            and ":conversation:" in conversation_ref
+        )
+
     async def _ensure_conversation(self) -> str | None:
         if self._conversation_id is not None:
             return self._conversation_id
@@ -251,6 +258,8 @@ class RegistryEventSink:
         )
 
     async def on_bot_reply(self, content: str) -> None:
+        if self._skip_bot_reply_mirror():
+            return
         await self._publish(
             "message.bot",
             event_id=f"exec:{self._execution_event_prefix}:bot",

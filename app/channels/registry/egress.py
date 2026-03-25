@@ -87,6 +87,10 @@ class RegistryChannelEgress(ChannelEgress):
         self._PROGRESS_MIN_INTERVAL = 5.0
         self.chat = _RegistryChatShim(self)
 
+    def _is_ephemeral_status_text(self, text: str) -> bool:
+        normalized = " ".join(str(text or "").split())
+        return normalized in {"Working…", "Working...", "Resuming…", "Resuming..."}
+
     @property
     def capabilities(self) -> ChannelCapabilities:
         return ChannelCapabilities(
@@ -224,13 +228,15 @@ class RegistryChannelEgress(ChannelEgress):
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
         self._append_output("send", text)
-        if not self._is_task_ref():
+        if not self._is_task_ref() and not self._is_ephemeral_status_text(text):
             await self._publish_event(
                 kind="message.bot",
                 title="Bot reply",
                 body=text,
                 event_id=event_id,
             )
+        elif not self._is_task_ref():
+            await self._publish_progress(text, event_id=event_id)
         return RegistryEditableHandle(self, event_id=event_id)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:

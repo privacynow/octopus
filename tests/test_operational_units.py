@@ -141,6 +141,52 @@ class TestRegistryEventSink:
             assert projection.created == []
             assert projection.published == []
 
+    @pytest.mark.asyncio
+    async def test_registry_conversation_bot_reply_is_not_mirrored_twice(self):
+        import pathlib
+        import tempfile
+
+        from octopus_sdk.event_sink import RegistryEventSink
+        from octopus_sdk.execution import TransportIdentity
+        from tests.support.config_support import make_config
+
+        class _Projection:
+            def __init__(self) -> None:
+                self.created: list[dict] = []
+                self.published: list[dict] = []
+
+            async def create_conversation(self, **kwargs):
+                self.created.append(kwargs)
+                return "conv-1"
+
+            async def publish_events(self, *, conversation_id, events):
+                self.published.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "events": list(events),
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = make_config(data_dir=pathlib.Path(d))
+            projection = _Projection()
+            sink = RegistryEventSink(
+                projection=projection,
+                transport=TransportIdentity(
+                    conversation_key="registry:local:conversation:conv-1",
+                    origin_channel="registry",
+                    external_conversation_ref="ext-1",
+                    conversation_ref="registry:local:conversation:conv-1",
+                    target_agent_id="agent-1",
+                ),
+                config=cfg,
+            )
+
+            await sink.on_bot_reply("hello")
+
+            assert projection.created == []
+            assert projection.published == []
+
 
 # ---------------------------------------------------------------------------
 # XmlTagDelegationParser

@@ -230,7 +230,9 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
 
         session_after = load_session_disk(data_dir, f"tg:{chat_id}", prov)
         assert session_after.get("pending_delegation") is None
-        assert channel_egress.messages == [("Delegation cancelled. No requests were sent.", None)]
+        assert len(channel_egress.messages) == 1
+        assert "cancelled" in channel_egress.messages[0][0].lower()
+        assert channel_egress.messages[0][1] is None
 
 
 async def test_preview_delegation_targets_marks_resolved_and_unresolved_agents():

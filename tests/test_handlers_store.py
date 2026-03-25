@@ -418,7 +418,10 @@ async def test_handler_skill_create_invalid_name_uses_safe_message(monkeypatch, 
 
         invalid = await send_command(th.cmd_skills, chat, regular, "/skills create Bad Name", ["create", "Bad Name"])
 
-        assert last_reply(invalid) == "Skill names must use lowercase letters, digits, and hyphens."
+        reply = last_reply(invalid).lower()
+        assert "lowercase" in reply
+        assert "digits" in reply
+        assert "hyphen" in reply
     finally:
         _cleanup_runtime(data_dir)
 

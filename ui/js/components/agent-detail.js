@@ -53,11 +53,10 @@ function renderAgentDetail(container, params) {
             p.appendChild(badge);
             header.appendChild(p);
 
-            content.textContent = '';
-
             // Info card
             const infoCard = document.createElement('div');
             infoCard.className = 'card';
+            infoCard.dataset.key = 'agent-info';
             const infoTitle = document.createElement('div');
             infoTitle.className = 'card-title';
             infoTitle.textContent = 'Info';
@@ -120,12 +119,12 @@ function renderAgentDetail(container, params) {
                 infoCard.appendChild(tagRow);
             }
 
-            content.appendChild(infoCard);
-
             // Workers table
+            const sections = [infoCard];
             if (workers.length > 0) {
                 const wCard = document.createElement('div');
                 wCard.className = 'card';
+                wCard.dataset.key = 'agent-workers';
                 const wTitle = document.createElement('div');
                 wTitle.className = 'card-title';
                 wTitle.textContent = 'Workers';
@@ -160,11 +159,12 @@ function renderAgentDetail(container, params) {
                 wTbl.appendChild(tbody);
                 wWrap.appendChild(wTbl);
                 wCard.appendChild(wWrap);
-                content.appendChild(wCard);
+                sections.push(wCard);
             }
 
             // Conversations sub-list
             const convosSection = document.createElement('div');
+            convosSection.dataset.key = 'agent-conversations';
             convosSection.id = 'agent-convos-section';
             const convosTitle = document.createElement('div');
             convosTitle.className = 'card-title';
@@ -178,7 +178,8 @@ function renderAgentDetail(container, params) {
             const convosPag = document.createElement('div');
             convosPag.id = 'agent-convos-pag';
             convosSection.appendChild(convosPag);
-            content.appendChild(convosSection);
+            sections.push(convosSection);
+            UI.reconcileChildren(content, sections);
 
             loadConversations();
             detailLoaded = true;
@@ -205,25 +206,28 @@ function renderAgentDetail(container, params) {
             if (pag) pag.textContent = '';
 
             if (convos.length === 0) {
-                list.appendChild(UI.renderEmptyState('No conversations'));
+                UI.reconcileChildren(list, [UI.renderEmptyState('No conversations')]);
                 return;
             }
 
-            convos.forEach(c => {
+            const rows = convos.map((c) => {
                 const sub = document.createElement('span');
                 const ts = document.createElement('span');
                 ts.setAttribute('data-timestamp', c.created_at || '');
                 ts.textContent = UI.relativeTime(c.created_at);
                 sub.appendChild(document.createTextNode((c.origin_channel || '') + ' \u00b7 '));
                 sub.appendChild(ts);
-                list.appendChild(UI.renderListRow({
+                const row = UI.renderListRow({
                     href: '/ui/conversations/' + c.conversation_id,
                     label: c.title || c.conversation_id,
                     sublabelNode: sub,
                     badgeText: c.status || 'open',
                     badgeClass: 'badge-' + (c.status || 'open'),
-                }));
+                });
+                row.dataset.key = c.conversation_id;
+                return row;
             });
+            UI.reconcileChildren(list, rows);
 
             if (pag) {
                 UI.renderPagination(pag, {

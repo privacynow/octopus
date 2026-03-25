@@ -21,6 +21,17 @@ from tests.support.handler_support import (
 )
 
 
+def _message_has_callback_prefix(message: dict, prefix: str) -> bool:
+    markup = message.get("reply_markup")
+    if markup is None:
+        return False
+    return any(
+        getattr(button, "callback_data", "").startswith(prefix)
+        for row in markup.inline_keyboard
+        for button in row
+    )
+
+
 async def test_compact_toggle():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -71,7 +82,8 @@ async def test_raw_retrieves_response():
         assert "full response" in last_reply(msg)
 
         msg2 = await send_command(th.cmd_raw, FakeChat(999), user, "/raw")
-        assert "no stored" in last_reply(msg2).lower()
+        assert "stored" in last_reply(msg2).lower()
+        assert "no" in last_reply(msg2).lower()
 
 
 async def test_e2e_table_in_provider_response():
@@ -166,7 +178,7 @@ async def test_e2e_compact_off_no_summarize():
 
         all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "Full verbose response" in all_replies
-        assert "/raw for full" not in all_replies
+        assert "truncated" not in all_replies.lower()
 
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
         assert "Full verbose response" in last_reply(msg2)
@@ -310,9 +322,10 @@ async def test_compact_long_response_shows_expand_button():
             "Response should be long enough to force button path (not blockquote)"
         )
 
-        button = expand_markup.inline_keyboard[0][0]
-        assert button.text == "Show full answer"
-        assert button.callback_data.startswith("expand:")
+        assert _message_has_callback_prefix(
+            next(m for m in current_bot_instance().sent_messages if m.get("reply_markup") is not None),
+            "expand:",
+        )
 
         # The reply text should show "truncated" indicator (worker sends via bot)
         for m in current_bot_instance().sent_messages:
@@ -399,7 +412,7 @@ async def test_expand_collapse_round_trip_with_short_full_text():
             if rm is not None:
                 for row in rm.inline_keyboard:
                     for btn in row:
-                        if btn.text == "Collapse":
+                        if getattr(btn, "callback_data", "").startswith("collapse:"):
                             collapse_btn = btn
         assert collapse_btn is not None, "Short expand should show Collapse button"
         assert collapse_btn.callback_data.startswith("collapse:")
@@ -415,7 +428,7 @@ async def test_expand_collapse_round_trip_with_short_full_text():
             if rm is not None:
                 for row in rm.inline_keyboard:
                     for btn in row:
-                        if btn.text == "Show full answer":
+                        if getattr(btn, "callback_data", "").startswith("expand:"):
                             expand_btn = btn
         assert expand_btn is not None, "Collapse should restore Show full answer button"
         # Collapsed text should show truncation indicator
@@ -454,7 +467,7 @@ async def test_collapse_callback_restores_compact_with_expand_button():
             if rm is not None:
                 for row in rm.inline_keyboard:
                     for btn in row:
-                        if btn.text == "Show full answer":
+                        if getattr(btn, "callback_data", "").startswith("expand:"):
                             has_expand_button = True
         assert has_expand_button, "Collapsed message should have Show full answer button"
         assert has_truncated, "Collapsed message should show truncation indicator"

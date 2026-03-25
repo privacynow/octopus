@@ -340,6 +340,27 @@ window.UI = (() => {
         container.appendChild(nav);
     }
 
+    function reconcileChildren(container, nextNodes) {
+        const nodes = Array.from(nextNodes || []);
+        const keyedExisting = new Map();
+        Array.from(container.children).forEach((child) => {
+            const key = child.dataset && child.dataset.key;
+            if (!key) return;
+            keyedExisting.set(`${child.tagName}:${key}`, child);
+        });
+        const finalNodes = nodes.map((node) => {
+            if (!(node instanceof Element)) return node;
+            const key = node.dataset && node.dataset.key;
+            if (!key) return node;
+            const existing = keyedExisting.get(`${node.tagName}:${key}`);
+            if (existing && existing.isEqualNode(node)) {
+                return existing;
+            }
+            return node;
+        });
+        container.replaceChildren(...finalNodes);
+    }
+
     function renderError(container, message, retryFn) {
         const card = document.createElement('div');
         card.className = 'error-card';
@@ -463,6 +484,7 @@ window.UI = (() => {
         renderStatCard,
         renderSkeletons,
         renderPagination,
+        reconcileChildren,
         renderError,
         showConfirm,
     };

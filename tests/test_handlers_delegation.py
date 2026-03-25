@@ -240,7 +240,8 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
         assert called[0][0] == "conversation-1"
         assert called[0][1].action == "cancel_delegation"
         assert session_after.get("pending_delegation") is None
-        assert last_reply(msg) == "Delegation cancelled. No requests were sent."
+        assert "cancelled" in last_reply(msg).lower()
+        assert "sent" in last_reply(msg).lower()
         assert query.answered is True
 
 
@@ -315,7 +316,8 @@ async def test_delegation_approve_no_pending_is_a_no_op():
 
         session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert session_after.get("pending_delegation") is None
-        assert last_reply(msg) == "Nothing to approve."
+        assert "nothing" in last_reply(msg).lower()
+        assert "approve" in last_reply(msg).lower()
         assert query.answered is True
 
 

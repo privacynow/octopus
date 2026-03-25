@@ -94,15 +94,13 @@ function renderAgentList(container) {
     }
 
     function renderCards(agents, hasMore, nextCursor) {
-        listEl.textContent = '';
-        pagEl.textContent = '';
-
         if (agents.length === 0) {
-            listEl.appendChild(UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled'));
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled')]);
+            pagEl.textContent = '';
             return;
         }
 
-        agents.forEach(a => {
+        const rows = agents.map((a) => {
             const sub = document.createElement('span');
             const parts = [a.role || 'agent', a.provider || '', a.slug].filter(Boolean);
             sub.appendChild(document.createTextNode(parts.join(' \u00b7 ')));
@@ -123,11 +121,14 @@ function renderAgentList(container) {
                 badgeText: a.connectivity_state || 'unknown',
                 badgeClass: 'badge-' + (a.connectivity_state || 'stopped'),
             });
+            row.dataset.key = a.agent_id;
             row.id = 'agent-badge-' + a.agent_id;
-            listEl.appendChild(row);
+            return row;
         });
+        UI.reconcileChildren(listEl, rows);
 
         // Pagination
+        pagEl.textContent = '';
         UI.renderPagination(pagEl, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!hasMore,

@@ -64,28 +64,6 @@ DELEGATED_TASK_ACTIVE_STATES = frozenset({"pending", "proposed", "submitted", "q
 PENDING_DELEGATION_STATES = frozenset({"proposed", "submitted", "completed", "partial_failed", "cancelled"})
 PENDING_DELEGATION_TERMINAL_STATES = frozenset({"completed", "partial_failed", "cancelled"})
 
-_ROUTED_ALLOWED_NEXT_STATES = {
-    "queued": frozenset({"queued", "leased", "completed", "failed", "cancelled", "timed_out"}),
-    "leased": frozenset({"leased", "running", "completed", "failed", "cancelled", "timed_out"}),
-    "running": frozenset({"running", "completed", "failed", "cancelled", "timed_out"}),
-    "completed": frozenset({"completed"}),
-    "failed": frozenset({"failed"}),
-    "cancelled": frozenset({"cancelled"}),
-    "timed_out": frozenset({"timed_out"}),
-}
-_PRE_ROUTED_ALLOWED_NEXT_STATES = {
-    "pending": frozenset({"pending", "submitted", *ROUTED_TASK_STATES}),
-    "proposed": frozenset({"proposed", "submitted", *ROUTED_TASK_STATES}),
-    "submitted": frozenset({"submitted", *ROUTED_TASK_STATES}),
-}
-_PENDING_ALLOWED_NEXT_STATES = {
-    "proposed": frozenset({"proposed", "submitted", "completed", "partial_failed", "cancelled"}),
-    "submitted": frozenset({"submitted", "completed", "partial_failed"}),
-    "completed": frozenset({"completed"}),
-    "partial_failed": frozenset({"partial_failed"}),
-    "cancelled": frozenset({"cancelled"}),
-}
-
 
 @dataclass(frozen=True)
 class RoutedTaskSnapshot:
@@ -144,6 +122,89 @@ class PendingDelegationTransitionResult:
         return delegation_ready_to_resume(self.new_state)
 
 
+class _DelegatedTaskLifecycle(StateMachine):
+    pending = State(initial=True)
+    proposed = State()
+    submitted = State()
+    queued = State()
+    leased = State()
+    running = State()
+    completed = State(final=True)
+    failed = State(final=True)
+    cancelled = State(final=True)
+    timed_out = State(final=True)
+
+    propose = pending.to(proposed)
+    submit = pending.to(submitted) | proposed.to(submitted)
+    queue = pending.to(queued) | proposed.to(queued) | submitted.to(queued)
+    lease = pending.to(leased) | proposed.to(leased) | submitted.to(leased) | queued.to(leased)
+    start = pending.to(running) | proposed.to(running) | submitted.to(running) | leased.to(running)
+    complete = (
+        pending.to(completed)
+        | proposed.to(completed)
+        | submitted.to(completed)
+        | queued.to(completed)
+        | leased.to(completed)
+        | running.to(completed)
+    )
+    fail = (
+        pending.to(failed)
+        | proposed.to(failed)
+        | submitted.to(failed)
+        | queued.to(failed)
+        | leased.to(failed)
+        | running.to(failed)
+    )
+    cancel = (
+        pending.to(cancelled)
+        | proposed.to(cancelled)
+        | submitted.to(cancelled)
+        | queued.to(cancelled)
+        | leased.to(cancelled)
+        | running.to(cancelled)
+    )
+    time_out = (
+        pending.to(timed_out)
+        | proposed.to(timed_out)
+        | submitted.to(timed_out)
+        | queued.to(timed_out)
+        | leased.to(timed_out)
+        | running.to(timed_out)
+    )
+
+
+class _PendingDelegationLifecycle(StateMachine):
+    proposed = State(initial=True)
+    submitted = State()
+    completed = State(final=True)
+    partial_failed = State(final=True)
+    cancelled = State(final=True)
+
+    submit = proposed.to(submitted)
+    complete = proposed.to(completed) | submitted.to(completed)
+    partial_fail = proposed.to(partial_failed) | submitted.to(partial_failed)
+    cancel = proposed.to(cancelled)
+
+
+_DELEGATED_TASK_EVENT_BY_TARGET = {
+    "proposed": "propose",
+    "submitted": "submit",
+    "queued": "queue",
+    "leased": "lease",
+    "running": "start",
+    "completed": "complete",
+    "failed": "fail",
+    "cancelled": "cancel",
+    "timed_out": "time_out",
+}
+_PENDING_DELEGATION_EVENT_BY_TARGET = {
+    "submitted": "submit",
+    "completed": "complete",
+    "partial_failed": "partial_fail",
+    "cancelled": "cancel",
+}
+
+
 def normalize_pending_delegation_status(status: str) -> str:
     text = (status or "").strip().lower()
     return text or "proposed"
@@ -186,17 +247,42 @@ def apply_pending_delegation_transition(
         target = "cancelled"
     else:
         raise ValueError(f"unknown pending delegation transition {request.transition!r}")
-    if target not in _PENDING_ALLOWED_NEXT_STATES[current]:
+    if target == current:
+        return PendingDelegationTransitionResult(
+            ok=True,
+            old_state=current,
+            new_state=current,
+        )
+    event_name = _PENDING_DELEGATION_EVENT_BY_TARGET.get(target)
+    if not event_name:
         return PendingDelegationTransitionResult(
             ok=False,
             old_state=current,
             new_state=current,
             reason=f"{current} cannot transition to {target}",
         )
+    machine = _PendingDelegationLifecycle(start_value=current)
+    event = getattr(machine, event_name, None)
+    if event is None:
+        return PendingDelegationTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=f"{current} cannot transition to {target}",
+        )
+    try:
+        event()
+    except Exception as exc:
+        return PendingDelegationTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=str(exc),
+        )
     return PendingDelegationTransitionResult(
         ok=True,
         old_state=current,
-        new_state=target,
+        new_state=machine.current_state.id,
     )
 
 
@@ -207,21 +293,42 @@ def validate_delegated_task_transition(current_status: str, next_status: str) ->
         raise ValueError(f"unknown delegated-task state {current_status!r}")
     if target not in DELEGATED_TASK_STATES:
         raise ValueError(f"unknown delegated-task state {next_status!r}")
-    if current in _PRE_ROUTED_ALLOWED_NEXT_STATES:
-        allowed = _PRE_ROUTED_ALLOWED_NEXT_STATES[current]
-    else:
-        allowed = _ROUTED_ALLOWED_NEXT_STATES[current]
-    if target not in allowed:
+    if current == target:
+        return TaskTransitionResult(
+            ok=True,
+            old_state=current,
+            new_state=current,
+        )
+    event_name = _DELEGATED_TASK_EVENT_BY_TARGET.get(target)
+    if not event_name:
         return TaskTransitionResult(
             ok=False,
             old_state=current,
             new_state=current,
             reason=f"{current} cannot transition to {target}",
         )
+    machine = _DelegatedTaskLifecycle(start_value=current)
+    event = getattr(machine, event_name, None)
+    if event is None:
+        return TaskTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=f"{current} cannot transition to {target}",
+        )
+    try:
+        event()
+    except Exception as exc:
+        return TaskTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=str(exc),
+        )
     return TaskTransitionResult(
         ok=True,
         old_state=current,
-        new_state=target,
+        new_state=machine.current_state.id,
     )
 
 

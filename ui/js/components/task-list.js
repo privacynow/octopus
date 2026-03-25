@@ -115,6 +115,7 @@ function renderTaskList(container) {
     function _createBoardTaskCard(task) {
         const card = document.createElement('article');
         card.className = 'task-board-card';
+        card.dataset.key = task.routed_task_id;
 
         const head = document.createElement('div');
         head.className = 'task-board-card-header';
@@ -155,11 +156,10 @@ function renderTaskList(container) {
     }
 
     function renderBoard(tasks) {
-        boardShell.textContent = '';
         const head = document.createElement('div');
         head.className = 'task-feed-header';
+        head.dataset.key = 'board-header';
         head.innerHTML = '<strong>Task board</strong><span>Grouped by current status so you can spot stalled or unhealthy work at a glance.</span>';
-        boardShell.appendChild(head);
 
         const counts = {
             total: tasks.length,
@@ -170,6 +170,7 @@ function renderTaskList(container) {
         };
         const summaryStrip = document.createElement('div');
         summaryStrip.className = 'task-summary-strip';
+        summaryStrip.dataset.key = 'board-summary';
         [
             ['Total', counts.total],
             ['Queued', counts.queued],
@@ -179,13 +180,14 @@ function renderTaskList(container) {
         ].forEach(([label, value]) => {
             const chip = document.createElement('div');
             chip.className = 'task-summary-chip';
+            chip.dataset.key = String(label).toLowerCase().replace(/\s+/g, '-');
             chip.innerHTML = `<strong>${UI.esc(String(value))}</strong><span>${UI.esc(label)}</span>`;
             summaryStrip.appendChild(chip);
         });
-        boardShell.appendChild(summaryStrip);
 
         const board = document.createElement('div');
         board.className = 'task-board';
+        board.dataset.key = 'task-board';
         const lanes = [
             ['queued', 'Queued', ['queued', 'submitted', 'leased']],
             ['running', 'Running', ['running']],
@@ -195,6 +197,7 @@ function renderTaskList(container) {
         lanes.forEach(([laneKey, title, statuses]) => {
             const lane = document.createElement('section');
             lane.className = 'task-lane';
+            lane.dataset.key = laneKey;
             lane.dataset.lane = laneKey;
 
             const laneHeader = document.createElement('div');
@@ -213,21 +216,20 @@ function renderTaskList(container) {
             lane.appendChild(laneBody);
             board.appendChild(lane);
         });
-        boardShell.appendChild(board);
+        UI.reconcileChildren(boardShell, [head, summaryStrip, board]);
     }
 
     function renderList(tasks, data) {
-        listEl.textContent = '';
-        pagEl.textContent = '';
-
         if (tasks.length === 0) {
-            listEl.appendChild(UI.renderEmptyState('No tasks match this filter.'));
+            UI.reconcileChildren(listEl, [UI.renderEmptyState('No tasks match this filter.')]);
+            pagEl.textContent = '';
             return;
         }
 
-        tasks.forEach((task) => {
+        const items = tasks.map((task) => {
             const item = document.createElement('div');
             item.className = 'task-list-item';
+            item.dataset.key = task.routed_task_id;
 
             const sub = document.createElement('span');
             const parts = [];
@@ -310,9 +312,11 @@ function renderTaskList(container) {
             }
 
             item.appendChild(detail);
-            listEl.appendChild(item);
+            return item;
         });
+        UI.reconcileChildren(listEl, items);
 
+        pagEl.textContent = '';
         UI.renderPagination(pagEl, {
             hasPrev: cursorStack.length > 0,
             hasNext: !!data.has_more,

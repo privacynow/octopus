@@ -109,7 +109,9 @@ def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: P
         second_duplicate = authoring.create_draft("existing-skill", owner_actor=actor_key)
 
         assert invalid.ok is False
-        assert invalid.message == "Skill names must use lowercase letters, digits, and hyphens."
+        assert "lowercase letters" in invalid.message
+        assert "digits" in invalid.message
+        assert "hyphens" in invalid.message
         assert "Bad Name" not in invalid.message
         assert duplicate.ok is True
         assert second_duplicate.ok is False

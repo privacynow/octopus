@@ -513,12 +513,12 @@ function renderConversationDetail(container, params) {
 
     function renderMetaCard(data) {
         meta = data;
-        metaCard.textContent = '';
         const title = data.title || convoId;
         header.innerHTML = `<h2>${UI.esc(title)}</h2><p><a href="/ui/conversations">\u2190 Back to conversations</a></p>`;
 
         const hero = document.createElement('div');
         hero.className = 'conversation-meta-hero';
+        hero.dataset.key = 'meta-hero';
 
         const info = document.createElement('div');
         const titleEl = document.createElement('div');
@@ -555,6 +555,7 @@ function renderConversationDetail(container, params) {
 
         const facts = document.createElement('div');
         facts.className = 'conversation-meta-facts';
+        facts.dataset.key = 'meta-facts';
         [
             ['Agent', data.target_display_name || data.target_agent_id || '—'],
             ['Source', data.origin_channel || 'registry'],
@@ -567,12 +568,10 @@ function renderConversationDetail(container, params) {
             facts.appendChild(item);
         });
 
-        metaCard.appendChild(hero);
-        metaCard.appendChild(facts);
+        UI.reconcileChildren(metaCard, [hero, facts]);
     }
 
     function renderTaskSummaryStrip(tasks) {
-        taskSummaryStrip.textContent = '';
         const counts = {
             total: tasks.length,
             running: tasks.filter((task) => task.status === 'running').length,
@@ -580,26 +579,27 @@ function renderConversationDetail(container, params) {
             attention: tasks.filter((task) => ['failed', 'cancelled', 'timed_out'].includes(task.status || '')).length,
             done: tasks.filter((task) => task.status === 'completed').length,
         };
-        [
+        const chips = [
             ['Total', counts.total],
             ['Queued', counts.queued],
             ['Running', counts.running],
             ['Needs follow-up', counts.attention],
             ['Done', counts.done],
-        ].forEach(([label, value]) => {
+        ].map(([label, value]) => {
             const chip = document.createElement('div');
             chip.className = 'task-summary-chip';
+            chip.dataset.key = String(label).toLowerCase().replace(/\s+/g, '-');
             chip.innerHTML = `<strong>${UI.esc(String(value))}</strong><span>${UI.esc(label)}</span>`;
-            taskSummaryStrip.appendChild(chip);
+            return chip;
         });
+        UI.reconcileChildren(taskSummaryStrip, chips);
     }
 
     function renderRelatedTasks(tasks) {
         renderTaskSummaryStrip(tasks);
-        taskBoard.textContent = '';
-        taskFeed.textContent = '';
         if (!tasks.length) {
-            taskBoard.appendChild(UI.renderEmptyState('No delegated tasks for this conversation yet.', true));
+            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated tasks for this conversation yet.', true)]);
+            UI.reconcileChildren(taskFeed, []);
             return;
         }
         const lanes = [
@@ -608,9 +608,10 @@ function renderConversationDetail(container, params) {
             ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
             ['done', 'Done', ['completed']],
         ];
-        lanes.forEach(([key, title, statuses]) => {
+        const laneNodes = lanes.map(([key, title, statuses]) => {
             const lane = document.createElement('section');
             lane.className = 'task-lane';
+            lane.dataset.key = key;
             lane.dataset.lane = key;
             const laneHeader = document.createElement('div');
             laneHeader.className = 'task-lane-header';
@@ -625,20 +626,22 @@ function renderConversationDetail(container, params) {
                 laneTasks.forEach((task) => laneBody.appendChild(_createConversationTaskCard(task, convoId)));
             }
             lane.appendChild(laneBody);
-            taskBoard.appendChild(lane);
+            return lane;
         });
+        UI.reconcileChildren(taskBoard, laneNodes);
 
         const feedHeader = document.createElement('div');
         feedHeader.className = 'task-feed-header';
+        feedHeader.dataset.key = 'task-feed-header';
         feedHeader.innerHTML = '<strong>Task log</strong><span>Latest delegated work for this conversation.</span>';
-        taskFeed.appendChild(feedHeader);
         const feedList = document.createElement('div');
         feedList.className = 'task-feed-list';
+        feedList.dataset.key = 'task-feed-list';
         tasks
             .slice()
             .sort((left, right) => String(right.updated_at || right.created_at || '').localeCompare(String(left.updated_at || left.created_at || '')))
             .forEach((task) => feedList.appendChild(_createConversationTaskCard(task, convoId, { compact: true })));
-        taskFeed.appendChild(feedList);
+        UI.reconcileChildren(taskFeed, [feedHeader, feedList]);
     }
 
     async function loadRelatedTasks({ soft = false } = {}) {
@@ -714,16 +717,13 @@ function renderConversationDetail(container, params) {
             hasMoreBefore = !!result.has_more_before;
             beforeSeq = Number(result.next_before_seq || (events[0] && events[0].seq) || 0);
             latestSeq = Number(result.next_after_seq || (events[events.length - 1] && events[events.length - 1].seq) || 0);
-            eventList.textContent = '';
             if (!events.length) {
                 const empty = document.createElement('div');
                 empty.className = 'empty-state';
                 empty.textContent = 'No events yet';
-                eventList.appendChild(empty);
+                UI.reconcileChildren(eventList, [empty]);
             } else {
-                events.forEach((event) => {
-                    eventList.appendChild(_createConversationEventElement(event, convoId));
-                });
+                UI.reconcileChildren(eventList, events.map((event) => _createConversationEventElement(event, convoId)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
@@ -942,6 +942,7 @@ function _createConversationEventElement(event, convoId) {
 
     const card = document.createElement('article');
     card.className = `event-card ${_eventCardClass(kind)}`;
+    card.dataset.key = event.event_id || String(event.seq || `${kind}:${event.created_at || ''}`);
 
     const header = document.createElement('button');
     header.className = 'event-card-header';
@@ -1025,6 +1026,7 @@ function _createConversationEventElement(event, convoId) {
 function _renderMessageBubble(event, kind) {
     const bubble = document.createElement('article');
     bubble.className = `chat-bubble ${kind === 'message.user' ? 'user' : 'bot'}`;
+    bubble.dataset.key = event.event_id || String(event.seq || `${kind}:${event.created_at || ''}`);
 
     const actor = document.createElement('div');
     actor.className = 'actor';
@@ -1283,6 +1285,7 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
 function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
     const card = document.createElement('article');
     card.className = `conversation-task-card${compact ? ' compact' : ''}`;
+    card.dataset.key = `${compact ? 'compact:' : 'full:'}${task.routed_task_id}`;
 
     const header = document.createElement('div');
     header.className = 'conversation-task-card-header';

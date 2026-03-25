@@ -22,6 +22,7 @@ class RegistryConnectionState:
     agent_token: str = ""
     poll_cursor: str = "0"
     registered_slug: str = ""
+    registered_card_hash: str = ""
     last_successful_contact_at: str = ""
     connectivity_state: str = "standalone"
     last_error: str = ""
@@ -76,6 +77,7 @@ def load_registry_connection_state(
         agent_token=raw.get("agent_token", ""),
         poll_cursor=str(raw.get("poll_cursor", "0")),
         registered_slug=raw.get("registered_slug", ""),
+        registered_card_hash=str(raw.get("registered_card_hash", "")),
         last_successful_contact_at=raw.get("last_successful_contact_at", ""),
         connectivity_state=raw.get("connectivity_state", "standalone"),
         last_error=last_error,

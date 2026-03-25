@@ -14,7 +14,7 @@ import app.agents.runtime as agent_runtime_module
 from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.runtime import AgentRuntime
+from app.agents.runtime import AgentRuntime, _registered_card_hash
 from app.agents.state import RegistryConnectionState
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.channel import _services_for_registry
@@ -520,6 +520,59 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         ("register", "product-bot", "connected"),
         ("heartbeat", "connected", "0"),
     ]
+
+
+async def test_agent_runtime_connected_sync_uses_heartbeat_without_re_registering(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def heartbeat(
+            self,
+            *,
+            connectivity_state: str,
+            current_capacity: int,
+            max_capacity: int,
+            runtime_health: dict | None = None,
+        ):
+            del runtime_health, current_capacity, max_capacity
+            calls.append(("heartbeat", connectivity_state))
+            return {"ok": True}
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            del card, connectivity_state, current_capacity, max_capacity
+            calls.append(("register", "unexpected"))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    config = make_config(
+        data_dir=tmp_path,
+        provider_name="codex",
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_slug="product-bot",
+        agent_role="product",
+        agent_capabilities=("planning", "delegation"),
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
+    runtime._state.agent_id = "agent-123"
+    runtime._state.agent_token = "secret-token"
+    runtime._state.registered_slug = "product-bot"
+    runtime._state.connectivity_state = "connected"
+    card = runtime.requested_card().model_copy(
+        update={"slug": "product-bot", "connectivity_state": "connected"}
+    )
+    runtime._state.registered_card_hash = _registered_card_hash(card)
+    runtime._save_state()
+
+    result = await runtime.sync_once()
+
+    assert result == "connected"
+    assert calls == [("heartbeat", "connected")]
 
 
 async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypatch, tmp_path: Path):

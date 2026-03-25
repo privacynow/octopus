@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import Sequence
 from typing import Any, Awaitable, Callable
@@ -25,6 +27,12 @@ from app.runtime_health import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _registered_card_hash(card: AgentCard) -> str:
+    payload = card.model_dump(mode="json")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class AgentRuntime:
@@ -187,12 +195,16 @@ class AgentRuntime:
                 }
             )
             client = self._client()
-            await client.register(
-                card,
-                connectivity_state="connected",
-                current_capacity=0,
-                max_capacity=1,
-            )
+            card_hash = _registered_card_hash(card)
+            if self._state.registered_card_hash != card_hash:
+                await client.register(
+                    card,
+                    connectivity_state="connected",
+                    current_capacity=0,
+                    max_capacity=1,
+                )
+                self._state.registered_card_hash = card_hash
+                self._save_state()
             runtime_health_payload = None
             try:
                 runtime_health_payload = await self._runtime_health_payload()

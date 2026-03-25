@@ -156,6 +156,14 @@ def _provider_request_content(prompt: str, system_prompt: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _should_publish_user_message(transport: TransportIdentity) -> bool:
+    actor = str(transport.actor or "")
+    return not (
+        actor.startswith("reg:delegation-resume:")
+        or actor.startswith("delegation-resume:")
+    )
+
+
 def _approval_expires_at(timeout_seconds: int) -> str:
     ttl_seconds = max(3600, timeout_seconds)
     return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
@@ -352,7 +360,8 @@ async def execute_request(
     if credential_env is None:
         return None
 
-    await event_sink.on_user_message(prompt, actor=transport.actor)
+    if _should_publish_user_message(transport):
+        await event_sink.on_user_message(prompt, actor=transport.actor)
 
     upload_dir = str(runtime.services.artifacts.upload_dir(conversation_key))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])

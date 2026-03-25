@@ -1116,6 +1116,65 @@ async def test_delegation_completion_sends_final_message_all_completed():
         assert await drain_one_worker_item(data_dir) is True
 
 
+async def test_registry_routed_result_skips_completion_summary_for_registry_parent(monkeypatch):
+    summary_calls: list[str] = []
+
+    async def _capture_summary(delegation, channel_egress):
+        del channel_egress
+        summary_calls.append(str(getattr(delegation, "status", "")))
+
+    monkeypatch.setattr(
+        "app.agents.delivery.send_delegation_completion_message",
+        _capture_summary,
+    )
+
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        conversation_ref = _reg_ref("conv-parent")
+        session = default_session(prov.name, prov.new_provider_state("reg:test"), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, _reg_conv(conversation_ref), session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert summary_calls == []
+
+
 async def test_delegation_completion_sends_final_message_partial_failed():
     with fresh_env(
         config_overrides={

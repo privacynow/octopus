@@ -47,6 +47,7 @@ from octopus_sdk.execution_context import (
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.providers import RunResult
 from octopus_sdk.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from octopus_sdk.execution import TransportIdentity, execute_request
 from app.runtime.work_admission import trust_tier_for_ref
 from app.skill_catalog_service import get_skill_catalog_service
 from octopus_sdk.sessions import (
@@ -81,6 +82,41 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
 )
+
+
+class _RecordingEventSink:
+    def __init__(self) -> None:
+        self.user_messages: list[tuple[str, str]] = []
+
+    async def on_user_message(self, content: str, *, actor: str = "") -> None:
+        self.user_messages.append((content, actor))
+
+    async def on_provider_request(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_provider_response(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_tool_execution(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_approval_requested(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_bot_reply(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_error(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_proposed(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_submitted(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_completed(self, *args, **kwargs) -> None:
+        del args, kwargs
 
 _MODEL_PROFILES = {"fast": "haiku", "balanced": "sonnet", "best": "opus"}
 
@@ -530,6 +566,53 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         ctx = prov.run_calls[0]["context"]
         assert ctx.file_policy == "edit"
         assert ctx.working_dir != "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_user_message():
+    with fresh_env() as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="resume")
+        base_runtime = current_execution_runtime()
+        sink = _RecordingEventSink()
+        runtime = base_runtime.__class__(
+            dispatch=base_runtime.dispatch,
+            services=base_runtime.services,
+            interrupted_exc=base_runtime.interrupted_exc,
+            build_transport_identity=base_runtime.build_transport_identity,
+            build_event_sink=lambda _transport: sink,
+            render_provider_error=base_runtime.render_provider_error,
+            show_foreign_setup=base_runtime.show_foreign_setup,
+            show_setup_prompt=base_runtime.show_setup_prompt,
+            send_retry_prompt=base_runtime.send_retry_prompt,
+            send_approval_prompt=base_runtime.send_approval_prompt,
+            send_formatted_reply=base_runtime.send_formatted_reply,
+            send_directed_artifacts=base_runtime.send_directed_artifacts,
+            send_compact_reply=base_runtime.send_compact_reply,
+            propose_delegation_plan=base_runtime.propose_delegation_plan,
+            delegation_parser=base_runtime.delegation_parser,
+            agent_directory=base_runtime.agent_directory,
+        )
+
+        outcome = await execute_request(
+            TransportIdentity(
+                conversation_key=telegram_conversation_key(chat.id),
+                origin_channel="registry",
+                external_conversation_ref="registry-conv-1",
+                conversation_ref="registry:default:conversation:registry-conv-1",
+                target_agent_id="agent-1",
+                actor="reg:delegation-resume:child-task-1",
+            ),
+            "Synthetic resume prompt",
+            [],
+            message,
+            runtime=runtime,
+        )
+
+        assert outcome is not None
+        assert outcome.status == "completed"
+        assert sink.user_messages == []
+        assert len(prov.run_calls) == 1
 
 
 @pytest.mark.asyncio

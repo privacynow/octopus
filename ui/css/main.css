@@ -1989,11 +1989,11 @@ a.stat-card:hover {
     gap: var(--space-3);
     padding: var(--space-4) var(--space-5);
     border-top: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(239,231,220,0.94), rgba(255,253,250,1));
+    background: var(--bg-secondary);
 }
 
 [data-theme="dark"] .compose-box {
-    background: linear-gradient(180deg, rgba(18,16,15,0.9), rgba(29,25,23,1));
+    background: rgba(32, 28, 26, 0.98);
 }
 
 .compose-box textarea {

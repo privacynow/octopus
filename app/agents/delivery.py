@@ -275,14 +275,15 @@ async def handle_registry_delivery(
                 source="registry",
                 external_id=parent_external_conversation_ref,
             )
-            try:
-                await send_delegation_completion_message(applied.pending, channel_egress)
-            except Exception:
-                log.warning(
-                    "Failed to send delegation completion summary for %s",
-                    parent_conversation_id,
-                    exc_info=True,
-                )
+            if not parent_conversation_id.startswith("registry:"):
+                try:
+                    await send_delegation_completion_message(applied.pending, channel_egress)
+                except Exception:
+                    log.warning(
+                        "Failed to send delegation completion summary for %s",
+                        parent_conversation_id,
+                        exc_info=True,
+                    )
             # Publish delegation.completed lifecycle event
             from octopus_sdk.event_sink import build_event_sink_for_context
             from octopus_sdk.execution import TransportIdentity

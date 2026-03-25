@@ -21,6 +21,24 @@ npm run capture:manual   # fixtures → docs/assets/manual/
 ../../.venv/bin/python annotate.py   # both asset dirs (registry/ui + manual)
 ```
 
+**Isolated live registry smoke (snapshot-based disposable stack):**
+
+```bash
+bash ../../scripts/e2e/run_live_registry_smoke.sh \
+  --snapshot-deploy /path/to/saved/.deploy
+```
+
+That harness is separate from screenshot capture:
+
+- it copies a saved `.deploy` snapshot into `.tmp/e2e-live-smoke/`
+- builds fresh images from the current repo
+- starts disposable registry + bot containers
+- runs API smoke and `live_registry_smoke.spec.js`
+- tears the stack down unless `--keep-fresh-stack` is passed
+
+Use it when validating real registry delegation/runtime behavior. Use
+`npm run capture` when regenerating the published docs screenshots.
+
 `annotate.py` writes `*-annotated.png` using sibling `*.meta.json` files (rectangle + arrow coordinates from capture). **Labels** are rendered in a **dark footer band** under the screenshot (numbered list), not as yellow boxes on top of the UI. Re-run **`npm run capture`** if you change layout; then **`annotate.py`** again.
 
 ## Notes

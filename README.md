@@ -156,6 +156,25 @@ If a manually configured remote registry connection fails:
 3. inspect the indexed `BOT_AGENT_REGISTRY_<n>_*` records in the bot env file
 4. run `./octopus doctor <bot>` and inspect per-registry state
 
+## Live Smoke
+
+For end-to-end verification against the current source tree, use the isolated
+snapshot-based harness instead of testing against a live `~/octopus` checkout.
+
+```bash
+bash scripts/e2e/run_live_registry_smoke.sh \
+  --snapshot-deploy /path/to/saved/.deploy
+```
+
+This harness:
+
+- copies the saved deployment snapshot into `.tmp/e2e-live-smoke/`
+- launches a fresh disposable registry + bot stack from the current repo
+- runs API smoke plus the Chromium live smoke
+- tears the disposable stack down afterward
+
+Use `--skip-playwright` to run the API/runtime portion only.
+
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — systems, subsystems, ports, SDK, APIs,

@@ -126,6 +126,36 @@ const API = (() => {
             request('GET', `/v1/agents/${encodeURIComponent(id)}/status`),
         getAgentConversations: (id, opts = {}) =>
             request('GET', `/v1/agents/${encodeURIComponent(id)}/conversations`, { params: opts }),
+        openConversationForAgent: async (agentId, opts = {}) => {
+            const preferExisting = opts.preferExisting !== false;
+            if (preferExisting) {
+                const existing = await request('GET', `/v1/agents/${encodeURIComponent(agentId)}/conversations`, {
+                    params: { limit: 25 },
+                });
+                const conversations = existing.conversations || existing || [];
+                const registryOpen = conversations.find((item) =>
+                    ['open', 'running'].includes(String(item.status || ''))
+                    && String(item.origin_channel || '') === 'registry'
+                );
+                if (registryOpen) {
+                    return registryOpen;
+                }
+                const anyOpen = conversations.find((item) =>
+                    ['open', 'running'].includes(String(item.status || ''))
+                );
+                if (anyOpen) {
+                    return anyOpen;
+                }
+            }
+            return request('POST', '/v1/conversations', {
+                body: {
+                    target_agent_id: agentId,
+                    origin_channel: 'registry',
+                    external_conversation_ref: 'ui-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+                    title: opts.title || 'New conversation',
+                },
+            });
+        },
 
         // Conversations
         listConversations: (opts = {}) =>

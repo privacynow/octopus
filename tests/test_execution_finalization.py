@@ -109,6 +109,9 @@ async def test_finalization_reports_routed_task_result() -> None:
     outcome = RequestExecutionOutcome(
         status="completed_with_denials",
         reply_text="Partial completion with denials.",
+        prompt_tokens=21,
+        completion_tokens=8,
+        cost_usd=0.19,
     )
 
     result = await finalize_execution(
@@ -140,6 +143,10 @@ async def test_finalization_reports_routed_task_result() -> None:
     payload = reported[0]["result"]
     assert payload.status == "completed"
     assert "Partial completion" in payload.full_text
+    assert payload.prompt_tokens == 21
+    assert payload.completion_tokens == 8
+    assert payload.cost_usd == 0.19
+    assert payload.provider == "claude"
 
 
 @pytest.mark.asyncio

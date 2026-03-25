@@ -447,6 +447,10 @@ def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, A
             "full_text",
             "artifacts",
             "follow_up_questions",
+            "prompt_tokens",
+            "completion_tokens",
+            "cost_usd",
+            "provider",
             "completed_at",
         },
         field_name="routed_task_result payload",
@@ -472,6 +476,22 @@ def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, A
         str(item)
         for item in follow_up_questions
     ]
+    prompt_tokens = _optional_int_field(data, "prompt_tokens", minimum=0)
+    if prompt_tokens is not _MISSING:
+        normalized["prompt_tokens"] = prompt_tokens
+    completion_tokens = _optional_int_field(data, "completion_tokens", minimum=0)
+    if completion_tokens is not _MISSING:
+        normalized["completion_tokens"] = completion_tokens
+    if "cost_usd" in data:
+        try:
+            normalized["cost_usd"] = float(data.get("cost_usd") or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("cost_usd requires a numeric value") from exc
+        if normalized["cost_usd"] < 0:
+            raise ValueError("cost_usd requires a non-negative value")
+    provider = _optional_text_field(data, "provider")
+    if provider is not _MISSING:
+        normalized["provider"] = provider
     completed_at = _optional_text_field(data, "completed_at")
     if completed_at is not _MISSING:
         normalized["completed_at"] = completed_at

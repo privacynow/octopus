@@ -323,6 +323,10 @@ class RoutedTaskResult(BaseModel):
     full_text: str = ""
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     follow_up_questions: list[str] = Field(default_factory=list)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    provider: str = ""
     completed_at: str = Field(default_factory=utcnow_iso, min_length=1)
 
     @field_validator("completed_at", mode="before")

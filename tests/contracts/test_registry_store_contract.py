@@ -1,5 +1,6 @@
 """Registry store contract: backend-neutral behavior for SQLite and Postgres."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 
@@ -895,6 +896,59 @@ def test_direct_assign_does_not_fuzzy_match_partial_alias(store):
                 },
             },
         )
+
+
+def test_delegated_task_usage_rolls_up_to_parent_conversation(store):
+    routed_task_id = "task-usage-rollup"
+    _routed, _origin_id, _target_id, target_token, conversation_id = _create_routed_task(
+        store,
+        routed_task_id=routed_task_id,
+    )
+
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, routed_task_id)
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": f"{routed_task_id}-complete",
+            "summary": "4",
+            "full_text": "4",
+            "prompt_tokens": 13,
+            "completion_tokens": 5,
+            "cost_usd": 0.17,
+            "provider": "codex",
+        },
+    )
+
+    usage_rows = store.get_usage_summary("1970-01-01T00:00:00+00:00")
+    usage_row = next(item for item in usage_rows if item["conversation_id"] == conversation_id)
+    assert usage_row["title"] == f"Conversation {routed_task_id}"
+    assert usage_row["metadata"]["prompt_tokens"] == 13
+    assert usage_row["metadata"]["completion_tokens"] == 5
+    assert usage_row["metadata"]["cost_usd"] == 0.17
+    assert usage_row["metadata"]["provider"] == "codex"
+
+    per_conversation = store.get_usage(
+        conversation_id=conversation_id,
+        since="1970-01-01T00:00:00+00:00",
+    )
+    assert any(
+        row["conversation_id"] == conversation_id
+        and row["metadata"]["prompt_tokens"] == 13
+        and row["metadata"]["completion_tokens"] == 5
+        and row["metadata"]["cost_usd"] == 0.17
+        and row["metadata"]["provider"] == "codex"
+        for row in per_conversation
+    )
+
+    summary = store.get_summary(now_iso=datetime.now(timezone.utc).isoformat())
+    assert summary["usage_24h"] == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "cost_usd": 0.17,
+    }
 
 
 def test_list_approvals_returns_only_pending_requests(store):

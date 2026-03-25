@@ -19,6 +19,8 @@ const PARENT_CONVERSATION_ID = requireEnv("E2E_PARENT_CONVERSATION_ID");
 const PARENT_PROMPT = requireEnv("E2E_PARENT_PROMPT");
 const EXISTING_TASK_TITLE = requireEnv("E2E_EXISTING_TASK_TITLE");
 const EXISTING_BASIC_TITLE = requireEnv("E2E_BASIC_CONVERSATION_TITLE");
+const DELEGATION_CONVERSATION_TITLE = requireEnv("E2E_DELEGATION_CONVERSATION_TITLE");
+const DELEGATION_CONVERSATION_ID = requireEnv("E2E_DELEGATION_CONVERSATION_ID");
 const ORIGIN_TOKEN = requireEnv("E2E_ORIGIN_TOKEN");
 const TARGET_TOKEN = requireEnv("E2E_TARGET_TOKEN");
 const ORIGIN_AGENT_ID = requireEnv("E2E_ORIGIN_AGENT_ID");
@@ -49,6 +51,14 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
   await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(PRIMARY_LABEL)) }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(SECONDARY_LABEL)) }).first()).toBeVisible();
+  const openConversationButtons = page.locator(".list-row-action");
+  await expect(openConversationButtons).toHaveCount(2);
+  await Promise.all([
+    page.waitForURL(/\/ui\/conversations\//, { timeout: 5000 }),
+    openConversationButtons.nth(1).click(),
+  ]);
+  await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 5000 });
+  await expect(page.locator(".conversation-meta")).toContainText(SECONDARY_LABEL);
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
@@ -61,7 +71,7 @@ test("live registry ui smoke", async ({ page }) => {
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
   await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
-  await expect(page.getByText(/Start with @m2, @cap:review, or @role:reviewer/i)).toBeVisible();
+  await expect(page.locator(".compose-hint")).toBeHidden();
   await expect(page.getByLabel("Message text")).toBeInViewport();
   await expect(page.locator(".chat-timeline")).toBeVisible();
   await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
@@ -80,6 +90,9 @@ test("live registry ui smoke", async ({ page }) => {
       slug: match.slug,
     };
   }, { targetAgentId: TARGET_AGENT_ID });
+  await page.getByLabel("Message text").fill("@");
+  await expect(page.locator(".compose-hint")).toContainText(/choose an agent, capability, or role/i);
+  await expect(page.locator(".compose-suggestions")).toContainText(`@${targetSelector.selectorValue}`);
   await page.getByLabel("Message text").fill(`@${targetSelector.selectorValue} ${liveUiTaskTitle}`);
   await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSelector.selectorValue)}`))).toBeVisible();
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
@@ -95,6 +108,7 @@ test("live registry ui smoke", async ({ page }) => {
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
   await expect(page.getByText(EXISTING_BASIC_TITLE).first()).toBeVisible();
+  await expect(page.getByText(DELEGATION_CONVERSATION_TITLE).first()).toBeVisible();
   const csrf = await fetchCsrf(page);
   const createdConversationTitle = `Live WS conversation ${Date.now()}`;
   await page.evaluate(
@@ -159,6 +173,10 @@ test("live registry ui smoke", async ({ page }) => {
           transition_id: `${taskId}-complete`,
           summary: "4",
           full_text: "4",
+          prompt_tokens: 17,
+          completion_tokens: 9,
+          cost_usd: 0.21,
+          provider: "codex",
           completed_at: new Date().toISOString(),
         }),
       });
@@ -175,4 +193,16 @@ test("live registry ui smoke", async ({ page }) => {
     },
   );
   await expect(page.getByText(liveTaskTitle).first()).toBeVisible({ timeout: 5000 });
+
+  await page.goto("/ui/usage");
+  await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
+  const usageRow = page
+    .locator("#usage-table tbody tr")
+    .filter({ has: page.locator(`a[href="/ui/conversations/${PARENT_CONVERSATION_ID}"]`) })
+    .first();
+  await expect(usageRow).toBeVisible({ timeout: 10000 });
+  await expect.poll(async () => {
+    const value = (await usageRow.locator("td").nth(1).textContent()) || "0";
+    return Number(value.replace(/,/g, "").trim());
+  }).toBeGreaterThan(0);
 });

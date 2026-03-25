@@ -1330,7 +1330,7 @@ select {
 }
 
 #content > .content-inner.workspace-route-wide {
-    max-width: 1560px;
+    max-width: 1680px;
 }
 
 .route-enter {
@@ -1368,6 +1368,13 @@ select {
 
 .page-header-tight {
     margin-bottom: var(--space-4);
+}
+
+.page-header-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin: calc(var(--space-4) * -1) 0 var(--space-3);
 }
 
 .card,
@@ -1990,6 +1997,10 @@ a.stat-card:hover {
     min-height: 0;
 }
 
+.conversation-page.conversation-page-compact {
+    grid-template-rows: auto auto auto;
+}
+
 .conversation-meta {
     padding: var(--space-3);
 }
@@ -2048,6 +2059,10 @@ a.stat-card:hover {
     overflow: hidden;
 }
 
+.conversation-page.conversation-page-compact .conversation-layout {
+    flex: 0 0 auto;
+}
+
 .conversation-panel {
     display: flex;
     flex-direction: column;
@@ -2056,6 +2071,10 @@ a.stat-card:hover {
     min-height: 0;
     height: 100%;
     overflow: hidden;
+}
+
+.conversation-panel.conversation-panel-compact {
+    height: auto;
 }
 
 .conversation-panel-header {
@@ -2079,6 +2098,12 @@ a.stat-card:hover {
     overflow-y: auto;
     padding: var(--space-3) var(--space-4);
     background: linear-gradient(180deg, var(--bg-tertiary), var(--bg));
+}
+
+.conversation-panel-compact .chat-timeline {
+    flex: 0 0 auto;
+    min-height: 8.5rem;
+    max-height: 12rem;
 }
 
 .conversation-task-view {
@@ -2611,6 +2636,33 @@ a.stat-card:hover {
     border-bottom: 0;
 }
 
+.list-row-shell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+}
+
+.list-row-shell:last-child {
+    border-bottom: 0;
+}
+
+.list-row-shell:hover,
+.list-row-shell:focus-within {
+    background: var(--surface-hover);
+}
+
+.list-row-shell > .list-row {
+    flex: 1;
+    border-bottom: 0;
+}
+
+.list-row-action {
+    margin-right: var(--space-3);
+    white-space: nowrap;
+}
+
 .list-row:hover,
 .list-row:focus-visible,
 .settings-row:focus-within {
@@ -2748,6 +2800,11 @@ a.stat-card:hover {
         min-height: auto;
     }
 
+    .page-header-actions {
+        margin-top: 0;
+        justify-content: flex-start;
+    }
+
     .conversation-page {
         min-height: auto;
         grid-template-rows: auto auto auto;
@@ -2761,6 +2818,10 @@ a.stat-card:hover {
     .conversation-panel {
         min-height: 70vh;
         height: auto;
+    }
+
+    .conversation-panel-compact .chat-timeline {
+        max-height: none;
     }
 
     .dashboard-command {

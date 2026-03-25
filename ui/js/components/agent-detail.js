@@ -9,12 +9,42 @@ function renderAgentDetail(container, params) {
     const convosLimit = UI.DEFAULT_PAGE_LIMIT;
     let detailLoaded = false;
     let conversationsLoaded = false;
+    let agentDisplayName = '';
+    let openConversationBusy = false;
 
     // Shell
     const header = document.createElement('div');
     header.className = 'page-header';
     header.innerHTML = '<h2>Agent Detail</h2><p>Loading...</p>';
     container.appendChild(header);
+
+    const headerActions = document.createElement('div');
+    headerActions.className = 'page-header-actions';
+    container.appendChild(headerActions);
+
+    const openConversationBtn = document.createElement('button');
+    openConversationBtn.type = 'button';
+    openConversationBtn.className = 'btn btn-primary';
+    openConversationBtn.textContent = 'Open conversation';
+    openConversationBtn.disabled = true;
+    openConversationBtn.addEventListener('click', async () => {
+        if (openConversationBusy) return;
+        openConversationBusy = true;
+        openConversationBtn.disabled = true;
+        openConversationBtn.textContent = 'Opening…';
+        try {
+            const conversation = await API.openConversationForAgent(agentId, {
+                title: `Conversation with ${agentDisplayName || agentId}`,
+            });
+            Router.navigate('/ui/conversations/' + conversation.conversation_id);
+        } catch (err) {
+            UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent detail open conversation failed' });
+            openConversationBusy = false;
+            openConversationBtn.disabled = false;
+            openConversationBtn.textContent = 'Open conversation';
+        }
+    });
+    headerActions.appendChild(openConversationBtn);
 
     const content = document.createElement('div');
     content.id = 'agent-detail-content';
@@ -36,6 +66,10 @@ function renderAgentDetail(container, params) {
                 return;
             }
             const a = status.agent || status;
+            agentDisplayName = a.display_name || a.slug || a.agent_id || agentId;
+            openConversationBusy = false;
+            openConversationBtn.disabled = false;
+            openConversationBtn.textContent = 'Open conversation';
             const workers = status.workers || [];
 
             // Update header

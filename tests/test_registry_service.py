@@ -1290,6 +1290,86 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     }
 
 
+def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-usage-rollup")
+    target_id, target_token = _enroll_and_register(client, "Target Bot", "target-usage-rollup")
+    conv = _create_conversation(client, origin_token, origin_id, "conv-usage-rollup", title="Usage rollup conversation")
+    conversation_id = conv["conversation_id"]
+
+    created = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-usage-rollup",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Usage rollup task",
+            "instructions": "Return only the number 4.",
+            "created_at": now_iso,
+        },
+    )
+    assert created.status_code == 200
+
+    target_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert target_poll.status_code == 200
+
+    running = client.post(
+        "/v1/agents/routed-tasks/task-usage-rollup/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "running",
+            "transition_id": "task-usage-rollup-start",
+            "summary": "In progress",
+            "timeline_events": [],
+        },
+    )
+    assert running.status_code == 200
+
+    completed = client.post(
+        "/v1/agents/routed-tasks/task-usage-rollup/result",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "completed",
+            "transition_id": "task-usage-rollup-complete",
+            "summary": "4",
+            "full_text": "4",
+            "prompt_tokens": 13,
+            "completion_tokens": 5,
+            "cost_usd": 0.17,
+            "provider": "codex",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert completed.status_code == 200
+
+    _login_ui(client)
+    usage = client.get("/v1/usage", params={"since": "1970-01-01T00:00:00+00:00"})
+    assert usage.status_code == 200
+    payload = usage.json()
+    assert payload["daily_total"] == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "cost_usd": 0.17,
+    }
+    row = next(item for item in payload["by_conversation"] if item["conversation_id"] == conversation_id)
+    assert row == {
+        "conversation_id": conversation_id,
+        "title": "Usage rollup conversation",
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "cost_usd": 0.17,
+    }
+
+
 def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

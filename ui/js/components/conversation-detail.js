@@ -168,7 +168,7 @@ function renderConversationDetail(container, params) {
 
     const composeHint = document.createElement('div');
     composeHint.className = 'compose-hint';
-    composeHint.textContent = 'Start with @m2, @cap:review, or @role:reviewer to route work directly.';
+    composeHint.hidden = true;
     composeMeta.appendChild(composeHint);
 
     const targetPreview = document.createElement('div');
@@ -209,22 +209,36 @@ function renderConversationDetail(container, params) {
             const capabilities = capabilityData.capabilities || capabilityData || [];
             const seen = new Set();
             availableTargets = [];
+            function pushTarget(item) {
+                const key = `${item.kind}:${String(item.label || '').toLowerCase()}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                availableTargets.push(item);
+            }
             agents.forEach((agent) => {
                 const slug = (agent.slug || agent.agent_id || '').trim();
-                if (!slug || seen.has(`agent:${slug}`)) return;
-                seen.add(`agent:${slug}`);
-                availableTargets.push({
+                if (!slug) return;
+                const detail = [agent.role || '', (agent.capabilities || []).slice(0, 2).join(', ')].filter(Boolean).join(' · ');
+                pushTarget({
                     label: '@' + slug,
                     kind: 'agent',
                     display: agent.display_name || slug,
-                    detail: [agent.role || '', (agent.capabilities || []).slice(0, 2).join(', ')].filter(Boolean).join(' · '),
+                    detail,
                 });
+                const displayName = String(agent.display_name || '').trim();
+                if (displayName && !/\s/.test(displayName) && displayName.toLowerCase() !== slug.toLowerCase()) {
+                    pushTarget({
+                        label: '@' + displayName,
+                        kind: 'agent',
+                        display: displayName,
+                        detail,
+                    });
+                }
             });
             agents.forEach((agent) => {
                 const role = String(agent.role || '').trim();
-                if (!role || seen.has(`role:${role}`)) return;
-                seen.add(`role:${role}`);
-                availableTargets.push({
+                if (!role) return;
+                pushTarget({
                     label: '@role:' + role,
                     kind: 'role',
                     display: role,
@@ -233,9 +247,8 @@ function renderConversationDetail(container, params) {
             });
             capabilities.forEach((capability) => {
                 const value = String(capability.name || capability.capability || capability || '').trim();
-                if (!value || seen.has(`capability:${value}`)) return;
-                seen.add(`capability:${value}`);
-                availableTargets.push({
+                if (!value) return;
+                pushTarget({
                     label: '@cap:' + value,
                     kind: 'capability',
                     display: value,
@@ -302,6 +315,7 @@ function renderConversationDetail(container, params) {
         timelinePanel.setAttribute('aria-labelledby', labelledBy);
         timeline.hidden = activeView === 'tasks';
         taskView.hidden = activeView !== 'tasks';
+        syncConversationDensity(activeView !== 'tasks' && !eventList.childElementCount);
     }
 
     function applyFilter(nextView) {
@@ -438,6 +452,18 @@ function renderConversationDetail(container, params) {
         updateComposerAssist();
     }
 
+    function setComposeHint(text = '') {
+        const normalized = String(text || '').trim();
+        composeHint.hidden = !normalized;
+        composeHint.textContent = normalized;
+    }
+
+    function selectorMatchesAvailableTarget(selectorToken) {
+        const token = String(selectorToken || '').trim().toLowerCase();
+        if (!token) return false;
+        return availableTargets.some((item) => String(item.label || '').trim().toLowerCase() === token);
+    }
+
     function clearSuggestions() {
         suggestionMatches = [];
         suggestionIndex = -1;
@@ -459,10 +485,12 @@ function renderConversationDetail(container, params) {
         const directAssignment = _extractConversationTargetSelectorMessage(text);
         const selectorToken = _leadingConversationTargetToken(text);
         const selector = selectorToken ? _parseConversationTargetSelector(selectorToken) : null;
+        const selectorPrefix = selectorToken.startsWith('@');
+        const exactSuggestionMatch = selectorMatchesAvailableTarget(selectorToken);
         if (directAssignment) {
             targetPreview.hidden = false;
             targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(directAssignment.selector)}.`;
-            composeHint.textContent = 'Direct assignments create a routed task immediately.';
+            setComposeHint('Direct assignment will create a routed task immediately.');
             textarea.placeholder = 'Describe the delegated task';
             sendBtn.textContent = 'Assign';
             sendBtn.setAttribute('aria-label', 'Assign task');
@@ -470,17 +498,36 @@ function renderConversationDetail(container, params) {
             return;
         }
         if (selector) {
-            targetPreview.hidden = false;
-            targetPreview.textContent = `Target ${_formatConversationTargetLabel(selector)} selected. Add instructions to assign work.`;
-            composeHint.textContent = 'Press Enter to assign once the task instructions are complete.';
+            targetPreview.hidden = !exactSuggestionMatch;
+            if (exactSuggestionMatch) {
+                targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(selector)}.`;
+                setComposeHint('Add instructions after the selector to assign work directly.');
+            } else if (selectorToken.startsWith('@')) {
+                setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+            }
             textarea.placeholder = 'Describe the delegated task';
             sendBtn.textContent = 'Assign';
             sendBtn.setAttribute('aria-label', 'Assign task');
             renderTargetSuggestions(selectorToken);
+            if (!suggestionMatches.length && selectorToken.startsWith('@') && !exactSuggestionMatch) {
+                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+            }
+            return;
+        }
+        if (selectorPrefix) {
+            targetPreview.hidden = true;
+            setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+            textarea.placeholder = 'Choose a routing target or keep typing';
+            sendBtn.textContent = 'Send';
+            sendBtn.setAttribute('aria-label', 'Send message');
+            renderTargetSuggestions(selectorToken);
+            if (!suggestionMatches.length) {
+                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+            }
             return;
         }
         targetPreview.hidden = true;
-        composeHint.textContent = 'Start with @m2, @cap:review, or @role:reviewer to route work directly.';
+        setComposeHint('');
         textarea.placeholder = 'Send a message to this conversation';
         sendBtn.textContent = 'Send';
         sendBtn.setAttribute('aria-label', 'Send message');
@@ -497,18 +544,22 @@ function renderConversationDetail(container, params) {
             return;
         }
         if (suggestionEngine) {
-            suggestionMatches = suggestionEngine.search(query).map((match) => match.item).slice(0, 6);
+            suggestionMatches = query
+                ? suggestionEngine.search(query).map((match) => match.item).slice(0, 6)
+                : availableTargets.slice(0, 6);
         } else {
-            suggestionMatches = availableTargets
-                .filter((item) => {
-                    const haystack = [
-                        item.label,
-                        item.display,
-                        item.detail,
-                    ].join(' ').toLowerCase();
-                    return haystack.includes(normalizedToken) || haystack.includes(query);
-                })
-                .slice(0, 6);
+            suggestionMatches = query
+                ? availableTargets
+                    .filter((item) => {
+                        const haystack = [
+                            item.label,
+                            item.display,
+                            item.detail,
+                        ].join(' ').toLowerCase();
+                        return haystack.includes(normalizedToken) || haystack.includes(query);
+                    })
+                    .slice(0, 6)
+                : availableTargets.slice(0, 6);
         }
         if (!suggestionMatches.length) {
             return;
@@ -748,17 +799,20 @@ function renderConversationDetail(container, params) {
                 empty.className = 'empty-state';
                 empty.textContent = 'No events yet';
                 UI.reconcileChildren(eventList, [empty]);
+                syncConversationDensity(activeView === 'conversation');
             } else {
                 UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
+                syncConversationDensity(false);
             }
             updateHistoryStatus();
             initHistoryObserver();
         } catch (err) {
             eventList.textContent = '';
             UI.renderError(eventList, 'Failed to load events: ' + err.message, reloadEvents);
+            syncConversationDensity(false);
         }
     }
 
@@ -853,6 +907,7 @@ function renderConversationDetail(container, params) {
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId));
+        syncConversationDensity(false);
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (meta) {
             meta.event_count = Number(meta.event_count || 0) + 1;
@@ -886,6 +941,11 @@ function renderConversationDetail(container, params) {
     }
     cleanups.add(() => clearTimeout(progressTimer));
     updateComposerAssist();
+
+    function syncConversationDensity(compact) {
+        page.classList.toggle('conversation-page-compact', Boolean(compact));
+        timelinePanel.classList.toggle('conversation-panel-compact', Boolean(compact));
+    }
 }
 
 function _parseConversationTargetSelector(raw) {

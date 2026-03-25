@@ -1444,6 +1444,19 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     now=completed_at,
                     delivery_id=uuid.uuid4().hex,
                 )
+                event_metadata = {
+                    "routed_task_id": routed_task_id,
+                    "status": decision.new_state,
+                    "transition_id": validated_payload["transition_id"],
+                }
+                if "prompt_tokens" in validated_payload:
+                    event_metadata["prompt_tokens"] = int(validated_payload.get("prompt_tokens") or 0)
+                if "completion_tokens" in validated_payload:
+                    event_metadata["completion_tokens"] = int(validated_payload.get("completion_tokens") or 0)
+                if "cost_usd" in validated_payload:
+                    event_metadata["cost_usd"] = float(validated_payload.get("cost_usd") or 0.0)
+                if "provider" in validated_payload:
+                    event_metadata["provider"] = str(validated_payload.get("provider") or "")
                 mirrored_event = self._insert_event(
                     conn,
                     event_id=primary_event_id,
@@ -1456,11 +1469,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         or validated_payload.get("full_text")
                         or decision.new_state
                     ),
-                    metadata={
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload["transition_id"],
-                    },
+                    metadata=event_metadata,
                     created_at=completed_at,
                 )
                 if mirrored_event is not None:
@@ -1755,26 +1764,35 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if until_iso:
                 rows = conn.execute(
                     """
-                    SELECT conversation_id, metadata_json, created_at
-                    FROM events
-                    WHERE kind = 'provider.response' AND created_at >= ? AND created_at <= ?
-                    ORDER BY created_at
+                    SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
+                    FROM events e
+                    LEFT JOIN conversations c ON c.conversation_id = e.conversation_id
+                    WHERE (
+                        e.kind = 'provider.response'
+                        OR (e.kind = 'task.status' AND json_extract(e.metadata_json, '$.prompt_tokens') IS NOT NULL)
+                    ) AND e.created_at >= ? AND e.created_at <= ?
+                    ORDER BY e.created_at
                     """,
                     (since_iso, until_iso),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """
-                    SELECT conversation_id, metadata_json, created_at
-                    FROM events
-                    WHERE kind = 'provider.response' AND created_at >= ?
-                    ORDER BY created_at
+                    SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
+                    FROM events e
+                    LEFT JOIN conversations c ON c.conversation_id = e.conversation_id
+                    WHERE (
+                        e.kind = 'provider.response'
+                        OR (e.kind = 'task.status' AND json_extract(e.metadata_json, '$.prompt_tokens') IS NOT NULL)
+                    ) AND e.created_at >= ?
+                    ORDER BY e.created_at
                     """,
                     (since_iso,),
                 ).fetchall()
         return [
             {
                 "conversation_id": row["conversation_id"],
+                "title": row["title"] or "",
                 "metadata": decode_json_field(row["metadata_json"], {}),
                 "created_at": row["created_at"],
             }
@@ -2795,26 +2813,32 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = "SELECT * FROM events WHERE kind = 'provider.response'"
+            sql = (
+                "SELECT e.*, c.title AS conversation_title "
+                "FROM events e "
+                "LEFT JOIN conversations c ON c.conversation_id = e.conversation_id "
+                "WHERE (e.kind = 'provider.response' OR (e.kind = 'task.status' AND json_extract(e.metadata_json, '$.prompt_tokens') IS NOT NULL))"
+            )
             params: list[Any] = []
             if agent_id:
-                sql += " AND agent_id = ?"
+                sql += " AND e.agent_id = ?"
                 params.append(agent_id)
             if conversation_id:
-                sql += " AND conversation_id = ?"
+                sql += " AND e.conversation_id = ?"
                 params.append(conversation_id)
             if since:
-                sql += " AND created_at >= ?"
+                sql += " AND e.created_at >= ?"
                 params.append(since)
             if until:
-                sql += " AND created_at <= ?"
+                sql += " AND e.created_at <= ?"
                 params.append(until)
-            sql += " ORDER BY created_at"
+            sql += " ORDER BY e.created_at"
             rows = conn.execute(sql, params).fetchall()
         return [
             {
                 "event_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
+                "title": row["conversation_title"] or "",
                 "agent_id": row["agent_id"],
                 "metadata": decode_json_field(row["metadata_json"], {}),
                 "created_at": row["created_at"],

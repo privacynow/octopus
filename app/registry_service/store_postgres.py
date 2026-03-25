@@ -1355,6 +1355,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     now=completed_at,
                     delivery_id=uuid.uuid4().hex,
                 )
+                event_metadata = {
+                    "routed_task_id": routed_task_id,
+                    "status": decision.new_state,
+                    "transition_id": validated_payload["transition_id"],
+                }
+                if "prompt_tokens" in validated_payload:
+                    event_metadata["prompt_tokens"] = int(validated_payload.get("prompt_tokens") or 0)
+                if "completion_tokens" in validated_payload:
+                    event_metadata["completion_tokens"] = int(validated_payload.get("completion_tokens") or 0)
+                if "cost_usd" in validated_payload:
+                    event_metadata["cost_usd"] = float(validated_payload.get("cost_usd") or 0.0)
+                if "provider" in validated_payload:
+                    event_metadata["provider"] = str(validated_payload.get("provider") or "")
                 mirrored_event = self._insert_event(
                     conn,
                     event_id=primary_event_id,
@@ -1367,11 +1380,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         or validated_payload.get("full_text")
                         or decision.new_state
                     ),
-                    metadata={
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload["transition_id"],
-                    },
+                    metadata=event_metadata,
                     created_at=completed_at,
                 )
                 if mirrored_event is not None:
@@ -1676,20 +1685,28 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 if until_iso:
                     cur.execute(
                         f"""
-                        SELECT conversation_id, metadata_json, created_at
-                        FROM {_SCHEMA}.events
-                        WHERE kind = 'provider.response' AND created_at >= %s AND created_at <= %s
-                        ORDER BY created_at
+                        SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
+                        FROM {_SCHEMA}.events e
+                        LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
+                        WHERE (
+                            e.kind = 'provider.response'
+                            OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens')
+                        ) AND e.created_at >= %s AND e.created_at <= %s
+                        ORDER BY e.created_at
                         """,
                         (since_iso, until_iso),
                     )
                 else:
                     cur.execute(
                         f"""
-                        SELECT conversation_id, metadata_json, created_at
-                        FROM {_SCHEMA}.events
-                        WHERE kind = 'provider.response' AND created_at >= %s
-                        ORDER BY created_at
+                        SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
+                        FROM {_SCHEMA}.events e
+                        LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
+                        WHERE (
+                            e.kind = 'provider.response'
+                            OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens')
+                        ) AND e.created_at >= %s
+                        ORDER BY e.created_at
                         """,
                         (since_iso,),
                     )
@@ -1697,6 +1714,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         return [
             {
                 "conversation_id": row["conversation_id"],
+                "title": row["title"] or "",
                 "metadata": decode_json_field(row["metadata_json"], {}),
                 "created_at": row["created_at"],
             }
@@ -2775,21 +2793,26 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
         with self._connect() as conn:
-            sql = f"SELECT * FROM {_SCHEMA}.events WHERE kind = 'provider.response'"
+            sql = (
+                f"SELECT e.*, c.title AS conversation_title "
+                f"FROM {_SCHEMA}.events e "
+                f"LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id "
+                f"WHERE (e.kind = 'provider.response' OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens'))"
+            )
             params: list[Any] = []
             if agent_id:
-                sql += " AND agent_id = %s"
+                sql += " AND e.agent_id = %s"
                 params.append(agent_id)
             if conversation_id:
-                sql += " AND conversation_id = %s"
+                sql += " AND e.conversation_id = %s"
                 params.append(conversation_id)
             if since:
-                sql += " AND created_at >= %s"
+                sql += " AND e.created_at >= %s"
                 params.append(since)
             if until:
-                sql += " AND created_at <= %s"
+                sql += " AND e.created_at <= %s"
                 params.append(until)
-            sql += " ORDER BY created_at"
+            sql += " ORDER BY e.created_at"
             with _cur(conn) as cur:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
@@ -2797,6 +2820,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             {
                 "event_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
+                "title": row["conversation_title"] or "",
                 "agent_id": row["agent_id"],
                 "metadata": decode_json_field(row["metadata_json"], {}),
                 "created_at": row["created_at"],

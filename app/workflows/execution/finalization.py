@@ -136,6 +136,10 @@ async def finalize_execution(
                     full_text=full_text or outcome.error_text,
                     artifacts=(),
                     follow_up_questions=(),
+                    prompt_tokens=outcome.prompt_tokens,
+                    completion_tokens=outcome.completion_tokens,
+                    cost_usd=outcome.cost_usd,
+                    provider=context.config.provider_name,
                 ),
             )
             if report.status == "reported":

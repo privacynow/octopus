@@ -19,10 +19,10 @@ function renderConversationList(container) {
 
     const actions = document.createElement('div');
     actions.className = 'action-bar';
-    const newBtn = document.createElement('button');
+    const newBtn = document.createElement('a');
     newBtn.className = 'btn btn-primary';
-    newBtn.textContent = 'Start a conversation';
-    newBtn.addEventListener('click', () => _showNewConversationDialog());
+    newBtn.href = '/ui/agents';
+    newBtn.textContent = 'Choose an agent';
     actions.appendChild(newBtn);
 
     const approvalLink = document.createElement('a');
@@ -183,98 +183,6 @@ function renderConversationList(container) {
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
     }));
-
-    function _showNewConversationDialog() {
-        const overlay = document.createElement('div');
-        overlay.className = 'confirm-overlay';
-
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.setAttribute('role', 'dialog');
-        dialog.setAttribute('aria-modal', 'true');
-
-        const h3 = document.createElement('h3');
-        h3.id = 'new-conversation-title';
-        h3.textContent = 'New Conversation';
-        dialog.setAttribute('aria-labelledby', h3.id);
-        dialog.appendChild(h3);
-
-        const agentLabel = document.createElement('label');
-        agentLabel.htmlFor = 'new-conversation-agent';
-        agentLabel.textContent = 'Target Agent';
-        agentLabel.style.display = 'block';
-        agentLabel.style.marginBottom = '4px';
-        agentLabel.style.fontSize = '12px';
-        agentLabel.style.color = 'var(--text-secondary)';
-        dialog.appendChild(agentLabel);
-
-        const agentSelect = document.createElement('select');
-        agentSelect.id = 'new-conversation-agent';
-        agentSelect.setAttribute('aria-label', 'Target agent');
-        agentSelect.style.width = '100%';
-        agentSelect.style.marginBottom = '12px';
-        agentSelect.style.padding = '8px';
-        agentSelect.innerHTML = '<option value="">Loading agents...</option>';
-        dialog.appendChild(agentSelect);
-
-        // Load agents
-        API.listAgents({ limit: 100 }).then(data => {
-            const agents = data.agents || data || [];
-            agentSelect.innerHTML = '';
-            if (agents.length === 0) {
-                agentSelect.innerHTML = '<option value="">No agents available</option>';
-                return;
-            }
-            agents.forEach(a => {
-                const opt = document.createElement('option');
-                opt.value = a.agent_id;
-                opt.textContent = a.display_name || a.slug || a.agent_id;
-                agentSelect.appendChild(opt);
-            });
-        }).catch((err) => {
-            agentSelect.innerHTML = '<option value="">Failed to load agents</option>';
-            UI.reportError('Failed to load agents for a new conversation', err, { context: 'Load conversation agents failed' });
-        });
-
-        const actions = document.createElement('div');
-        actions.className = 'confirm-actions';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'btn';
-        cancelBtn.type = 'button';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.addEventListener('click', () => overlay.remove());
-
-        const createBtn = document.createElement('button');
-        createBtn.className = 'btn btn-primary';
-        createBtn.type = 'button';
-        createBtn.textContent = 'Create';
-        createBtn.addEventListener('click', async () => {
-            const agentId = agentSelect.value;
-            if (!agentId) return;
-            createBtn.disabled = true;
-            createBtn.textContent = 'Creating...';
-            try {
-                const result = await API.createConversation(agentId);
-                overlay.remove();
-                Router.navigate('/ui/conversations/' + result.conversation_id);
-            } catch (err) {
-                createBtn.disabled = false;
-                createBtn.textContent = 'Create';
-                UI.reportError('Failed to start the conversation', err, { context: 'Create conversation failed' });
-            }
-        });
-
-        actions.appendChild(cancelBtn);
-        actions.appendChild(createBtn);
-        dialog.appendChild(actions);
-        overlay.appendChild(dialog);
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) overlay.remove();
-        });
-        document.body.appendChild(overlay);
-        requestAnimationFrame(() => agentSelect.focus());
-    }
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(reloadDebounce));

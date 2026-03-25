@@ -9,6 +9,7 @@ function renderAgentList(container) {
     let nameFilter = UI.readQueryParam('q', '');
     let stateFilter = UI.readQueryParam('state', '');
     let hasLoaded = false;
+    let activeConversationOpen = '';
 
     // Shell
     const header = document.createElement('div');
@@ -101,6 +102,10 @@ function renderAgentList(container) {
         }
 
         const rows = agents.map((a) => {
+            const shell = document.createElement('div');
+            shell.className = 'list-row-shell';
+            shell.dataset.key = a.agent_id;
+
             const sub = document.createElement('span');
             const parts = [a.role || 'agent', a.provider || '', a.slug].filter(Boolean);
             sub.appendChild(document.createTextNode(parts.join(' \u00b7 ')));
@@ -121,9 +126,33 @@ function renderAgentList(container) {
                 badgeText: a.connectivity_state || 'unknown',
                 badgeClass: 'badge-' + (a.connectivity_state || 'stopped'),
             });
-            row.dataset.key = a.agent_id;
             row.id = 'agent-badge-' + a.agent_id;
-            return row;
+            shell.appendChild(row);
+
+            const actionBtn = document.createElement('button');
+            actionBtn.type = 'button';
+            actionBtn.className = 'btn btn-sm list-row-action';
+            actionBtn.textContent = 'Open conversation';
+            actionBtn.setAttribute('aria-label', `Open or start a conversation with ${a.display_name || a.slug || a.agent_id}`);
+            actionBtn.addEventListener('click', async () => {
+                if (activeConversationOpen === a.agent_id) return;
+                activeConversationOpen = a.agent_id;
+                actionBtn.disabled = true;
+                actionBtn.textContent = 'Opening…';
+                try {
+                    const conversation = await API.openConversationForAgent(a.agent_id, {
+                        title: `Conversation with ${a.display_name || a.slug || a.agent_id}`,
+                    });
+                    Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                } catch (err) {
+                    UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent list open conversation failed' });
+                    actionBtn.disabled = false;
+                    actionBtn.textContent = 'Open conversation';
+                    activeConversationOpen = '';
+                }
+            });
+            shell.appendChild(actionBtn);
+            return shell;
         });
         UI.reconcileChildren(listEl, rows);
 

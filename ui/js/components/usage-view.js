@@ -4,11 +4,12 @@
 function renderUsageView(container) {
     const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
+    let hasLoaded = false;
 
     // Header
     const header = document.createElement('div');
     header.className = 'page-header';
-    header.innerHTML = '<h2>Usage</h2><p>Prompt, completion, and cost totals derived from provider response events</p>';
+    header.innerHTML = '<h2>Usage</h2><p>Prompt, completion, and cost totals from provider responses and delegated task results</p>';
     container.appendChild(header);
 
     // Date range bar
@@ -66,17 +67,16 @@ function renderUsageView(container) {
         };
     }
 
-    function loadUsage() {
-        summaryEl.textContent = '';
-        tableEl.textContent = '';
-        UI.renderSkeletons(summaryEl, 1, 'card');
-        UI.renderSkeletons(tableEl, 3, 'row');
+    function loadUsage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            summaryEl.textContent = '';
+            tableEl.textContent = '';
+            UI.renderSkeletons(summaryEl, 1, 'card');
+            UI.renderSkeletons(tableEl, 3, 'row');
+        }
 
         const params = _rangeToParams(currentRange);
         API.getUsage(params).then(usage => {
-            summaryEl.textContent = '';
-            tableEl.textContent = '';
-
             const daily = usage.daily_total || {};
             const rows = Array.isArray(usage)
                 ? usage
@@ -85,6 +85,7 @@ function renderUsageView(container) {
             // Summary card
             const card = document.createElement('div');
             card.className = 'summary-card';
+            card.dataset.key = 'usage-summary-card';
 
             const promptStat = _createStat(
                 (daily.prompt_tokens || 0).toLocaleString(),
@@ -104,19 +105,18 @@ function renderUsageView(container) {
             );
             card.appendChild(costStat);
 
-            summaryEl.appendChild(card);
+            UI.reconcileChildren(summaryEl, [card]);
 
             // Per-conversation table
             if (rows.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No usage data for this period';
-                tableEl.appendChild(empty);
+                UI.reconcileChildren(tableEl, [UI.renderEmptyState('No usage data for this period')]);
+                hasLoaded = true;
                 return;
             }
 
             const wrap = document.createElement('div');
             wrap.className = 'table-wrap';
+            wrap.dataset.key = 'usage-table-wrap';
             const tbl = document.createElement('table');
             tbl.className = 'data-table responsive';
 
@@ -127,14 +127,21 @@ function renderUsageView(container) {
             const tbody = document.createElement('tbody');
             rows.forEach(u => {
                 const tr = document.createElement('tr');
+                tr.dataset.key = u.conversation_id || '';
 
-                const cells = [
-                    ['Conversation', u.conversation_id || u.title || ''],
+                const conversationTd = document.createElement('td');
+                conversationTd.setAttribute('data-label', 'Conversation');
+                const conversationLink = document.createElement('a');
+                conversationLink.href = '/ui/conversations/' + encodeURIComponent(u.conversation_id || '');
+                conversationLink.textContent = u.title || u.conversation_id || '';
+                conversationTd.appendChild(conversationLink);
+                tr.appendChild(conversationTd);
+
+                [
                     ['Prompt Tokens', (u.prompt_tokens || 0).toLocaleString()],
                     ['Completion Tokens', (u.completion_tokens || 0).toLocaleString()],
                     ['Cost', '$' + (u.cost_usd || 0).toFixed(4)],
-                ];
-                cells.forEach(([label, val]) => {
+                ].forEach(([label, val]) => {
                     const td = document.createElement('td');
                     td.setAttribute('data-label', label);
                     td.textContent = val;
@@ -145,9 +152,14 @@ function renderUsageView(container) {
             });
             tbl.appendChild(tbody);
             wrap.appendChild(tbl);
-            tableEl.appendChild(wrap);
+            UI.reconcileChildren(tableEl, [wrap]);
+            hasLoaded = true;
 
         }).catch(err => {
+            if (soft && hasLoaded) {
+                UI.reportError('Failed to refresh usage', err, { context: 'Usage soft refresh failed' });
+                return;
+            }
             summaryEl.textContent = '';
             tableEl.textContent = '';
             UI.renderError(tableEl, 'Failed: ' + err.message, loadUsage);
@@ -174,7 +186,7 @@ function renderUsageView(container) {
     let reloadDebounce = null;
     const unsub = WS.subscribe('usage', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadUsage, 600);
+        reloadDebounce = setTimeout(() => loadUsage({ soft: true }), 600);
     });
     cleanups.add(() => clearTimeout(reloadDebounce));
     cleanups.add(unsub);

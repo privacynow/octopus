@@ -959,6 +959,7 @@ def resource_usage(
             row["conversation_id"],
             {
                 "conversation_id": row["conversation_id"],
+                "title": row.get("title", ""),
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "cost_usd": 0.0,

@@ -381,6 +381,42 @@ window.UI = (() => {
         });
     }
 
+    function bindSegmentedControlKeyboard(group, onActivate) {
+        if (!(group instanceof Element)) return;
+        group.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+            const tabs = Array.from(group.querySelectorAll('[role="tab"]'));
+            if (!tabs.length) return;
+            const currentIndex = tabs.indexOf(document.activeElement);
+            if (currentIndex < 0) return;
+            e.preventDefault();
+
+            let nextIndex = currentIndex;
+            if (e.key === 'Home') {
+                nextIndex = 0;
+            } else if (e.key === 'End') {
+                nextIndex = tabs.length - 1;
+            } else {
+                const delta = e.key === 'ArrowRight' ? 1 : -1;
+                nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+            }
+
+            const target = tabs[nextIndex];
+            if (!target) return;
+            target.focus();
+            if (typeof onActivate === 'function') {
+                onActivate(target);
+            } else {
+                target.click();
+            }
+            requestAnimationFrame(() => {
+                if (target.isConnected && typeof target.focus === 'function') {
+                    target.focus();
+                }
+            });
+        });
+    }
+
     function renderError(container, message, retryFn) {
         container.appendChild(createErrorCard(message, retryFn));
     }
@@ -493,6 +529,7 @@ window.UI = (() => {
         renderSkeletons,
         renderPagination,
         reconcileChildren,
+        bindSegmentedControlKeyboard,
         createErrorCard,
         renderError,
         showConfirm,

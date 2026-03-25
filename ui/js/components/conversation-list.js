@@ -3,6 +3,7 @@
  */
 function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
+    const QUICK_START_INLINE_LIMIT = 8;
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
@@ -48,26 +49,30 @@ function renderConversationList(container) {
         ['failed', 'failed', 'Needs follow-up'],
     ];
 
+    function applyStatus(value) {
+        currentStatus = value;
+        cursor = 0;
+        cursorStack = [];
+        syncStatusButtons();
+        UI.updateQueryParams({ q: currentQ, status: currentStatus });
+        loadPage();
+    }
+
     statuses.forEach(([key, value, label]) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'segmented-control-btn';
         btn.dataset.key = key;
+        btn.dataset.value = value;
         btn.textContent = label;
         btn.setAttribute('role', 'tab');
         btn.setAttribute('aria-selected', String(currentStatus === value));
         btn.tabIndex = currentStatus === value ? 0 : -1;
         if (currentStatus === value) btn.classList.add('active');
-        btn.addEventListener('click', () => {
-            currentStatus = value;
-            cursor = 0;
-            cursorStack = [];
-            syncStatusButtons();
-            UI.updateQueryParams({ q: currentQ, status: currentStatus });
-            loadPage();
-        });
+        btn.addEventListener('click', () => applyStatus(value));
         statusBar.appendChild(btn);
     });
+    UI.bindSegmentedControlKeyboard(statusBar, (target) => applyStatus(target.dataset.value || ''));
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
@@ -116,18 +121,13 @@ function renderConversationList(container) {
         UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
     }
 
-    function renderQuickStart(agents) {
+    function renderQuickStart(agents, { hasOverflow = false } = {}) {
         const shell = document.createElement('div');
         shell.className = 'quickstart-shell';
         shell.dataset.key = 'quickstart-shell';
 
         const head = document.createElement('div');
         head.className = 'quickstart-header';
-
-        const label = document.createElement('strong');
-        label.className = 'quickstart-title';
-        label.textContent = 'Start with';
-        head.appendChild(label);
 
         const links = document.createElement('div');
         links.className = 'quickstart-links';
@@ -180,6 +180,15 @@ function renderConversationList(container) {
                 });
                 row.appendChild(button);
             });
+
+            if (hasOverflow) {
+                const moreLink = document.createElement('a');
+                moreLink.href = '/ui/agents?state=connected';
+                moreLink.className = 'quickstart-chip';
+                moreLink.dataset.key = 'quickstart-overflow';
+                moreLink.textContent = 'All agents';
+                row.appendChild(moreLink);
+            }
         }
 
         shell.appendChild(row);
@@ -190,8 +199,11 @@ function renderConversationList(container) {
         if (!soft || !quickStartLoaded) {
             UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
         }
-        API.listAgents({ state: 'connected', limit: 12 }).then((data) => {
-            renderQuickStart(data.agents || data || []);
+        API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 }).then((data) => {
+            const agents = data.agents || data || [];
+            renderQuickStart(agents.slice(0, QUICK_START_INLINE_LIMIT), {
+                hasOverflow: !!data.has_more || agents.length > QUICK_START_INLINE_LIMIT,
+            });
             quickStartLoaded = true;
         }).catch((err) => {
             if (soft && quickStartLoaded) {

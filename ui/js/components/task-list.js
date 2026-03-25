@@ -44,26 +44,30 @@ function renderTaskList(container) {
         ['cancelled', 'cancelled', 'Cancelled'],
     ];
 
+    function applyStatusFilter(value) {
+        currentStatus = value;
+        cursor = 0;
+        cursorStack = [];
+        syncStatusButtons();
+        UI.updateQueryParams({ status: currentStatus });
+        loadList();
+    }
+
     statuses.forEach(([key, value, label]) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'segmented-control-btn';
         btn.dataset.key = key;
+        btn.dataset.value = value;
         btn.textContent = label;
         btn.setAttribute('role', 'tab');
         btn.setAttribute('aria-selected', String(currentStatus === value));
         btn.tabIndex = currentStatus === value ? 0 : -1;
         if (currentStatus === value) btn.classList.add('active');
-        btn.addEventListener('click', () => {
-            currentStatus = value;
-            cursor = 0;
-            cursorStack = [];
-            syncStatusButtons();
-            UI.updateQueryParams({ status: currentStatus });
-            loadList();
-        });
+        btn.addEventListener('click', () => applyStatusFilter(value));
         statusBar.appendChild(btn);
     });
+    UI.bindSegmentedControlKeyboard(statusBar, (target) => applyStatusFilter(target.dataset.value || ''));
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';

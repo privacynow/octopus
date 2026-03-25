@@ -2019,10 +2019,21 @@ select {
 
     .conversation-layout {
         min-height: 0;
+        flex: 1 1 auto;
+        height: 100%;
     }
 
     .conversation-page {
-        min-height: auto;
+        min-height: 0;
+    }
+
+    .conversation-screen {
+        min-height: calc(100dvh - 4.5rem);
+    }
+
+    .conversation-shell {
+        min-height: 0;
+        grid-template-rows: auto auto minmax(0, 1fr);
     }
 
     .compose-box {

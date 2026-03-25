@@ -26,6 +26,13 @@ const TARGET_TOKEN = requireEnv("E2E_TARGET_TOKEN");
 const ORIGIN_AGENT_ID = requireEnv("E2E_ORIGIN_AGENT_ID");
 const TARGET_AGENT_ID = requireEnv("E2E_TARGET_AGENT_ID");
 
+async function signIn(page) {
+  await page.goto("/ui/login");
+  await page.getByLabel(/password/i).fill(UI_TOKEN);
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
+}
+
 async function fetchCsrf(page) {
   return page.evaluate(async () => {
     const response = await fetch("/v1/auth/csrf", { credentials: "same-origin" });
@@ -38,10 +45,7 @@ async function fetchCsrf(page) {
 }
 
 test("live registry ui smoke", async ({ page }) => {
-  await page.goto("/ui/login");
-  await page.getByLabel(/password/i).fill(UI_TOKEN);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await expect(page.getByText("Needs attention").first()).toBeVisible();
   await expect(page.getByText("Open conversations").first()).toBeVisible();
@@ -49,6 +53,17 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  const agentFilterTabs = page.getByRole("tablist", { name: "Agent state filter" });
+  await agentFilterTabs.getByRole("tab", { name: "All" }).focus();
+  await agentFilterTabs.getByRole("tab", { name: "All" }).press("ArrowRight");
+  await expect(agentFilterTabs.getByRole("tab", { name: "Connected", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(agentFilterTabs.getByRole("tab", { name: "Connected", exact: true })).toHaveAttribute("tabindex", "0");
+  await agentFilterTabs.getByRole("tab", { name: "Connected", exact: true }).press("End");
+  await expect(agentFilterTabs.getByRole("tab", { name: "Offline" })).toHaveAttribute("aria-selected", "true");
+  await expect(agentFilterTabs.getByRole("tab", { name: "Offline" })).toHaveAttribute("tabindex", "0");
+  await agentFilterTabs.getByRole("tab", { name: "Offline" }).press("Home");
+  await expect(agentFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
+  await expect(agentFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("tabindex", "0");
   await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(PRIMARY_LABEL)) }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(SECONDARY_LABEL)) }).first()).toBeVisible();
   const openConversationButtons = page.locator(".list-row-action");
@@ -62,6 +77,17 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
+  const taskFilterTabs = page.getByRole("tablist", { name: "Task status filter" });
+  await taskFilterTabs.getByRole("tab", { name: "All" }).focus();
+  await taskFilterTabs.getByRole("tab", { name: "All" }).press("ArrowRight");
+  await expect(taskFilterTabs.getByRole("tab", { name: "Queued", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(taskFilterTabs.getByRole("tab", { name: "Queued", exact: true })).toHaveAttribute("tabindex", "0");
+  await taskFilterTabs.getByRole("tab", { name: "Queued", exact: true }).press("End");
+  await expect(taskFilterTabs.getByRole("tab", { name: "Cancelled" })).toHaveAttribute("aria-selected", "true");
+  await expect(taskFilterTabs.getByRole("tab", { name: "Cancelled" })).toHaveAttribute("tabindex", "0");
+  await taskFilterTabs.getByRole("tab", { name: "Cancelled" }).press("Home");
+  await expect(taskFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
+  await expect(taskFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("tabindex", "0");
   await expect(page.getByText(EXISTING_TASK_TITLE).first()).toBeVisible();
   const existingTaskItem = page.locator(".task-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
   await existingTaskItem.locator(".task-item-row").click();
@@ -107,9 +133,24 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(
     page.locator(".conversation-task-card-title").filter({ hasText: liveUiTaskTitle })
   ).toHaveCount(1);
+  await page.getByRole("tab", { name: "Full activity" }).click();
+  await expect(page.locator(".chat-timeline")).not.toHaveAttribute("hidden", "");
+  await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
+  await expect(page.locator(".timeline-events")).toContainText("Delegated work started");
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
+  const conversationFilterTabs = page.getByRole("tablist", { name: "Conversation status filter" });
+  await conversationFilterTabs.getByRole("tab", { name: "All" }).focus();
+  await conversationFilterTabs.getByRole("tab", { name: "All" }).press("ArrowRight");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "Open", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "Open", exact: true })).toHaveAttribute("tabindex", "0");
+  await conversationFilterTabs.getByRole("tab", { name: "Open", exact: true }).press("End");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "Needs follow-up" })).toHaveAttribute("aria-selected", "true");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "Needs follow-up" })).toHaveAttribute("tabindex", "0");
+  await conversationFilterTabs.getByRole("tab", { name: "Needs follow-up" }).press("Home");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
+  await expect(conversationFilterTabs.getByRole("tab", { name: "All" })).toHaveAttribute("tabindex", "0");
   await expect(page.locator(".quickstart-chip")).toHaveCount(2);
   await Promise.all([
     page.waitForURL(/\/ui\/conversations\//, { timeout: 5000 }),
@@ -208,6 +249,14 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/usage");
   await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
+  const usageTabs = page.getByRole("tablist", { name: "Usage date range" });
+  await usageTabs.getByRole("tab", { name: "7 days" }).focus();
+  await usageTabs.getByRole("tab", { name: "7 days" }).press("End");
+  await expect(usageTabs.getByRole("tab", { name: "30 days" })).toHaveAttribute("aria-selected", "true");
+  await expect(usageTabs.getByRole("tab", { name: "30 days" })).toHaveAttribute("tabindex", "0");
+  await usageTabs.getByRole("tab", { name: "30 days" }).press("Home");
+  await expect(usageTabs.getByRole("tab", { name: "Today" })).toHaveAttribute("aria-selected", "true");
+  await expect(usageTabs.getByRole("tab", { name: "Today" })).toHaveAttribute("tabindex", "0");
   const usageRow = page
     .locator("#usage-table tbody tr")
     .filter({ has: page.locator(`a[href=\"/ui/conversations/${PARENT_CONVERSATION_ID}\"]`) })
@@ -217,4 +266,39 @@ test("live registry ui smoke", async ({ page }) => {
     const value = (await usageRow.locator("td").nth(1).textContent()) || "0";
     return Number(value.replace(/,/g, "").trim());
   }).toBeGreaterThan(0);
+});
+
+test.describe("mobile dark ui smoke", () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    colorScheme: "dark",
+  });
+
+  test("mobile dark segmented controls and conversation layout", async ({ page }) => {
+    await signIn(page);
+    await expect.poll(async () => {
+      return page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+    }).toBe("dark");
+
+    await page.goto("/ui/conversations");
+    await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
+    const mobileConversationTabs = page.getByRole("tablist", { name: "Conversation status filter" });
+    const mobileActiveTab = mobileConversationTabs.getByRole("tab", { name: "All" });
+    const [tablistBox, activeBox] = await Promise.all([
+      mobileConversationTabs.boundingBox(),
+      mobileActiveTab.boundingBox(),
+    ]);
+    expect(tablistBox).toBeTruthy();
+    expect(activeBox).toBeTruthy();
+    expect(activeBox.x).toBeGreaterThanOrEqual(tablistBox.x - 1);
+    expect(activeBox.x + activeBox.width).toBeLessThanOrEqual(tablistBox.x + tablistBox.width + 1);
+    expect(activeBox.y).toBeGreaterThanOrEqual(tablistBox.y - 1);
+    expect(activeBox.y + activeBox.height).toBeLessThanOrEqual(tablistBox.y + tablistBox.height + 1);
+
+    await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
+    await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
+    await expect(page.getByLabel("Message text")).toBeInViewport();
+    await page.getByRole("tab", { name: "Full activity" }).click();
+    await expect(page.locator(".timeline-events")).toContainText("Agent started work");
+  });
 });

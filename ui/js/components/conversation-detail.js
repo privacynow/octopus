@@ -59,6 +59,7 @@ function renderConversationDetail(container, params) {
     allBtn.className = 'segmented-control-btn';
     allBtn.type = 'button';
     allBtn.id = 'conversation-view-tab';
+    allBtn.dataset.view = 'conversation';
     allBtn.textContent = 'Conversation';
     allBtn.setAttribute('role', 'tab');
     allBtn.setAttribute('aria-selected', 'true');
@@ -70,6 +71,7 @@ function renderConversationDetail(container, params) {
     tasksBtn.className = 'segmented-control-btn';
     tasksBtn.type = 'button';
     tasksBtn.id = 'task-view-tab';
+    tasksBtn.dataset.view = 'tasks';
     tasksBtn.textContent = 'Tasks';
     tasksBtn.setAttribute('role', 'tab');
     tasksBtn.setAttribute('aria-selected', 'false');
@@ -81,6 +83,7 @@ function renderConversationDetail(container, params) {
     messagesBtn.className = 'segmented-control-btn';
     messagesBtn.type = 'button';
     messagesBtn.id = 'activity-view-tab';
+    messagesBtn.dataset.view = 'activity';
     messagesBtn.textContent = 'Full activity';
     messagesBtn.setAttribute('role', 'tab');
     messagesBtn.setAttribute('aria-selected', 'false');
@@ -317,18 +320,7 @@ function renderConversationDetail(container, params) {
     allBtn.addEventListener('click', () => applyFilter('conversation'));
     tasksBtn.addEventListener('click', () => applyFilter('tasks'));
     messagesBtn.addEventListener('click', () => applyFilter('activity'));
-    filterGroup.addEventListener('keydown', (e) => {
-        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-        e.preventDefault();
-        const tabs = [allBtn, tasksBtn, messagesBtn];
-        const currentIndex = tabs.indexOf(document.activeElement);
-        if (currentIndex >= 0) {
-            const delta = e.key === 'ArrowRight' ? 1 : -1;
-            const target = tabs[(currentIndex + delta + tabs.length) % tabs.length];
-            target.focus();
-            applyFilter(target === allBtn ? 'conversation' : target === tasksBtn ? 'tasks' : 'activity');
-        }
-    });
+    UI.bindSegmentedControlKeyboard(filterGroup, (target) => applyFilter(target.dataset.view || 'conversation'));
     updateTimelineHeader();
 
     exportBtn.addEventListener('click', async () => {

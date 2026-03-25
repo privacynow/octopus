@@ -27,6 +27,12 @@ function renderUsageView(container) {
         { label: '30 days', value: '30d' },
     ];
 
+    function applyRange(value) {
+        currentRange = value;
+        syncRangeButtons();
+        loadUsage();
+    }
+
     ranges.forEach((range) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -36,13 +42,10 @@ function renderUsageView(container) {
         btn.setAttribute('role', 'tab');
         btn.setAttribute('aria-selected', String(range.value === currentRange));
         btn.tabIndex = range.value === currentRange ? 0 : -1;
-        btn.addEventListener('click', () => {
-            currentRange = range.value;
-            syncRangeButtons();
-            loadUsage();
-        });
+        btn.addEventListener('click', () => applyRange(range.value));
         rangeBar.appendChild(btn);
     });
+    UI.bindSegmentedControlKeyboard(rangeBar, (target) => applyRange(target.dataset.value || '7d'));
 
     const summaryEl = document.createElement('section');
     summaryEl.className = 'summary-rail';

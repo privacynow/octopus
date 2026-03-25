@@ -43,26 +43,30 @@ function renderAgentList(container) {
         ['offline', 'offline', 'Offline'],
     ];
 
+    function applyStateFilter(value) {
+        stateFilter = value;
+        cursor = 0;
+        cursorStack = [];
+        syncStateButtons();
+        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
+        loadPage();
+    }
+
     states.forEach(([key, value, label]) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'segmented-control-btn';
         btn.dataset.key = key;
+        btn.dataset.value = value;
         btn.textContent = label;
         btn.setAttribute('role', 'tab');
         btn.setAttribute('aria-selected', String(stateFilter === value));
         btn.tabIndex = stateFilter === value ? 0 : -1;
         if (stateFilter === value) btn.classList.add('active');
-        btn.addEventListener('click', () => {
-            stateFilter = value;
-            cursor = 0;
-            cursorStack = [];
-            syncStateButtons();
-            UI.updateQueryParams({ q: nameFilter, state: stateFilter });
-            loadPage();
-        });
+        btn.addEventListener('click', () => applyStateFilter(value));
         stateBar.appendChild(btn);
     });
+    UI.bindSegmentedControlKeyboard(stateBar, (target) => applyStateFilter(target.dataset.value || ''));
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';

@@ -187,6 +187,7 @@ def _build_action_channel_egress(
         conversation_key=action_conversation_key,
         source=getattr(event, "source", "telegram"),
         conversation_ref=event.conversation_ref,
+        external_conversation_ref=getattr(event, "external_conversation_ref", ""),
         authority_ref=event.authority_ref,
         routed_task_id="",
         target_message_id=_action_target_message_id(event),
@@ -200,6 +201,7 @@ def _build_channel_egress(
     conversation_key: str,
     source: str,
     conversation_ref: str = "",
+    external_conversation_ref: str = "",
     authority_ref: str = "",
     routed_task_id: str = "",
     target_message_id: int | None = None,
@@ -223,6 +225,7 @@ def _build_channel_egress(
         source=source,
         authority_ref=authority_ref,
         routed_task_id=routed_task_id,
+        external_id=external_conversation_ref,
         target_message_id=target_message_id,
         output_log=getattr(bot_instance, "_output_log", None) if bot_instance is not None else None,
     )
@@ -297,7 +300,10 @@ async def _execute_worker_action(
         transport = TransportIdentity(
             conversation_key=target_key,
             origin_channel=source,
-            external_conversation_ref=conversation_ref,
+            external_conversation_ref=(
+                str(getattr(channel_egress, "external_id", "") or "")
+                or conversation_ref
+            ),
             target_agent_id=runtime_registry_agent_id(
                 runtime.config.data_dir,
                 reg_id,
@@ -392,6 +398,7 @@ async def worker_dispatch(
             conversation_key=message_conversation_key,
             source=source,
             conversation_ref=event.conversation_ref,
+            external_conversation_ref=getattr(event, "external_conversation_ref", ""),
             authority_ref=authority_ref,
             routed_task_id=routed_task_id,
             item_id=str(item.get("id", "")),

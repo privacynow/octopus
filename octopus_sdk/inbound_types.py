@@ -51,6 +51,7 @@ class InboundMessage:
     attachments: tuple[InboundAttachment, ...] = ()
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    external_conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
     skip_approval: bool = False
@@ -116,6 +117,7 @@ class InboundAction:
     params: dict[str, Any] = field(default_factory=dict)
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
+    external_conversation_ref: str = ""
     authority_ref: str = ""
     transport: str = ""
 
@@ -171,6 +173,7 @@ def serialize_inbound(
                 "source": event.source,
                 "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
+                "external_conversation_ref": event.external_conversation_ref,
                 "routed_task_id": event.routed_task_id,
                 "authority_ref": event.authority_ref,
                 "skip_approval": event.skip_approval,
@@ -221,6 +224,7 @@ def serialize_inbound(
                 "source": event.source,
                 "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
+                "external_conversation_ref": event.external_conversation_ref,
                 "authority_ref": event.authority_ref,
             }
         )
@@ -250,6 +254,7 @@ def deserialize_inbound(
     # provenance instead of dropping to blank forever.
     transport = str(data.get("transport", "") or source).strip()
     conversation_ref = str(data.get("conversation_ref", "") or "")
+    external_conversation_ref = str(data.get("external_conversation_ref", "") or "")
     authority_ref = str(data.get("authority_ref", "") or "")
     if source == "registry" and kind in {"message", "action"} and not authority_ref:
         raise ValueError("Registry inbound payload missing canonical authority_ref")
@@ -271,6 +276,7 @@ def deserialize_inbound(
             source=source,
             transport=transport,
             conversation_ref=conversation_ref,
+            external_conversation_ref=external_conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
             authority_ref=authority_ref,
             skip_approval=bool(data.get("skip_approval", False)),
@@ -306,6 +312,7 @@ def deserialize_inbound(
             source=source,
             transport=transport,
             conversation_ref=conversation_ref,
+            external_conversation_ref=external_conversation_ref,
             authority_ref=authority_ref,
         )
     raise ValueError(f"Unknown kind: {kind}")

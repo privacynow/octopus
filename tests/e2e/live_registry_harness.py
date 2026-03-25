@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import secrets
 import shutil
 import socket
 import subprocess
@@ -324,6 +325,35 @@ class FreshStack:
             return {}
         return {str(key): str(value) for key, value in data.items()}
 
+    def write_bot_file(self, slug: str, path: str, content: str) -> None:
+        script = (
+            "from pathlib import Path\n"
+            "import os\n"
+            "path = Path(os.environ['OCTOPUS_WRITE_PATH'])\n"
+            "path.parent.mkdir(parents=True, exist_ok=True)\n"
+            "path.write_text(os.environ['OCTOPUS_WRITE_CONTENT'], encoding='utf-8')\n"
+        )
+        result = self.bot_compose(
+            slug,
+            "exec",
+            "-T",
+            "-e",
+            f"OCTOPUS_WRITE_PATH={path}",
+            "-e",
+            f"OCTOPUS_WRITE_CONTENT={content}",
+            "bot",
+            "python",
+            "-c",
+            script,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise HarnessError(
+                f"failed to write {path} in bot {slug}: {(result.stderr or result.stdout or '').strip()}"
+            )
+
     def down(self) -> None:
         for slug in self.bot_slugs:
             self.bot_compose(
@@ -368,7 +398,8 @@ class LiveRegistryHarness:
         self,
         *,
         repo_dir: Path,
-        source_repo: Path,
+        source_repo: Path | None,
+        snapshot_deploy: Path | None,
         temp_root: Path,
         keep_fresh_stack: bool,
         leave_source_stopped: bool,
@@ -376,6 +407,7 @@ class LiveRegistryHarness:
     ) -> None:
         self.repo_dir = repo_dir
         self.source_repo = source_repo
+        self.snapshot_source = snapshot_deploy
         self.temp_root = temp_root
         self.keep_fresh_stack = keep_fresh_stack
         self.leave_source_stopped = leave_source_stopped
@@ -420,7 +452,11 @@ class LiveRegistryHarness:
             manager.start_bot(slug)
 
     def snapshot_source_deploy(self) -> None:
-        source_deploy = self.source_repo / ".deploy"
+        source_deploy = self.snapshot_source
+        if source_deploy is None:
+            if self.source_repo is None:
+                raise HarnessError("source repo or snapshot deploy path is required")
+            source_deploy = self.source_repo / ".deploy"
         if not source_deploy.exists():
             raise HarnessError(f"Missing source deploy directory: {source_deploy}")
         _ensure_removed(self.snapshot_deploy.parent)
@@ -430,6 +466,13 @@ class LiveRegistryHarness:
         registry_env["REGISTRY_BIND_HOST"] = "127.0.0.1"
         registry_env["REGISTRY_PORT"] = str(_free_local_port())
         write_env_file(self.snapshot_deploy / "registry" / ".env", registry_env)
+        for bot_env_path in sorted((self.snapshot_deploy / "bots").glob("*/.env")):
+            bot_env = OrderedDict(parse_env_file(bot_env_path))
+            # The isolated smoke exercises registry-origin flows only. Blank the
+            # Telegram token so the disposable bots run registry-only and do not
+            # collide with any other long-poll consumer for the saved Telegram bot.
+            bot_env["TELEGRAM_BOT_TOKEN"] = ""
+            write_env_file(bot_env_path, bot_env)
 
     def run_operator_smoke(self) -> dict[str, str]:
         assert self.fresh_stack is not None
@@ -454,6 +497,13 @@ class LiveRegistryHarness:
             if len(stack.bot_slugs) < 2:
                 raise HarnessError("Live registry smoke requires at least two bots in the source deployment snapshot")
             secondary_state = stack.wait_for_connected_bot(stack.bot_slugs[1])
+            delegation_secret = f"delegated-live-token-{secrets.token_hex(8)}"
+            delegation_secret_path = "/home/bot/e2e/delegation-token.txt"
+            stack.write_bot_file(
+                secondary_state.slug,
+                delegation_secret_path,
+                delegation_secret,
+            )
 
             for path in ("/v1/summary", "/v1/agents", "/v1/conversations", "/v1/tasks"):
                 response = client.get(path, params={"limit": 10})
@@ -500,11 +550,168 @@ class LiveRegistryHarness:
                 events.raise_for_status()
                 payload = events.json()
                 return any(
-                    event.get("kind") == "message.bot" and str(event.get("content", "")).strip() == "registry smoke ok"
+                    event.get("kind") == "message.bot"
+                    and str(event.get("content", "")).strip().lower().rstrip(".!") == "registry smoke ok"
                     for event in payload.get("events", [])
                 )
 
             _poll("basic conversation reply", _basic_reply, timeout_seconds=120)
+
+            delegation_title = f"E2E natural delegation {int(time.time())}"
+            delegation_prompt = (
+                "The exact token needed to answer this request exists only on the other bot.\n"
+                "You cannot read it in this bot.\n"
+                "Your only valid first reply is exactly the delegation block below and nothing else.\n"
+                "Do not explain. Do not summarize. Do not guess the token.\n\n"
+                "Reply with exactly this delegation block and nothing else:\n"
+                f'<delegation>{{"tasks":[{{"target":"{secondary_state.slug}","title":"Read delegated token","instructions":"Read the exact contents of {delegation_secret_path} and reply with only that content."}}]}}</delegation>\n\n'
+                "When the delegated result returns, answer the user with that exact token only."
+            )
+            delegation_create = client.post(
+                "/v1/conversations",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": csrf_token,
+                },
+                json={
+                    "target_agent_id": primary_state.agent_id,
+                    "origin_channel": "registry",
+                    "external_conversation_ref": f"e2e-delegation-{int(time.time())}",
+                    "title": delegation_title,
+                },
+            )
+            delegation_create.raise_for_status()
+            delegation_conversation_id = delegation_create.json()["conversation_id"]
+            delegation_message = client.post(
+                f"/v1/conversations/{delegation_conversation_id}/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": csrf_token,
+                },
+                json={"text": delegation_prompt},
+            )
+            delegation_message.raise_for_status()
+
+            primary_bot_values = stack.bot_values(stack.bot_slugs[0])
+            delegation_autonomous = (
+                primary_bot_values.get("BOT_AUTONOMOUS", "").strip() == "1"
+                and primary_bot_values.get("BOT_APPROVAL_MODE", "").strip().lower() != "on"
+            )
+
+            def _delegation_events() -> list[dict[str, Any]]:
+                response = client.get(
+                    f"/v1/conversations/{delegation_conversation_id}/events",
+                    params={"limit": 100},
+                )
+                response.raise_for_status()
+                return response.json().get("events", [])
+
+            def _delegation_state() -> dict[str, Any] | None:
+                events = _delegation_events()
+                proposed_event: dict[str, Any] | None = None
+                for event in events:
+                    content = str(event.get("content", "")).strip()
+                    metadata = event.get("metadata", {}) or {}
+                    if event.get("kind") == "error":
+                        return {
+                            "status": "failed",
+                            "detail": str(metadata.get("message", "") or content or "error"),
+                            "event": event,
+                        }
+                    if "Delegation submission failed" in content:
+                        return {"status": "failed", "detail": content, "event": event}
+                    if event.get("kind") == "delegation.submitted":
+                        return {"status": "submitted", "event": event}
+                    if event.get("kind") == "delegation.proposed":
+                        proposed_event = event
+                if proposed_event is not None:
+                    return {"status": "proposed", "event": proposed_event}
+                return None
+
+            if delegation_autonomous:
+                delegation_state = _poll(
+                    "delegation submission",
+                    _delegation_state,
+                    timeout_seconds=180,
+                )
+                if delegation_state.get("status") == "failed":
+                    raise HarnessError(
+                        "autonomous delegation failed: "
+                        f"{delegation_state.get('detail', 'unknown error')}"
+                    )
+            else:
+                delegation_state = _poll(
+                    "delegation proposal",
+                    _delegation_state,
+                    timeout_seconds=180,
+                )
+                if delegation_state.get("status") != "proposed":
+                    raise HarnessError(
+                        "delegation did not reach proposal state: "
+                        f"{delegation_state.get('detail', delegation_state.get('status', 'unknown'))}"
+                    )
+                proposed_tasks = delegation_state.get("event", {}).get("metadata", {}).get("tasks", [])
+                if not proposed_tasks:
+                    raise HarnessError("delegation proposal did not include tasks metadata")
+
+                approve_delegation = client.post(
+                    f"/v1/conversations/{delegation_conversation_id}/actions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-CSRF-Token": csrf_token,
+                    },
+                    json={"action": "approve_delegation", "payload": {}},
+                )
+                approve_delegation.raise_for_status()
+
+            def _delegated_task_created() -> dict[str, Any] | None:
+                response = client.get("/v1/tasks", params={"limit": 50})
+                response.raise_for_status()
+                payload = response.json()
+                for task in payload.get("tasks", []):
+                    if str(task.get("parent_conversation_id", "")) == delegation_conversation_id:
+                        return task
+                return None
+
+            delegated_task = _poll(
+                "delegated task creation",
+                _delegated_task_created,
+                timeout_seconds=120,
+            )
+            delegated_task_id = str(delegated_task.get("routed_task_id", ""))
+            if not delegated_task_id:
+                raise HarnessError("delegated task creation returned no routed_task_id")
+
+            def _delegated_task_completed() -> dict[str, Any] | None:
+                task = _delegated_task_created()
+                if task and str(task.get("status", "")) == "completed":
+                    return task
+                return None
+
+            delegated_task = _poll(
+                "delegated task completion",
+                _delegated_task_completed,
+                timeout_seconds=180,
+            )
+
+            def _delegation_submitted() -> bool:
+                return any(event.get("kind") == "delegation.submitted" for event in _delegation_events())
+
+            _poll("delegation submitted event", _delegation_submitted, timeout_seconds=60)
+
+            def _delegation_completed() -> bool:
+                return any(event.get("kind") == "delegation.completed" for event in _delegation_events())
+
+            _poll("delegation completed event", _delegation_completed, timeout_seconds=120)
+
+            def _delegation_final_reply() -> bool:
+                return any(
+                    event.get("kind") == "message.bot"
+                    and delegation_secret == str(event.get("content", "")).strip()
+                    for event in _delegation_events()
+                )
+
+            _poll("delegation final reply", _delegation_final_reply, timeout_seconds=180)
 
             parent_title = f"E2E routed task parent {int(time.time())}"
             parent_prompt = "Track this delegated task in the registry timeline."
@@ -587,6 +794,8 @@ class LiveRegistryHarness:
                 "primary_agent_token": primary_state.agent_token,
                 "secondary_agent_token": secondary_state.agent_token,
                 "basic_conversation_title": basic_title,
+                "delegation_conversation_id": delegation_conversation_id,
+                "delegated_task_id": delegated_task_id,
                 "parent_conversation_id": parent_conversation_id,
                 "parent_prompt": parent_prompt,
                 "existing_task_title": routed_task_title,
@@ -639,7 +848,11 @@ class LiveRegistryHarness:
 
     def run(self) -> int:
         self.temp_root.mkdir(parents=True, exist_ok=True)
-        source_snapshot = self.capture_stack_state(self.source_repo)
+        source_snapshot = (
+            self.capture_stack_state(self.source_repo)
+            if self.source_repo is not None
+            else StackState(registry_running=False, running_bots=[])
+        )
         self.snapshot_source_deploy()
         fresh_run_id = str(int(time.time()))
         self.fresh_stack = FreshStack(
@@ -651,7 +864,8 @@ class LiveRegistryHarness:
         _print(f"Snapshot copied to {self.snapshot_deploy}")
         _print(f"Artifacts will be written to {self.artifacts_dir}")
         try:
-            self.stop_stack(self.source_repo, source_snapshot)
+            if self.source_repo is not None:
+                self.stop_stack(self.source_repo, source_snapshot)
             self.fresh_stack.build_images()
             self.fresh_stack.start()
             context = self.run_operator_smoke()
@@ -669,7 +883,7 @@ class LiveRegistryHarness:
                     self.fresh_stack.down()
                 except Exception:  # pragma: no cover - best-effort cleanup
                     pass
-            if not self.leave_source_stopped:
+            if self.source_repo is not None and not self.leave_source_stopped:
                 try:
                     self.restore_stack(self.source_repo, source_snapshot)
                 except Exception as exc:  # pragma: no cover - best-effort restore with clear stderr
@@ -679,6 +893,7 @@ class LiveRegistryHarness:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a fresh live registry smoke against a copied octopus deployment")
     parser.add_argument("--source-repo", type=Path, default=DEFAULT_SOURCE_REPO)
+    parser.add_argument("--snapshot-deploy", type=Path, default=None)
     parser.add_argument("--temp-root", type=Path, default=DEFAULT_TEMP_ROOT)
     parser.add_argument("--keep-fresh-stack", action="store_true")
     parser.add_argument("--leave-source-stopped", action="store_true")
@@ -688,9 +903,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    source_repo = args.source_repo.resolve() if args.snapshot_deploy is None else None
+    snapshot_deploy = args.snapshot_deploy.resolve() if args.snapshot_deploy is not None else None
     harness = LiveRegistryHarness(
         repo_dir=REPO_ROOT,
-        source_repo=args.source_repo.resolve(),
+        source_repo=source_repo,
+        snapshot_deploy=snapshot_deploy,
         temp_root=args.temp_root.resolve(),
         keep_fresh_stack=args.keep_fresh_stack,
         leave_source_stopped=args.leave_source_stopped,

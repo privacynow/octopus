@@ -966,6 +966,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise KeyError(routed_task_id)
             with _cur(conn) as cur:
                 cur.execute(
+                    f"SELECT external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
+                    (task["parent_conversation_id"],),
+                )
+                parent_conversation = cur.fetchone()
+            with _cur(conn) as cur:
+                cur.execute(
                     f"""
                     UPDATE {_SCHEMA}.routed_tasks
                     SET status = %s, summary = %s, result_json = %s, updated_at = %s
@@ -986,6 +992,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 payload={
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": task["parent_conversation_id"],
+                    "parent_external_conversation_ref": (
+                        str(parent_conversation["external_conversation_ref"] or "")
+                        if parent_conversation is not None
+                        else ""
+                    ),
                     "result": validated_payload,
                 },
                 now=now,

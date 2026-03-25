@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agents.registry_capabilities import registry_id_from_authority_ref
+from app.agents.state import runtime_registry_agent_id
 from app.formatting import summarize_text
 from octopus_sdk.identity import telegram_conversation_ref, telegram_numeric_id
 from app.channels.telegram import presenters as telegram_presenters
@@ -61,6 +63,40 @@ class _AutoSubmitEgress:
         return DelegationCallbackHandle()
 
 
+def _event_sink_transport_identity(
+    conversation_key_value: str,
+    *,
+    conversation_ref: str,
+    external_conversation_ref: str = "",
+    authority_ref: str = "",
+    target_agent_id: str = "",
+):
+    from octopus_sdk.execution import TransportIdentity
+
+    numeric_chat_id = telegram_numeric_id(conversation_key_value)
+    if conversation_ref.startswith("registry:"):
+        resolved_external_ref = external_conversation_ref or conversation_key_value
+        return TransportIdentity(
+            conversation_key=conversation_key_value,
+            origin_channel="registry",
+            external_conversation_ref=resolved_external_ref,
+            conversation_ref=conversation_ref,
+            authority_ref=authority_ref,
+            target_agent_id=target_agent_id,
+        )
+    return TransportIdentity(
+        conversation_key=conversation_key_value,
+        origin_channel="telegram",
+        external_conversation_ref=(
+            external_conversation_ref
+            or (str(numeric_chat_id) if numeric_chat_id is not None else conversation_key_value)
+        ),
+        conversation_ref=conversation_ref,
+        authority_ref=authority_ref,
+        target_agent_id=target_agent_id,
+    )
+
+
 
 async def propose_delegation_plan(
     runtime: TelegramRuntime,
@@ -97,11 +133,22 @@ async def propose_delegation_plan(
             agent_directory=runtime.services.control_plane.agent_directory,
         )
         from octopus_sdk.event_sink import build_event_sink_for_context
-        from octopus_sdk.execution import TransportIdentity
-        transport = TransportIdentity(
-            conversation_key=conversation_key_value,
-            origin_channel="telegram",
-            external_conversation_ref=str(numeric_chat_id) if numeric_chat_id is not None else conversation_key_value,
+        authority_ref = str(getattr(message, "authority_ref", "") or "")
+        target_agent_id = ""
+        if authority_ref:
+            try:
+                target_agent_id = runtime_registry_agent_id(
+                    runtime.config.data_dir,
+                    registry_id_from_authority_ref(authority_ref),
+                )
+            except ValueError:
+                target_agent_id = ""
+        transport = _event_sink_transport_identity(
+            conversation_key_value,
+            conversation_ref=conversation_ref,
+            external_conversation_ref=str(getattr(message, "external_id", "") or ""),
+            authority_ref=authority_ref,
+            target_agent_id=target_agent_id,
         )
         sink = build_event_sink_for_context(
             transport,

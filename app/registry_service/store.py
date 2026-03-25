@@ -1127,6 +1127,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if task is None:
                 raise KeyError(routed_task_id)
+            parent_conversation = conn.execute(
+                "SELECT external_conversation_ref FROM conversations WHERE conversation_id = ?",
+                (task["parent_conversation_id"],),
+            ).fetchone()
             conn.execute(
                 """
                 UPDATE routed_tasks
@@ -1148,6 +1152,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 payload={
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": task["parent_conversation_id"],
+                    "parent_external_conversation_ref": (
+                        str(parent_conversation["external_conversation_ref"] or "")
+                        if parent_conversation is not None
+                        else ""
+                    ),
                     "result": validated_payload,
                 },
                 now=now,

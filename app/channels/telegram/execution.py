@@ -20,7 +20,10 @@ from app.channels.telegram.state import TelegramRuntime
 from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
 from octopus_sdk.execution_context import ResolvedExecutionContext
-from octopus_sdk.identity import telegram_conversation_ref, telegram_numeric_id
+from octopus_sdk.identity import (
+    telegram_conversation_ref,
+    telegram_numeric_id,
+)
 from octopus_sdk.runtime_dispatch import RuntimeDispatchRuntime
 from octopus_sdk.inbound_types import InboundAttachment
 from octopus_sdk.runtime import ExecutionServices, build_execution_runtime as build_sdk_execution_runtime
@@ -413,6 +416,14 @@ def execution_channel_metadata(
         if from_user is not None:
             actor = telegram_actor_key(getattr(from_user, "id", 0))
 
+    external_conversation_ref = str(chat_id)
+    if origin == "registry":
+        external_conversation_ref = str(
+            getattr(message, "external_id", "")
+            or getattr(message, "external_conversation_ref", "")
+            or str(chat_id)
+        )
+
     return ExecutionChannelMetadata(
         conversation_key=conv_key,
         descriptor=descriptor,
@@ -420,7 +431,7 @@ def execution_channel_metadata(
         routed_task_id=getattr(message, "routed_task_id", ""),
         authority_ref=getattr(message, "authority_ref", ""),
         origin_channel=origin,
-        external_conversation_ref=str(chat_id),
+        external_conversation_ref=external_conversation_ref,
         target_agent_id=target_agent_id,
         actor=actor,
     )

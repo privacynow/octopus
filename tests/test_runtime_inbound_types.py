@@ -44,6 +44,7 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             source="registry",
             transport="registry",
             conversation_ref="registry:prod:task:task-1",
+            external_conversation_ref="registry-ext-1",
             routed_task_id="task-1",
             authority_ref="registry:prod",
         )
@@ -57,6 +58,7 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             source="registry",
             transport="registry",
             conversation_ref="registry:prod:conversation:conv-1",
+            external_conversation_ref="registry-ext-2",
             authority_ref="registry:prod",
         )
     )
@@ -68,6 +70,8 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert isinstance(action, InboundAction)
     assert message.authority_ref == "registry:prod"
     assert action.authority_ref == "registry:prod"
+    assert message.external_conversation_ref == "registry-ext-1"
+    assert action.external_conversation_ref == "registry-ext-2"
     assert message.transport == "registry"
     assert action.transport == "registry"
 

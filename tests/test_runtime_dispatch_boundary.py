@@ -460,6 +460,23 @@ def test_execution_channel_metadata_does_not_infer_authority_ref_from_registry_r
     assert metadata.authority_ref == ""
 
 
+def test_execution_channel_metadata_uses_registry_external_conversation_ref_from_bound_egress() -> None:
+    with fresh_env():
+        runtime = current_runtime()
+        message = FakeMessage(chat=FakeChat(12345), text="hello")
+        message.conversation_ref = "registry:ops:conversation:conv-1"
+        message.external_id = "registry-ui-conv-1"
+
+        metadata = execution_channel_metadata(
+            runtime,
+            message,
+            "registry:conversation:conv-1",
+        )
+
+    assert metadata.origin_channel == "registry"
+    assert metadata.external_conversation_ref == "registry-ui-conv-1"
+
+
 @pytest.mark.asyncio
 async def test_format_provider_error_returns_plain_text() -> None:
     text = await format_provider_error("<boom>", 1)

@@ -272,7 +272,14 @@ class RegistryChannelEgress(ChannelEgress):
         return
 
     async def sync_binding(self, binding: Any) -> None:
-        del binding
+        if not isinstance(binding, dict):
+            return
+        title = str(binding.get("title", "") or "").strip()
+        if title:
+            self.title = title
+        external_id = str(binding.get("external_id", "") or "").strip()
+        if external_id:
+            self.external_id = external_id
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config
@@ -309,6 +316,8 @@ class RegistryChannelEgress(ChannelEgress):
         if status.startswith("completed"):
             body = getattr(outcome, "reply_text", "") or self._plain_text_snippet(self.last_status_text, limit=400)
             await self._publish_event(kind="task.status", title="Done", body=trim_text(body, 400), metadata={"status": "completed"})
+            return None
+        if status in {"delegation_proposed", "delegation_submitted"}:
             return None
         if status == "timed_out":
             await self._publish_event(kind="error", title="Failed", body="Timed out", metadata={"error_type": "execution", "message": "Timed out"})

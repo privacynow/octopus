@@ -93,6 +93,7 @@ def _registry_semantic_action(
     payload: dict[str, object],
     delivery_id: str,
     registry_id: str,
+    external_conversation_ref: str = "",
 ):
     semantic = {
         "approve": "approve_pending",
@@ -122,6 +123,7 @@ def _registry_semantic_action(
         actor_ref=f"registry-ui:{conversation_ref}",
         delivery_id=delivery_id,
         registry_id=registry_id,
+        external_conversation_ref=external_conversation_ref,
     )
 
 
@@ -167,6 +169,7 @@ async def handle_registry_delivery(
             payload=action_payload,
             delivery_id=effective_delivery_id,
             registry_id=registry_id,
+            external_conversation_ref=str(payload.get("external_conversation_ref", "") or ""),
         )
         if envelope is None:
             return "rejected"
@@ -197,6 +200,9 @@ async def handle_registry_delivery(
         parent_conversation_id = qualify_registry_parent_ref(
             registry_id,
             str(payload.get("parent_conversation_id", "")),
+        )
+        parent_external_conversation_ref = str(
+            payload.get("parent_external_conversation_ref", "") or ""
         )
         result = payload.get("result", {})
         if not parent_conversation_id or not routed_task_id or not isinstance(result, dict):
@@ -246,6 +252,7 @@ async def handle_registry_delivery(
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
             delivery_id=resume_delivery_id,
+            external_conversation_ref=parent_external_conversation_ref,
             registry_id=registry_id,
             skip_approval=True,
         )
@@ -266,6 +273,7 @@ async def handle_registry_delivery(
                 bot=runtime.bot,
                 conversation_key=conversation_key,
                 source="registry",
+                external_id=parent_external_conversation_ref,
             )
             try:
                 await send_delegation_completion_message(applied.pending, channel_egress)
@@ -281,7 +289,9 @@ async def handle_registry_delivery(
             transport = TransportIdentity(
                 conversation_key=conversation_key,
                 origin_channel="registry",
-                external_conversation_ref=parent_conversation_id,
+                external_conversation_ref=(
+                    parent_external_conversation_ref or parent_conversation_id
+                ),
                 target_agent_id=runtime_registry_agent_id(config.data_dir, registry_id),
             )
             sink = build_event_sink_for_context(

@@ -1517,6 +1517,8 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert origin_poll.status_code == 200
     origin_deliveries = origin_poll.json()["deliveries"]
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
+    routed_result = next(item for item in origin_deliveries if item["kind"] == "routed_result")
+    assert routed_result["payload"]["parent_external_conversation_ref"] == "conv-1"
 
 
 def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):

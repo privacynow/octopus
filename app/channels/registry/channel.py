@@ -81,11 +81,11 @@ class _RegistryChannel(Channel):
     def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
         del config
         parsed = parse_registry_ref(conversation_ref)
-        external_id = binding_external_id_for_ref(conversation_ref)
+        external_id = str(kw.get("external_id", "") or "").strip() or binding_external_id_for_ref(conversation_ref)
         routed_task_id = str(kw.get("routed_task_id", ""))
         if self._ref_kind == "task" and not routed_task_id:
             routed_task_id = external_id
-        if parsed is not None:
+        if self._ref_kind == "task" and parsed is not None and not external_id:
             external_id = parsed[2]
         return RegistryChannelEgress(
             self._config,

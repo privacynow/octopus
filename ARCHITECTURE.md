@@ -363,6 +363,8 @@ topics; conversation detail also renders progress updates.
 
 ### Telegram Request Execution
 
+This is the normal inbound execution path for a Telegram-originated request.
+
 ```mermaid
 sequenceDiagram
     participant U as User
@@ -381,6 +383,8 @@ sequenceDiagram
 
 ### Registry Projection
 
+This is how execution events become stored registry conversation activity.
+
 ```mermaid
 sequenceDiagram
     participant X as Runtime
@@ -396,6 +400,8 @@ sequenceDiagram
 ```
 
 ### Delegation And Routed Tasks
+
+This is how one bot delegates work to another through the registry.
 
 ```mermaid
 sequenceDiagram

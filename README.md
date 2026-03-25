@@ -92,19 +92,24 @@ CLI is intentionally local-first:
 The operator UI under `ui/` is a vanilla SPA with no framework and no build
 step. Main screens:
 
-- **Dashboard** — attention-first home screen with drillable summary cards
+- **Dashboard** — compact operator workspace for blocking approvals, open
+  conversations, task follow-up, and agent health
 - **Approvals** — pending operator decisions
 - **Agents** — list rows with server-side search/state filters
-- **Conversations** — server-side search/status filters, compose, direct
-  assignment, cancel, export, human-first default timeline
-- **Tasks** — routed task rows with inline detail and parent-conversation links
+- **Conversations** — server-side search/status filters, a main composer that
+  routes on leading `@agent` / `@cap:` / `@role:`, tabs for Conversation,
+  Tasks, and Full activity, plus cancel/export
+- **Tasks** — status board plus detailed task log with retry/cancel actions and
+  parent-conversation links
 - **Capabilities**, **Skills**, **Usage**, **Guidance**
 
-Conversation compose currently supports two operator modes:
+Conversation compose is now one flow:
 
-- **Message** — send a normal message into the conversation
-- **Send directly** — submit a structured task to a selected bot, capability,
-  or role without relying on text parsing in the registry UI
+- type a normal message to continue the conversation
+- start with `@m2`, `@cap:review`, or `@role:reviewer` to submit a structured
+  direct assignment from the same composer
+- use the dedicated **Tasks** tab in conversation detail to monitor routed work
+  and retry/cancel it without reading raw activity cards
 
 Realtime comes from `/v1/ws` and uses explicit typed topics for:
 

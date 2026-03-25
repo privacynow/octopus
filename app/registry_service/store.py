@@ -2452,7 +2452,15 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
             raise ValueError(f"Unsupported action: {validated_envelope.action}")
 
-    def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
+    def list_tasks(
+        self,
+        *,
+        for_agent_id: str | None = None,
+        parent_conversation_id: str = "",
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[dict[str, Any]]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             sql = """
@@ -2466,6 +2474,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if for_agent_id is not None:
                 where_clauses.append("(t.origin_agent_id = ? OR t.target_agent_id = ?)")
                 params.extend([for_agent_id, for_agent_id])
+            if parent_conversation_id:
+                where_clauses.append("t.parent_conversation_id = ?")
+                params.append(parent_conversation_id)
             if status:
                 where_clauses.append("t.status = ?")
                 params.append(status)
@@ -2485,6 +2496,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "title": row["title"],
                 "status": row["status"],
                 "summary": row["summary"],
+                "instructions": decode_json_field(row["request_json"], {}).get("instructions", ""),
+                "result_summary": decode_json_field(row["result_json"], {}).get("summary", ""),
+                "result_text": decode_json_field(row["result_json"], {}).get("full_text", ""),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }

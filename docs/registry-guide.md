@@ -159,9 +159,9 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 ![Conversation detail](assets/registry/ui/06-conversation-detail-annotated.png)
 
 - **Header**: title, target display name, source, reference, and status.
-- **Actions**: **Conversation** view vs **Full activity**; **Cancel** conversation; **Export** markdown.
-- **Compose**: operator message (**Enter** to send); uses session cookie + CSRF.
-- **Timeline**: `message.user` / `message.bot` as **bubbles**; the default view keeps approvals, delegation, task updates, and problems visible while lower-level provider/tool activity moves into **Full activity**.
+- **Actions**: **Conversation**, **Tasks**, and **Full activity** views; **Cancel** conversation; **Export** markdown.
+- **Compose**: send a normal operator message, or start with `@agent`, `@cap:`, or `@role:` to submit a direct assignment from the same composer.
+- **Timeline**: `message.user` / `message.bot` render as **bubbles**; the default view stays human-first, the **Tasks** tab renders routed work directly from the task store, and lower-level provider/tool activity moves into **Full activity**.
 - **History**: older activity loads automatically when you **scroll up** to the top sentinel.
 - **Live updates**: WebSocket (`/v1/ws`) with reconnect backoff when the ASGI stack supports upgrades.
 
@@ -169,8 +169,9 @@ On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** 
 
 ![Tasks](assets/registry/ui/07-tasks-annotated.png)
 
-- **Pagination** and **status** filter keep task rows focused on one slice of routed work.
-- Expanding a row shows instructions, result summary, and the link back to the **parent conversation**.
+- The top **task board** groups work by status for quick triage.
+- **Pagination** and the **status** filter keep the detailed task log focused on one slice of routed work.
+- Expanding a row shows instructions, result summary, retry/cancel actions, and the link back to the **parent conversation**.
 - Task rows refresh when routed-task updates land over the WebSocket.
 
 ### 8. Capabilities

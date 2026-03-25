@@ -14,6 +14,11 @@ from octopus_sdk.registry.models import (
     extract_target_selector_message,
     parse_target_selector,
 )
+from octopus_sdk.task_protocol import (
+    PendingDelegationSnapshot,
+    PendingDelegationTransitionRequest,
+    apply_pending_delegation_transition,
+)
 from tests.support.config_support import make_config
 
 
@@ -286,6 +291,19 @@ def test_extract_target_selector_message_requires_instructions():
     assert selector.kind == "agent"
     assert selector.value == "m2"
     assert instructions == "return only the answer"
+
+
+def test_pending_delegation_transition_derives_partial_failure_from_child_states():
+    result = apply_pending_delegation_transition(
+        PendingDelegationSnapshot(status="submitted", task_statuses=("completed", "failed")),
+        PendingDelegationTransitionRequest(
+            transition="sync_children",
+            task_statuses=("completed", "failed"),
+        ),
+    )
+    assert result.ok is True
+    assert result.new_state == "partial_failed"
+    assert result.ready_to_resume is True
 
 
 @pytest.mark.asyncio

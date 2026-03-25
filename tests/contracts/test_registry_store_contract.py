@@ -520,6 +520,33 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
     assert [event["metadata"]["status"] for event in events] == ["queued", "running", "completed"]
 
 
+def test_list_tasks_can_filter_by_parent_conversation_id(store):
+    first, origin_id, target_id, _token, conversation_id = _create_routed_task(
+        store,
+        routed_task_id="task-parent-filter-1",
+    )
+    second_conversation = store.create_conversation(
+        target_agent_id=target_id,
+        origin_channel="registry",
+        external_conversation_ref="parent-filter-conv-2",
+        title="Second parent",
+    )
+    store.create_routed_task(
+        {
+            "routed_task_id": "task-parent-filter-2",
+            "parent_conversation_id": second_conversation["conversation_id"],
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Second task",
+            "instructions": "Do second work.",
+            "created_at": "2026-03-25T00:00:00+00:00",
+        }
+    )
+
+    tasks = store.list_tasks(parent_conversation_id=conversation_id)
+    assert [task["routed_task_id"] for task in tasks] == [first["routed_task_id"]]
+
+
 def test_list_agents_supports_query_and_connectivity_filters(store):
     _enroll(store, "alpha-reviewer")
     beta_id, beta_token = _enroll(store, "beta-builder")

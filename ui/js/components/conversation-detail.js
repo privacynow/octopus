@@ -9,7 +9,7 @@ function renderConversationDetail(container, params) {
     let latestSeq = 0;
     let hasMoreBefore = false;
     let loadingOlder = false;
-    let showConversationView = _readConversationViewParam();
+    let activeView = _readConversationViewParam();
     let topObserver = null;
     const conversationKinds = [
         'message.user',
@@ -17,6 +17,10 @@ function renderConversationDetail(container, params) {
         'approval.requested',
         'error',
     ];
+    let relatedTasks = [];
+    let tasksLoaded = false;
+    let suggestionMatches = [];
+    let suggestionIndex = -1;
 
     const header = document.createElement('div');
     header.className = 'page-header page-header-tight';
@@ -42,7 +46,7 @@ function renderConversationDetail(container, params) {
     toolbar.appendChild(filterGroup);
 
     const allBtn = document.createElement('button');
-    allBtn.className = 'segmented-control-btn active';
+    allBtn.className = 'segmented-control-btn';
     allBtn.type = 'button';
     allBtn.id = 'conversation-view-tab';
     allBtn.textContent = 'Conversation';
@@ -51,6 +55,17 @@ function renderConversationDetail(container, params) {
     allBtn.setAttribute('aria-controls', 'conversation-timeline-panel');
     allBtn.tabIndex = 0;
     filterGroup.appendChild(allBtn);
+
+    const tasksBtn = document.createElement('button');
+    tasksBtn.className = 'segmented-control-btn';
+    tasksBtn.type = 'button';
+    tasksBtn.id = 'task-view-tab';
+    tasksBtn.textContent = 'Tasks';
+    tasksBtn.setAttribute('role', 'tab');
+    tasksBtn.setAttribute('aria-selected', 'false');
+    tasksBtn.setAttribute('aria-controls', 'conversation-timeline-panel');
+    tasksBtn.tabIndex = -1;
+    filterGroup.appendChild(tasksBtn);
 
     const messagesBtn = document.createElement('button');
     messagesBtn.className = 'segmented-control-btn';
@@ -96,6 +111,23 @@ function renderConversationDetail(container, params) {
     const timeline = document.createElement('div');
     timeline.className = 'chat-timeline';
     timelinePanel.appendChild(timeline);
+
+    const taskView = document.createElement('div');
+    taskView.className = 'conversation-task-view';
+    taskView.hidden = true;
+    timelinePanel.appendChild(taskView);
+
+    const taskSummaryStrip = document.createElement('div');
+    taskSummaryStrip.className = 'task-summary-strip';
+    taskView.appendChild(taskSummaryStrip);
+
+    const taskBoard = document.createElement('div');
+    taskBoard.className = 'task-board task-board-conversation';
+    taskView.appendChild(taskBoard);
+
+    const taskFeed = document.createElement('div');
+    taskFeed.className = 'conversation-task-feed';
+    taskView.appendChild(taskFeed);
 
     const liveRegion = document.createElement('div');
     liveRegion.className = 'sr-only';
@@ -226,40 +258,58 @@ function renderConversationDetail(container, params) {
     }
 
     function updateTimelineHeader() {
-        const label = showConversationView ? 'Conversation' : 'Full activity';
-        const subtitle = showConversationView
+        const label = activeView === 'conversation'
+            ? 'Conversation'
+            : activeView === 'tasks'
+                ? 'Tasks'
+                : 'Full activity';
+        const subtitle = activeView === 'conversation'
             ? 'Operator messages, agent replies, approval requests, and problems'
-            : 'Every stored event, including provider and tool activity';
+            : activeView === 'tasks'
+                ? 'Delegated work, task controls, and current task outcomes'
+                : 'Every stored event, including provider and tool activity';
         timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
-        allBtn.setAttribute('aria-selected', String(showConversationView));
-        allBtn.tabIndex = showConversationView ? 0 : -1;
-        messagesBtn.setAttribute('aria-selected', String(!showConversationView));
-        messagesBtn.tabIndex = showConversationView ? -1 : 0;
-        timelinePanel.setAttribute('aria-labelledby', showConversationView ? allBtn.id : messagesBtn.id);
+        allBtn.classList.toggle('active', activeView === 'conversation');
+        tasksBtn.classList.toggle('active', activeView === 'tasks');
+        messagesBtn.classList.toggle('active', activeView === 'activity');
+        allBtn.setAttribute('aria-selected', String(activeView === 'conversation'));
+        allBtn.tabIndex = activeView === 'conversation' ? 0 : -1;
+        tasksBtn.setAttribute('aria-selected', String(activeView === 'tasks'));
+        tasksBtn.tabIndex = activeView === 'tasks' ? 0 : -1;
+        messagesBtn.setAttribute('aria-selected', String(activeView === 'activity'));
+        messagesBtn.tabIndex = activeView === 'activity' ? 0 : -1;
+        const labelledBy = activeView === 'tasks' ? tasksBtn.id : activeView === 'activity' ? messagesBtn.id : allBtn.id;
+        timelinePanel.setAttribute('aria-labelledby', labelledBy);
+        timeline.hidden = activeView === 'tasks';
+        taskView.hidden = activeView !== 'tasks';
     }
 
-    function applyFilter(nextConversationView) {
-        showConversationView = nextConversationView;
-        allBtn.classList.toggle('active', showConversationView);
-        messagesBtn.classList.toggle('active', !showConversationView);
+    function applyFilter(nextView) {
+        activeView = nextView;
         updateTimelineHeader();
-        _writeConversationViewParam(showConversationView);
+        _writeConversationViewParam(activeView);
+        if (activeView === 'tasks') {
+            loadRelatedTasks({ soft: true });
+            return;
+        }
         reloadEvents();
     }
 
-    allBtn.addEventListener('click', () => applyFilter(true));
-    messagesBtn.addEventListener('click', () => applyFilter(false));
+    allBtn.addEventListener('click', () => applyFilter('conversation'));
+    tasksBtn.addEventListener('click', () => applyFilter('tasks'));
+    messagesBtn.addEventListener('click', () => applyFilter('activity'));
     filterGroup.addEventListener('keydown', (e) => {
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
         e.preventDefault();
-        if (document.activeElement === allBtn || document.activeElement === messagesBtn) {
-            const target = document.activeElement === allBtn ? messagesBtn : allBtn;
+        const tabs = [allBtn, tasksBtn, messagesBtn];
+        const currentIndex = tabs.indexOf(document.activeElement);
+        if (currentIndex >= 0) {
+            const delta = e.key === 'ArrowRight' ? 1 : -1;
+            const target = tabs[(currentIndex + delta + tabs.length) % tabs.length];
             target.focus();
-            applyFilter(target === allBtn);
+            applyFilter(target === allBtn ? 'conversation' : target === tasksBtn ? 'tasks' : 'activity');
         }
     });
-    allBtn.classList.toggle('active', showConversationView);
-    messagesBtn.classList.toggle('active', !showConversationView);
     updateTimelineHeader();
 
     exportBtn.addEventListener('click', async () => {
@@ -292,12 +342,7 @@ function renderConversationDetail(container, params) {
         });
     });
 
-    textarea.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
+    textarea.addEventListener('keydown', handleComposerKeydown);
 
     sendBtn.addEventListener('click', sendMessage);
     textarea.addEventListener('input', updateComposerAssist);
@@ -309,6 +354,7 @@ function renderConversationDetail(container, params) {
         const selectorOnly = !directAssignment && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
         sendBtn.disabled = true;
         textarea.disabled = true;
+        clearSuggestions();
         suggestionList.hidden = true;
         try {
             if (directAssignment) {
@@ -332,6 +378,61 @@ function renderConversationDetail(container, params) {
         textarea.focus();
     }
 
+    function handleComposerKeydown(e) {
+        if (!suggestionList.hidden && suggestionMatches.length) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSuggestionIndex((suggestionIndex + 1 + suggestionMatches.length) % suggestionMatches.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSuggestionIndex((suggestionIndex - 1 + suggestionMatches.length) % suggestionMatches.length);
+                return;
+            }
+            if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                e.preventDefault();
+                const chosen = suggestionMatches[suggestionIndex >= 0 ? suggestionIndex : 0];
+                if (chosen) {
+                    applyTargetSuggestion(chosen.label);
+                }
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                clearSuggestions();
+                return;
+            }
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    }
+
+    function applyTargetSuggestion(label) {
+        textarea.value = _replaceLeadingConversationSelector(textarea.value, label);
+        clearSuggestions();
+        textarea.focus();
+        updateComposerAssist();
+    }
+
+    function clearSuggestions() {
+        suggestionMatches = [];
+        suggestionIndex = -1;
+        suggestionList.textContent = '';
+        suggestionList.hidden = true;
+    }
+
+    function setSuggestionIndex(nextIndex) {
+        suggestionIndex = nextIndex;
+        Array.from(suggestionList.children).forEach((child, index) => {
+            const active = index === suggestionIndex;
+            child.classList.toggle('active', active);
+            child.setAttribute('aria-selected', String(active));
+        });
+    }
+
     function updateComposerAssist() {
         const text = textarea.value.trim();
         const directAssignment = _extractConversationTargetSelectorMessage(text);
@@ -345,7 +446,6 @@ function renderConversationDetail(container, params) {
             sendBtn.textContent = 'Assign';
             sendBtn.setAttribute('aria-label', 'Assign task');
             renderTargetSuggestions('');
-            suggestionList.hidden = true;
             return;
         }
         if (selector) {
@@ -369,40 +469,46 @@ function renderConversationDetail(container, params) {
 
     function renderTargetSuggestions(token) {
         const normalizedToken = String(token || '').trim().toLowerCase();
-        if (!normalizedToken || normalizedToken === latestSuggestionToken && suggestionList.childElementCount) {
-            latestSuggestionToken = normalizedToken;
-        } else {
-            latestSuggestionToken = normalizedToken;
-        }
-        suggestionList.textContent = '';
+        latestSuggestionToken = normalizedToken;
+        clearSuggestions();
         if (!normalizedToken || !normalizedToken.startsWith('@')) {
-            suggestionList.hidden = true;
             return;
         }
-        const matches = availableTargets
-            .filter((item) => item.label.toLowerCase().startsWith(normalizedToken))
+        suggestionMatches = availableTargets
+            .filter((item) => {
+                const haystack = [
+                    item.label,
+                    item.display,
+                    item.detail,
+                ].join(' ').toLowerCase();
+                return haystack.includes(normalizedToken);
+            })
             .slice(0, 6);
-        if (!matches.length) {
-            suggestionList.hidden = true;
+        if (!suggestionMatches.length) {
             return;
         }
-        matches.forEach((item) => {
+        suggestionMatches.forEach((item, index) => {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'compose-suggestion';
+            button.setAttribute('role', 'option');
+            button.setAttribute('aria-selected', 'false');
             button.innerHTML = `<strong>${UI.esc(item.label)}</strong><span>${UI.esc(item.display)}</span>${item.detail ? `<em>${UI.esc(item.detail)}</em>` : ''}`;
             button.addEventListener('click', () => {
-                textarea.value = _replaceLeadingConversationSelector(textarea.value, item.label);
-                textarea.focus();
-                updateComposerAssist();
+                applyTargetSuggestion(item.label);
             });
             suggestionList.appendChild(button);
+            if (index === 0) {
+                suggestionIndex = 0;
+            }
         });
+        setSuggestionIndex(suggestionIndex >= 0 ? suggestionIndex : 0);
+        suggestionList.setAttribute('role', 'listbox');
         suggestionList.hidden = false;
     }
 
     function currentKindFilter() {
-        return showConversationView ? conversationKinds.join(',') : undefined;
+        return activeView === 'conversation' ? conversationKinds.join(',') : undefined;
     }
 
     function renderMetaCard(data) {
@@ -463,6 +569,97 @@ function renderConversationDetail(container, params) {
 
         metaCard.appendChild(hero);
         metaCard.appendChild(facts);
+    }
+
+    function renderTaskSummaryStrip(tasks) {
+        taskSummaryStrip.textContent = '';
+        const counts = {
+            total: tasks.length,
+            running: tasks.filter((task) => task.status === 'running').length,
+            queued: tasks.filter((task) => ['queued', 'submitted', 'leased'].includes(task.status || '')).length,
+            attention: tasks.filter((task) => ['failed', 'cancelled', 'timed_out'].includes(task.status || '')).length,
+            done: tasks.filter((task) => task.status === 'completed').length,
+        };
+        [
+            ['Total', counts.total],
+            ['Queued', counts.queued],
+            ['Running', counts.running],
+            ['Needs follow-up', counts.attention],
+            ['Done', counts.done],
+        ].forEach(([label, value]) => {
+            const chip = document.createElement('div');
+            chip.className = 'task-summary-chip';
+            chip.innerHTML = `<strong>${UI.esc(String(value))}</strong><span>${UI.esc(label)}</span>`;
+            taskSummaryStrip.appendChild(chip);
+        });
+    }
+
+    function renderRelatedTasks(tasks) {
+        renderTaskSummaryStrip(tasks);
+        taskBoard.textContent = '';
+        taskFeed.textContent = '';
+        if (!tasks.length) {
+            taskBoard.appendChild(UI.renderEmptyState('No delegated tasks for this conversation yet.', true));
+            return;
+        }
+        const lanes = [
+            ['queued', 'Queued', ['queued', 'submitted', 'leased']],
+            ['running', 'Running', ['running']],
+            ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
+            ['done', 'Done', ['completed']],
+        ];
+        lanes.forEach(([key, title, statuses]) => {
+            const lane = document.createElement('section');
+            lane.className = 'task-lane';
+            lane.dataset.lane = key;
+            const laneHeader = document.createElement('div');
+            laneHeader.className = 'task-lane-header';
+            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
+            laneHeader.innerHTML = `<strong>${UI.esc(title)}</strong><span>${laneTasks.length}</span>`;
+            lane.appendChild(laneHeader);
+            const laneBody = document.createElement('div');
+            laneBody.className = 'task-lane-body';
+            if (!laneTasks.length) {
+                laneBody.appendChild(UI.renderEmptyState('Nothing here right now.', true));
+            } else {
+                laneTasks.forEach((task) => laneBody.appendChild(_createConversationTaskCard(task, convoId)));
+            }
+            lane.appendChild(laneBody);
+            taskBoard.appendChild(lane);
+        });
+
+        const feedHeader = document.createElement('div');
+        feedHeader.className = 'task-feed-header';
+        feedHeader.innerHTML = '<strong>Task log</strong><span>Latest delegated work for this conversation.</span>';
+        taskFeed.appendChild(feedHeader);
+        const feedList = document.createElement('div');
+        feedList.className = 'task-feed-list';
+        tasks
+            .slice()
+            .sort((left, right) => String(right.updated_at || right.created_at || '').localeCompare(String(left.updated_at || left.created_at || '')))
+            .forEach((task) => feedList.appendChild(_createConversationTaskCard(task, convoId, { compact: true })));
+        taskFeed.appendChild(feedList);
+    }
+
+    async function loadRelatedTasks({ soft = false } = {}) {
+        if (!soft || !tasksLoaded) {
+            taskBoard.textContent = '';
+            taskFeed.textContent = '';
+            UI.renderSkeletons(taskBoard, 4, 'card');
+        }
+        try {
+            const data = await API.listTasks({
+                parent_conversation_id: convoId,
+                limit: 100,
+            });
+            relatedTasks = data.tasks || data || [];
+            renderRelatedTasks(relatedTasks);
+            tasksLoaded = true;
+        } catch (err) {
+            taskBoard.textContent = '';
+            taskFeed.textContent = '';
+            UI.renderError(taskBoard, 'Failed to load conversation tasks: ' + err.message, loadRelatedTasks);
+        }
     }
 
     function clearTimelineForLoad() {
@@ -609,7 +806,18 @@ function renderConversationDetail(container, params) {
         }
         if (msg.type !== 'event' || !msg.data) return;
         const event = msg.data;
-        if (showConversationView && !conversationKinds.includes(event.kind || '')) return;
+        if (['delegation.proposed', 'delegation.submitted', 'delegation.completed', 'task.status'].includes(event.kind || '')) {
+            loadRelatedTasks({ soft: true });
+        }
+        if (activeView === 'tasks') {
+            if (meta) {
+                meta.event_count = Number(meta.event_count || 0) + 1;
+                meta.updated_at = event.created_at || meta.updated_at;
+                renderMetaCard(meta);
+            }
+            return;
+        }
+        if (activeView === 'conversation' && !conversationKinds.includes(event.kind || '')) return;
         const seq = Number(event.seq || 0);
         if (seq && latestSeq && seq <= latestSeq) return;
         const shouldStick = isNearBottom();
@@ -642,7 +850,11 @@ function renderConversationDetail(container, params) {
 
     loadConversation();
     loadTargetSuggestions();
-    reloadEvents();
+    if (activeView === 'tasks') {
+        loadRelatedTasks();
+    } else {
+        reloadEvents();
+    }
     cleanups.add(() => clearTimeout(progressTimer));
     updateComposerAssist();
 }
@@ -701,19 +913,20 @@ function _formatConversationTargetLabel(selector) {
 function _readConversationViewParam() {
     try {
         const url = new URL(window.location.href);
-        return url.searchParams.get('view') !== 'activity';
+        const view = url.searchParams.get('view');
+        return view === 'tasks' || view === 'activity' ? view : 'conversation';
     } catch {
-        return true;
+        return 'conversation';
     }
 }
 
-function _writeConversationViewParam(showConversationView) {
+function _writeConversationViewParam(activeView) {
     try {
         const url = new URL(window.location.href);
-        if (showConversationView) {
+        if (activeView === 'conversation') {
             url.searchParams.delete('view');
         } else {
-            url.searchParams.set('view', 'activity');
+            url.searchParams.set('view', activeView);
         }
         history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     } catch {
@@ -1065,6 +1278,109 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
             body.appendChild(actions);
         }
     }
+}
+
+function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
+    const card = document.createElement('article');
+    card.className = `conversation-task-card${compact ? ' compact' : ''}`;
+
+    const header = document.createElement('div');
+    header.className = 'conversation-task-card-header';
+    const title = document.createElement('div');
+    title.className = 'conversation-task-card-title';
+    title.textContent = task.title || task.routed_task_id;
+    header.appendChild(title);
+    const badge = document.createElement('span');
+    badge.className = `badge badge-${task.status || 'queued'}`;
+    badge.textContent = task.status || 'queued';
+    header.appendChild(badge);
+    card.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'conversation-task-card-meta';
+    const parts = [];
+    if (task.target_display_name || task.target_agent_id) {
+        parts.push(`To ${task.target_display_name || task.target_agent_id}`);
+    }
+    if (task.updated_at || task.created_at) {
+        const stamp = document.createElement('span');
+        stamp.setAttribute('data-timestamp', task.updated_at || task.created_at || '');
+        stamp.textContent = UI.relativeTime(task.updated_at || task.created_at || '');
+        const label = document.createElement('span');
+        label.textContent = parts.join(' · ');
+        if (parts.length) {
+            meta.appendChild(label);
+            meta.appendChild(stamp);
+        } else {
+            meta.appendChild(stamp);
+        }
+    } else if (parts.length) {
+        meta.textContent = parts.join(' · ');
+    }
+    if (meta.childElementCount || meta.textContent) {
+        card.appendChild(meta);
+    }
+
+    const summary = task.summary
+        || task.result_summary
+        || task.result_text
+        || task.instructions
+        || '';
+    if (summary) {
+        const summaryBlock = document.createElement('p');
+        summaryBlock.className = 'conversation-task-card-summary';
+        summaryBlock.textContent = compact ? summary.slice(0, 180) : summary;
+        card.appendChild(summaryBlock);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'task-action-row';
+    const statusText = document.createElement('span');
+    statusText.className = 'task-action-status';
+    actions.appendChild(statusText);
+    if (['queued', 'submitted', 'leased', 'running'].includes(task.status || '')) {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn btn-sm btn-danger';
+        cancelBtn.textContent = 'Cancel task';
+        cancelBtn.addEventListener('click', async () => {
+            cancelBtn.disabled = true;
+            statusText.textContent = 'Cancelling…';
+            try {
+                await API.conversationAction(convoId, 'cancel_task', { routed_task_id: task.routed_task_id });
+                statusText.textContent = 'Cancel requested.';
+            } catch (err) {
+                cancelBtn.disabled = false;
+                statusText.textContent = 'Cancel failed.';
+                UI.reportError('Failed to cancel the task', err, { context: 'Task cancel failed' });
+            }
+        });
+        actions.appendChild(cancelBtn);
+    }
+    if (['failed', 'cancelled', 'timed_out'].includes(task.status || '')) {
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'btn btn-sm';
+        retryBtn.textContent = 'Retry task';
+        retryBtn.addEventListener('click', async () => {
+            retryBtn.disabled = true;
+            statusText.textContent = 'Retrying…';
+            try {
+                await API.conversationAction(convoId, 'retry_task', { routed_task_id: task.routed_task_id });
+                statusText.textContent = 'Retry queued.';
+            } catch (err) {
+                retryBtn.disabled = false;
+                statusText.textContent = 'Retry failed.';
+                UI.reportError('Failed to retry the task', err, { context: 'Task retry failed' });
+            }
+        });
+        actions.appendChild(retryBtn);
+    }
+    if (actions.childElementCount > 1) {
+        card.appendChild(actions);
+    }
+
+    return card;
 }
 
 function _renderErrorCard(body, event, metadata) {

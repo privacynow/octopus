@@ -422,9 +422,12 @@ Conversation detail in `ui/js/components/conversation-detail.js` is also the
 main operator entrypoint for structured coordination today:
 
 - normal conversation messages still go through `POST /v1/conversations/{id}/messages`
-- direct task assignment goes through typed `direct_assign` actions
-- the default “Conversation” tab filters out low-level machine activity, while
-  “Full activity” shows the full stored event stream
+- a leading selector such as `@m2`, `@cap:review`, or `@role:reviewer` routes
+  through typed `direct_assign` actions from the same main composer
+- the default `Conversation` tab stays human-first
+- the `Tasks` tab renders routed work as first-class task objects with task
+  actions
+- `Full activity` keeps the full stored event stream for diagnostics
 
 ## Main Interaction Flows
 
@@ -487,7 +490,8 @@ sequenceDiagram
 ```
 
 Parent conversations also receive mirrored `task.status` events so delegated
-work is visible in the registry UI.
+work is visible in the registry UI, while the conversation `Tasks` tab queries
+the routed-task store directly for a cleaner operational view.
 
 ## Identity And Persistence
 

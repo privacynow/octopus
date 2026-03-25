@@ -11,8 +11,12 @@ from octopus_sdk.task_protocol import (
     DELEGATED_TASK_ACTIVE_STATES,
     DELEGATED_TASK_TERMINAL_STATES,
     PENDING_DELEGATION_TERMINAL_STATES,
-    derive_pending_delegation_status,
+    PendingDelegationSnapshot,
+    PendingDelegationTransitionRequest,
+    apply_pending_delegation_transition,
+    delegation_ready_to_resume as pending_delegation_ready_to_resume,
     normalize_delegated_task_status,
+    normalize_pending_delegation_status,
     validate_delegated_task_transition,
 )
 
@@ -22,8 +26,7 @@ PARENT_TERMINAL_STATUSES = PENDING_DELEGATION_TERMINAL_STATES
 
 
 def normalize_parent_status(status: str) -> str:
-    text = (status or "").strip().lower()
-    return text or "proposed"
+    return normalize_pending_delegation_status(status)
 
 
 def normalize_child_status(status: str) -> str:
@@ -45,7 +48,7 @@ def any_task_failed(pending: PendingDelegation | None) -> bool:
 def delegation_ready_to_resume(pending: PendingDelegation | None) -> bool:
     if pending is None:
         return False
-    return normalize_parent_status(pending.status) in {"completed", "partial_failed"}
+    return pending_delegation_ready_to_resume(pending.status)
 
 
 @dataclass(frozen=True)
@@ -185,8 +188,17 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
             return DelegationDecision(status="no_delegation", ok=True, pending=pending)
         if any(normalize_child_status(task.status) != "proposed" for task in pending.tasks):
             return DelegationDecision(status="not_cancellable", ok=True, pending=pending)
+        parent_transition = apply_pending_delegation_transition(
+            PendingDelegationSnapshot(
+                status=pending.status,
+                task_statuses=tuple(task.status for task in pending.tasks),
+            ),
+            PendingDelegationTransitionRequest(transition="cancel"),
+        )
+        if not parent_transition.ok:
+            return DelegationDecision(status="not_cancellable", ok=True, pending=pending)
         return DelegationDecision(
-            status="cancelled",
+            status=parent_transition.new_state,
             ok=True,
             effects=DelegationEffects(clear_pending=True),
         )
@@ -206,10 +218,21 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
             tasks.append(next_task)
         if not updated:
             return DelegationDecision(status="not_found", ok=True, pending=pending, matched=False)
+        parent_transition = apply_pending_delegation_transition(
+            PendingDelegationSnapshot(
+                status=pending.status,
+                task_statuses=tuple(task.status for task in pending.tasks),
+            ),
+            PendingDelegationTransitionRequest(
+                transition="sync_children",
+                task_statuses=tuple(task.status for task in tasks),
+            ),
+        )
+        next_parent_status = parent_transition.new_state if parent_transition.ok else normalize_parent_status(pending.status)
         updated_pending = replace(
             pending,
             tasks=tasks,
-            status=derive_pending_delegation_status(task.status for task in tasks),
+            status=next_parent_status,
         )
         return DelegationDecision(
             status=normalize_parent_status(updated_pending.status),
@@ -217,7 +240,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
             effects=DelegationEffects(set_pending=updated_pending),
             pending=updated_pending,
             matched=True,
-            ready_to_resume=delegation_ready_to_resume(updated_pending),
+            ready_to_resume=parent_transition.ready_to_resume if parent_transition.ok else delegation_ready_to_resume(updated_pending),
         )
 
     if isinstance(action, FinalizeResumeAction):

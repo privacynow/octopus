@@ -850,11 +850,13 @@ def resource_list_tasks(
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
     status: str = Query(default=""),
+    parent_conversation_id: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     tasks = store.list_tasks(
         for_agent_id=_scoped_agent_id(auth),
+        parent_conversation_id=parent_conversation_id,
         cursor=cursor,
         limit=limit,
         status=status,

@@ -797,7 +797,15 @@ class AbstractRegistryStore(Protocol):
     ) -> dict[str, Any]:
         """Submit a typed coordination action for an existing conversation."""
 
-    def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
+    def list_tasks(
+        self,
+        *,
+        for_agent_id: str | None = None,
+        parent_conversation_id: str = "",
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form with offset-based pagination."""
 
     def get_task(self, routed_task_id: str) -> dict[str, Any]:

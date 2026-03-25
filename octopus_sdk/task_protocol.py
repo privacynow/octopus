@@ -45,6 +45,7 @@ PendingDelegationStatus = Literal[
     "partial_failed",
     "cancelled",
 ]
+PendingDelegationTransition = Literal["sync_children", "cancel"]
 
 ROUTED_TASK_STATES = frozenset(
     {
@@ -60,6 +61,7 @@ ROUTED_TASK_STATES = frozenset(
 DELEGATED_TASK_STATES = frozenset({"pending", "proposed", "submitted", *ROUTED_TASK_STATES})
 DELEGATED_TASK_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "timed_out"})
 DELEGATED_TASK_ACTIVE_STATES = frozenset({"pending", "proposed", "submitted", "queued", "leased", "running"})
+PENDING_DELEGATION_STATES = frozenset({"proposed", "submitted", "completed", "partial_failed", "cancelled"})
 PENDING_DELEGATION_TERMINAL_STATES = frozenset({"completed", "partial_failed", "cancelled"})
 
 _ROUTED_ALLOWED_NEXT_STATES = {
@@ -75,6 +77,13 @@ _PRE_ROUTED_ALLOWED_NEXT_STATES = {
     "pending": frozenset({"pending", "submitted", *ROUTED_TASK_STATES}),
     "proposed": frozenset({"proposed", "submitted", *ROUTED_TASK_STATES}),
     "submitted": frozenset({"submitted", *ROUTED_TASK_STATES}),
+}
+_PENDING_ALLOWED_NEXT_STATES = {
+    "proposed": frozenset({"proposed", "submitted", "completed", "partial_failed", "cancelled"}),
+    "submitted": frozenset({"submitted", "completed", "partial_failed"}),
+    "completed": frozenset({"completed"}),
+    "partial_failed": frozenset({"partial_failed"}),
+    "cancelled": frozenset({"cancelled"}),
 }
 
 
@@ -111,6 +120,35 @@ class TaskTransitionResult:
     new_version: int = 0
 
 
+@dataclass(frozen=True)
+class PendingDelegationSnapshot:
+    status: str
+    task_statuses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PendingDelegationTransitionRequest:
+    transition: PendingDelegationTransition
+    task_statuses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PendingDelegationTransitionResult:
+    ok: bool
+    old_state: str
+    new_state: str
+    reason: str = ""
+
+    @property
+    def ready_to_resume(self) -> bool:
+        return delegation_ready_to_resume(self.new_state)
+
+
+def normalize_pending_delegation_status(status: str) -> str:
+    text = (status or "").strip().lower()
+    return text or "proposed"
+
+
 def normalize_delegated_task_status(status: str) -> str:
     text = (status or "").strip().lower()
     return text or "proposed"
@@ -127,6 +165,39 @@ def derive_pending_delegation_status(task_statuses: Iterable[str]) -> PendingDel
     if any(status in DELEGATED_TASK_ACTIVE_STATES for status in statuses):
         return "submitted"
     return "proposed"
+
+
+def delegation_ready_to_resume(status: str) -> bool:
+    return normalize_pending_delegation_status(status) in {"completed", "partial_failed"}
+
+
+def apply_pending_delegation_transition(
+    snapshot: PendingDelegationSnapshot,
+    request: PendingDelegationTransitionRequest,
+) -> PendingDelegationTransitionResult:
+    current = normalize_pending_delegation_status(snapshot.status)
+    if current not in PENDING_DELEGATION_STATES:
+        raise ValueError(f"unknown pending delegation state {snapshot.status!r}")
+    if request.transition == "sync_children":
+        target = derive_pending_delegation_status(
+            request.task_statuses or snapshot.task_statuses
+        )
+    elif request.transition == "cancel":
+        target = "cancelled"
+    else:
+        raise ValueError(f"unknown pending delegation transition {request.transition!r}")
+    if target not in _PENDING_ALLOWED_NEXT_STATES[current]:
+        return PendingDelegationTransitionResult(
+            ok=False,
+            old_state=current,
+            new_state=current,
+            reason=f"{current} cannot transition to {target}",
+        )
+    return PendingDelegationTransitionResult(
+        ok=True,
+        old_state=current,
+        new_state=target,
+    )
 
 
 def validate_delegated_task_transition(current_status: str, next_status: str) -> TaskTransitionResult:

@@ -1542,6 +1542,43 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert routed_result["payload"]["parent_external_conversation_ref"] == "conv-1"
 
 
+def test_registry_list_tasks_can_filter_by_parent_conversation_id(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot")
+    target_id, _target_token = _enroll_and_register(client, "Target Bot", "target-bot")
+    first = _create_conversation(client, origin_token, origin_id, "conv-filter-1", title="First parent")
+    second = _create_conversation(client, origin_token, origin_id, "conv-filter-2", title="Second parent")
+
+    for task_id, parent_id in (
+        ("task-filter-1", first["conversation_id"]),
+        ("task-filter-2", second["conversation_id"]),
+    ):
+        response = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": task_id,
+                "parent_conversation_id": parent_id,
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": f"Task {task_id}",
+                "instructions": "Do work.",
+                "created_at": "2026-03-25T00:00:00+00:00",
+            },
+        )
+        assert response.status_code == 200
+
+    filtered = client.get(
+        "/v1/tasks",
+        params={"parent_conversation_id": first["conversation_id"], "limit": 10},
+    )
+    assert filtered.status_code == 200
+    assert [task["routed_task_id"] for task in filtered.json()["tasks"]] == ["task-filter-1"]
+
+
 def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

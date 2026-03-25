@@ -41,9 +41,9 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
   await expect(page.getByRole("heading", { name: /registry/i })).toBeVisible();
-  await expect(page.locator(".attention-card")).toHaveCount(3);
-  await expect(page.getByRole("heading", { name: "Open conversations" })).toBeVisible();
-  await expect(page.getByText("Pending approvals").first()).toBeVisible();
+  await expect(page.getByText("Operator workspace").first()).toBeVisible();
+  await expect(page.getByText("Blocking approvals").first()).toBeVisible();
+  await expect(page.getByText("Open conversations").first()).toBeVisible();
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
@@ -52,9 +52,11 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
+  await expect(page.getByText("Task board").first()).toBeVisible();
   await expect(page.getByText(EXISTING_TASK_TITLE).first()).toBeVisible();
-  await page.getByText(EXISTING_TASK_TITLE).first().click();
-  await expect(page.getByRole("link", { name: "View parent conversation" }).first()).toBeVisible();
+  const existingTaskItem = page.locator(".task-list-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
+  await existingTaskItem.locator(".task-summary-row").click();
+  await expect(existingTaskItem.getByRole("link", { name: "View parent conversation" })).toBeVisible();
 
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
   await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
@@ -73,10 +75,9 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSlug)}`))).toBeVisible();
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
   await page.getByRole("button", { name: "Assign" }).click();
-  await page.getByRole("tab", { name: "Full activity" }).click();
-  await expect(page.locator(".timeline-events")).toContainText(EXISTING_TASK_TITLE);
-  await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle);
-  await expect(page.locator(".timeline-events")).toContainText("Work update");
+  await page.getByRole("tab", { name: "Tasks" }).click();
+  await expect(page.locator(".conversation-task-view")).toContainText("Task log");
+  await expect(page.locator(".conversation-task-view")).toContainText(liveUiTaskTitle);
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();

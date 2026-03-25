@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.identity import telegram_conversation_key
+from octopus_sdk.identity import telegram_conversation_key
 from app.session_defaults import default_session
 from app.storage import (
     ensure_data_dirs,

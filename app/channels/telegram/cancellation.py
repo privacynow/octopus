@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from app.identity import telegram_conversation_key
+from octopus_sdk.identity import telegram_conversation_key
 
 
 def _normalized_cancel_key(chat_id: int | str) -> int | str:

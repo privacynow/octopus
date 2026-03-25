@@ -7,8 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from app.agents.types import RoutedTaskResult
-from app.identity import filesystem_component_for_key
+from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.identity import filesystem_component_for_key
 from app.workflows.delegation.contracts import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}

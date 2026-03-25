@@ -3,8 +3,7 @@ import time
 from pathlib import Path
 
 from app import runtime_backend, work_queue
-from app.agents.state import save_registry_connection_state
-from app.agents.types import RegistryConnectionState
+from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.runtime_health import (
     WorkerHeartbeat,
     collect_runtime_health_report,
@@ -15,7 +14,7 @@ from app.storage import ensure_data_dirs
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
 async def _collect_health(config, provider):

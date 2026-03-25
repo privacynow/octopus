@@ -14,21 +14,26 @@ import app.agents.runtime as agent_runtime_module
 from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.runtime import AgentRuntime
-from app.agents.state import bot_identity
-from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
+from app.agents.runtime import AgentRuntime, _registered_card_hash
+from app.agents.state import RegistryConnectionState
+from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.channel import _services_for_registry
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.agents.registry_capabilities import registry_authority_ref
 from app.control_plane.bus import ControlPlaneBus
 from app.config import derive_agent_slug
-from app.identity import conversation_key_for_ref, telegram_conversation_ref
-from app.runtime.inbound_types import deserialize_inbound
+import octopus_sdk.identity as identity_module
+from octopus_sdk.identity import (
+    bot_identity,
+    conversation_key_for_ref,
+    load_bot_identity_state,
+    telegram_conversation_ref,
+)
+from octopus_sdk.inbound_types import deserialize_inbound
 from app.runtime.services import build_noop_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from app.workflows.delegation.contracts import DelegationUpdateOutcome
 from app.agents.state import (
-    load_bot_identity_state,
     load_registry_connection_state,
     load_runtime_registry_connection_state,
     save_registry_connection_state,
@@ -56,7 +61,7 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
 
     card = AgentRuntime(config).requested_card()
 
-    assert card.capabilities == ()
+    assert card.capabilities == []
 
 
 def test_requested_card_uses_neutral_version_when_no_product_version_is_defined(tmp_path: Path):
@@ -171,12 +176,12 @@ def test_bot_identity_preserves_existing_file_when_atomic_replace_fails(
     def fail_replace(src: Path, dst: Path) -> None:
         raise OSError("rename failed")
 
-    monkeypatch.setattr(agent_state_module.os, "replace", fail_replace)
+    monkeypatch.setattr(identity_module.os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="rename failed"):
-        agent_state_module._save_bot_identity_state(
+        identity_module._save_bot_identity_state(
             identity_path,
-            agent_state_module.BotIdentityState(
+            identity_module.BotIdentityState(
                 bot_id="new-bot-id",
                 created_at="2026-02-01T00:00:00Z",
             ),
@@ -515,6 +520,59 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         ("register", "product-bot", "connected"),
         ("heartbeat", "connected", "0"),
     ]
+
+
+async def test_agent_runtime_connected_sync_uses_heartbeat_without_re_registering(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def heartbeat(
+            self,
+            *,
+            connectivity_state: str,
+            current_capacity: int,
+            max_capacity: int,
+            runtime_health: dict | None = None,
+        ):
+            del runtime_health, current_capacity, max_capacity
+            calls.append(("heartbeat", connectivity_state))
+            return {"ok": True}
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            del card, connectivity_state, current_capacity, max_capacity
+            calls.append(("register", "unexpected"))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    config = make_config(
+        data_dir=tmp_path,
+        provider_name="codex",
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_slug="product-bot",
+        agent_role="product",
+        agent_capabilities=("planning", "delegation"),
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
+    runtime._state.agent_id = "agent-123"
+    runtime._state.agent_token = "secret-token"
+    runtime._state.registered_slug = "product-bot"
+    runtime._state.connectivity_state = "connected"
+    card = runtime.requested_card().model_copy(
+        update={"slug": "product-bot", "connectivity_state": "connected"}
+    )
+    runtime._state.registered_card_hash = _registered_card_hash(card)
+    runtime._save_state()
+
+    result = await runtime.sync_once()
+
+    assert result == "connected"
+    assert calls == [("heartbeat", "connected")]
 
 
 async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypatch, tmp_path: Path):
@@ -895,6 +953,60 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
             "conversation_ref": "slack:eng:C0123ABC",
             "external_id": "slack:eng:C0123ABC",
             "origin_channel": "registry",
+        }
+    ]
+
+
+async def test_admit_registry_delivery_preserves_registry_external_conversation_ref(
+    monkeypatch,
+    tmp_path: Path,
+):
+    seen_bindings: list[dict[str, str]] = []
+
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            seen_bindings.append(
+                {
+                    "conversation_ref": str(binding.get("conversation_ref", "")),
+                    "external_id": str(binding.get("external_id", "")),
+                }
+            )
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            return _FakeEgress()
+
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "channel_input",
+            "delivery_id": "delivery-reg-1",
+            "registry_id": "prod",
+            "payload": {
+                "conversation_id": "conv-1",
+                "text": "hello from registry",
+                "external_conversation_ref": "operator-conv-1",
+            },
+        },
+        dispatcher=_FakeDispatcher(),
+    )
+
+    assert outcome == "accepted"
+    assert seen_bindings == [
+        {
+            "conversation_ref": registry_conversation_ref("prod", "conv-1"),
+            "external_id": "operator-conv-1",
         }
     ]
 

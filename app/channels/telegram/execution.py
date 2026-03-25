@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 
 from telegram.error import BadRequest
 
+from app import work_queue
 from app.agents.delegation import build_delegation_runtime
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import TelegramConversationRuntime
@@ -18,21 +19,27 @@ from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
-from app.execution_context import ResolvedExecutionContext
-from app.identity import telegram_conversation_ref, telegram_numeric_id
-from app.runtime.dispatch import RuntimeDispatchRuntime
-from app.runtime.inbound_types import InboundAttachment
+from octopus_sdk.execution_context import ResolvedExecutionContext
+from octopus_sdk.identity import (
+    telegram_conversation_ref,
+    telegram_numeric_id,
+)
+from octopus_sdk.runtime_dispatch import RuntimeDispatchRuntime
+from octopus_sdk.inbound_types import InboundAttachment
+from octopus_sdk.runtime import ExecutionServices, build_execution_runtime as build_sdk_execution_runtime
+from app.provider_guidance_service import get_provider_guidance_service
+from app.skill_activation_service import get_skill_activation_service
+from app.runtime import composition
 from app.runtime.session_runtime import resolve_session_context
-from app.session_state import SessionState
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from octopus_sdk.sessions import SessionState
 from app.storage import chat_upload_dir, is_image_path, resolve_allowed_path
-from app.summarize import format_provider_error
-from app.workflows.execution.contracts import (
+from app.summarize import format_provider_error, save_raw
+from octopus_sdk.execution import (
     ExecutionRuntime,
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
-)
-from app.workflows.execution.context import build_transport_identity_from_metadata
-from app.workflows.execution.requests import (
+    build_transport_identity_from_metadata,
     check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
     execute_request as execution_execute_request,
     request_approval as execution_request_approval,
@@ -97,6 +104,67 @@ def bind_execution_collaborators(
             )
         ),
     )
+
+
+@dataclass(frozen=True)
+class _TelegramSessionRuntime:
+    state: TelegramRuntime
+
+    def load(
+        self,
+        conversation_key: str,
+        *,
+        provider_name: str,
+        provider_state_factory,
+        approval_mode: str,
+        default_role: str = "",
+        default_skills: tuple[str, ...] = (),
+    ) -> SessionState:
+        return load_runtime_session(
+            self.state.config.data_dir,
+            conversation_key,
+            provider_name=provider_name,
+            provider_state_factory=provider_state_factory,
+            approval_mode=approval_mode,
+            default_role=default_role,
+            default_skills=default_skills,
+        )
+
+    def save(self, conversation_key: str, session: SessionState) -> None:
+        save_runtime_session(self.state.config.data_dir, conversation_key, session)
+
+    def resolve_context(
+        self,
+        session: SessionState,
+        *,
+        config,
+        provider_name: str,
+        trust_tier: str = "trusted",
+    ) -> ResolvedExecutionContext:
+        return resolve_session_context(
+            session,
+            config=config,
+            provider_name=provider_name,
+            trust_tier=trust_tier,
+        )
+
+
+@dataclass(frozen=True)
+class _TelegramArtifactStore:
+    state: TelegramRuntime
+
+    def upload_dir(self, conversation_key: str) -> Path:
+        return chat_upload_dir(self.state.config.data_dir, conversation_key)
+
+    def save_raw(
+        self,
+        conversation_key: str,
+        prompt: str,
+        raw_text: str,
+        *,
+        kind: str = "request",
+    ) -> int:
+        return save_raw(self.state.config.data_dir, conversation_key, prompt, raw_text, kind=kind)
 
 
 def run_result_was_interrupted(returncode: int) -> bool:
@@ -322,7 +390,7 @@ def execution_channel_metadata(
         )
     if dispatcher is not None and resolved_ref:
         descriptor = dispatcher.descriptor_for_ref(resolved_ref)
-    from app.identity import telegram_conversation_key, parse_conversation_key, telegram_actor_key
+    from octopus_sdk.identity import telegram_conversation_key, parse_conversation_key, telegram_actor_key
 
     if isinstance(chat_id, int):
         conv_key = telegram_conversation_key(chat_id)
@@ -348,6 +416,14 @@ def execution_channel_metadata(
         if from_user is not None:
             actor = telegram_actor_key(getattr(from_user, "id", 0))
 
+    external_conversation_ref = str(chat_id)
+    if origin == "registry":
+        external_conversation_ref = str(
+            getattr(message, "external_id", "")
+            or getattr(message, "external_conversation_ref", "")
+            or str(chat_id)
+        )
+
     return ExecutionChannelMetadata(
         conversation_key=conv_key,
         descriptor=descriptor,
@@ -355,7 +431,7 @@ def execution_channel_metadata(
         routed_task_id=getattr(message, "routed_task_id", ""),
         authority_ref=getattr(message, "authority_ref", ""),
         origin_channel=origin,
-        external_conversation_ref=str(chat_id),
+        external_conversation_ref=external_conversation_ref,
         target_agent_id=target_agent_id,
         actor=actor,
     )
@@ -366,11 +442,20 @@ def build_execution_runtime(
     *,
     collaborators: TelegramExecutionCollaborators,
 ) -> ExecutionRuntime:
-    from app.workflows.execution.event_sink import build_event_sink_for_context, _NOOP_SINK
+    from octopus_sdk.event_sink import build_event_sink_for_context, _NOOP_SINK
     projection = runtime.services.control_plane.conversation_projection
+    services = ExecutionServices(
+        guidance=get_provider_guidance_service(),
+        skill_activation=get_skill_activation_service(),
+        runtime_skill_setup=composition.workflows().runtime_skills.setup,
+        sessions=_TelegramSessionRuntime(runtime),
+        artifacts=_TelegramArtifactStore(runtime),
+    )
 
-    return ExecutionRuntime(
+    return build_sdk_execution_runtime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
+        services=services,
+        interrupted_exc=work_queue.LeaveClaimed,
         build_transport_identity=lambda message, chat_id, *, actor_key="": build_transport_identity_from_metadata(
             execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
             conversation_callback_factory=collaborators.build_conversation_progress_callback,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.providers.base import ToolExecutionRecord
+from octopus_sdk.providers import ToolExecutionRecord
 
 
 @runtime_checkable

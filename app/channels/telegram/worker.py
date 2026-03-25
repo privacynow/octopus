@@ -33,8 +33,8 @@ from app.channels.telegram.session_io import (
 )
 from app.channels.telegram.state import TelegramRuntime
 from app.formatting import summarize_text
-from app.identity import telegram_conversation_ref, telegram_numeric_id
-from app.runtime.inbound_types import (
+from octopus_sdk.identity import telegram_conversation_ref, telegram_numeric_id
+from octopus_sdk.inbound_types import (
     InboundAction,
     InboundCallback,
     InboundCommand,
@@ -42,10 +42,10 @@ from app.runtime.inbound_types import (
     InboundUser,
 )
 from app.runtime.work_admission import admit_worker_message, trust_tier_for_ref
-from app.workflows.execution.contracts import ExecutionRuntime
-from app.workflows.execution.contracts import RequestExecutionOutcome
+from octopus_sdk.execution import ExecutionRuntime
+from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
-from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
+from octopus_sdk.execution import dispatch_message_request, load_approval_mode
 from app.workflows.delegation.coordination import expire_stale_delegations
 from app.workflows.recovery.replay import get_recovery_use_cases
 from app.worker import poll_interval_for_runtime
@@ -187,6 +187,7 @@ def _build_action_channel_egress(
         conversation_key=action_conversation_key,
         source=getattr(event, "source", "telegram"),
         conversation_ref=event.conversation_ref,
+        external_conversation_ref=getattr(event, "external_conversation_ref", ""),
         authority_ref=event.authority_ref,
         routed_task_id="",
         target_message_id=_action_target_message_id(event),
@@ -200,6 +201,7 @@ def _build_channel_egress(
     conversation_key: str,
     source: str,
     conversation_ref: str = "",
+    external_conversation_ref: str = "",
     authority_ref: str = "",
     routed_task_id: str = "",
     target_message_id: int | None = None,
@@ -223,6 +225,7 @@ def _build_channel_egress(
         source=source,
         authority_ref=authority_ref,
         routed_task_id=routed_task_id,
+        external_id=external_conversation_ref,
         target_message_id=target_message_id,
         output_log=getattr(bot_instance, "_output_log", None) if bot_instance is not None else None,
     )
@@ -281,8 +284,8 @@ async def _execute_worker_action(
     action_conversation_key = _item_conversation_key(item)
 
     if action == "delegation_approve":
-        from app.workflows.execution.event_sink import build_event_sink_for_context
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.event_sink import build_event_sink_for_context
+        from octopus_sdk.execution import TransportIdentity
         from app.agents.registry_capabilities import registry_id_from_authority_ref
         target_key = action_conversation_key
         if params.get("target_conversation_key"):
@@ -297,7 +300,10 @@ async def _execute_worker_action(
         transport = TransportIdentity(
             conversation_key=target_key,
             origin_channel=source,
-            external_conversation_ref=conversation_ref,
+            external_conversation_ref=(
+                str(getattr(channel_egress, "external_id", "") or "")
+                or conversation_ref
+            ),
             target_agent_id=runtime_registry_agent_id(
                 runtime.config.data_dir,
                 reg_id,
@@ -392,6 +398,7 @@ async def worker_dispatch(
             conversation_key=message_conversation_key,
             source=source,
             conversation_ref=event.conversation_ref,
+            external_conversation_ref=getattr(event, "external_conversation_ref", ""),
             authority_ref=authority_ref,
             routed_task_id=routed_task_id,
             item_id=str(item.get("id", "")),

@@ -12,13 +12,13 @@ import httpx
 
 from app.config import ProcessRole, RuntimeMode, validate_config
 from app.registry_errors import registry_error_detail
-from app.session_state import session_from_dict
+from octopus_sdk.sessions import session_from_dict
 from app.storage import list_sessions, load_session
 from app.time_utils import age_seconds, utc_now
 
 if TYPE_CHECKING:
     from app.config import BotConfig
-    from app.providers.base import Provider
+    from octopus_sdk.providers import Provider
 
 log = logging.getLogger(__name__)
 

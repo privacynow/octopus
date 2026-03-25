@@ -12,7 +12,7 @@ from app.workflows.conversation.contracts import (
     ConversationControlPort,
     ProviderStateFactory,
 )
-from app.session_state import SessionState, session_from_dict
+from octopus_sdk.sessions import SessionState, session_from_dict
 from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 from app.storage import default_session
 

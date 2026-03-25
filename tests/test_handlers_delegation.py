@@ -1,10 +1,10 @@
 import time
 
-from app.identity import telegram_conversation_ref
-from app.identity import telegram_conversation_key
-from app.ports.agent_directory import AuthorityResolution
-from app.ports.task_routing import TaskSubmissionResult
-from app.providers.base import RunResult
+from octopus_sdk.identity import telegram_conversation_ref
+from octopus_sdk.identity import telegram_conversation_key
+from octopus_sdk.agent_directory import AuthorityResolution
+from octopus_sdk.task_routing import TaskSubmissionResult
+from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (

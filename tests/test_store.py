@@ -5,9 +5,9 @@ from pathlib import Path
 import app.content_store as content_store_mod
 from app.content_models import RuntimeSkillTrackRecord, SkillFileRecord, SkillRevisionRecord
 from app.content_store import get_content_store, init_content_store_for_config
-from app.execution_context import resolve_execution_context
+from octopus_sdk.execution_context import resolve_execution_context
 from app.provider_guidance_service import get_provider_guidance_service
-from app.session_state import session_from_dict
+from octopus_sdk.sessions import session_from_dict
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
 from app.storage import close_db, default_session, ensure_data_dirs
@@ -219,11 +219,21 @@ def test_execution_context_hash_tracks_content_store_updates(monkeypatch, tmp_pa
 
         session = default_session("claude", {"session_id": "test", "started": False}, "off")
         session["active_skills"] = ["helper"]
-        ctx_v1 = resolve_execution_context(session_from_dict(session), cfg, "claude")
+        ctx_v1 = resolve_execution_context(
+            session_from_dict(session),
+            cfg,
+            "claude",
+            catalog=get_skill_catalog_service(),
+        )
 
         registry.add_skill("helper", body=MARKER_V2, version="2.0.0")
         assert imports.update("helper").ok is True
-        ctx_v2 = resolve_execution_context(session_from_dict(session), cfg, "claude")
+        ctx_v2 = resolve_execution_context(
+            session_from_dict(session),
+            cfg,
+            "claude",
+            catalog=get_skill_catalog_service(),
+        )
 
         assert ctx_v1.skill_digests["helper"] != ctx_v2.skill_digests["helper"]
         assert ctx_v1.context_hash != ctx_v2.context_hash

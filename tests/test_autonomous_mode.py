@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.config import BotConfig, validate_config
-from app.identity import telegram_actor_key
+from octopus_sdk.identity import telegram_actor_key
 from app.octopus_cli.core import OctopusManager
 from tests.support.config_support import make_config
 
@@ -139,7 +139,7 @@ def test_autonomous_explicit_approval_on_wins(monkeypatch, tmp_path):
 
 async def test_autonomous_grants_skip_permissions():
     """config.autonomous=True + session.approval_mode='off' -> skip_permissions=True."""
-    from app.session_state import SessionState
+    from octopus_sdk.sessions import SessionState
 
     session = SessionState(
         provider="claude",
@@ -160,7 +160,7 @@ async def test_autonomous_grants_skip_permissions():
 
 async def test_autonomous_respects_approval_on_override():
     """config.autonomous=True + session.approval_mode='on' -> no autonomous grant."""
-    from app.session_state import SessionState
+    from octopus_sdk.sessions import SessionState
 
     session = SessionState(
         provider="claude",
@@ -177,7 +177,7 @@ async def test_autonomous_respects_approval_on_override():
 
 async def test_non_autonomous_no_grant():
     """config.autonomous=False -> no autonomous grant regardless of approval_mode."""
-    from app.session_state import SessionState
+    from octopus_sdk.sessions import SessionState
 
     session = SessionState(
         provider="claude",

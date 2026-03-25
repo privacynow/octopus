@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 
 from fastapi import WebSocket
-from registry_sdk.realtime import (
+from octopus_sdk.realtime import (
     RealtimeEventEnvelope,
     RealtimeHeartbeatEnvelope,
     RealtimeInvalidationEnvelope,

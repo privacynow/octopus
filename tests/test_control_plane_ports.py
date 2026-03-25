@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-from app.agents.types import AgentDiscoveryQuery, RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
-from app.ports.agent_directory import (
+from octopus_sdk.registry.models import AgentDiscoveryQuery, RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.agent_directory import (
     AgentDirectoryPort,
     NoOpAgentDirectory,
 )
-from app.ports.conversation_projection import (
+from octopus_sdk.conversation_projection import (
     ConversationProjectionPort,
     NoOpConversationProjection,
 )
-from app.ports.health_publication import (
+from octopus_sdk.health_publication import (
     ConnectionSummary,
     HealthPublicationPort,
     HealthReport,
     NoOpHealthPublication,
 )
-from app.ports.task_routing import (
+from octopus_sdk.task_routing import (
     NoOpTaskRouting,
     TaskResultReport,
     TaskRoutingPort,

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from app import user_messages as _msg
 from app.config import BotConfig
+from app.runtime import composition
 from app.workflows.pending.contracts import (
     PendingExecutionPlan,
     PendingRequestOutcome,
     PendingRequestPort,
 )
-from app.request_flow import classify_pending_validation, extra_dirs_from_denials, validate_pending
-from app.session_state import PendingApproval, PendingRetry, SessionState
+from octopus_sdk.request_flow import classify_pending_validation, extra_dirs_from_denials, validate_pending
+from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
 from app.workflows.pending.machine import (
     PendingRequestDisposition,
     PendingRequestWorkflowModel,
@@ -33,7 +34,16 @@ class PendingRequestUseCases(PendingRequestPort):
         return PendingRequestOutcome(
             status="invalid",
             mutated=True,
-            message=validate_pending(pending, session, cfg, provider_name) or _msg.approval_request_no_longer_valid(),
+            message=(
+                validate_pending(
+                    pending,
+                    session,
+                    cfg,
+                    provider_name,
+                    catalog=composition.workflows().runtime_skills.catalog,
+                )
+                or _msg.approval_request_no_longer_valid()
+            ),
         )
 
     def approve(
@@ -50,7 +60,13 @@ class PendingRequestUseCases(PendingRequestPort):
                 message=_msg.approval_no_pending_approve(),
             )
         state = "pending_approval" if session.pending_approval else "pending_retry"
-        classification = classify_pending_validation(pending, session, cfg, provider_name)
+        classification = classify_pending_validation(
+            pending,
+            session,
+            cfg,
+            provider_name,
+            catalog=composition.workflows().runtime_skills.catalog,
+        )
         event_name = (
             "approve_execute" if classification == "ok"
             else "expire" if classification == "expired"
@@ -112,7 +128,13 @@ class PendingRequestUseCases(PendingRequestPort):
                 status="no_pending",
                 message=_msg.retry_nothing_pending(),
             )
-        classification = classify_pending_validation(pending, session, cfg, provider_name)
+        classification = classify_pending_validation(
+            pending,
+            session,
+            cfg,
+            provider_name,
+            catalog=composition.workflows().runtime_skills.catalog,
+        )
         event_name = (
             "approve_execute" if classification == "ok"
             else "expire" if classification == "expired"

@@ -31,7 +31,7 @@ from app.channels.telegram.runtime_skills import (
 )
 from app.channels.telegram.session_io import actor_key as _actor_key, conversation_key, event_key
 from app.channels.telegram.state import TelegramRuntime
-from app.runtime.inbound_types import InboundAction, InboundEnvelope
+from octopus_sdk.inbound_types import InboundAction, InboundEnvelope
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app import work_queue
 

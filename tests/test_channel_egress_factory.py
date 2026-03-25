@@ -3,12 +3,12 @@
 import tempfile
 from pathlib import Path
 
-from app.identity import telegram_conversation_ref
+from octopus_sdk.identity import telegram_conversation_ref
 from app.channels.registry.refs import registry_conversation_ref
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress
-from app.identity import telegram_actor_key
-from app.runtime.inbound_types import InboundUser
+from octopus_sdk.identity import telegram_actor_key
+from octopus_sdk.inbound_types import InboundUser
 from app.runtime.work_admission import trust_tier_for_ref
 from tests.support.handler_support import (
     FakeProvider,

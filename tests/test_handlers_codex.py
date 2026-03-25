@@ -1,15 +1,15 @@
 """Handler integration tests for Codex-specific session and script behavior."""
 
-from app.execution_context import ResolvedExecutionContext, resolve_execution_context
-from app.providers.base import RunContext, RunResult
-from app.session_state import session_from_dict
+from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
+from octopus_sdk.providers import RunContext, RunResult
+from octopus_sdk.sessions import session_from_dict
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
     get_provider_config_digest,
     save_user_credential,
 )
 from app.storage import default_session, save_session
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
     FakeCallbackQuery,

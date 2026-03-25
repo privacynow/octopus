@@ -5,11 +5,11 @@ import time
 
 import pytest
 
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
 from app.work_queue import debug_transport_connection, get_work_items_for_chat
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
     current_runtime,

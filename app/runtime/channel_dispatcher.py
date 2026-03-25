@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.ports.channel import Channel, ChannelBootstrap, ChannelDescriptor, ChannelIngress
-from app.ports.egress import ChannelEgress
+from octopus_sdk.channels import Channel, ChannelBootstrap, ChannelDescriptor, ChannelIngress
+from octopus_sdk.egress import ChannelEgress
 
 
 class ChannelDispatcher:

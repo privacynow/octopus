@@ -14,21 +14,39 @@ Design rules:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.execution_context import resolve_execution_context
-from app.time_utils import age_seconds, utc_now
-from app.user_messages import (
+from octopus_sdk.execution_context import resolve_execution_context
+from octopus_sdk.user_messages import (
     approval_context_changed,
     approval_expired,
     approval_expired_fallback,
 )
-from app.session_state import PendingApproval, PendingRetry, SessionState
+from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
 
 if TYPE_CHECKING:
-    from app.config import BotConfig
-    from app.execution_context import ResolvedExecutionContext
+    from octopus_sdk.config import BotConfigBase
+    from octopus_sdk.execution_context import ResolvedExecutionContext, SkillCatalogView
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _age_seconds(created_at: float | str, *, now: datetime) -> float | None:
+    if created_at in (None, "", 0, 0.0):
+        return None
+    if isinstance(created_at, (int, float)):
+        return max(0.0, float(now.timestamp()) - float(created_at))
+    try:
+        parsed = datetime.fromisoformat(str(created_at))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - parsed.astimezone(timezone.utc)).total_seconds())
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +62,7 @@ def pending_expired(
     if created_at in (None, "", 0, 0.0):
         return None
     ttl = max(3600, timeout_seconds)
-    age = age_seconds(created_at, now=utc_now())
+    age = _age_seconds(created_at, now=_utc_now())
     if age is not None and age > ttl:
         minutes = int(age // 60)
         return approval_expired(minutes)
@@ -53,23 +71,33 @@ def pending_expired(
 
 def current_context_hash(
     session: SessionState,
-    config: "BotConfig",
+    config: "BotConfigBase",
     provider_name: str,
     trust_tier: str = "trusted",
+    *,
+    catalog: "SkillCatalogView | None" = None,
 ) -> str:
     """Compute the current context hash from session + config.
 
     trust_tier must match the tier used when the pending request was created,
     otherwise the hash will differ even when nothing actually changed.
     """
-    return resolve_execution_context(session, config, provider_name, trust_tier=trust_tier).context_hash
+    return resolve_execution_context(
+        session,
+        config,
+        provider_name,
+        trust_tier=trust_tier,
+        catalog=catalog,
+    ).context_hash
 
 
 def classify_pending_validation(
     pending: PendingApproval | PendingRetry,
     session: SessionState,
-    config: "BotConfig",
+    config: "BotConfigBase",
     provider_name: str,
+    *,
+    catalog: "SkillCatalogView | None" = None,
 ) -> str:
     """Classify pending request for the workflow machine.
 
@@ -82,7 +110,11 @@ def classify_pending_validation(
         return "expired"
     trust_tier = getattr(pending, "trust_tier", "trusted")
     if pending.context_hash and pending.context_hash != current_context_hash(
-        session, config, provider_name, trust_tier=trust_tier,
+        session,
+        config,
+        provider_name,
+        trust_tier=trust_tier,
+        catalog=catalog,
     ):
         return "context_changed"
     return "ok"
@@ -91,15 +123,23 @@ def classify_pending_validation(
 def validate_pending(
     pending: PendingApproval | PendingRetry,
     session: SessionState,
-    config: "BotConfig",
+    config: "BotConfigBase",
     provider_name: str,
+    *,
+    catalog: "SkillCatalogView | None" = None,
 ) -> str | None:
     """Validate a pending request. Returns error message, or None if valid.
 
     Reads trust_tier from the pending object so the hash is recomputed
     with the same identity shape that created it.
     """
-    kind = classify_pending_validation(pending, session, config, provider_name)
+    kind = classify_pending_validation(
+        pending,
+        session,
+        config,
+        provider_name,
+        catalog=catalog,
+    )
     if kind == "expired":
         return pending_expired(pending, config.timeout_seconds) or approval_expired_fallback()
     if kind == "context_changed":

@@ -39,7 +39,7 @@ from app.octopus_cli.models import (
     Workspace,
 )
 from app.subprocess_env import build_subprocess_env
-from registry_sdk.client import RegistryClient, RegistryClientError
+from octopus_sdk.registry.client import RegistryClient, RegistryClientError
 
 
 LOCAL_REGISTRY_INTERNAL_URL = "http://registry:8787"
@@ -449,7 +449,7 @@ class OctopusManager:
                 Path("requirements.txt"),
                 Path("infra/docker/Dockerfile.bot"),
                 Path("app"),
-                Path("registry_sdk"),
+                Path("octopus_sdk"),
                 Path("skills"),
                 Path("scripts"),
             ]
@@ -459,7 +459,7 @@ class OctopusManager:
                 Path("requirements.txt"),
                 Path("infra/docker/Dockerfile"),
                 Path("app"),
-                Path("registry_sdk"),
+                Path("octopus_sdk"),
                 Path("skills"),
                 Path("scripts"),
                 Path("ui"),

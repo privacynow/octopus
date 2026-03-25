@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.channels.telegram.state import TelegramRuntime
-from app.identity import (
+from octopus_sdk.identity import (
     parse_actor_key,
     parse_conversation_key,
     telegram_actor_key,
@@ -11,7 +11,7 @@ from app.identity import (
     telegram_numeric_id,
 )
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app.skill_activation_service import get_skill_activation_service
 
 

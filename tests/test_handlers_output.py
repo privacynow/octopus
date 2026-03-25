@@ -1,9 +1,9 @@
 """Handler integration tests for output presentation and raw-response helpers."""
 
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
 from app.channels.telegram.presenters import extract_summary
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
     FakeChat,

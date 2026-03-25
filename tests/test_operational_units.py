@@ -23,7 +23,7 @@ import pytest
 
 class TestTransportIdentity:
     def test_default_fields_are_empty(self):
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.execution import TransportIdentity
         t = TransportIdentity(conversation_key="")
         assert t.conversation_key == ""
         assert t.origin_channel == ""
@@ -33,7 +33,7 @@ class TestTransportIdentity:
         assert t.timeline_callback is None
 
     def test_fields_populated(self):
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.execution import TransportIdentity
         t = TransportIdentity(
             conversation_key="tg:12345",
             origin_channel="telegram",
@@ -46,7 +46,7 @@ class TestTransportIdentity:
         assert t.target_agent_id == "agent-abc"
 
     def test_frozen(self):
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.execution import TransportIdentity
         t = TransportIdentity(conversation_key="tg:1")
         with pytest.raises(AttributeError):
             t.conversation_key = "changed"
@@ -59,7 +59,7 @@ class TestTransportIdentity:
 class TestNoOpEventSink:
     @pytest.mark.asyncio
     async def test_noop_sink_methods_are_silent(self):
-        from app.workflows.execution.event_sink import NoOpEventSink
+        from octopus_sdk.event_sink import NoOpEventSink
         sink = NoOpEventSink()
         await sink.on_user_message("hello")
         await sink.on_provider_response(prompt_tokens=10)
@@ -69,12 +69,12 @@ class TestNoOpEventSink:
         await sink.on_delegation_submitted([])
 
     def test_noop_is_singleton(self):
-        from app.workflows.execution.event_sink import _NOOP_SINK, NoOpEventSink
+        from octopus_sdk.event_sink import _NOOP_SINK, NoOpEventSink
         assert isinstance(_NOOP_SINK, NoOpEventSink)
 
     def test_build_event_sink_returns_noop_when_no_projection(self):
-        from app.workflows.execution.event_sink import build_event_sink_for_context, NoOpEventSink
-        from app.workflows.execution.contracts import TransportIdentity
+        from octopus_sdk.event_sink import build_event_sink_for_context, NoOpEventSink
+        from octopus_sdk.execution import TransportIdentity
         from tests.support.config_support import make_config
         import tempfile, pathlib
         with tempfile.TemporaryDirectory() as d:
@@ -84,7 +84,7 @@ class TestNoOpEventSink:
             assert isinstance(sink, NoOpEventSink)
 
     def test_build_event_sink_returns_noop_when_no_transport(self):
-        from app.workflows.execution.event_sink import build_event_sink_for_context, NoOpEventSink
+        from octopus_sdk.event_sink import build_event_sink_for_context, NoOpEventSink
         from tests.support.config_support import make_config
         import tempfile, pathlib
         with tempfile.TemporaryDirectory() as d:
@@ -93,13 +93,108 @@ class TestNoOpEventSink:
             assert isinstance(sink, NoOpEventSink)
 
 
+class TestRegistryEventSink:
+    @pytest.mark.asyncio
+    async def test_registry_conversation_user_message_is_not_mirrored_twice(self):
+        import pathlib
+        import tempfile
+
+        from octopus_sdk.event_sink import RegistryEventSink
+        from octopus_sdk.execution import TransportIdentity
+        from tests.support.config_support import make_config
+
+        class _Projection:
+            def __init__(self) -> None:
+                self.created: list[dict] = []
+                self.published: list[dict] = []
+
+            async def create_conversation(self, **kwargs):
+                self.created.append(kwargs)
+                return "conv-1"
+
+            async def publish_events(self, *, conversation_id, events):
+                self.published.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "events": list(events),
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = make_config(data_dir=pathlib.Path(d))
+            projection = _Projection()
+            sink = RegistryEventSink(
+                projection=projection,
+                transport=TransportIdentity(
+                    conversation_key="registry:local:conversation:conv-1",
+                    origin_channel="registry",
+                    external_conversation_ref="ext-1",
+                    conversation_ref="registry:local:conversation:conv-1",
+                    target_agent_id="agent-1",
+                    actor="operator",
+                ),
+                config=cfg,
+            )
+
+            await sink.on_user_message("hello", actor="operator")
+
+            assert projection.created == []
+            assert projection.published == []
+
+    @pytest.mark.asyncio
+    async def test_registry_conversation_bot_reply_is_not_mirrored_twice(self):
+        import pathlib
+        import tempfile
+
+        from octopus_sdk.event_sink import RegistryEventSink
+        from octopus_sdk.execution import TransportIdentity
+        from tests.support.config_support import make_config
+
+        class _Projection:
+            def __init__(self) -> None:
+                self.created: list[dict] = []
+                self.published: list[dict] = []
+
+            async def create_conversation(self, **kwargs):
+                self.created.append(kwargs)
+                return "conv-1"
+
+            async def publish_events(self, *, conversation_id, events):
+                self.published.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "events": list(events),
+                    }
+                )
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = make_config(data_dir=pathlib.Path(d))
+            projection = _Projection()
+            sink = RegistryEventSink(
+                projection=projection,
+                transport=TransportIdentity(
+                    conversation_key="registry:local:conversation:conv-1",
+                    origin_channel="registry",
+                    external_conversation_ref="ext-1",
+                    conversation_ref="registry:local:conversation:conv-1",
+                    target_agent_id="agent-1",
+                ),
+                config=cfg,
+            )
+
+            await sink.on_bot_reply("hello")
+
+            assert projection.created == []
+            assert projection.published == []
+
+
 # ---------------------------------------------------------------------------
 # XmlTagDelegationParser
 # ---------------------------------------------------------------------------
 
 class TestXmlTagDelegationParser:
     def test_parses_valid_delegation(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = 'Some text\n<delegation>\n{"tasks": [{"target": "m3", "title": "Add numbers", "instructions": "2+2"}]}\n</delegation>'
         agents = [{"slug": "m3", "agent_id": "agent-m3", "display_name": "M3"}]
@@ -109,37 +204,37 @@ class TestXmlTagDelegationParser:
         assert tasks[0]["title"] == "Add numbers"
 
     def test_no_delegation_block_returns_empty(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         assert parser.parse("just a normal response", [{"slug": "m3", "agent_id": "a"}]) == []
 
     def test_unknown_slug_skipped(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>{"tasks": [{"target": "unknown-bot", "title": "X"}]}</delegation>'
         agents = [{"slug": "m3", "agent_id": "a"}]
         assert parser.parse(text, agents) == []
 
     def test_empty_agents_returns_empty(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>{"tasks": [{"target": "m3"}]}</delegation>'
         assert parser.parse(text, []) == []
 
     def test_malformed_json_returns_empty(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>not json</delegation>'
         assert parser.parse(text, [{"slug": "m3", "agent_id": "a"}]) == []
 
     def test_missing_closing_tag_returns_empty(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>{"tasks": [{"target": "m3"}]}'
         assert parser.parse(text, [{"slug": "m3", "agent_id": "a"}]) == []
 
     def test_defaults_title_when_missing(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>{"tasks": [{"target": "m3", "instructions": "do it"}]}</delegation>'
         agents = [{"slug": "m3", "agent_id": "a"}]
@@ -147,7 +242,7 @@ class TestXmlTagDelegationParser:
         assert tasks[0]["title"] == "Delegated task"
 
     def test_multiple_tasks(self):
-        from app.workflows.execution.delegation_parser import XmlTagDelegationParser
+        from octopus_sdk.delegation import XmlTagDelegationParser
         parser = XmlTagDelegationParser()
         text = '<delegation>{"tasks": [{"target": "m2", "title": "A"}, {"target": "m3", "title": "B"}]}</delegation>'
         agents = [{"slug": "m2", "agent_id": "a2"}, {"slug": "m3", "agent_id": "a3"}]
@@ -163,32 +258,32 @@ class TestXmlTagDelegationParser:
 
 class TestIdentityHelpers:
     def test_normalize_bare_id(self):
-        from app.identity import normalize_conversation_id
+        from octopus_sdk.identity import normalize_conversation_id
         assert normalize_conversation_id("abc123") == "abc123"
 
     def test_normalize_registry_prefixed(self):
-        from app.identity import normalize_conversation_id
+        from octopus_sdk.identity import normalize_conversation_id
         assert normalize_conversation_id("registry:local:conversation:abc123") == "abc123"
 
     def test_normalize_collapsed_ref(self):
-        from app.identity import normalize_conversation_id
+        from octopus_sdk.identity import normalize_conversation_id
         assert normalize_conversation_id("registry:conversation:abc123") == "abc123"
 
     def test_delegation_session_key_stable(self):
-        from app.identity import delegation_session_key
+        from octopus_sdk.identity import delegation_session_key
         k1 = delegation_session_key("agent-1", "conv-abc")
         k2 = delegation_session_key("agent-1", "conv-abc")
         assert k1 == k2
         assert k1 == "delegation:agent-1:conv-abc"
 
     def test_delegation_session_key_differs_by_agent(self):
-        from app.identity import delegation_session_key
+        from octopus_sdk.identity import delegation_session_key
         k1 = delegation_session_key("agent-1", "conv-abc")
         k2 = delegation_session_key("agent-2", "conv-abc")
         assert k1 != k2
 
     def test_delegation_session_key_differs_by_conversation(self):
-        from app.identity import delegation_session_key
+        from octopus_sdk.identity import delegation_session_key
         k1 = delegation_session_key("agent-1", "conv-abc")
         k2 = delegation_session_key("agent-1", "conv-xyz")
         assert k1 != k2
@@ -302,7 +397,7 @@ class TestDeterministicSessionId:
 
 class TestExecutionRuntimeShape:
     def test_requires_build_transport_identity(self):
-        from app.workflows.execution.contracts import ExecutionRuntime
+        from octopus_sdk.execution import ExecutionRuntime
         import dataclasses
         fields = {f.name for f in dataclasses.fields(ExecutionRuntime)}
         assert "build_transport_identity" in fields
@@ -311,7 +406,7 @@ class TestExecutionRuntimeShape:
         assert "conversation_projection" not in fields
 
     def test_delegation_parser_is_optional(self):
-        from app.workflows.execution.contracts import ExecutionRuntime
+        from octopus_sdk.execution import ExecutionRuntime
         import dataclasses
         field_map = {f.name: f for f in dataclasses.fields(ExecutionRuntime)}
         assert field_map["delegation_parser"].default is None
@@ -331,7 +426,7 @@ class TestActorKeyNormalization:
         assert actor_key("tg:42") == "tg:42"
 
     def test_session_state_uses_actor_key_field(self):
-        from app.session_state import PendingApproval, PendingRetry, AwaitingSkillSetup
+        from octopus_sdk.sessions import PendingApproval, PendingRetry, AwaitingSkillSetup
         import dataclasses
         for cls in (PendingApproval, PendingRetry, AwaitingSkillSetup):
             field_names = {f.name for f in dataclasses.fields(cls)}

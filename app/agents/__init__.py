@@ -2,23 +2,17 @@
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import (
-    BotIdentityState,
-    bot_identity,
-    load_bot_identity_state,
+    RegistryConnectionState,
     load_registry_connection_state,
     save_registry_connection_state,
 )
-from app.agents.types import (
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.models import (
     AgentCard,
     AgentDiscoveryQuery,
-    ConversationRef,
-    RegistryConnectionConfig,
-    RegistryConnectionState,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    ChannelBinding,
-    ChannelEvent,
 )
 
 __all__ = [
@@ -26,18 +20,12 @@ __all__ = [
     "AgentDiscoveryQuery",
     "AgentRegistryClient",
     "AgentRuntime",
-    "BotIdentityState",
-    "ConversationRef",
     "RegistryClientError",
     "RegistryConnectionConfig",
     "RegistryConnectionState",
     "RoutedTaskRequest",
     "RoutedTaskResult",
     "RoutedTaskUpdate",
-    "ChannelBinding",
-    "ChannelEvent",
-    "bot_identity",
-    "load_bot_identity_state",
     "load_registry_connection_state",
     "save_registry_connection_state",
     "AgentRuntime",

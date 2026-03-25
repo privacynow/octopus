@@ -9,7 +9,7 @@ from typing import Any
 from app.access import is_allowed_user_with_override, trust_tier
 from app import work_queue
 from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.runtime.inbound_types import InboundEnvelope, serialize_inbound
+from octopus_sdk.inbound_types import InboundEnvelope, serialize_inbound
 
 
 def trust_tier_for_ref(

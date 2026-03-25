@@ -1,6 +1,6 @@
 """Machine tests for delegation progression."""
 
-from app.agents.types import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult
 from app.workflows.delegation.contracts import DelegationTaskDraft
 from app.workflows.delegation.machine import (
     CancelDelegationAction,

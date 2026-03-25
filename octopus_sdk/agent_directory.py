@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from app.agents.types import AgentDiscoveryQuery, DiscoveredAgentRef
+from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
 
 
 class AgentSearchResult(BaseModel):

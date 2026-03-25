@@ -13,7 +13,7 @@ browser or tools that mimic the browser session flow.
 ## Implementation
 
 - **Routes:** [`app/channels/registry/http.py`](../../app/channels/registry/http.py)
-- **Realtime:** [`app/channels/registry/ws.py`](../../app/channels/registry/ws.py) plus typed envelopes in [`registry_sdk/realtime.py`](../../registry_sdk/realtime.py)
+- **Realtime:** [`app/channels/registry/ws.py`](../../app/channels/registry/ws.py) plus typed envelopes in [`octopus_sdk/realtime.py`](../../octopus_sdk/realtime.py)
 - **UI coverage:** the Registry SPA covers the dashboard summary, agents,
   paginated conversations/tasks, approvals, operator **compose / cancel /
   export** on conversations, capabilities, skills catalog, usage ranges, and

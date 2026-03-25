@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.session_state import DelegatedTask, PendingDelegation
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 
 
 @dataclass(frozen=True)

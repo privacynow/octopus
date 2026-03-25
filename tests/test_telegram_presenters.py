@@ -41,7 +41,7 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
 )
-from app.session_state import DelegatedTask, PendingDelegation
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.workflows.delegation.contracts import DelegationTargetPreview
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,

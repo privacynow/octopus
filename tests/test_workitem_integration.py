@@ -21,12 +21,12 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.identity import (
+from octopus_sdk.identity import (
     telegram_actor_key,
     telegram_conversation_key,
     telegram_event_id,
 )
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from tests.support.handler_support import (
     current_boot_id,
     current_execution_runtime,
@@ -624,7 +624,7 @@ async def test_worker_dispatch_sends_recovery_notice():
     """Recovered InboundMessage gets a recovery notice with buttons,
     not an automatic replay through the provider."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 11001
@@ -753,7 +753,7 @@ async def test_recovery_replay_callback_executes_original():
     """Clicking Replay on a recovery notice replays the original message
     through execute_request."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 13001
@@ -954,7 +954,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
     the item failed — not done, not pending_recovery."""
     import app.channels.telegram.ingress as th
     from app.worker import worker_loop
-    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 16001
@@ -1006,7 +1006,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
 async def test_usage_recording_failure_keeps_item_done_via_worker_loop(monkeypatch):
     """Usage accounting failures are non-blocking; worker_loop still owns completion."""
     from app.worker import worker_loop
-    from app.runtime.inbound_types import InboundMessage, InboundUser, serialize_inbound
+    from octopus_sdk.inbound_types import InboundMessage, InboundUser, serialize_inbound
 
     with fresh_env(config_overrides={"allowed_actor_keys": frozenset({"tg:42"})}) as (data_dir, _cfg, prov):
         chat_id = 16002
@@ -1271,7 +1271,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
     for the chat, the callback must inform the user rather than silently
     failing or creating two claimed rows."""
     import app.channels.telegram.ingress as th
-    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
+    from octopus_sdk.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 19002

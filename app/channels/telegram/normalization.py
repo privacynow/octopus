@@ -10,12 +10,12 @@ import dataclasses
 from pathlib import Path
 
 from app import user_messages as _msg
-from app.identity import (
+from octopus_sdk.identity import (
     telegram_actor_key,
     telegram_conversation_key,
     telegram_conversation_ref,
 )
-from app.runtime.inbound_types import (
+from octopus_sdk.inbound_types import (
     InboundAttachment,
     InboundCallback,
     InboundCommand,

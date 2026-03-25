@@ -606,7 +606,7 @@ def test_telegram_ingress_does_not_build_ptb_applications_or_register_handlers()
 
 def test_runtime_dispatch_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "app" / "runtime" / "dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
     text = dispatch_path.read_text()
     assert "app.channels" not in text, (
         f"channel import still referenced in {dispatch_path}"
@@ -624,7 +624,7 @@ def test_runtime_composition_has_no_channel_imports() -> None:
 
 def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "app" / "runtime" / "dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
     text = dispatch_path.read_text()
     forbidden = (
         "from telegram",
@@ -693,8 +693,8 @@ def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> N
 
 def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    inbound_types_path = repo_root / "app" / "runtime" / "inbound_types.py"
-    session_state_path = repo_root / "app" / "session_state.py"
+    inbound_types_path = repo_root / "octopus_sdk" / "inbound_types.py"
+    session_state_path = repo_root / "octopus_sdk" / "sessions.py"
     coordination_path = repo_root / "app" / "workflows" / "delegation" / "coordination.py"
     presenters_path = repo_root / "app" / "channels" / "telegram" / "presenters.py"
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
@@ -727,7 +727,7 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
     delivery_path = repo_root / "app" / "agents" / "delivery.py"
     registry_egress_path = repo_root / "app" / "channels" / "registry" / "egress.py"
     runtime_path = repo_root / "app" / "agents" / "runtime.py"
-    agent_types_path = repo_root / "app" / "agents" / "types.py"
+    state_path = repo_root / "app" / "agents" / "state.py"
 
     bridge_text = bridge_path.read_text()
     assert 'or "default"' not in bridge_text
@@ -742,8 +742,8 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
     assert "config.agent_registries[0]" not in runtime_text
     assert 'else "default"' not in runtime_text
 
-    agent_types_text = agent_types_path.read_text()
-    assert 'registry_id: str = "default"' not in agent_types_text
+    state_text = state_path.read_text()
+    assert 'registry_id: str = "default"' not in state_text
 
 
 def test_dead_registry_runtime_api_is_deleted() -> None:
@@ -1210,7 +1210,7 @@ def test_removed_bridge_http_helpers_do_not_reappear() -> None:
 def test_generic_health_and_discover_paths_do_not_reference_registry_scope() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     candidate_paths = (
-        repo_root / "app" / "ports" / "health_publication.py",
+        repo_root / "octopus_sdk" / "health_publication.py",
         repo_root / "app" / "control_plane" / "adapters" / "health_publication.py",
         repo_root / "app" / "channels" / "telegram" / "ingress.py",
     )

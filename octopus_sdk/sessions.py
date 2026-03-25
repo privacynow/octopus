@@ -17,9 +17,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.identity import parse_actor_key
-
-
 @dataclass
 class ProjectBinding:
     """Resolved project configuration from BotConfig.projects.
@@ -207,3 +204,28 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
         created_at=d.get("created_at", ""),
         updated_at=d.get("updated_at", ""),
     )
+
+
+def default_session(
+    provider_name: str,
+    provider_state: dict[str, Any],
+    approval_mode: str,
+    role: str = "",
+    default_skills: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "provider": provider_name,
+        "provider_state": provider_state,
+        "approval_mode": approval_mode,
+        "active_skills": list(default_skills),
+        "role": role,
+        "pending_approval": None,
+        "pending_retry": None,
+        "awaiting_skill_setup": None,
+        "pending_delegation": None,
+        "created_at": now,
+        "updated_at": now,
+    }

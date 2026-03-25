@@ -6,7 +6,7 @@ import html
 from pathlib import Path
 
 from app import user_messages as _msg
-from app.identity import resolve_event_conversation_ref
+from octopus_sdk.identity import resolve_event_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.workflows.recovery.contracts import (
     RecoveryActionOutcome,
@@ -16,7 +16,7 @@ from app.workflows.recovery.contracts import (
     WorkerRecoveryOutcome,
 )
 from app import work_queue
-from app.runtime.inbound_types import InboundMessage, deserialize_inbound
+from octopus_sdk.inbound_types import InboundMessage, deserialize_inbound
 from app.runtime.work_admission import trust_tier_for_ref
 from app.workflows.recovery.results import TransportStateCorruption
 

@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from app.ports.channel import Channel, ChannelBootstrap, ChannelDescriptor, ChannelIngress
-from app.ports.egress import ChannelCapabilities, ChannelEgress, EditableHandle
+from octopus_sdk.channels import Channel, ChannelBootstrap, ChannelDescriptor, ChannelIngress
+from octopus_sdk.egress import ChannelCapabilities, ChannelEgress, EditableHandle
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from tests.support.config_support import make_config
 

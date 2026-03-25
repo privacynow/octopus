@@ -284,6 +284,17 @@ npm run annotate                  # *-annotated.png (uses repo-root .venv)
 
 The harness uses isolated tokens and a fresh throwaway DB under `docs/registry-ui-screenshots/` on every run. Usage screenshots now derive from the seeded **`provider.response`** events in the capture data; there is no separate legacy usage seeding path. **Outlines** in annotated images follow DOM positions from capture time — re-capture when layout shifts.
 
+If you need to verify real runtime behavior instead of seeded screenshot data,
+use the isolated live smoke harness from the repo root:
+
+```bash
+bash scripts/e2e/run_live_registry_smoke.sh \
+  --snapshot-deploy /path/to/saved/.deploy
+```
+
+That path launches a disposable stack from the current repo and runs API +
+Chromium smoke against it without touching a live `~/octopus` checkout.
+
 **Other diagrams**
 
 - **Mermaid** (README, manual overview, ARCHITECTURE): edit the fenced blocks in the `.md` files; GitHub renders them.

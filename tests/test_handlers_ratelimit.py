@@ -1,8 +1,8 @@
 """Handler integration tests for rate limiting."""
 
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,

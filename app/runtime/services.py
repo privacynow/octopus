@@ -7,14 +7,14 @@ from dataclasses import dataclass
 
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
-from app.ports.agent_directory import AgentDirectoryPort
-from app.ports.agent_directory import NoOpAgentDirectory
-from app.ports.conversation_projection import ConversationProjectionPort
-from app.ports.conversation_projection import NoOpConversationProjection
-from app.ports.health_publication import HealthPublicationPort
-from app.ports.health_publication import NoOpHealthPublication
-from app.ports.task_routing import TaskRoutingPort
-from app.ports.task_routing import NoOpTaskRouting
+from octopus_sdk.agent_directory import AgentDirectoryPort
+from octopus_sdk.agent_directory import NoOpAgentDirectory
+from octopus_sdk.conversation_projection import ConversationProjectionPort
+from octopus_sdk.conversation_projection import NoOpConversationProjection
+from octopus_sdk.health_publication import HealthPublicationPort
+from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.task_routing import TaskRoutingPort
+from octopus_sdk.task_routing import NoOpTaskRouting
 
 
 @dataclass(frozen=True)

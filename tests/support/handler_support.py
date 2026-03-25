@@ -12,8 +12,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.agents.state import save_registry_connection_state
-from app.agents.types import RegistryConnectionState
+from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
@@ -28,7 +27,7 @@ from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
@@ -621,7 +620,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     Use after send_text when the test needs the provider to run. Returns True if
     an item was drained, False if queue was empty.
     """
-    from app.runtime.inbound_types import deserialize_inbound
+    from octopus_sdk.inbound_types import deserialize_inbound
     from app.workflows.recovery.results import TransportStateCorruption
 
     runtime = current_runtime()

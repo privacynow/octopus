@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from collections.abc import Sequence
-from dataclasses import replace
 from typing import Any, Awaitable, Callable
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
 from app.agents.state import (
-    load_bot_identity_state,
+    RegistryConnectionState,
     load_runtime_registry_connection_state,
     save_registry_connection_state,
 )
-from app.agents.types import AgentCard, RegistryConnectionConfig, RegistryConnectionState, utcnow_iso
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.identity import bot_identity
+from octopus_sdk.registry.models import AgentCard, utcnow_iso
 from app.config import BotConfig
 from app.runtime_health import (
     RuntimeHealthJsonProjector,
@@ -24,6 +27,12 @@ from app.runtime_health import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _registered_card_hash(card: AgentCard) -> str:
+    payload = card.model_dump(mode="json")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class AgentRuntime:
@@ -89,17 +98,17 @@ class AgentRuntime:
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
             registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
-            capabilities=capabilities,
-            tags=self.config.agent_tags,
+            capabilities=list(capabilities),
+            tags=list(self.config.agent_tags),
             description=self.config.agent_description,
             provider=self.config.provider_name,
             mode=self.config.agent_mode,
             connectivity_state=self._state.connectivity_state,
             current_capacity=0,
             max_capacity=1,
-            channel_capabilities=self._channel_capabilities(),
+            channel_capabilities=list(self._channel_capabilities()),
             version="",
-            bot_key=load_bot_identity_state(self.config.data_dir).bot_id,
+            bot_key=bot_identity(self.config.data_dir),
         )
 
     def _effective_capabilities(self) -> tuple[str, ...]:
@@ -179,18 +188,23 @@ class AgentRuntime:
                 self._state.poll_cursor = str(enroll.get("poll_cursor", "0"))
                 self._save_state()
 
-            card = replace(
-                self.requested_card(),
-                slug=self._state.registered_slug or self.config.agent_slug,
-                connectivity_state="connected",
+            card = self.requested_card().model_copy(
+                update={
+                    "slug": self._state.registered_slug or self.config.agent_slug,
+                    "connectivity_state": "connected",
+                }
             )
             client = self._client()
-            await client.register(
-                card,
-                connectivity_state="connected",
-                current_capacity=0,
-                max_capacity=1,
-            )
+            card_hash = _registered_card_hash(card)
+            if self._state.registered_card_hash != card_hash:
+                await client.register(
+                    card,
+                    connectivity_state="connected",
+                    current_capacity=0,
+                    max_capacity=1,
+                )
+                self._state.registered_card_hash = card_hash
+                self._save_state()
             runtime_health_payload = None
             try:
                 runtime_health_payload = await self._runtime_health_payload()

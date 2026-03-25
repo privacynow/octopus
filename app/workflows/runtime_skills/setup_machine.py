@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.session_state import AwaitingSkillSetup
+from octopus_sdk.sessions import AwaitingSkillSetup
 from app.skill_types import SkillRequirement
 from app.time_utils import age_seconds, utc_now, utc_now_timestamp
 

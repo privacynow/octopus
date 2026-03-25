@@ -24,7 +24,7 @@ from app.channels.telegram import worker as telegram_worker
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
-from app.providers.base import Provider
+from octopus_sdk.providers import Provider
 from app.runtime.services import BotServices, build_noop_bot_services
 
 

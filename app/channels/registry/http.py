@@ -34,9 +34,9 @@ from app.channels.registry.auth import (
 )
 from app.channels.registry.ws import WebSocketManager
 from app.capability_service import CapabilityService
-from registry_sdk.conversations import ConversationCreate
-from registry_sdk.events import ConversationEvent, validate_event_metadata
-from registry_sdk.realtime import ConversationProgressUpdate
+from octopus_sdk.registry.models import ConversationCreate
+from octopus_sdk.events import ConversationEvent, validate_event_metadata
+from octopus_sdk.realtime import ConversationProgressUpdate
 from app.channels.registry.ingress import (
     approve_catalog_skill,
     approve_provider_guidance,
@@ -122,7 +122,7 @@ class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
     scope_key: str = Field(default="", description="Guidance scope key")
 
 
-from app.identity import normalize_conversation_id
+from octopus_sdk.identity import normalize_conversation_id
 
 
 def _int_value(value: Any) -> int:
@@ -315,11 +315,12 @@ async def heartbeat(
     agent_id = agent_data.get("agent_id", "")
     if agent_id:
         await _ws_manager.broadcast_heartbeat(agent_id, agent_data)
-    await _broadcast_invalidations(
-        topics=("agents", "summary"),
-        reason="agent.heartbeat",
-        agent_id=str(agent_id or ""),
-    )
+    if result.get("collections_changed"):
+        await _broadcast_invalidations(
+            topics=("agents", "summary"),
+            reason="agent.heartbeat",
+            agent_id=str(agent_id or ""),
+        )
     return result
 
 

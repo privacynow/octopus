@@ -7,7 +7,7 @@ import textwrap
 from pathlib import Path
 
 from app.progress import render as render_progress
-from app.providers.base import RunContext, RunResult
+from octopus_sdk.providers import RunContext, RunResult
 from app.providers.codex import CodexProvider
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProgress

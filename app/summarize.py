@@ -8,7 +8,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.identity import filesystem_component_for_key
+from octopus_sdk.identity import filesystem_component_for_key
 from app.startup_diagnostics import redact_sensitive_startup_text
 from app.subprocess_env import build_subprocess_env
 

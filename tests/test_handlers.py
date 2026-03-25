@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from app.identity import conversation_key_for_ref, telegram_conversation_ref
-from app.agents.state import save_registry_connection_state
-from app.agents.types import RegistryConnectionState
+from octopus_sdk.identity import conversation_key_for_ref, telegram_conversation_ref
+from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.agents.delivery import handle_registry_delivery
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.channels.telegram.bootstrap import build_bootstrap
@@ -18,13 +17,13 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
-from app.ports.health_publication import AuthorityStatus, ConnectionSummary
-from app.ports.task_routing import TaskSubmissionResult
-from app.ports.task_routing import TaskResultReport
-from app.providers.base import RunContext, RunResult
-from app.runtime.inbound_types import InboundMessage, InboundUser
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.health_publication import AuthorityStatus, ConnectionSummary
+from octopus_sdk.task_routing import TaskSubmissionResult
+from octopus_sdk.task_routing import TaskResultReport
+from octopus_sdk.providers import RunContext, RunResult
+from octopus_sdk.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.config_support import make_registry_connection
@@ -383,10 +382,10 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
         assert seen_queries
         query = seen_queries[0]
         assert query.role == "developer"
-        assert query.capabilities == ("python",)
-        assert query.tags == ("backend",)
+        assert query.capabilities == ["python"]
+        assert query.tags == ["backend"]
         assert query.free_text == "schema review"
-        assert query.exclude_agent_ids == ()
+        assert query.exclude_agent_ids == []
         reply = msg.replies[0]["text"]
         assert "Dev Bot" in reply
         assert "developer" in reply
@@ -845,7 +844,7 @@ async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
         assert first_update.routed_task_id == "routed-task-progress-1"
         assert first_update.status == "running"
         assert first_update.summary == "working…"
-        assert first_update.timeline_events == ()
+        assert first_update.timeline_events == []
         assert first_update.progress is None
 
         last_authority_ref, last_update = status_updates[-1]
@@ -1115,6 +1114,65 @@ async def test_delegation_completion_sends_final_message_all_completed():
             for message in current_bot_instance().sent_messages
         )
         assert await drain_one_worker_item(data_dir) is True
+
+
+async def test_registry_routed_result_skips_completion_summary_for_registry_parent(monkeypatch):
+    summary_calls: list[str] = []
+
+    async def _capture_summary(delegation, channel_egress):
+        del channel_egress
+        summary_calls.append(str(getattr(delegation, "status", "")))
+
+    monkeypatch.setattr(
+        "app.agents.delivery.send_delegation_completion_message",
+        _capture_summary,
+    )
+
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        conversation_ref = _reg_ref("conv-parent")
+        session = default_session(prov.name, prov.new_provider_state("reg:test"), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, _reg_conv(conversation_ref), session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert summary_calls == []
 
 
 async def test_delegation_completion_sends_final_message_partial_failed():
@@ -2769,7 +2827,7 @@ async def test_session_shows_project():
 
 async def test_context_hash_changes_with_project():
     """Context hash should differ when project_id changes."""
-    from app.execution_context import ResolvedExecutionContext
+    from octopus_sdk.execution_context import ResolvedExecutionContext
     _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], working_dir="", file_policy="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, project_id="").context_hash
     hash2 = ResolvedExecutionContext(**_d, project_id="myproject").context_hash
@@ -2907,7 +2965,7 @@ async def test_policy_edit_passed_to_provider():
 
 async def test_context_hash_changes_with_file_policy():
     """Context hash should differ when file_policy changes."""
-    from app.execution_context import ResolvedExecutionContext
+    from octopus_sdk.execution_context import ResolvedExecutionContext
     _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], project_id="", working_dir="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, file_policy="").context_hash
     hash2 = ResolvedExecutionContext(**_d, file_policy="inspect").context_hash
@@ -2916,7 +2974,7 @@ async def test_context_hash_changes_with_file_policy():
 
 async def test_context_hash_changes_with_working_dir():
     """Context hash should differ when working_dir changes."""
-    from app.execution_context import ResolvedExecutionContext
+    from octopus_sdk.execution_context import ResolvedExecutionContext
     _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], project_id="", file_policy="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, working_dir="").context_hash
     hash2 = ResolvedExecutionContext(**_d, working_dir="/opt/frontend").context_hash
@@ -3806,7 +3864,7 @@ async def test_provider_empty_response():
 # Phase 15: Project-level inheritance in commands
 # =====================================================================
 
-from app.session_state import ProjectBinding
+from octopus_sdk.sessions import ProjectBinding
 
 
 async def test_policy_status_shows_project_default():

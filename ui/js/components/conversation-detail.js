@@ -19,7 +19,6 @@ function renderConversationDetail(container, params) {
         'delegation.proposed',
         'delegation.submitted',
         'delegation.completed',
-        'task.status',
         'error',
     ];
 
@@ -95,7 +94,7 @@ function renderConversationDetail(container, params) {
 
     const timelineHeader = document.createElement('div');
     timelineHeader.className = 'conversation-panel-header';
-    timelineHeader.innerHTML = '<div><strong>Conversation</strong><span>Replies, approvals, and progress updates</span></div>';
+    timelineHeader.innerHTML = '<div><strong>Conversation</strong><span>Replies, approvals, delegation milestones, and errors</span></div>';
     timelinePanel.appendChild(timelineHeader);
 
     const timeline = document.createElement('div');
@@ -163,7 +162,7 @@ function renderConversationDetail(container, params) {
     function updateTimelineHeader() {
         const label = showConversationView ? 'Conversation' : 'Full activity';
         const subtitle = showConversationView
-            ? 'Replies, approvals, and progress updates'
+            ? 'Replies, approvals, delegation milestones, and errors'
             : 'Every stored event, including provider and tool activity';
         timelineHeader.innerHTML = `<div><strong>${UI.esc(label)}</strong><span>${UI.esc(subtitle)}</span></div>`;
         allBtn.setAttribute('aria-selected', String(showConversationView));

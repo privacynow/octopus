@@ -8,10 +8,10 @@ import pytest
 
 import app.channels.telegram.progress as telegram_progress
 import app.user_messages as _msg
-from app.agents.types import RoutedTaskUpdate
-from app.ports.agent_directory import NoOpAgentDirectory
-from app.ports.health_publication import NoOpHealthPublication
-from app.ports.task_routing import NoOpTaskRouting
+from octopus_sdk.registry.models import RoutedTaskUpdate
+from octopus_sdk.agent_directory import NoOpAgentDirectory
+from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
@@ -99,7 +99,7 @@ async def test_routed_task_progress_callback_updates_task_status_via_port() -> N
     assert update.status == "running"
     assert update.summary == "Reviewing diff"
     assert update.progress is None
-    assert update.timeline_events == ()
+    assert update.timeline_events == []
 
 
 @pytest.mark.asyncio

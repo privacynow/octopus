@@ -13,11 +13,11 @@ from typing import Any
 
 from app.agents.client import AgentRegistryClient
 from app.agents.state import load_runtime_registry_connection_state
-from app.agents.types import RoutedTaskUpdate
+from octopus_sdk.registry.models import RoutedTaskUpdate
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
-from app.ports.egress import (
+from octopus_sdk.egress import (
     ChannelCapabilities,
     ChannelEgress,
     EditableHandle,
@@ -87,6 +87,10 @@ class RegistryChannelEgress(ChannelEgress):
         self._PROGRESS_MIN_INTERVAL = 5.0
         self.chat = _RegistryChatShim(self)
 
+    def _is_ephemeral_status_text(self, text: str) -> bool:
+        normalized = " ".join(str(text or "").split())
+        return normalized in {"Working…", "Working...", "Resuming…", "Resuming..."}
+
     @property
     def capabilities(self) -> ChannelCapabilities:
         return ChannelCapabilities(
@@ -126,7 +130,7 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
-        from registry_sdk.events import ConversationEvent
+        from octopus_sdk.events import ConversationEvent
 
         resolved_event_id = event_id or uuid.uuid4().hex
         merged_metadata: dict[str, Any] = dict(metadata or {})
@@ -224,13 +228,15 @@ class RegistryChannelEgress(ChannelEgress):
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
         self._append_output("send", text)
-        if not self._is_task_ref():
+        if not self._is_task_ref() and not self._is_ephemeral_status_text(text):
             await self._publish_event(
                 kind="message.bot",
                 title="Bot reply",
                 body=text,
                 event_id=event_id,
             )
+        elif not self._is_task_ref():
+            await self._publish_progress(text, event_id=event_id)
         return RegistryEditableHandle(self, event_id=event_id)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
@@ -272,7 +278,14 @@ class RegistryChannelEgress(ChannelEgress):
         return
 
     async def sync_binding(self, binding: Any) -> None:
-        del binding
+        if not isinstance(binding, dict):
+            return
+        title = str(binding.get("title", "") or "").strip()
+        if title:
+            self.title = title
+        external_id = str(binding.get("external_id", "") or "").strip()
+        if external_id:
+            self.external_id = external_id
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config
@@ -309,6 +322,8 @@ class RegistryChannelEgress(ChannelEgress):
         if status.startswith("completed"):
             body = getattr(outcome, "reply_text", "") or self._plain_text_snippet(self.last_status_text, limit=400)
             await self._publish_event(kind="task.status", title="Done", body=trim_text(body, 400), metadata={"status": "completed"})
+            return None
+        if status in {"delegation_proposed", "delegation_submitted"}:
             return None
         if status == "timed_out":
             await self._publish_event(kind="error", title="Failed", body="Timed out", metadata={"error_type": "execution", "message": "Timed out"})

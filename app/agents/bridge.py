@@ -13,8 +13,8 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.identity import conversation_key_for_ref
-from app.runtime.inbound_types import (
+from octopus_sdk.identity import conversation_key_for_ref
+from octopus_sdk.inbound_types import (
     InboundAction,
     InboundEnvelope,
     InboundMessage,
@@ -35,6 +35,7 @@ def build_registry_message_delivery(
     text: str,
     actor_ref: str,
     delivery_id: str,
+    external_conversation_ref: str = "",
     routed_task_id: str = "",
     registry_id: str,
     skip_approval: bool = False,
@@ -54,6 +55,7 @@ def build_registry_message_delivery(
             source="registry",
             transport="registry",
             conversation_ref=conversation_ref,
+            external_conversation_ref=external_conversation_ref,
             routed_task_id=routed_task_id,
             authority_ref=registry_authority_ref(registry_id),
             skip_approval=skip_approval,
@@ -70,6 +72,7 @@ def build_registry_action_envelope(
     actor_ref: str,
     delivery_id: str,
     registry_id: str,
+    external_conversation_ref: str = "",
 ) -> InboundEnvelope:
     if not registry_id:
         raise ValueError("Registry action delivery requires an explicit registry_id")
@@ -84,6 +87,7 @@ def build_registry_action_envelope(
         source="registry",
         transport="registry",
         conversation_ref=conversation_ref,
+        external_conversation_ref=external_conversation_ref,
         authority_ref=registry_authority_ref(registry_id),
     )
     return InboundEnvelope(
@@ -122,6 +126,7 @@ async def admit_registry_delivery(
             text=payload.get("text", ""),
             actor_ref=f"registry-ui:{conversation_ref}",
             delivery_id=effective_delivery_id,
+            external_conversation_ref=str(payload.get("external_conversation_ref", "") or ""),
             registry_id=registry_id,
         )
         status, _ = work_queue.record_and_admit_message(
@@ -146,7 +151,7 @@ async def admit_registry_delivery(
                     "conversation_ref": conversation_ref,
                     "title": payload.get("title", "Registry conversation"),
                     "origin_channel": "registry",
-                    "external_id": binding_external_id_for_ref(conversation_ref),
+                    "external_id": str(payload.get("external_conversation_ref", "") or binding_external_id_for_ref(conversation_ref)),
                 }
             )
         return "accepted"
@@ -169,7 +174,7 @@ async def admit_registry_delivery(
             text = f"{request['title']}\n\n{text}".strip()
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
-        from app.identity import delegation_session_key
+        from octopus_sdk.identity import delegation_session_key
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
         # Use delegation_session_key so multiple tasks from the same parent share one provider session
         origin_agent_id = request.get("origin_agent_id", "")

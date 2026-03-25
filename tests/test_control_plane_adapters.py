@@ -2,13 +2,6 @@ from __future__ import annotations
 
 import json
 
-from app.agents.types import (
-    AgentDiscoveryQuery,
-    DiscoveredAgentRef,
-    RoutedTaskRequest,
-    RoutedTaskResult,
-    RoutedTaskUpdate,
-)
 from app.control_plane.adapters import (
     BusAgentDirectory,
     BusConversationProjection,
@@ -17,9 +10,16 @@ from app.control_plane.adapters import (
 )
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlReply
-from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
-from app.ports.health_publication import HealthReport
-from app.ports.task_routing import TaskSubmissionResult
+from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.health_publication import HealthReport
+from octopus_sdk.registry.models import (
+    AgentDiscoveryQuery,
+    DiscoveredAgentRef,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+)
+from octopus_sdk.task_routing import TaskSubmissionResult
 
 
 class _FakeBus:

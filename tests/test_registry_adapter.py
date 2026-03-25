@@ -14,7 +14,7 @@ from app.channels.registry.channel import (
 )
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from app.providers.base import RunResult
+from octopus_sdk.providers import RunResult
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import (
     BotServices,
@@ -22,7 +22,7 @@ from app.runtime.services import (
     build_noop_control_plane_services,
 )
 from tests.support.config_support import make_config, make_registry_connection
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 
 
 @dataclass
@@ -100,6 +100,8 @@ async def test_registry_channel_sync_binding_no_started_event(tmp_path):
         }
     )
 
+    assert channel_egress.title == "Delegated task"
+    assert channel_egress.external_id == "task-1"
     assert projection.event_calls == []
 
 
@@ -120,6 +122,24 @@ async def test_registry_channel_publishes_completed_event_on_outcome(tmp_path):
 
     assert [call["kind"] for call in projection.event_calls] == ["task.status"]
     assert projection.event_calls[0]["status"] == "completed"
+
+
+async def test_registry_channel_ignores_delegation_submission_outcome(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+    projection = _ProjectionRecorder()
+    channel_egress = RegistryChannelEgress(
+        cfg,
+        conversation_ref=registry_conversation_ref("default", "conv-delegation"),
+        services=_services(projection),
+    )
+
+    await channel_egress.on_outcome(SimpleNamespace(status="delegation_submitted"))
+
+    assert projection.event_calls == []
 
 
 async def test_registry_channel_rate_limits_progress_events(tmp_path, monkeypatch):
@@ -153,6 +173,25 @@ async def test_registry_channel_rate_limits_progress_events(tmp_path, monkeypatc
     # Progress events are now ephemeral (not persisted) — no events should be published
     progress_events = [event for event in projection.event_calls if event["kind"] == "progress"]
     assert len(progress_events) == 0
+
+
+async def test_registry_channel_does_not_persist_ephemeral_working_status(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+    projection = _ProjectionRecorder()
+    channel_egress = RegistryChannelEgress(
+        cfg,
+        conversation_ref=registry_conversation_ref("default", "conv-ephemeral"),
+        services=_services(projection),
+    )
+
+    await channel_egress.send_text("Working…")
+    await channel_egress.send_text("Resuming…")
+
+    assert projection.event_calls == []
 
 
 async def test_registry_channel_swallows_projection_failures(tmp_path):
@@ -236,6 +275,36 @@ async def test_registry_channels_build_scoped_egress_from_qualified_refs(tmp_pat
     assert conversation_egress.external_id == "conv-42"
     assert task_egress.registry_id == "prod"
     assert task_egress.routed_task_id == "task-42"
+
+
+async def test_registry_conversation_channel_preserves_explicit_external_id(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(),
+    )
+    registry = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.prod",
+        enroll_token="enroll-prod",
+        registry_scope="full",
+        poll_interval_seconds=5.0,
+    )
+    projection = _ProjectionRecorder()
+
+    conversation_channel = RegistryConversationChannel(
+        cfg,
+        registry,
+        services=_services(projection),
+    )
+
+    conversation_egress = conversation_channel.build_egress(
+        conversation_ref=registry_conversation_ref("prod", "conv-42"),
+        config=cfg,
+        external_id="operator-conversation-42",
+    )
+
+    assert conversation_egress.external_id == "operator-conversation-42"
 
 
 async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path):

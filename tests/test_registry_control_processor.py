@@ -9,7 +9,7 @@ from app.agents.registry_capabilities import (
     registry_id_from_authority_ref,
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
-from app.agents.types import RegistryConnectionConfig
+from octopus_sdk.config import RegistryConnectionConfig
 from app.control_plane.models import ControlCommand
 from app.control_plane.requests import (
     PublishHealthRequest,
@@ -20,8 +20,8 @@ from app.control_plane.requests import (
     TimelineEventPayload,
     UpdateRoutedTaskStatusPayload,
 )
-from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
-from app.ports.task_routing import TaskResultReport, TaskSubmissionResult
+from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 
 
 class _FakeRegistryClient:
@@ -324,11 +324,11 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert resolution.status == "resolved"
     assert resolution.authority_ref == "registry:alpha"
     assert client.submitted_tasks[0].context == {"severity": "high"}
-    assert client.status_updates[0][1].timeline_events[0]["event_id"] == "evt-1"
+    assert client.status_updates[0][1].timeline_events[0].event_id == "evt-1"
     assert client.status_updates[0][1].progress == 50
     assert client.status_updates[0][1].updated_at == "2026-03-20T00:00:10+00:00"
-    assert client.reported_results[0][1].artifacts == ({"path": "/tmp/report.txt"},)
-    assert client.last_search.exclude_agent_ids == ("self-alpha",)
+    assert client.reported_results[0][1].artifacts == [{"path": "/tmp/report.txt"}]
+    assert client.last_search.exclude_agent_ids == ["self-alpha"]
 
 
 @pytest.mark.asyncio

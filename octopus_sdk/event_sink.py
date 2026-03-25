@@ -3,7 +3,7 @@
 The sink is NOT a second registry client. It composes:
   - ConversationProjectionPort (the capability)
   - TransportIdentity (who/where)
-  - BotConfig (publish level gating)
+  - BotConfigBase (publish level gating)
 
 into typed methods that execute_request and delegation handlers call.
 All failures are logged as warnings and swallowed — never blocks execution.
@@ -15,10 +15,10 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.config import BotConfig, should_publish_event
-from app.ports.conversation_projection import ConversationProjectionPort
-from app.providers.base import ToolExecutionRecord
-from app.workflows.execution.contracts import TransportIdentity
+from octopus_sdk.config import BotConfigBase, should_publish_event
+from octopus_sdk.conversation_projection import ConversationProjectionPort
+from octopus_sdk.providers import ToolExecutionRecord
+from octopus_sdk.execution import TransportIdentity
 
 log = logging.getLogger(__name__)
 
@@ -95,13 +95,27 @@ class RegistryEventSink:
         self,
         projection: ConversationProjectionPort,
         transport: TransportIdentity,
-        config: BotConfig,
+        config: BotConfigBase,
     ) -> None:
         self._projection = projection
         self._transport = transport
         self._config = config
         self._conversation_id: str | None = None
         self._execution_event_prefix = uuid4().hex
+
+    def _skip_user_message_mirror(self) -> bool:
+        conversation_ref = self._transport.conversation_ref or ""
+        return (
+            self._transport.origin_channel == "registry"
+            and ":conversation:" in conversation_ref
+        )
+
+    def _skip_bot_reply_mirror(self) -> bool:
+        conversation_ref = self._transport.conversation_ref or ""
+        return (
+            self._transport.origin_channel == "registry"
+            and ":conversation:" in conversation_ref
+        )
 
     async def _ensure_conversation(self) -> str | None:
         if self._conversation_id is not None:
@@ -133,7 +147,7 @@ class RegistryEventSink:
         if conversation_id is None:
             return
         try:
-            from registry_sdk.events import ConversationEvent
+            from octopus_sdk.events import ConversationEvent
             event = ConversationEvent(
                 event_id=event_id,
                 kind=kind,
@@ -150,6 +164,8 @@ class RegistryEventSink:
             log.warning("registry publish: publish_events failed for %s", kind, exc_info=True)
 
     async def on_user_message(self, content: str, *, actor: str = "") -> None:
+        if self._skip_user_message_mirror():
+            return
         await self._publish(
             "message.user",
             event_id=f"exec:{self._execution_event_prefix}:user",
@@ -242,6 +258,8 @@ class RegistryEventSink:
         )
 
     async def on_bot_reply(self, content: str) -> None:
+        if self._skip_bot_reply_mirror():
+            return
         await self._publish(
             "message.bot",
             event_id=f"exec:{self._execution_event_prefix}:bot",
@@ -290,7 +308,7 @@ class RegistryEventSink:
 def build_event_sink_for_context(
     transport: TransportIdentity | None,
     projection: ConversationProjectionPort | None,
-    config: BotConfig,
+    config: BotConfigBase,
 ) -> NoOpEventSink | RegistryEventSink:
     """Build an event sink from available context.
 

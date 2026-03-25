@@ -7,7 +7,7 @@ from app.provider_guidance_service import (
     PROMPT_SIZE_WARNING_THRESHOLD,
     get_provider_guidance_service,
 )
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app.skill_activation_service import get_skill_activation_service
 from app.workflows.runtime_skills.contracts import (
     ConversationSkillItem,

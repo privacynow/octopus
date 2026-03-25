@@ -7,7 +7,7 @@ import app.content_store as content_store_mod
 import httpx
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
-from app.identity import telegram_actor_key
+from octopus_sdk.identity import telegram_actor_key
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skill_catalog_service import get_skill_catalog_service
 from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases
@@ -15,7 +15,7 @@ from app.workflows.runtime_skills.activation import get_runtime_skill_activation
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
 from app.workflows.runtime_skills.importing import get_runtime_skill_import_use_cases
 from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
-from app.session_state import session_from_dict
+from octopus_sdk.sessions import session_from_dict
 from tests.support.skill_test_helpers import derive_encryption_key, load_user_credentials
 from app.storage import close_db, default_session, ensure_data_dirs
 from tests.support.config_support import make_config

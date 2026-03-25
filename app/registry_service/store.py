@@ -554,6 +554,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            previous_effective_state = effective_connectivity_state(
+                row["connectivity_state"],
+                row["last_heartbeat_at"],
+            )
             runtime_health_payload = heartbeat_payload.get("runtime_health")
             conn.execute(
                 """
@@ -586,8 +590,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 )
             row = self._token_row(conn, agent_token)
             assert row is not None
+            current_agent = self._row_to_agent(row)
             return {
-                "agent": self._row_to_agent(row),
+                "agent": current_agent,
+                "collections_changed": previous_effective_state != current_agent["connectivity_state"],
                 "server_time": now,
             }
 
@@ -1053,7 +1059,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if cursor.rowcount > 0:
                 source_events = list(validated_payload["timeline_events"])
-                if not source_events and task_row is not None:
+                if (
+                    not source_events
+                    and task_row is not None
+                    and validated_payload["status"] != "running"
+                ):
                     source_events = [
                         routed_task_progress_event(
                             routed_task_id=routed_task_id,
@@ -1127,6 +1137,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if task is None:
                 raise KeyError(routed_task_id)
+            parent_conversation = conn.execute(
+                "SELECT external_conversation_ref FROM conversations WHERE conversation_id = ?",
+                (task["parent_conversation_id"],),
+            ).fetchone()
             conn.execute(
                 """
                 UPDATE routed_tasks
@@ -1148,6 +1162,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 payload={
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": task["parent_conversation_id"],
+                    "parent_external_conversation_ref": (
+                        str(parent_conversation["external_conversation_ref"] or "")
+                        if parent_conversation is not None
+                        else ""
+                    ),
                     "result": validated_payload,
                 },
                 now=now,

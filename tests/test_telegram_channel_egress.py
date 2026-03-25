@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.channels.telegram.egress import TelegramChannelEgress, TelegramEditableHandle
-from app.ports.agent_directory import NoOpAgentDirectory
-from app.ports.health_publication import NoOpHealthPublication
-from app.ports.task_routing import NoOpTaskRouting
+from octopus_sdk.agent_directory import NoOpAgentDirectory
+from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from tests.support.handler_support import MinimalFakeBot
 

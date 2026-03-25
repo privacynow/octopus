@@ -1,10 +1,10 @@
-"""Default delegation intent parser — extracts <delegation> XML blocks."""
+"""Delegation contracts and the default XML-tag parser."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 log = logging.getLogger(__name__)
@@ -13,12 +13,15 @@ _DELEGATION_OPEN = "<delegation>"
 _DELEGATION_CLOSE = "</delegation>"
 
 
-class XmlTagDelegationParser:
-    """Parse <delegation>{"tasks": [...]}</delegation> blocks from provider output.
+@runtime_checkable
+class DelegationIntentParser(Protocol):
+    """Parse delegation intent from a provider response."""
 
-    Default implementation of DelegationIntentParser. Resolves target slugs
-    to agent_ids using the available_agents list.
-    """
+    def parse(self, response_text: str, available_agents: list[dict[str, str]]) -> list[dict[str, str]]: ...
+
+
+class XmlTagDelegationParser:
+    """Parse <delegation>{\"tasks\": [...]}</delegation> blocks from provider output."""
 
     def parse(self, response_text: str, available_agents: list[dict[str, str]]) -> list[dict[str, str]]:
         if not response_text or not available_agents:
@@ -50,10 +53,12 @@ class XmlTagDelegationParser:
             if not agent:
                 log.warning("Delegation target slug '%s' not found in available agents", target_slug)
                 continue
-            tasks.append({
-                "routed_task_id": uuid4().hex,
-                "target_agent_id": agent["agent_id"],
-                "title": str(task.get("title", "")).strip() or "Delegated task",
-                "instructions": str(task.get("instructions", "")).strip(),
-            })
+            tasks.append(
+                {
+                    "routed_task_id": uuid4().hex,
+                    "target_agent_id": agent["agent_id"],
+                    "title": str(task.get("title", "")).strip() or "Delegated task",
+                    "instructions": str(task.get("instructions", "")).strip(),
+                }
+            )
         return tasks

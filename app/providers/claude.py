@@ -17,7 +17,7 @@ from app.progress import (
     CommandFinish, ContentDelta, Denial, ToolFinish, ToolStart,
     Thinking, render as render_progress,
 )
-from app.providers.base import (
+from octopus_sdk.providers import (
     PreflightContext,
     ProgressSink,
     RunContext,

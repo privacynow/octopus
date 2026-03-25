@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 from urllib.parse import urlparse
 
-from app.session_state import AwaitingSkillSetup
+from octopus_sdk.sessions import AwaitingSkillSetup
 from app.time_utils import age_seconds, utc_now
 
 

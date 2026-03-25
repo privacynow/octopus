@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.credential_service import get_credential_service
 from app.credential_types import CredentialValidator
 from app.credential_validation import validate_credential
-from app.session_state import SessionState
+from octopus_sdk.sessions import SessionState
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillSetupState,
     RuntimeSkillSetupCancellationOutcome,

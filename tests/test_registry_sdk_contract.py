@@ -1,7 +1,9 @@
-"""Contract tests for registry_sdk types and client wire format."""
+"""Contract tests for octopus_sdk registry models and client wire format."""
 
-from registry_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
-from registry_sdk.conversations import ConversationCreate
+import asyncio
+
+from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
+from octopus_sdk.registry.models import ConversationCreate
 
 
 def test_conversation_event_uses_created_at_not_timestamp():
@@ -124,7 +126,7 @@ def test_sdk_client_publish_events_wraps_in_events_key():
     import asyncio
     import json
     from unittest.mock import AsyncMock, patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "test-token")
     event = ConversationEvent(
@@ -163,7 +165,7 @@ def test_sdk_client_enroll_sends_body_not_header():
     """Verify enroll sends enrollment_token in JSON body, not X-Enrollment-Token header."""
     import asyncio
     from unittest.mock import patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "")
     captured = {}
@@ -203,9 +205,8 @@ def test_sdk_client_enroll_sends_body_not_header():
 
 
 def test_sdk_client_publish_progress_uses_progress_endpoint():
-    import asyncio
     from unittest.mock import patch
-    from registry_sdk.client import RegistryClient
+    from octopus_sdk.registry.client import RegistryClient
 
     client = RegistryClient("http://test:8787", "test-token")
     captured = {}
@@ -239,16 +240,147 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
             )
         )
 
+
+def test_sdk_client_submit_routed_task_includes_created_at_from_model_default():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"routed_task_id":"task-1"}'
+            text = '{"routed_task_id":"task-1"}'
+
+            def json(self):
+                return {"routed_task_id": "task-1"}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(
+            client.submit_routed_task(
+                {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "parent-1",
+                    "origin_agent_id": "origin-1",
+                    "target_agent_id": "target-1",
+                    "title": "Do thing",
+                    "instructions": "Work on it",
+                }
+            )
+        )
+
     assert captured["method"] == "POST"
-    assert captured["url"] == "http://test:8787/v1/conversations/conv-1/progress"
-    assert captured["json"] == {
-        "content": "Working on it",
-        "created_at": "2026-03-24T00:00:00+00:00",
-    }
+    assert captured["url"].endswith("/v1/agents/routed-tasks")
+    assert captured["json"]["routed_task_id"] == "task-1"
+    assert "created_at" in captured["json"]
+    assert captured["json"]["created_at"]
+
+
+def test_sdk_client_routed_task_status_uses_path_id_not_body_id():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"status":"running"}'
+            text = '{"status":"running"}'
+
+            def json(self):
+                return {"status": "running"}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(
+            client.routed_task_status(
+                "task-1",
+                {
+                    "routed_task_id": "task-1",
+                    "status": "running",
+                    "summary": "halfway",
+                },
+            )
+        )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1/agents/routed-tasks/task-1/status")
+    assert captured["json"]["status"] == "running"
+    assert captured["json"]["summary"] == "halfway"
+    assert "routed_task_id" not in captured["json"]
+    assert "updated_at" in captured["json"]
+
+
+def test_sdk_client_routed_task_result_uses_path_id_not_body_id():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"status":"completed"}'
+            text = '{"status":"completed"}'
+
+            def json(self):
+                return {"status": "completed"}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(
+            client.routed_task_result(
+                "task-1",
+                {
+                    "routed_task_id": "task-1",
+                    "status": "completed",
+                    "summary": "done",
+                    "full_text": "done",
+                },
+            )
+        )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1/agents/routed-tasks/task-1/result")
+    assert captured["json"]["status"] == "completed"
+    assert captured["json"]["summary"] == "done"
+    assert captured["json"]["full_text"] == "done"
+    assert "routed_task_id" not in captured["json"]
+    assert "completed_at" in captured["json"]
 
 
 def test_sdk_agent_card_contract_has_no_agent_id_field():
-    from registry_sdk.agents import AgentCard
+    from octopus_sdk.registry.models import AgentCard
 
     card = AgentCard(
         bot_key="bot:demo",

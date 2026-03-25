@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from app.ports.egress import (
+from octopus_sdk.egress import (
     ChannelCapabilities,
     ChannelEgress,
     EditableHandle,

@@ -39,16 +39,18 @@ from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
-from app.identity import telegram_conversation_ref
-from app.execution_context import (
+from octopus_sdk.identity import telegram_conversation_ref
+from octopus_sdk.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,
 )
-from app.identity import telegram_actor_key, telegram_conversation_key
-from app.providers.base import RunResult
-from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.providers import RunResult
+from octopus_sdk.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from octopus_sdk.execution import TransportIdentity, execute_request
 from app.runtime.work_admission import trust_tier_for_ref
-from app.session_state import (
+from app.skill_catalog_service import get_skill_catalog_service
+from octopus_sdk.sessions import (
     PendingApproval,
     PendingRetry,
     SessionState,
@@ -80,6 +82,41 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
 )
+
+
+class _RecordingEventSink:
+    def __init__(self) -> None:
+        self.user_messages: list[tuple[str, str]] = []
+
+    async def on_user_message(self, content: str, *, actor: str = "") -> None:
+        self.user_messages.append((content, actor))
+
+    async def on_provider_request(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_provider_response(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_tool_execution(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_approval_requested(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_bot_reply(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_error(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_proposed(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_submitted(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    async def on_delegation_completed(self, *args, **kwargs) -> None:
+        del args, kwargs
 
 _MODEL_PROFILES = {"fast": "haiku", "balanced": "sonnet", "best": "opus"}
 
@@ -146,7 +183,13 @@ def test_trusted_context_filters_unresolvable_skills():
             approval_mode="off",
             active_skills=["code-review", "missing-skill", "code-review"],
         )
-        ctx = resolve_execution_context(session, cfg, "claude", trust_tier="trusted")
+        ctx = resolve_execution_context(
+            session,
+            cfg,
+            "claude",
+            trust_tier="trusted",
+            catalog=get_skill_catalog_service(),
+        )
         assert ctx.active_skills == ["code-review"]
 
 
@@ -165,7 +208,7 @@ def test_public_trust_strips_project():
 
 def test_public_trust_restricts_model_profiles():
     """Public users restricted to allowed profiles fall back correctly."""
-    from app.execution_context import resolve_effective_model
+    from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
         provider="claude", provider_state={}, approval_mode="off",
@@ -297,7 +340,7 @@ async def test_trusted_user_not_blocked_from_restricted_command():
 
 def test_public_user_cannot_escalate_to_restricted_model():
     """Public user with restricted profiles cannot set a profile outside the allowed set."""
-    from app.execution_context import resolve_effective_model
+    from octopus_sdk.execution_context import resolve_effective_model
 
     cfg = _make_config(
         model="claude-sonnet-4-6",
@@ -440,7 +483,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
     import app.channels.telegram.execution as telegram_execution
-    from app.workflows.execution.requests import execute_request
+    from octopus_sdk.execution import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -487,7 +530,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
     import app.channels.telegram.execution as telegram_execution
-    from app.workflows.execution.requests import execute_request
+    from octopus_sdk.execution import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -523,6 +566,53 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         ctx = prov.run_calls[0]["context"]
         assert ctx.file_policy == "edit"
         assert ctx.working_dir != "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_user_message():
+    with fresh_env() as (_data_dir, _cfg, prov):
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="resume")
+        base_runtime = current_execution_runtime()
+        sink = _RecordingEventSink()
+        runtime = base_runtime.__class__(
+            dispatch=base_runtime.dispatch,
+            services=base_runtime.services,
+            interrupted_exc=base_runtime.interrupted_exc,
+            build_transport_identity=base_runtime.build_transport_identity,
+            build_event_sink=lambda _transport: sink,
+            render_provider_error=base_runtime.render_provider_error,
+            show_foreign_setup=base_runtime.show_foreign_setup,
+            show_setup_prompt=base_runtime.show_setup_prompt,
+            send_retry_prompt=base_runtime.send_retry_prompt,
+            send_approval_prompt=base_runtime.send_approval_prompt,
+            send_formatted_reply=base_runtime.send_formatted_reply,
+            send_directed_artifacts=base_runtime.send_directed_artifacts,
+            send_compact_reply=base_runtime.send_compact_reply,
+            propose_delegation_plan=base_runtime.propose_delegation_plan,
+            delegation_parser=base_runtime.delegation_parser,
+            agent_directory=base_runtime.agent_directory,
+        )
+
+        outcome = await execute_request(
+            TransportIdentity(
+                conversation_key=telegram_conversation_key(chat.id),
+                origin_channel="registry",
+                external_conversation_ref="registry-conv-1",
+                conversation_ref="registry:default:conversation:registry-conv-1",
+                target_agent_id="agent-1",
+                actor="reg:delegation-resume:child-task-1",
+            ),
+            "Synthetic resume prompt",
+            [],
+            message,
+            runtime=runtime,
+        )
+
+        assert outcome is not None
+        assert outcome.status == "completed"
+        assert sink.user_messages == []
+        assert len(prov.run_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -619,7 +709,7 @@ async def test_pending_retry_preserves_trust_tier():
 
 def test_validate_pending_respects_stored_trust_tier():
     """validate_pending must recompute hash with the pending's trust_tier."""
-    from app.request_flow import validate_pending
+    from octopus_sdk.request_flow import validate_pending
 
     cfg = _make_config(
         public_working_dir="/tmp/public",
@@ -653,7 +743,7 @@ def test_validate_pending_respects_stored_trust_tier():
 
 def test_validate_pending_detects_real_context_change():
     """validate_pending correctly detects when context actually changed."""
-    from app.request_flow import validate_pending
+    from octopus_sdk.request_flow import validate_pending
 
     cfg = _make_config(timeout_seconds=3600)
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")
@@ -674,7 +764,7 @@ def test_validate_pending_detects_real_context_change():
 
 def test_classify_pending_validation_returns_ok_expired_context_changed():
     """classify_pending_validation returns ok/expired/context_changed for machine guards."""
-    from app.request_flow import classify_pending_validation
+    from octopus_sdk.request_flow import classify_pending_validation
 
     cfg = _make_config(timeout_seconds=3600)
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")
@@ -719,7 +809,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
 def test_classify_pending_validation_accepts_iso_created_at():
     """Pending expiry logic accepts ISO timestamps as well as legacy floats."""
-    from app.request_flow import classify_pending_validation
+    from octopus_sdk.request_flow import classify_pending_validation
 
     cfg = _make_config(timeout_seconds=3600)
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")

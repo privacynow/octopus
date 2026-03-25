@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.normalization import (
     TelegramAttachmentTooLarge,
     normalize_callback,
@@ -13,7 +13,7 @@ from app.channels.telegram.normalization import (
     normalize_message,
     normalize_user,
 )
-from app.runtime.inbound_types import (
+from octopus_sdk.inbound_types import (
     InboundAttachment,
     InboundCallback,
     InboundCommand,
@@ -606,7 +606,7 @@ async def test_handle_message_caption_reaches_provider():
 
     This proves the caption fallback in normalize_message() governs the runtime path.
     """
-    from app.providers.base import RunResult
+    from octopus_sdk.providers import RunResult
     import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:

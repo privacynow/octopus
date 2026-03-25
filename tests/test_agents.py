@@ -1074,6 +1074,7 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
                     "parent_conversation_id": parent_conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "task-1-complete",
                         "summary": "Summary",
                         "full_text": "Delegated task completed successfully.",
                     },
@@ -1357,6 +1358,7 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
                     "parent_conversation_id": qualified_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "task-1-complete",
                         "summary": "done",
                         "full_text": "Delegated task completed successfully.",
                     },
@@ -1375,7 +1377,7 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
                 "payload": {
                     "routed_task_id": "task-1",
                     "parent_conversation_id": "telegram:bot-1:12345",
-                    "result": {"status": "completed", "summary": "done"},
+                    "result": {"status": "completed", "transition_id": "task-1-complete-2", "summary": "done"},
                 },
             },
             runtime=runtime,
@@ -1423,6 +1425,7 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
                         "parent_conversation_id": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
+                            "transition_id": "task-1-complete",
                             "summary": "done",
                             "full_text": "Delegated task completed successfully.",
                         },
@@ -1484,6 +1487,7 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
                         "parent_conversation_id": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
+                            "transition_id": "task-1-complete",
                             "summary": "done",
                             "full_text": "Delegated task completed successfully.",
                         },

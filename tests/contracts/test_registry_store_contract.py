@@ -206,6 +206,24 @@ def _create_routed_task(
     return routed, origin_id, target_id, target_token, conversation["conversation_id"]
 
 
+def _lease_routed_task(store, target_token: str) -> None:
+    deliveries = store.poll(target_token, cursor=0, limit=20)["deliveries"]
+    assert any(item["kind"] == "routed_task" for item in deliveries)
+
+
+def _start_routed_task(store, target_token: str, routed_task_id: str) -> None:
+    store.update_routed_task_status(
+        target_token,
+        routed_task_id,
+        {
+            "status": "running",
+            "transition_id": f"{routed_task_id}-start",
+            "summary": "started",
+            "timeline_events": [],
+        },
+    )
+
+
 @pytest.fixture(params=["sqlite", "postgres"])
 def store(request, tmp_path: Path):
     if request.param == "sqlite":
@@ -362,7 +380,7 @@ def test_create_routed_task_mirrors_parent_conversation_event(store):
     assert routed["inserted_events"][0]["seq"] > 0
     assert len(events) == 1
     assert events[0]["kind"] == "task.status"
-    assert events[0]["metadata"] == {"status": "queued"}
+    assert events[0]["metadata"] == {"routed_task_id": "task-mirror-create", "status": "queued"}
     assert events[0]["seq"] == routed["inserted_events"][0]["seq"]
 
 
@@ -389,22 +407,46 @@ def test_create_routed_task_requires_required_fields(store):
         )
 
 
-@pytest.mark.parametrize("protected_status", PROTECTED_ROUTED_TASK_STATUSES)
+@pytest.mark.parametrize("protected_status", ("completed", "failed", "cancelled", "timed_out"))
 def test_routed_task_status_updates_do_not_overwrite_protected_status(store, protected_status):
     routed_task_id = f"task-status-{protected_status}"
     protected_summary = f"{protected_status} summary"
-    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
+    _routed, _origin_id, _target_id, target_token, conversation_id = _create_routed_task(
         store, routed_task_id=routed_task_id
     )
+    _lease_routed_task(store, target_token)
 
     if protected_status == "completed":
+        _start_routed_task(store, target_token, routed_task_id)
         store.update_routed_task_result(
             target_token,
             routed_task_id,
             {
                 "status": "completed",
+                "transition_id": f"{routed_task_id}-complete",
                 "summary": protected_summary,
                 "full_text": "Full result",
+            },
+        )
+    elif protected_status == "failed":
+        _start_routed_task(store, target_token, routed_task_id)
+        store.update_routed_task_status(
+            target_token,
+            routed_task_id,
+            {
+                "status": "failed",
+                "transition_id": f"{routed_task_id}-{protected_status}",
+                "summary": protected_summary,
+                "timeline_events": [],
+            },
+        )
+    elif protected_status == "cancelled":
+        store.add_conversation_action(
+            conversation_id,
+            {
+                "action_id": f"{routed_task_id}-cancel",
+                "action": "cancel_task",
+                "payload": {"routed_task_id": routed_task_id},
             },
         )
     else:
@@ -413,71 +455,46 @@ def test_routed_task_status_updates_do_not_overwrite_protected_status(store, pro
             routed_task_id,
             {
                 "status": protected_status,
+                "transition_id": f"{routed_task_id}-{protected_status}",
                 "summary": protected_summary,
                 "timeline_events": [],
             },
         )
 
-    store.update_routed_task_status(
-        target_token,
-        routed_task_id,
-        {
-            "status": "running",
-            "summary": "late progress",
-            "timeline_events": [],
-        },
-    )
+    with pytest.raises(ValueError):
+        store.update_routed_task_status(
+            target_token,
+            routed_task_id,
+            {
+                "status": "running",
+                "transition_id": f"{routed_task_id}-late-progress",
+                "summary": "late progress",
+                "timeline_events": [],
+            },
+        )
 
     task = _routed_task_row(store, routed_task_id)
 
     assert task["status"] == protected_status
-    assert task["summary"] == protected_summary
+    if protected_status == "cancelled":
+        assert task["summary"] == "Cancelled by operator."
+    else:
+        assert task["summary"] == protected_summary
     if protected_status == "completed":
         assert "Full result" in str(task["result_json"])
-
-
-def test_routed_task_result_can_overwrite_partialfailed(store):
-    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
-        store, routed_task_id="task-status-recovered"
-    )
-
-    store.update_routed_task_status(
-        target_token,
-        "task-status-recovered",
-        {
-            "status": "partialfailed",
-            "summary": "delivery failed",
-            "timeline_events": [],
-        },
-    )
-
-    store.update_routed_task_result(
-        target_token,
-        "task-status-recovered",
-        {
-            "status": "completed",
-            "summary": "done",
-            "full_text": "Recovered result",
-        },
-    )
-
-    task = _routed_task_row(store, "task-status-recovered")
-
-    assert task["status"] == "completed"
-    assert task["summary"] == "done"
-    assert "Recovered result" in str(task["result_json"])
-
 
 def test_routed_task_status_and_result_auto_mirror_events(store):
     _routed, _origin_id, _target_id, target_token, conversation_id = _create_routed_task(
         store, routed_task_id="task-auto-mirror"
     )
+    _lease_routed_task(store, target_token)
 
     status_result = store.update_routed_task_status(
         target_token,
         "task-auto-mirror",
         {
             "status": "running",
+            "transition_id": "task-auto-mirror-running",
             "summary": "halfway there",
             "timeline_events": [],
         },
@@ -487,6 +504,7 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
         "task-auto-mirror",
         {
             "status": "completed",
+            "transition_id": "task-auto-mirror-complete",
             "summary": "done",
             "full_text": "All set",
             "completed_at": "2026-03-16T00:01:00+00:00",
@@ -495,11 +513,11 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
 
     events = store.list_events(conversation_id)["events"]
 
-    assert status_result["events_written"] is False
-    assert status_result["inserted_events"] == []
+    assert status_result["events_written"] is True
+    assert status_result["inserted_events"][0]["seq"] > 0
     assert result_result["events_written"] is True
     assert result_result["inserted_events"][0]["seq"] > 0
-    assert [event["metadata"]["status"] for event in events] == ["queued", "completed"]
+    assert [event["metadata"]["status"] for event in events] == ["queued", "running", "completed"]
 
 
 def test_list_agents_supports_query_and_connectivity_filters(store):
@@ -526,6 +544,7 @@ def test_routed_task_status_requires_explicit_non_empty_status(store):
             target_token,
             "task-status-required",
             {
+                "transition_id": "task-status-required-transition",
                 "summary": "missing status",
                 "timeline_events": [],
             },
@@ -542,6 +561,7 @@ def test_routed_task_result_requires_explicit_non_empty_status(store):
             target_token,
             "task-result-required",
             {
+                "transition_id": "task-result-required-transition",
                 "summary": "missing status",
                 "full_text": "No explicit status",
             },
@@ -553,12 +573,15 @@ def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
     _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id=routed_task_id
     )
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, routed_task_id)
 
     store.update_routed_task_result(
         target_token,
         routed_task_id,
         {
             "status": "completed",
+            "transition_id": f"{routed_task_id}-complete",
             "summary": "done",
             "full_text": "Final result",
         },
@@ -566,27 +589,29 @@ def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
 
     assert store.list_events("conv-blocked-timeline")["events"] == []
 
-    store.update_routed_task_status(
-        target_token,
-        routed_task_id,
-        {
-            "status": "running",
-            "summary": "late progress",
-            "timeline_events": [
-                {
-                    "event_id": "evt-blocked-timeline",
-                    "conversation_id": "conv-blocked-timeline",
-                    "kind": "progress",
-                    "title": "Late progress",
-                    "body": "This should not land.",
-                    "status": "running",
-                    "progress": None,
-                    "metadata": {},
-                    "created_at": "2026-03-16T00:00:05+00:00",
-                }
-            ],
-        },
-    )
+    with pytest.raises(ValueError):
+        store.update_routed_task_status(
+            target_token,
+            routed_task_id,
+            {
+                "status": "running",
+                "transition_id": f"{routed_task_id}-late-progress",
+                "summary": "late progress",
+                "timeline_events": [
+                    {
+                        "event_id": "evt-blocked-timeline",
+                        "conversation_id": "conv-blocked-timeline",
+                        "kind": "progress",
+                        "title": "Late progress",
+                        "body": "This should not land.",
+                        "status": "running",
+                        "progress": None,
+                        "metadata": {},
+                        "created_at": "2026-03-16T00:00:05+00:00",
+                    }
+                ],
+            },
+        )
 
     task = _routed_task_row(store, routed_task_id)
 
@@ -703,7 +728,10 @@ def test_add_conversation_action_requires_non_empty_action(store):
     )
 
     with pytest.raises(ValueError, match="action"):
-        store.add_conversation_action(conversation["conversation_id"], "   ")
+        store.add_conversation_action(
+            conversation["conversation_id"],
+            {"action_id": "action-1", "action": "", "payload": {}},
+        )
 
 
 def test_list_approvals_returns_only_pending_requests(store):
@@ -755,7 +783,10 @@ def test_list_approvals_returns_only_pending_requests(store):
             },
         }],
     )
-    store.add_conversation_action(decided["conversation_id"], "approve", {"request_id": "approval-decided-event"})
+    store.add_conversation_action(
+        decided["conversation_id"],
+        {"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "approval-decided-event"}},
+    )
 
     approvals = store.list_approvals()
 

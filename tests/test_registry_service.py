@@ -1214,21 +1214,6 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     )
     assert publish.status_code == 200
 
-    pending_task = client.post(
-        "/v1/agents/routed-tasks",
-        headers={"Authorization": f"Bearer {origin_token}"},
-        json={
-            "routed_task_id": "task-summary-pending",
-            "parent_conversation_id": conversation_id,
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Pending review",
-            "instructions": "Queue this work.",
-            "created_at": now_iso,
-        },
-    )
-    assert pending_task.status_code == 200
-
     running_task = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
@@ -1244,16 +1229,39 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     )
     assert running_task.status_code == 200
 
+    target_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert target_poll.status_code == 200
+
     status = client.post(
         "/v1/agents/routed-tasks/task-summary-running/status",
         headers={"Authorization": f"Bearer {target_token}"},
         json={
             "status": "running",
+            "transition_id": "task-summary-running-start",
             "summary": "In progress",
             "timeline_events": [],
         },
     )
     assert status.status_code == 200
+
+    pending_task = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-summary-pending",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Pending review",
+            "instructions": "Queue this work.",
+            "created_at": now_iso,
+        },
+    )
+    assert pending_task.status_code == 200
 
     _login_ui(client)
     summary = client.get("/v1/summary")
@@ -1342,7 +1350,7 @@ def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path:
     decision = client.post(
         f"/v1/conversations/{decided['conversation_id']}/actions",
         headers={"X-CSRF-Token": csrf},
-        json={"action": "approve", "payload": {"request_id": "evt-approval-decided"}},
+        json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "evt-approval-decided"}},
     )
     assert decision.status_code == 200
 
@@ -1369,7 +1377,7 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
     cancel = client.post(
         f"/v1/conversations/{conversation_id}/actions",
         headers={"X-CSRF-Token": csrf_token},
-        json={"action": "cancel_conversation"},
+        json={"action_id": "cancel-action-1", "action": "cancel_conversation", "payload": {}},
     )
     assert cancel.status_code == 200
 
@@ -1383,7 +1391,7 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
                         "kind": "task.status",
                         "content": "Still winding down",
                         "created_at": "2026-03-15T00:00:02+00:00",
-                        "metadata": {"status": "running"},
+                        "metadata": {"routed_task_id": "task-cancel-progress", "status": "running"},
                     }
                 ]
             },
@@ -1495,11 +1503,24 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert target_poll.status_code == 200
     assert target_poll.json()["deliveries"][0]["kind"] == "routed_task"
 
+    started = client.post(
+        "/v1/agents/routed-tasks/task-1/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "running",
+            "transition_id": "task-1-start",
+            "summary": "In progress",
+            "timeline_events": [],
+        },
+    )
+    assert started.status_code == 200
+
     result = client.post(
         "/v1/agents/routed-tasks/task-1/result",
         headers={"Authorization": f"Bearer {target_token}"},
         json={
             "status": "completed",
+            "transition_id": "task-1-complete",
             "summary": "Added missing tests",
             "full_text": "Test plan updated with edge cases.",
             "artifacts": [],

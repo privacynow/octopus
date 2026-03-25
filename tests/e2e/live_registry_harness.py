@@ -557,17 +557,8 @@ class LiveRegistryHarness:
 
             _poll("basic conversation reply", _basic_reply, timeout_seconds=120)
 
-            delegation_title = f"E2E natural delegation {int(time.time())}"
-            delegation_prompt = (
-                "The exact token needed to answer this request exists only on the other bot.\n"
-                "You cannot read it in this bot.\n"
-                "Your only valid first reply is exactly the delegation block below and nothing else.\n"
-                "Do not explain. Do not summarize. Do not guess the token.\n\n"
-                "Reply with exactly this delegation block and nothing else:\n"
-                f'<delegation>{{"tasks":[{{"target":"{secondary_state.slug}","title":"Read delegated token","instructions":"Read the exact contents of {delegation_secret_path} and reply with only that content."}}]}}</delegation>\n\n'
-                "When the delegated result returns, answer the user with that exact token only."
-            )
-            delegation_create = client.post(
+            assignment_title = f"E2E direct assignment {int(time.time())}"
+            assignment_create = client.post(
                 "/v1/conversations",
                 headers={
                     "Content-Type": "application/json",
@@ -576,27 +567,36 @@ class LiveRegistryHarness:
                 json={
                     "target_agent_id": primary_state.agent_id,
                     "origin_channel": "registry",
-                    "external_conversation_ref": f"e2e-delegation-{int(time.time())}",
-                    "title": delegation_title,
+                    "external_conversation_ref": f"e2e-direct-{int(time.time())}",
+                    "title": assignment_title,
                 },
             )
-            delegation_create.raise_for_status()
-            delegation_conversation_id = delegation_create.json()["conversation_id"]
-            delegation_message = client.post(
-                f"/v1/conversations/{delegation_conversation_id}/messages",
+            assignment_create.raise_for_status()
+            delegation_conversation_id = assignment_create.json()["conversation_id"]
+            assignment_submit = client.post(
+                f"/v1/conversations/{delegation_conversation_id}/actions",
                 headers={
                     "Content-Type": "application/json",
                     "X-CSRF-Token": csrf_token,
                 },
-                json={"text": delegation_prompt},
+                json={
+                    "action_id": f"e2e-direct-{int(time.time())}",
+                    "action": "direct_assign",
+                    "payload": {
+                        "selector": {
+                            "kind": "agent",
+                            "value": secondary_state.agent_id,
+                            "preferred_agent_id": secondary_state.agent_id,
+                        },
+                        "title": "Read delegated token",
+                        "instructions": (
+                            f"Read the exact contents of {delegation_secret_path} "
+                            "and reply with only that content."
+                        ),
+                    },
+                },
             )
-            delegation_message.raise_for_status()
-
-            primary_bot_values = stack.bot_values(stack.bot_slugs[0])
-            delegation_autonomous = (
-                primary_bot_values.get("BOT_AUTONOMOUS", "").strip() == "1"
-                and primary_bot_values.get("BOT_APPROVAL_MODE", "").strip().lower() != "on"
-            )
+            assignment_submit.raise_for_status()
 
             def _delegation_events() -> list[dict[str, Any]]:
                 response = client.get(
@@ -606,63 +606,10 @@ class LiveRegistryHarness:
                 response.raise_for_status()
                 return response.json().get("events", [])
 
-            def _delegation_state() -> dict[str, Any] | None:
-                events = _delegation_events()
-                proposed_event: dict[str, Any] | None = None
-                for event in events:
-                    content = str(event.get("content", "")).strip()
-                    metadata = event.get("metadata", {}) or {}
-                    if event.get("kind") == "error":
-                        return {
-                            "status": "failed",
-                            "detail": str(metadata.get("message", "") or content or "error"),
-                            "event": event,
-                        }
-                    if "Delegation submission failed" in content:
-                        return {"status": "failed", "detail": content, "event": event}
-                    if event.get("kind") == "delegation.submitted":
-                        return {"status": "submitted", "event": event}
-                    if event.get("kind") == "delegation.proposed":
-                        proposed_event = event
-                if proposed_event is not None:
-                    return {"status": "proposed", "event": proposed_event}
-                return None
+            def _assignment_submitted() -> bool:
+                return any(event.get("kind") == "delegation.submitted" for event in _delegation_events())
 
-            if delegation_autonomous:
-                delegation_state = _poll(
-                    "delegation submission",
-                    _delegation_state,
-                    timeout_seconds=180,
-                )
-                if delegation_state.get("status") == "failed":
-                    raise HarnessError(
-                        "autonomous delegation failed: "
-                        f"{delegation_state.get('detail', 'unknown error')}"
-                    )
-            else:
-                delegation_state = _poll(
-                    "delegation proposal",
-                    _delegation_state,
-                    timeout_seconds=180,
-                )
-                if delegation_state.get("status") != "proposed":
-                    raise HarnessError(
-                        "delegation did not reach proposal state: "
-                        f"{delegation_state.get('detail', delegation_state.get('status', 'unknown'))}"
-                    )
-                proposed_tasks = delegation_state.get("event", {}).get("metadata", {}).get("tasks", [])
-                if not proposed_tasks:
-                    raise HarnessError("delegation proposal did not include tasks metadata")
-
-                approve_delegation = client.post(
-                    f"/v1/conversations/{delegation_conversation_id}/actions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-CSRF-Token": csrf_token,
-                    },
-                    json={"action": "approve_delegation", "payload": {}},
-                )
-                approve_delegation.raise_for_status()
+            _poll("direct assignment submission", _assignment_submitted, timeout_seconds=60)
 
             def _delegated_task_created() -> dict[str, Any] | None:
                 response = client.get("/v1/tasks", params={"limit": 50})
@@ -694,24 +641,16 @@ class LiveRegistryHarness:
                 timeout_seconds=180,
             )
 
-            def _delegation_submitted() -> bool:
-                return any(event.get("kind") == "delegation.submitted" for event in _delegation_events())
-
-            _poll("delegation submitted event", _delegation_submitted, timeout_seconds=60)
-
-            def _delegation_completed() -> bool:
-                return any(event.get("kind") == "delegation.completed" for event in _delegation_events())
-
-            _poll("delegation completed event", _delegation_completed, timeout_seconds=120)
-
-            def _delegation_final_reply() -> bool:
+            def _direct_assignment_parent_result() -> bool:
                 return any(
-                    event.get("kind") == "message.bot"
+                    event.get("kind") == "task.status"
+                    and str((event.get("metadata", {}) or {}).get("routed_task_id", "")) == delegated_task_id
+                    and str((event.get("metadata", {}) or {}).get("status", "")) == "completed"
                     and delegation_secret == str(event.get("content", "")).strip()
                     for event in _delegation_events()
                 )
 
-            _poll("delegation final reply", _delegation_final_reply, timeout_seconds=180)
+            _poll("direct assignment parent result", _direct_assignment_parent_result, timeout_seconds=180)
 
             parent_title = f"E2E routed task parent {int(time.time())}"
             parent_prompt = "Track this delegated task in the registry timeline."

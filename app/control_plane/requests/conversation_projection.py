@@ -1,6 +1,17 @@
-"""Conversation-projection control-plane payloads.
+"""Conversation-projection control-plane payloads."""
 
-Legacy request types (BindConversationRequest, PublishTimelineRequest) have been
-removed.  Conversation projection now uses create_conversation / publish_events
-with inline JSON payloads.
-"""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+from octopus_sdk.registry.models import CoordinationActionEnvelope
+
+
+class AddConversationMessagePayload(BaseModel):
+    conversation_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+
+
+class SubmitConversationActionPayload(BaseModel):
+    conversation_id: str = Field(..., min_length=1)
+    envelope: CoordinationActionEnvelope

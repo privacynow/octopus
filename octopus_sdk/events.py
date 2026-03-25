@@ -101,22 +101,33 @@ class DelegationTaskSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    draft_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)  # target agent slug or agent_id
     status: str = Field(..., min_length=1)  # proposed, submitted, completed, failed
+    routed_task_id: str = ""
+    selector_kind: str = ""
+    selector_value: str = ""
+    instructions: str = ""
+    priority: str = ""
+    requested_capabilities: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class DelegationMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    proposal_id: str = Field(..., min_length=1)
     tasks: list[DelegationTaskSummary] = Field(..., min_length=1)
 
 
 class TaskStatusMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    routed_task_id: str = Field(..., min_length=1)
     status: str = Field(..., min_length=1)
     progress: int | None = None
+    transition_id: str = ""
 
 
 class ErrorMetadata(BaseModel):

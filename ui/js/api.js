@@ -104,6 +104,13 @@ const API = (() => {
         });
     }
 
+    function _actionId() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID().replace(/-/g, '');
+        }
+        return `${Date.now()}${Math.random().toString(16).slice(2)}`;
+    }
+
     return {
         setCsrfToken,
         fetchCsrf,
@@ -139,13 +146,17 @@ const API = (() => {
         sendMessage: (id, text) =>
             request('POST', `/v1/conversations/${encodeURIComponent(id)}/messages`, { body: { text } }),
         conversationAction: (id, action, payload = {}) =>
-            request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, { body: { action, payload } }),
+            request('POST', `/v1/conversations/${encodeURIComponent(id)}/actions`, {
+                body: { action_id: _actionId(), action, payload },
+            }),
         exportConversation: (id) =>
             request('GET', `/v1/conversations/${encodeURIComponent(id)}/export`, { raw: true }),
 
         // Tasks
         listTasks: (opts = {}) =>
             request('GET', '/v1/tasks', { params: opts }),
+        getTask: (id) =>
+            request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
 
         // Capabilities
         listCapabilities: () =>

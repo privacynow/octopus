@@ -162,7 +162,6 @@ def build_execution_runtime(
     send_directed_artifacts,
     send_compact_reply,
     propose_delegation_plan,
-    delegation_parser=None,
     agent_directory=None,
 ):
     from octopus_sdk.execution import ExecutionRuntime
@@ -182,6 +181,5 @@ def build_execution_runtime(
         send_directed_artifacts=send_directed_artifacts,
         send_compact_reply=send_compact_reply,
         propose_delegation_plan=propose_delegation_plan,
-        delegation_parser=delegation_parser,
         agent_directory=agent_directory,
     )

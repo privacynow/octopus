@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 
+from octopus_sdk.registry.models import DelegationTaskDraft
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
-from app.workflows.delegation.contracts import DelegationTaskDraft
 
 CHILD_ACTIVE_STATUSES = frozenset({"pending", "proposed", "queued", "leased", "running", "submitted"})
 CHILD_TERMINAL_STATUSES = frozenset({"completed", "failed"})
@@ -156,10 +156,10 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
     if isinstance(action, ProposeDelegationAction):
         tasks = tuple(
             DelegatedTask(
-                routed_task_id=item.routed_task_id,
-                authority_ref=item.authority_ref,
+                routed_task_id=item.draft_id,
                 title=item.title,
-                target_agent_id=item.target_agent_id,
+                authority_ref=item.authority_ref,
+                target_agent_id=item.selector.preferred_agent_id or item.selector.value,
                 instructions=item.instructions,
                 status="proposed",
             )

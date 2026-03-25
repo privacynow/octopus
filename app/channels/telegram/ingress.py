@@ -27,7 +27,9 @@ from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
     handle_delegation_cancel,
     parse_delegation_callback,
+    parse_target_selector,
     propose_delegation_plan,
+    submit_direct_assignment,
 )
 from app.channels.telegram.execution import (
     allowed_roots,
@@ -85,6 +87,7 @@ from app.channels.telegram.pending import (
 from app.channels.telegram.inbound_context import event_trust_tier
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
+from app.formatting import summarize_text
 from octopus_sdk.inbound_types import InboundUser
 from octopus_sdk.inbound_types import (
     InboundEnvelope,
@@ -806,6 +809,61 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
 
 
 @_command_handler
+async def cmd_delegate(
+    runtime: TelegramRuntime,
+    event,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    del context
+    if await _public_guard(runtime, event, update):
+        return
+    args = tuple(event.args or ())
+    if len(args) < 2:
+        await update.effective_message.reply_text(
+            "Usage: /delegate @agent instructions\nYou can also use @cap:capability or @role:role."
+        )
+        return
+    selector = parse_target_selector(args[0])
+    if selector is None:
+        await update.effective_message.reply_text(
+            "Usage: /delegate @agent instructions\nYou can also use @cap:capability or @role:role."
+        )
+        return
+    instructions = " ".join(part.strip() for part in args[1:] if str(part).strip()).strip()
+    if not instructions:
+        await update.effective_message.reply_text(
+            "Delegation needs instructions after the target selector."
+        )
+        return
+    chat_id = event.chat_id
+    title = summarize_text(instructions) or "Direct assignment"
+    try:
+        result = await submit_direct_assignment(
+            runtime,
+            telegram_session_io.conversation_key(chat_id),
+            update.effective_message,
+            conversation_ref=telegram_conversation_ref(runtime.config, chat_id),
+            selector=selector,
+            title=title,
+            instructions=instructions,
+        )
+    except Exception as exc:
+        await update.effective_message.reply_text(
+            f"Delegation unavailable right now. {exc}"
+        )
+        return
+    task_ref = result.routed_tasks[0] if result.routed_tasks else None
+    target_label = selector.preferred_agent_id or f"{selector.kind}:{selector.value}"
+    if task_ref is None:
+        await update.effective_message.reply_text(f"Task sent to {target_label}.")
+        return
+    await update.effective_message.reply_text(
+        f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
+    )
+
+
+@_command_handler
 async def cmd_export(
     runtime: TelegramRuntime,
     event,
@@ -1192,7 +1250,6 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
                 runtime,
                 chat_id,
                 query,
-                delegation_runtime=build_delegation_channel_runtime(runtime),
             )
             return
         if action == "delegation_cancel":
@@ -1200,7 +1257,6 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
                 runtime,
                 chat_id,
                 query,
-                delegation_runtime=build_delegation_channel_runtime(runtime),
             )
 
 async def handle_recovery_callback(

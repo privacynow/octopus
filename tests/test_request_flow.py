@@ -590,7 +590,6 @@ async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_u
             send_directed_artifacts=base_runtime.send_directed_artifacts,
             send_compact_reply=base_runtime.send_compact_reply,
             propose_delegation_plan=base_runtime.propose_delegation_plan,
-            delegation_parser=base_runtime.delegation_parser,
             agent_directory=base_runtime.agent_directory,
         )
 

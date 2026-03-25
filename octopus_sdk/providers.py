@@ -5,6 +5,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from octopus_sdk.registry.models import DelegationIntent
+
 
 @dataclass(frozen=True)
 class FileChangeRecord:
@@ -33,9 +35,7 @@ class RunResult:
     provider_state_updates: dict[str, Any] = field(default_factory=dict)
     denials: list[dict[str, Any]] = field(default_factory=list)
     cancelled: bool = False
-    delegation_title: str = ""
-    delegation_resume_instruction: str = ""
-    delegation_tasks: list[dict[str, str]] = field(default_factory=list)
+    coordination_intent: DelegationIntent | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0

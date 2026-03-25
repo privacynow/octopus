@@ -107,7 +107,7 @@ def test_pending_delegation_status_transitions_completed():
     outcome = apply_routed_result(
         plan,
         routed_task_id="task-1",
-        result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
+        result=RoutedTaskResult(routed_task_id="task-1", status="completed", transition_id="task-1-complete", summary="done"),
     )
     assert outcome.matched is True
     plan = outcome.pending
@@ -118,7 +118,7 @@ def test_pending_delegation_status_transitions_completed():
     outcome = apply_routed_result(
         plan,
         routed_task_id="task-2",
-        result=RoutedTaskResult(routed_task_id="task-2", status="completed", summary="done"),
+        result=RoutedTaskResult(routed_task_id="task-2", status="completed", transition_id="task-2-complete", summary="done"),
     )
     assert outcome.matched is True
     plan = outcome.pending
@@ -154,13 +154,13 @@ def test_pending_delegation_status_transitions_partial_failed():
     first = apply_routed_result(
         plan,
         routed_task_id="task-1",
-        result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
+        result=RoutedTaskResult(routed_task_id="task-1", status="completed", transition_id="task-1-complete", summary="done"),
     )
     assert first.pending is not None
     second = apply_routed_result(
         first.pending,
         routed_task_id="task-2",
-        result=RoutedTaskResult(routed_task_id="task-2", status="failed", summary="boom", full_text="Tool crashed"),
+        result=RoutedTaskResult(routed_task_id="task-2", status="failed", transition_id="task-2-fail", summary="boom", full_text="Tool crashed"),
     )
     plan = second.pending
     assert plan is not None
@@ -198,7 +198,7 @@ def test_apply_routed_result_matches_registry_provenance_when_task_ids_overlap()
         plan,
         routed_task_id="task-shared",
         authority_ref="registry:ops",
-        result=RoutedTaskResult(routed_task_id="task-shared", status="completed", summary="ops done"),
+        result=RoutedTaskResult(routed_task_id="task-shared", status="completed", transition_id="task-shared-complete", summary="ops done"),
     )
 
     assert outcome.pending is not None

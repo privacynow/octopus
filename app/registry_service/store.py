@@ -31,9 +31,12 @@ from app.registry_service.store_base import (
     AbstractRegistryStore,
     CapabilityDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
+    delegation_event,
     routed_task_created_event,
     routed_task_progress_event,
     routed_task_result_event,
+    stable_routed_task_id,
+    validated_action_payload,
     validated_ack_request,
     validated_agent_card_payload,
     validated_conversation_action,
@@ -56,6 +59,18 @@ from app.registry_service.store_base import (
     runtime_health_summary,
     utcnow_iso,
     validated_registry_scope,
+)
+from octopus_sdk.registry.models import (
+    CoordinationActionEnvelope,
+    CoordinationActionResult,
+    DelegationTaskDraft,
+    DirectAssignActionPayload,
+    TargetSelector,
+)
+from octopus_sdk.task_protocol import (
+    RoutedTaskSnapshot,
+    TaskTransitionRequest,
+    apply_task_transition,
 )
 
 _SCHEMA_VERSION = 1
@@ -808,6 +823,240 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 delivery_id=delivery_id,
             )
 
+    def _selector_candidates(
+        self,
+        conn: sqlite3.Connection,
+        selector: TargetSelector,
+    ) -> list[sqlite3.Row]:
+        rows = conn.execute(
+            """
+            WITH agent_rows AS (
+                SELECT
+                    a.*,
+                    CASE
+                        WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'offline'
+                        ELSE a.connectivity_state
+                    END AS effective_state
+                FROM agents a
+            )
+            SELECT *
+            FROM agent_rows
+            WHERE effective_state = 'connected'
+            ORDER BY lower(display_name), agent_id
+            """,
+            (self._offline_before(),),
+        ).fetchall()
+        value = selector.value.strip().lower()
+        matches: list[sqlite3.Row] = []
+        for row in rows:
+            if selector.kind == "agent":
+                slug = str(row["slug"] or "").strip().lower()
+                agent_id = str(row["agent_id"] or "").strip().lower()
+                if value in {slug, agent_id}:
+                    matches.append(row)
+            elif selector.kind == "capability":
+                caps = {str(item).strip().lower() for item in decode_json_field(row["skills_json"], []) if item}
+                if value in caps:
+                    matches.append(row)
+            elif selector.kind == "role":
+                role = str(row["role"] or "").strip().lower()
+                if role == value or value in role:
+                    matches.append(row)
+        return matches
+
+    def _resolve_selector(
+        self,
+        conn: sqlite3.Connection,
+        selector: TargetSelector,
+    ) -> sqlite3.Row:
+        matches = self._selector_candidates(conn, selector)
+        preferred = selector.preferred_agent_id.strip()
+        if preferred:
+            preferred_matches = [
+                row for row in matches if str(row["agent_id"] or "").strip() == preferred
+            ]
+            if not preferred_matches:
+                raise ValueError(
+                    f"Selector {selector.kind}:{selector.value} does not resolve to preferred agent {preferred}"
+                )
+            return preferred_matches[0]
+        if not matches:
+            raise ValueError(f"No connected agent matches {selector.kind}:{selector.value}")
+        if len(matches) > 1:
+            labels = ", ".join(
+                str(row["slug"] or row["agent_id"] or "").strip()
+                for row in matches[:5]
+            )
+            raise ValueError(
+                f"Selector {selector.kind}:{selector.value} is ambiguous across {len(matches)} agents: {labels}"
+            )
+        return matches[0]
+
+    def _delegation_task_metadata(
+        self,
+        task: DelegationTaskDraft,
+        *,
+        status: str,
+        target_agent_id: str = "",
+        routed_task_id: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "draft_id": task.draft_id,
+            "title": task.title,
+            "target": target_agent_id or task.selector.preferred_agent_id or task.selector.value,
+            "status": status,
+            "routed_task_id": routed_task_id,
+            "selector_kind": task.selector.kind,
+            "selector_value": task.selector.value,
+            "instructions": task.instructions,
+            "priority": task.priority,
+            "requested_capabilities": list(task.requested_capabilities),
+            "context": dict(task.context),
+        }
+
+    def _insert_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_id: str,
+        conversation_id: str,
+        agent_id: str,
+        kind: str,
+        actor: str,
+        content: str,
+        metadata: dict[str, Any],
+        created_at: str,
+    ) -> dict[str, Any] | None:
+        cursor = conn.execute(
+            """
+            INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO NOTHING
+            """,
+            (
+                event_id,
+                conversation_id,
+                agent_id,
+                kind,
+                actor,
+                content,
+                ensure_json(metadata),
+                created_at,
+            ),
+        )
+        if cursor.rowcount <= 0:
+            return None
+        seq_row = conn.execute(
+            "SELECT seq FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        return {
+            "seq": int(seq_row["seq"]) if seq_row is not None else 0,
+            "event_id": event_id,
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+            "kind": kind,
+            "actor": actor,
+            "content": content,
+            "metadata": metadata,
+            "created_at": created_at,
+        }
+
+    def _task_row_to_summary(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "routed_task_id": row["routed_task_id"],
+            "parent_conversation_id": row["parent_conversation_id"],
+            "origin_agent_id": row["origin_agent_id"],
+            "target_agent_id": row["target_agent_id"],
+            "title": row["title"],
+            "status": row["status"],
+            "summary": row["summary"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    @staticmethod
+    def _task_snapshot_from_row(row: sqlite3.Row) -> RoutedTaskSnapshot:
+        return RoutedTaskSnapshot(
+            status=str(row["status"] or "queued"),
+            queued_at=str(row["created_at"] or ""),
+            leased_at="",
+            started_at="",
+            completed_at="",
+            failed_at="",
+            cancelled_at="",
+        )
+
+    def _create_routed_task_in_tx(
+        self,
+        conn: sqlite3.Connection,
+        request: dict[str, Any],
+        *,
+        now: str,
+    ) -> dict[str, Any]:
+        validated_request = validated_routed_task_request(request)
+        disabled_capabilities = self._disabled_capabilities(conn)
+        for capability in requested_routed_capabilities(validated_request):
+            if capability.lower() in disabled_capabilities:
+                raise CapabilityDisabledError(capability)
+        conn.execute(
+            """
+            INSERT INTO routed_tasks (
+                routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
+                title, request_json, status, summary, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', '', ?, ?)
+            ON CONFLICT(routed_task_id) DO UPDATE SET
+                parent_conversation_id = excluded.parent_conversation_id,
+                origin_agent_id = excluded.origin_agent_id,
+                target_agent_id = excluded.target_agent_id,
+                title = excluded.title,
+                request_json = excluded.request_json,
+                status = excluded.status,
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (
+                validated_request["routed_task_id"],
+                validated_request["parent_conversation_id"],
+                validated_request["origin_agent_id"],
+                validated_request["target_agent_id"],
+                validated_request["title"],
+                ensure_json(validated_request),
+                now,
+                now,
+            ),
+        )
+        delivery = self._create_delivery(
+            conn,
+            target_agent_id=validated_request["target_agent_id"],
+            kind="routed_task",
+            payload=validated_request,
+            now=now,
+            delivery_id=uuid.uuid4().hex,
+        )
+        mirrored_event = routed_task_created_event(validated_request)
+        inserted_event = self._insert_event(
+            conn,
+            event_id=mirrored_event["event_id"],
+            conversation_id=mirrored_event["conversation_id"],
+            agent_id=validated_request["target_agent_id"],
+            kind=mirrored_event["kind"],
+            actor="",
+            content=mirrored_event["content"],
+            metadata=mirrored_event["metadata"],
+            created_at=mirrored_event["created_at"],
+        )
+        if inserted_event is not None:
+            conn.execute(
+                "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+            )
+        return {
+            "request": validated_request,
+            "delivery": delivery,
+            "event": inserted_event,
+        }
+
     def _create_delivery(
         self,
         conn: sqlite3.Connection,
@@ -836,92 +1085,21 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
-        validated_request = validated_routed_task_request(request)
         with self._connect() as conn:
+            validated_request = validated_routed_task_request(request)
             conversation_row = conn.execute(
                 "SELECT conversation_id FROM conversations WHERE conversation_id = ?",
                 (validated_request["parent_conversation_id"],),
             ).fetchone()
             if conversation_row is None:
                 raise KeyError(validated_request["parent_conversation_id"])
-            disabled_capabilities = self._disabled_capabilities(conn)
-            for capability in requested_routed_capabilities(validated_request):
-                if capability.lower() in disabled_capabilities:
-                    raise CapabilityDisabledError(capability)
-            conn.execute(
-                """
-                INSERT INTO routed_tasks (
-                    routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
-                    title, request_json, status, summary, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'queued', '', ?, ?)
-                ON CONFLICT(routed_task_id) DO UPDATE SET
-                    parent_conversation_id = excluded.parent_conversation_id,
-                    origin_agent_id = excluded.origin_agent_id,
-                    target_agent_id = excluded.target_agent_id,
-                    title = excluded.title,
-                    request_json = excluded.request_json,
-                    status = excluded.status,
-                    summary = excluded.summary,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    validated_request["routed_task_id"],
-                    validated_request["parent_conversation_id"],
-                    validated_request["origin_agent_id"],
-                    validated_request["target_agent_id"],
-                    validated_request["title"],
-                    ensure_json(validated_request),
-                    now,
-                    now,
-                ),
-            )
-            delivery = self._create_delivery(
+            created = self._create_routed_task_in_tx(
                 conn,
-                target_agent_id=validated_request["target_agent_id"],
-                kind="routed_task",
-                payload=validated_request,
+                validated_request,
                 now=now,
-                delivery_id=uuid.uuid4().hex,
             )
-            mirrored_event = routed_task_created_event(validated_request)
-            ev_cursor = conn.execute(
-                """
-                INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(event_id) DO NOTHING
-                """,
-                (
-                    mirrored_event["event_id"],
-                    mirrored_event["conversation_id"],
-                    validated_request["target_agent_id"],
-                    mirrored_event["kind"],
-                    "",
-                    mirrored_event["content"],
-                    ensure_json(mirrored_event["metadata"]),
-                    mirrored_event["created_at"],
-                ),
-            )
-            inserted_events: list[dict[str, Any]] = []
-            if ev_cursor.rowcount > 0:
-                seq_row = conn.execute(
-                    "SELECT seq FROM events WHERE event_id = ?",
-                    (mirrored_event["event_id"],),
-                ).fetchone()
-                inserted_events.append({
-                    "seq": int(seq_row["seq"]) if seq_row is not None else 0,
-                    "event_id": mirrored_event["event_id"],
-                    "conversation_id": mirrored_event["conversation_id"],
-                    "agent_id": validated_request["target_agent_id"],
-                    "kind": mirrored_event["kind"],
-                    "actor": "",
-                    "content": mirrored_event["content"],
-                    "metadata": mirrored_event["metadata"],
-                    "created_at": mirrored_event["created_at"],
-                })
-                conn.execute(
-                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
-                    (mirrored_event["created_at"], mirrored_event["conversation_id"]),
-                )
+            delivery = created["delivery"]
+            inserted_events = [created["event"]] if created.get("event") is not None else []
         return {
             "routed_task_id": validated_request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
@@ -980,6 +1158,33 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """,
                     (now, now, *delivery_ids),
                 )
+                for item in deliveries:
+                    if item["kind"] != "routed_task":
+                        continue
+                    payload = decode_json_field(item["payload_json"], {})
+                    routed_task_id = str(payload.get("routed_task_id") or "").strip()
+                    if not routed_task_id:
+                        continue
+                    task_row = conn.execute(
+                        "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
+                        (routed_task_id,),
+                    ).fetchone()
+                    if task_row is None:
+                        continue
+                    decision = apply_task_transition(
+                        self._task_snapshot_from_row(task_row),
+                        TaskTransitionRequest(
+                            transition="lease",
+                            actor_role="system",
+                            transition_id=item["delivery_id"],
+                            occurred_at=now,
+                        ),
+                    )
+                    if decision.ok and not decision.duplicate and decision.new_state != task_row["status"]:
+                        conn.execute(
+                            "UPDATE routed_tasks SET status = ?, updated_at = ? WHERE routed_task_id = ?",
+                            (decision.new_state, now, routed_task_id),
+                        )
         items = [
             {
                 "cursor": str(item["seq"]),
@@ -1029,99 +1234,125 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def update_routed_task_status(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
-        protected_status_placeholders = ", ".join("?" for _ in PROTECTED_ROUTED_TASK_STATUSES)
         validated_payload = validated_routed_task_status_payload(payload)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, {"coordination", "full"})
-            cursor = conn.execute(
-                f"""
-                UPDATE routed_tasks
-                SET status = ?, summary = ?, updated_at = ?
-                WHERE routed_task_id = ?
-                  AND status NOT IN ({protected_status_placeholders})
-                """,
-                (
-                    validated_payload["status"],
-                    validated_payload["summary"],
-                    now,
-                    routed_task_id,
-                    *PROTECTED_ROUTED_TASK_STATUSES,
-                ),
-            )
-            events_written = False
-            inserted_events: list[dict[str, Any]] = []
             task_row = conn.execute(
-                "SELECT parent_conversation_id, origin_agent_id, target_agent_id FROM routed_tasks WHERE routed_task_id = ?",
+                "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
                 (routed_task_id,),
             ).fetchone()
-            if cursor.rowcount > 0:
-                source_events = list(validated_payload["timeline_events"])
-                if (
-                    not source_events
-                    and task_row is not None
-                    and validated_payload["status"] != "running"
-                ):
-                    source_events = [
-                        routed_task_progress_event(
-                            routed_task_id=routed_task_id,
-                            parent_conversation_id=task_row["parent_conversation_id"],
-                            payload=validated_payload,
-                        )
-                    ]
-                for event in source_events:
-                    event_metadata = {"status": validated_payload["status"]}
+            if task_row is None:
+                raise KeyError(routed_task_id)
+            if str(task_row["target_agent_id"] or "") != str(row["agent_id"] or ""):
+                raise PermissionError("Routed task does not belong to this agent")
+            occurred_at = now
+            requested_status = validated_payload["status"]
+            if requested_status == "running":
+                transition = "progress" if str(task_row["status"] or "") == "running" else "start"
+            elif requested_status == "failed":
+                transition = "fail"
+            elif requested_status == "timed_out":
+                transition = "time_out"
+            elif requested_status == "cancelled":
+                transition = "cancel"
+            elif requested_status == "leased":
+                transition = "lease"
+            else:
+                raise ValueError(f"Unsupported routed task status: {requested_status}")
+
+            decision = apply_task_transition(
+                self._task_snapshot_from_row(task_row),
+                TaskTransitionRequest(
+                    transition=transition,
+                    actor_role="target_bot",
+                    transition_id=validated_payload["transition_id"],
+                    occurred_at=occurred_at,
+                    progress=validated_payload.get("progress"),
+                ),
+            )
+            if not decision.ok:
+                raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
+
+            duplicate = False
+            inserted_events: list[dict[str, Any]] = []
+            primary_event_id = f"task-transition:{routed_task_id}:{validated_payload['transition_id']}"
+            if conn.execute(
+                "SELECT 1 FROM events WHERE event_id = ?",
+                (primary_event_id,),
+            ).fetchone():
+                duplicate = True
+            else:
+                conn.execute(
+                    "UPDATE routed_tasks SET status = ?, summary = ?, updated_at = ? WHERE routed_task_id = ?",
+                    (
+                        decision.new_state,
+                        validated_payload["summary"],
+                        occurred_at,
+                        routed_task_id,
+                    ),
+                )
+                primary_event = self._insert_event(
+                    conn,
+                    event_id=primary_event_id,
+                    conversation_id=str(task_row["parent_conversation_id"] or ""),
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(validated_payload.get("summary") or decision.new_state),
+                    metadata={
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload["transition_id"],
+                        **(
+                            {"progress": validated_payload["progress"]}
+                            if validated_payload.get("progress") is not None
+                            else {}
+                        ),
+                    },
+                    created_at=occurred_at,
+                )
+                if primary_event is not None:
+                    inserted_events.append(primary_event)
+                for event in validated_payload["timeline_events"]:
+                    event_metadata = {
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload["transition_id"],
+                        **dict(event.get("metadata") or {}),
+                    }
                     if event.get("progress") is not None:
                         event_metadata["progress"] = event["progress"]
-                    event_content = str(event.get("body", "") or event.get("title", "") or "")
-                    ev_cursor = conn.execute(
-                        """
-                        INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(event_id) DO NOTHING
-                        """,
-                        (
-                            event["event_id"],
-                            event["conversation_id"],
-                            row["agent_id"],
-                            "task.status",
-                            "",
-                            event_content,
-                            ensure_json(event_metadata),
-                            event["created_at"],
-                        ),
+                    inserted_event = self._insert_event(
+                        conn,
+                        event_id=str(event["event_id"]),
+                        conversation_id=str(event["conversation_id"]),
+                        agent_id=str(row["agent_id"] or ""),
+                        kind="task.status",
+                        actor="",
+                        content=str(event.get("body", "") or event.get("title", "") or ""),
+                        metadata=event_metadata,
+                        created_at=str(event["created_at"]),
                     )
-                    if ev_cursor.rowcount > 0:
-                        seq_row = conn.execute(
-                            "SELECT seq FROM events WHERE event_id = ?",
-                            (event["event_id"],),
-                        ).fetchone()
-                        events_written = True
-                        inserted_events.append({
-                            "seq": int(seq_row["seq"]) if seq_row is not None else 0,
-                            "event_id": event["event_id"],
-                            "conversation_id": event["conversation_id"],
-                            "agent_id": row["agent_id"],
-                            "kind": "task.status",
-                            "actor": "",
-                            "content": event_content,
-                            "metadata": event_metadata,
-                            "created_at": event["created_at"],
-                        })
-                if events_written and task_row is not None:
-                    mirrored_updated_at = inserted_events[-1]["created_at"] if inserted_events else now
+                    if inserted_event is not None:
+                        inserted_events.append(inserted_event)
+                if inserted_events:
                     conn.execute(
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
-                        (mirrored_updated_at, task_row["parent_conversation_id"]),
+                        (inserted_events[-1]["created_at"], task_row["parent_conversation_id"]),
                     )
-            result = {"routed_task_id": routed_task_id, "status": validated_payload["status"], "events_written": events_written, "inserted_events": inserted_events}
-            if task_row:
-                result["parent_conversation_id"] = task_row["parent_conversation_id"]
-                result["origin_agent_id"] = task_row["origin_agent_id"]
-                result["target_agent_id"] = task_row["target_agent_id"]
-        return result
+            return {
+                "routed_task_id": routed_task_id,
+                "status": decision.new_state,
+                "duplicate": duplicate,
+                "events_written": bool(inserted_events),
+                "inserted_events": inserted_events,
+                "parent_conversation_id": task_row["parent_conversation_id"],
+                "origin_agent_id": task_row["origin_agent_id"],
+                "target_agent_id": task_row["target_agent_id"],
+            }
 
     def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -1137,93 +1368,109 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if task is None:
                 raise KeyError(routed_task_id)
+            if str(task["target_agent_id"] or "") != str(row["agent_id"] or ""):
+                raise PermissionError("Routed task does not belong to this agent")
+            requested_status = validated_payload["status"]
+            if requested_status == "completed":
+                transition = "complete"
+            elif requested_status == "failed":
+                transition = "fail"
+            elif requested_status == "timed_out":
+                transition = "time_out"
+            else:
+                raise ValueError(f"Unsupported routed task result status: {requested_status}")
+            completed_at = now
+            decision = apply_task_transition(
+                self._task_snapshot_from_row(task),
+                TaskTransitionRequest(
+                    transition=transition,
+                    actor_role="target_bot",
+                    transition_id=validated_payload["transition_id"],
+                    occurred_at=completed_at,
+                ),
+            )
+            if not decision.ok:
+                raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
+            primary_event_id = f"task-result:{routed_task_id}:{validated_payload['transition_id']}"
+            duplicate = conn.execute(
+                "SELECT 1 FROM events WHERE event_id = ?",
+                (primary_event_id,),
+            ).fetchone() is not None
             parent_conversation = conn.execute(
                 "SELECT external_conversation_ref FROM conversations WHERE conversation_id = ?",
                 (task["parent_conversation_id"],),
             ).fetchone()
-            conn.execute(
-                """
-                UPDATE routed_tasks
-                SET status = ?, summary = ?, result_json = ?, updated_at = ?
-                WHERE routed_task_id = ?
-                """,
-                (
-                    validated_payload["status"],
-                    validated_payload["summary"],
-                    ensure_json(validated_payload),
-                    now,
-                    routed_task_id,
-                ),
-            )
-            self._create_delivery(
-                conn,
-                target_agent_id=task["origin_agent_id"],
-                kind="routed_result",
-                payload={
-                    "routed_task_id": routed_task_id,
-                    "parent_conversation_id": task["parent_conversation_id"],
-                    "parent_external_conversation_ref": (
-                        str(parent_conversation["external_conversation_ref"] or "")
-                        if parent_conversation is not None
-                        else ""
-                    ),
-                    "result": validated_payload,
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            mirrored_event = routed_task_result_event(
-                routed_task_id=routed_task_id,
-                parent_conversation_id=task["parent_conversation_id"],
-                payload=validated_payload,
-            )
-            ev_cursor = conn.execute(
-                """
-                INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(event_id) DO NOTHING
-                """,
-                (
-                    mirrored_event["event_id"],
-                    mirrored_event["conversation_id"],
-                    row["agent_id"],
-                    mirrored_event["kind"],
-                    "",
-                    mirrored_event["content"],
-                    ensure_json(mirrored_event["metadata"]),
-                    mirrored_event["created_at"],
-                ),
-            )
             inserted_events: list[dict[str, Any]] = []
-            if ev_cursor.rowcount > 0:
-                seq_row = conn.execute(
-                    "SELECT seq FROM events WHERE event_id = ?",
-                    (mirrored_event["event_id"],),
-                ).fetchone()
-                inserted_events.append({
-                    "seq": int(seq_row["seq"]) if seq_row is not None else 0,
-                    "event_id": mirrored_event["event_id"],
-                    "conversation_id": mirrored_event["conversation_id"],
-                    "agent_id": row["agent_id"],
-                    "kind": mirrored_event["kind"],
-                    "actor": "",
-                    "content": mirrored_event["content"],
-                    "metadata": mirrored_event["metadata"],
-                    "created_at": mirrored_event["created_at"],
-                })
+            if not duplicate:
+                persisted_result = dict(validated_payload)
+                persisted_result["completed_at"] = completed_at
+                persisted_result["status"] = decision.new_state
                 conn.execute(
-                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
-                    (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+                    """
+                    UPDATE routed_tasks
+                    SET status = ?, summary = ?, result_json = ?, updated_at = ?
+                    WHERE routed_task_id = ?
+                    """,
+                    (
+                        decision.new_state,
+                        validated_payload["summary"],
+                        ensure_json(persisted_result),
+                        completed_at,
+                        routed_task_id,
+                    ),
                 )
-        return {
-            "routed_task_id": routed_task_id,
-            "status": validated_payload["status"],
-            "events_written": bool(inserted_events),
-            "inserted_events": inserted_events,
-            "parent_conversation_id": task["parent_conversation_id"],
-            "origin_agent_id": task["origin_agent_id"],
-            "target_agent_id": task["target_agent_id"],
-        }
+                self._create_delivery(
+                    conn,
+                    target_agent_id=task["origin_agent_id"],
+                    kind="routed_result",
+                    payload={
+                        "routed_task_id": routed_task_id,
+                        "parent_conversation_id": task["parent_conversation_id"],
+                        "parent_external_conversation_ref": (
+                            str(parent_conversation["external_conversation_ref"] or "")
+                            if parent_conversation is not None
+                            else ""
+                        ),
+                        "result": persisted_result,
+                    },
+                    now=completed_at,
+                    delivery_id=uuid.uuid4().hex,
+                )
+                mirrored_event = self._insert_event(
+                    conn,
+                    event_id=primary_event_id,
+                    conversation_id=str(task["parent_conversation_id"] or ""),
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(
+                        validated_payload.get("summary")
+                        or validated_payload.get("full_text")
+                        or decision.new_state
+                    ),
+                    metadata={
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload["transition_id"],
+                    },
+                    created_at=completed_at,
+                )
+                if mirrored_event is not None:
+                    inserted_events.append(mirrored_event)
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                        (completed_at, task["parent_conversation_id"]),
+                    )
+            return {
+                "routed_task_id": routed_task_id,
+                "status": decision.new_state,
+                "duplicate": duplicate,
+                "events_written": bool(inserted_events),
+                "inserted_events": inserted_events,
+                "parent_conversation_id": task["parent_conversation_id"],
+                "origin_agent_id": task["origin_agent_id"],
+                "target_agent_id": task["target_agent_id"],
+            }
 
     def deregister(self, agent_token: str) -> dict[str, Any]:
         now = utcnow_iso()
@@ -1765,95 +2012,445 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 }
         return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
 
-    def add_conversation_action(self, conversation_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        validated_action, action_payload = validated_conversation_action(action, payload)
+    def add_conversation_action(
+        self,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope | dict[str, Any],
+    ) -> dict[str, Any]:
+        validated_envelope = validated_conversation_action(envelope)
+        action_payload = validated_action_payload(validated_envelope)
         with self._connect() as conn:
             conversation = conn.execute(
-                "SELECT target_agent_id, origin_channel, external_conversation_ref FROM conversations WHERE conversation_id = ?",
+                "SELECT target_agent_id, origin_channel, external_conversation_ref, title FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
             if conversation is None:
                 raise KeyError(conversation_id)
-            agent_row = conn.execute(
-                "SELECT bot_key FROM agents WHERE agent_id = ?",
-                (conversation["target_agent_id"],),
-            ).fetchone()
-            bot_key = ""
-            if agent_row is not None:
-                bot_key = str(agent_row["bot_key"] or "").strip()
-            if not bot_key:
-                raise ValueError(
-                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
-                )
             now = utcnow_iso()
-            event_id_for_action = uuid.uuid4().hex
-            self._create_delivery(
-                conn,
-                target_agent_id=conversation["target_agent_id"],
-                kind="channel_action",
-                payload={
-                    "conversation_id": conversation_id,
-                    "conversation_ref": conversation_id,
-                    "action": validated_action,
-                    "payload": action_payload,
-                    "channel": "registry",
-                    "bot_key": bot_key,
-                    "origin_channel": conversation["origin_channel"],
-                    "external_conversation_ref": conversation["external_conversation_ref"],
-                    "stable_event_id": event_id_for_action,
-                    "stable_created_at": now,
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            is_cancel = validated_action == "cancel_conversation"
-            if is_cancel:
-                event_kind = "task.status"
-                event_metadata = {"status": "cancelling"}
-                event_content = ""
-            else:
-                event_kind = "approval.decided"
-                decision = "rejected" if validated_action.startswith("reject") else "approved"
-                event_metadata = {
-                    "action": validated_action,
-                    "decided_by": "operator",
-                    "decision": decision,
-                }
-                event_content = json.dumps(action_payload) if action_payload else ""
-            event_id = event_id_for_action
-            conn.execute(
-                """INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(event_id) DO NOTHING""",
-                (event_id, conversation_id, "", event_kind, "operator", event_content, ensure_json(event_metadata), now),
-            )
-            update_fields = "updated_at = ?"
-            update_params: list[Any] = [now]
-            if is_cancel:
-                update_fields += ", status = ?"
-                update_params.append("cancelling")
-            update_params.append(conversation_id)
-            conn.execute(
-                f"UPDATE conversations SET {update_fields} WHERE conversation_id = ?",
-                update_params,
-            )
-            inserted_event_row = conn.execute(
-                "SELECT * FROM events WHERE event_id = ?", (event_id,)
-            ).fetchone()
             inserted_event = None
-            if inserted_event_row:
-                inserted_event = {
-                    "seq": inserted_event_row["seq"],
-                    "event_id": inserted_event_row["event_id"],
-                    "conversation_id": inserted_event_row["conversation_id"],
-                    "agent_id": inserted_event_row["agent_id"],
-                    "kind": inserted_event_row["kind"],
-                    "actor": inserted_event_row["actor"],
-                    "content": inserted_event_row["content"],
-                    "metadata": decode_json_field(inserted_event_row["metadata_json"], {}),
-                    "created_at": inserted_event_row["created_at"],
+            routed_tasks: list[dict[str, Any]] = []
+            duplicate = False
+
+            def _event_from_row(event_id: str) -> dict[str, Any] | None:
+                row = conn.execute(
+                    "SELECT * FROM events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "seq": row["seq"],
+                    "event_id": row["event_id"],
+                    "conversation_id": row["conversation_id"],
+                    "agent_id": row["agent_id"],
+                    "kind": row["kind"],
+                    "actor": row["actor"],
+                    "content": row["content"],
+                    "metadata": decode_json_field(row["metadata_json"], {}),
+                    "created_at": row["created_at"],
                 }
-        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
+
+            if validated_envelope.action in {"approve", "reject", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
+                agent_row = conn.execute(
+                    "SELECT bot_key FROM agents WHERE agent_id = ?",
+                    (conversation["target_agent_id"],),
+                ).fetchone()
+                bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
+                if not bot_key:
+                    raise ValueError(
+                        f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
+                    )
+                self._create_delivery(
+                    conn,
+                    target_agent_id=conversation["target_agent_id"],
+                    kind="channel_action",
+                    payload={
+                        "conversation_id": conversation_id,
+                        "conversation_ref": conversation_id,
+                        "action": validated_envelope.action,
+                        "payload": {} if action_payload is None else action_payload.model_dump(exclude_unset=True),
+                        "channel": "registry",
+                        "bot_key": bot_key,
+                        "origin_channel": conversation["origin_channel"],
+                        "external_conversation_ref": conversation["external_conversation_ref"],
+                        "stable_event_id": validated_envelope.action_id,
+                        "stable_created_at": now,
+                    },
+                    now=now,
+                    delivery_id=uuid.uuid4().hex,
+                )
+                if validated_envelope.action == "cancel_conversation":
+                    inserted_event = self._insert_event(
+                        conn,
+                        event_id=validated_envelope.action_id,
+                        conversation_id=conversation_id,
+                        agent_id="",
+                        kind="task.status",
+                        actor="operator",
+                        content="",
+                        metadata={"routed_task_id": "", "status": "cancelling"},
+                        created_at=now,
+                    )
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ?, status = ? WHERE conversation_id = ?",
+                        (now, "cancelling", conversation_id),
+                    )
+                else:
+                    inserted_event = self._insert_event(
+                        conn,
+                        event_id=validated_envelope.action_id,
+                        conversation_id=conversation_id,
+                        agent_id="",
+                        kind="approval.decided",
+                        actor="operator",
+                        content=json.dumps(action_payload.model_dump(exclude_unset=True)),
+                        metadata={
+                            "action": validated_envelope.action,
+                            "decided_by": "operator",
+                            "decision": "rejected" if validated_envelope.action in {"reject", "retry_skip", "recovery_discard"} else "approved",
+                        },
+                        created_at=now,
+                    )
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                        (now, conversation_id),
+                    )
+                duplicate = inserted_event is None
+                if inserted_event is None:
+                    inserted_event = _event_from_row(validated_envelope.action_id)
+                return CoordinationActionResult(
+                    conversation_id=conversation_id,
+                    action_id=validated_envelope.action_id,
+                    action=validated_envelope.action,
+                    accepted=True,
+                    duplicate=duplicate,
+                    event=inserted_event,
+                ).model_dump()
+
+            if validated_envelope.action == "delegate_tasks":
+                proposal = action_payload
+                task_entries = [
+                    self._delegation_task_metadata(task, status="proposed")
+                    for task in proposal.tasks
+                ]
+                delegation_evt = delegation_event(
+                    kind="delegation.proposed",
+                    proposal_id=validated_envelope.action_id,
+                    conversation_id=conversation_id,
+                    tasks=task_entries,
+                    created_at=now,
+                    content=proposal.title or "Delegation proposal",
+                )
+                inserted_event = self._insert_event(
+                    conn,
+                    event_id=delegation_evt["event_id"],
+                    conversation_id=conversation_id,
+                    agent_id="",
+                    kind=delegation_evt["kind"],
+                    actor="operator",
+                    content=delegation_evt["content"],
+                    metadata=delegation_evt["metadata"],
+                    created_at=delegation_evt["created_at"],
+                )
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                    (now, conversation_id),
+                )
+                duplicate = inserted_event is None
+                if inserted_event is None:
+                    inserted_event = _event_from_row(delegation_evt["event_id"])
+                return CoordinationActionResult(
+                    conversation_id=conversation_id,
+                    action_id=validated_envelope.action_id,
+                    action=validated_envelope.action,
+                    accepted=True,
+                    duplicate=duplicate,
+                    proposal_id=validated_envelope.action_id,
+                    event=inserted_event,
+                ).model_dump()
+
+            if validated_envelope.action == "approve_delegation":
+                proposal_id = action_payload.proposal_id
+                proposal_row = conn.execute(
+                    "SELECT * FROM events WHERE conversation_id = ? AND kind = ? AND json_extract(metadata_json, '$.proposal_id') = ? ORDER BY seq DESC LIMIT 1",
+                    (conversation_id, "delegation.proposed", proposal_id),
+                ).fetchone()
+                if proposal_row is None:
+                    raise ValueError(f"Unknown delegation proposal: {proposal_id}")
+                proposal_metadata = decode_json_field(proposal_row["metadata_json"], {})
+                task_entries = list(proposal_metadata.get("tasks", []))
+                if not task_entries:
+                    raise ValueError(f"Delegation proposal {proposal_id} has no tasks")
+                for index, entry in enumerate(task_entries):
+                    draft = DelegationTaskDraft.model_validate(
+                        {
+                            "draft_id": entry.get("draft_id", f"draft-{index + 1}"),
+                            "selector": {
+                                "kind": entry.get("selector_kind", "agent"),
+                                "value": entry.get("selector_value", entry.get("target", "")),
+                                "preferred_agent_id": entry.get("target", ""),
+                            },
+                            "title": entry.get("title", ""),
+                            "instructions": entry.get("instructions", ""),
+                            "priority": entry.get("priority", "normal"),
+                            "requested_capabilities": entry.get("requested_capabilities", []),
+                            "context": entry.get("context", {}),
+                        }
+                    )
+                    resolved_target = self._resolve_selector(conn, draft.selector)
+                    request = {
+                        "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, index),
+                        "parent_conversation_id": conversation_id,
+                        "origin_agent_id": conversation["target_agent_id"],
+                        "target_agent_id": resolved_target["agent_id"],
+                        "title": draft.title,
+                        "instructions": draft.instructions,
+                        "context": dict(draft.context),
+                        "requested_capabilities": list(draft.requested_capabilities),
+                        "priority": draft.priority,
+                        "created_at": now,
+                    }
+                    created = self._create_routed_task_in_tx(conn, request, now=now)
+                    routed_tasks.append({
+                        "routed_task_id": request["routed_task_id"],
+                        "target_agent_id": resolved_target["agent_id"],
+                        "authority_ref": "",
+                        "title": draft.title,
+                        "status": "queued",
+                    })
+                submitted_event = delegation_event(
+                    kind="delegation.submitted",
+                    proposal_id=proposal_id,
+                    conversation_id=conversation_id,
+                    tasks=[
+                        {
+                            **entry,
+                            "status": "submitted",
+                            "routed_task_id": routed_tasks[index]["routed_task_id"],
+                            "target": routed_tasks[index]["target_agent_id"],
+                        }
+                        for index, entry in enumerate(task_entries)
+                    ],
+                    created_at=now,
+                    content="Delegated work submitted",
+                )
+                inserted_event = self._insert_event(
+                    conn,
+                    event_id=f"delegation.submitted:{validated_envelope.action_id}",
+                    conversation_id=conversation_id,
+                    agent_id="",
+                    kind=submitted_event["kind"],
+                    actor="operator",
+                    content=submitted_event["content"],
+                    metadata=submitted_event["metadata"],
+                    created_at=submitted_event["created_at"],
+                )
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                    (now, conversation_id),
+                )
+                duplicate = inserted_event is None
+                if inserted_event is None:
+                    inserted_event = _event_from_row(f"delegation.submitted:{validated_envelope.action_id}")
+                return CoordinationActionResult(
+                    conversation_id=conversation_id,
+                    action_id=validated_envelope.action_id,
+                    action=validated_envelope.action,
+                    accepted=True,
+                    duplicate=duplicate,
+                    proposal_id=proposal_id,
+                    routed_tasks=routed_tasks,
+                    event=inserted_event,
+                ).model_dump()
+
+            if validated_envelope.action == "direct_assign":
+                assignment = action_payload
+                resolved_target = self._resolve_selector(conn, assignment.selector)
+                request = {
+                    "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, 0),
+                    "parent_conversation_id": conversation_id,
+                    "origin_agent_id": conversation["target_agent_id"],
+                    "target_agent_id": resolved_target["agent_id"],
+                    "title": assignment.title,
+                    "instructions": assignment.instructions,
+                    "context": dict(assignment.context),
+                    "requested_capabilities": list(assignment.requested_capabilities),
+                    "priority": assignment.priority,
+                    "created_at": now,
+                }
+                created = self._create_routed_task_in_tx(conn, request, now=now)
+                routed_tasks.append({
+                    "routed_task_id": request["routed_task_id"],
+                    "target_agent_id": resolved_target["agent_id"],
+                    "authority_ref": "",
+                    "title": assignment.title,
+                    "status": "queued",
+                })
+                submitted_event = delegation_event(
+                    kind="delegation.submitted",
+                    proposal_id=validated_envelope.action_id,
+                    conversation_id=conversation_id,
+                    tasks=[
+                        {
+                            "draft_id": validated_envelope.action_id,
+                            "title": assignment.title,
+                            "target": resolved_target["agent_id"],
+                            "status": "submitted",
+                            "routed_task_id": request["routed_task_id"],
+                            "selector_kind": assignment.selector.kind,
+                            "selector_value": assignment.selector.value,
+                            "instructions": assignment.instructions,
+                            "priority": assignment.priority,
+                            "requested_capabilities": list(assignment.requested_capabilities),
+                            "context": dict(assignment.context),
+                        }
+                    ],
+                    created_at=now,
+                    content="Direct assignment submitted",
+                )
+                inserted_event = self._insert_event(
+                    conn,
+                    event_id=f"delegation.submitted:{validated_envelope.action_id}",
+                    conversation_id=conversation_id,
+                    agent_id="",
+                    kind=submitted_event["kind"],
+                    actor="operator",
+                    content=submitted_event["content"],
+                    metadata=submitted_event["metadata"],
+                    created_at=submitted_event["created_at"],
+                )
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                    (now, conversation_id),
+                )
+                duplicate = inserted_event is None
+                if inserted_event is None:
+                    inserted_event = _event_from_row(f"delegation.submitted:{validated_envelope.action_id}")
+                return CoordinationActionResult(
+                    conversation_id=conversation_id,
+                    action_id=validated_envelope.action_id,
+                    action=validated_envelope.action,
+                    accepted=True,
+                    duplicate=duplicate,
+                    proposal_id=validated_envelope.action_id,
+                    routed_tasks=routed_tasks,
+                    event=inserted_event,
+                ).model_dump()
+
+            if validated_envelope.action in {"cancel_task", "retry_task", "cancel_delegation"}:
+                if validated_envelope.action == "cancel_delegation":
+                    inserted_event = self._insert_event(
+                        conn,
+                        event_id=validated_envelope.action_id,
+                        conversation_id=conversation_id,
+                        agent_id="",
+                        kind="approval.decided",
+                        actor="operator",
+                        content="",
+                        metadata={
+                            "action": validated_envelope.action,
+                            "decided_by": "operator",
+                            "decision": "rejected",
+                        },
+                        created_at=now,
+                    )
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                        (now, conversation_id),
+                    )
+                    duplicate = inserted_event is None
+                    if inserted_event is None:
+                        inserted_event = _event_from_row(validated_envelope.action_id)
+                    return CoordinationActionResult(
+                        conversation_id=conversation_id,
+                        action_id=validated_envelope.action_id,
+                        action=validated_envelope.action,
+                        accepted=True,
+                        duplicate=duplicate,
+                        proposal_id=action_payload.proposal_id,
+                        event=inserted_event,
+                    ).model_dump()
+
+                routed_task_id = action_payload.routed_task_id
+                task_row = conn.execute(
+                    "SELECT * FROM routed_tasks WHERE routed_task_id = ? AND parent_conversation_id = ?",
+                    (routed_task_id, conversation_id),
+                ).fetchone()
+                if task_row is None:
+                    raise ValueError(f"Unknown task {routed_task_id} for conversation {conversation_id}")
+                if validated_envelope.action == "retry_task":
+                    request = decode_json_field(task_row["request_json"], {})
+                    request["routed_task_id"] = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
+                    request["created_at"] = now
+                    request["parent_conversation_id"] = conversation_id
+                    created = self._create_routed_task_in_tx(conn, request, now=now)
+                    routed_tasks.append({
+                        "routed_task_id": request["routed_task_id"],
+                        "target_agent_id": request["target_agent_id"],
+                        "authority_ref": "",
+                        "title": request["title"],
+                        "status": "queued",
+                    })
+                    inserted_event = created.get("event")
+                else:
+                    snapshot = RoutedTaskSnapshot(
+                        status=str(task_row["status"] or "queued"),
+                    )
+                    decision = apply_task_transition(
+                        snapshot,
+                        TaskTransitionRequest(
+                            transition="cancel",
+                            actor_role="operator",
+                            transition_id=validated_envelope.action_id,
+                            occurred_at=now,
+                        ),
+                    )
+                    if not decision.ok:
+                        raise ValueError(decision.reason or f"Task {routed_task_id} cannot be cancelled")
+                    conn.execute(
+                        "UPDATE routed_tasks SET status = ?, summary = ?, updated_at = ? WHERE routed_task_id = ?",
+                        ("cancelled", "Cancelled by operator.", now, routed_task_id),
+                    )
+                    inserted_event = self._insert_event(
+                        conn,
+                        event_id=validated_envelope.action_id,
+                        conversation_id=conversation_id,
+                        agent_id="",
+                        kind="task.status",
+                        actor="operator",
+                        content="Cancelled by operator.",
+                        metadata={
+                            "routed_task_id": routed_task_id,
+                            "status": "cancelled",
+                            "transition_id": validated_envelope.action_id,
+                        },
+                        created_at=now,
+                    )
+                    routed_tasks.append({
+                        "routed_task_id": routed_task_id,
+                        "target_agent_id": str(task_row["target_agent_id"] or ""),
+                        "authority_ref": "",
+                        "title": str(task_row["title"] or ""),
+                        "status": "cancelled",
+                    })
+                conn.execute(
+                    "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                    (now, conversation_id),
+                )
+                duplicate = inserted_event is None
+                if inserted_event is None:
+                    inserted_event = _event_from_row(validated_envelope.action_id)
+                return CoordinationActionResult(
+                    conversation_id=conversation_id,
+                    action_id=validated_envelope.action_id,
+                    action=validated_envelope.action,
+                    accepted=True,
+                    duplicate=duplicate,
+                    routed_tasks=routed_tasks,
+                    event=inserted_event,
+                ).model_dump()
+
+            raise ValueError(f"Unsupported action: {validated_envelope.action}")
 
     def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
         fetch_limit = limit + 1
@@ -1893,6 +2490,36 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             }
             for row in rows
         ]
+
+    def get_task(self, routed_task_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
+                FROM routed_tasks t
+                LEFT JOIN agents origin ON origin.agent_id = t.origin_agent_id
+                LEFT JOIN agents target ON target.agent_id = t.target_agent_id
+                WHERE t.routed_task_id = ?
+                """,
+                (routed_task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(routed_task_id)
+        return {
+            "routed_task_id": row["routed_task_id"],
+            "parent_conversation_id": row["parent_conversation_id"],
+            "origin_agent_id": row["origin_agent_id"],
+            "origin_display_name": row["origin_name"] or "",
+            "target_agent_id": row["target_agent_id"],
+            "target_display_name": row["target_name"] or "",
+            "title": row["title"],
+            "status": row["status"],
+            "summary": row["summary"],
+            "request": decode_json_field(row["request_json"], {}),
+            "result": decode_json_field(row["result_json"], {}),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         with self._connect() as conn:

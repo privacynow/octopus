@@ -254,6 +254,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
             payload_json=UpdateRoutedTaskStatusPayload(
                 routed_task_id="task-1",
                 status="running",
+                transition_id="transition-1",
                 summary="halfway",
                 timeline_events=[
                     TimelineEventPayload(
@@ -279,6 +280,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
             payload_json=ReportTaskResultPayload(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="transition-2",
                 summary="done",
                 full_text="all good",
                 artifacts=[{"path": "/tmp/report.txt"}],
@@ -326,7 +328,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert client.submitted_tasks[0].context == {"severity": "high"}
     assert client.status_updates[0][1].timeline_events[0].event_id == "evt-1"
     assert client.status_updates[0][1].progress == 50
+    assert client.status_updates[0][1].transition_id == "transition-1"
     assert client.status_updates[0][1].updated_at == "2026-03-20T00:00:10+00:00"
+    assert client.reported_results[0][1].transition_id == "transition-2"
     assert client.reported_results[0][1].artifacts == [{"path": "/tmp/report.txt"}]
     assert client.last_search.exclude_agent_ids == ["self-alpha"]
 

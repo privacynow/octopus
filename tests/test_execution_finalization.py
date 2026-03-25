@@ -276,7 +276,7 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) -> None:
+async def test_finalization_report_failure_emits_failed_fallback(caplog) -> None:
     status_updates: list[tuple[str, object]] = []
 
     class FailingTaskRouting:
@@ -319,5 +319,5 @@ async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) 
     authority_ref, update = status_updates[0]
     assert authority_ref == registry_authority_ref("default")
     assert update.routed_task_id == "task-5"
-    assert update.status == "partialfailed"
+    assert update.status == "failed"
     assert "could not be delivered" in update.summary

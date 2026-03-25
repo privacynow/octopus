@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -102,6 +103,154 @@ class RoutedTaskRequest(BaseModel):
         return utcnow_iso() if not str(value or "").strip() else str(value)
 
 
+class TargetSelector(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["agent", "capability", "role"] = "agent"
+    value: str = Field(..., min_length=1)
+    preferred_agent_id: str = ""
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def normalize_value(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value must not be blank")
+        return text
+
+
+class DelegationTaskDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
+    selector: TargetSelector
+    authority_ref: str = ""
+    title: str = Field(..., min_length=1)
+    instructions: str = Field(..., min_length=1)
+    priority: str = "normal"
+    requested_capabilities: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class DelegationIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = ""
+    resume_instruction: str = ""
+    tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
+
+
+class DirectAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selector: TargetSelector
+    title: str = Field(..., min_length=1)
+    instructions: str = Field(..., min_length=1)
+    priority: str = "normal"
+    requested_capabilities: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ApproveRejectActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(..., min_length=1)
+
+
+class RetryDecisionActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(..., min_length=1)
+
+
+class RecoveryActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    update_id: int = Field(..., gt=0)
+
+
+class DirectAssignActionPayload(DirectAssignmentRequest):
+    pass
+
+
+class DelegateTasksActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = ""
+    resume_instruction: str = ""
+    tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
+
+
+class ApproveDelegationActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: str = Field(..., min_length=1)
+
+
+class CancelDelegationActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: str = Field(..., min_length=1)
+
+
+class CancelTaskActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    routed_task_id: str = Field(..., min_length=1)
+
+
+class RetryTaskActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    routed_task_id: str = Field(..., min_length=1)
+
+
+class CoordinationActionEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: str = Field(..., min_length=1)
+    action: Literal[
+        "approve",
+        "reject",
+        "cancel_conversation",
+        "retry_allow",
+        "retry_skip",
+        "recovery_discard",
+        "recovery_replay",
+        "direct_assign",
+        "delegate_tasks",
+        "approve_delegation",
+        "cancel_delegation",
+        "cancel_task",
+        "retry_task",
+    ]
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class RoutedTaskRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    routed_task_id: str = Field(..., min_length=1)
+    target_agent_id: str = ""
+    authority_ref: str = ""
+    title: str = ""
+    status: str = ""
+
+
+class CoordinationActionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(..., min_length=1)
+    action_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+    accepted: bool = True
+    duplicate: bool = False
+    status: str = ""
+    proposal_id: str = ""
+    routed_tasks: list[RoutedTaskRef] = Field(default_factory=list)
+    event: dict[str, Any] | None = None
+
+
 class TimelineEventPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -121,6 +270,7 @@ class RoutedTaskUpdate(BaseModel):
 
     routed_task_id: str
     status: str
+    transition_id: str = Field(..., min_length=1)
     summary: str = ""
     timeline_events: list[TimelineEventPayload] = Field(default_factory=list)
     progress: int | None = None
@@ -137,6 +287,7 @@ class RoutedTaskResult(BaseModel):
 
     routed_task_id: str
     status: str
+    transition_id: str = Field(..., min_length=1)
     summary: str = ""
     full_text: str = ""
     artifacts: list[dict[str, Any]] = Field(default_factory=list)

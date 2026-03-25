@@ -10,6 +10,11 @@ from uuid import uuid4
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand
+from app.control_plane.requests import (
+    AddConversationMessagePayload,
+    SubmitConversationActionPayload,
+)
+from octopus_sdk.registry.models import CoordinationActionEnvelope, CoordinationActionResult
 
 log = logging.getLogger(__name__)
 
@@ -183,8 +188,8 @@ class BusConversationProjection:
         authorities = sorted(
             self._directory.authorities_for_capability("conversation_projection")
         )
-
-        # On cache miss, recover canonical identity from any healthy authority
+        if not authorities:
+            return
         if conversation_id not in self._identity_cache and authorities:
             recovery_authority = authorities[0]
             try:
@@ -209,18 +214,12 @@ class BusConversationProjection:
                             "external_conversation_ref": ecr,
                             "title": conv.get("title", ""),
                         }
-                        log.info(
-                            "Recovered canonical identity for conversation %s from %s",
-                            conversation_id,
-                            recovery_authority,
-                        )
             except Exception:
                 log.warning(
                     "Failed to recover canonical identity for conversation %s",
                     conversation_id,
                     exc_info=True,
                 )
-
         for authority_ref in authorities:
             cached = self._identity_cache.get(conversation_id)
             if not cached:
@@ -230,18 +229,8 @@ class BusConversationProjection:
                     authority_ref,
                 )
                 continue
-
-            # Ensure conversation row exists on this authority (idempotent)
             try:
                 resolved_agent_id = self._resolved_agent_id(authority_ref)
-            except RuntimeError:
-                log.warning(
-                    "publish_events: missing agent_id for authority %s; skipping create-before-publish for %s",
-                    authority_ref,
-                    conversation_id,
-                )
-                continue
-            try:
                 create_payload = json.dumps({
                     "target_agent_id": resolved_agent_id,
                     "origin_channel": cached["origin_channel"],
@@ -255,7 +244,10 @@ class BusConversationProjection:
                         operation="create_conversation",
                         payload_json=create_payload,
                         authority_ref=authority_ref,
-                        idempotency_key=f"{resolved_agent_id}:{cached['origin_channel']}:{cached['external_conversation_ref']}",
+                        idempotency_key=(
+                            f"{resolved_agent_id}:{cached['origin_channel']}:"
+                            f"{cached['external_conversation_ref']}"
+                        ),
                     ),
                     timeout_seconds=self.bus_timeout_seconds,
                 )
@@ -266,8 +258,6 @@ class BusConversationProjection:
                     conversation_id,
                     exc_info=True,
                 )
-
-            # Publish events
             payload = json.dumps({
                 "conversation_id": conversation_id,
                 "events": [e.model_dump() for e in events],
@@ -291,21 +281,111 @@ class BusConversationProjection:
                     exc_info=True,
                 )
                 try:
-                    await self._bus.submit(ControlCommand(
-                        command_id=uuid4().hex,
-                        capability="mirror_retry",
-                        operation="publish_events",
-                        payload_json=json.dumps({
-                            "conversation_id": conversation_id,
-                            "events": [e.model_dump() for e in events],
-                        }),
-                        authority_ref=authority_ref,
-                        idempotency_key=f"mirror:publish:{conversation_id}:{','.join(e.event_id for e in events)}",
-                        max_retries=10,
-                    ))
+                    await self._bus.submit(
+                        ControlCommand(
+                            command_id=uuid4().hex,
+                            capability="mirror_retry",
+                            operation="publish_events",
+                            payload_json=payload,
+                            authority_ref=authority_ref,
+                            idempotency_key=(
+                                f"mirror:publish:{conversation_id}:"
+                                f"{','.join(e.event_id for e in events)}"
+                            ),
+                            max_retries=10,
+                        )
+                    )
                 except Exception:
                     log.warning(
                         "Failed to submit mirror_retry publish_events for %s",
                         authority_ref,
                         exc_info=True,
                     )
+
+    async def add_message(
+        self,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> dict:
+        authorities = sorted(
+            self._directory.authorities_for_capability("conversation_projection")
+        )
+        if not authorities:
+            raise RuntimeError("no authority registered for conversation_projection")
+        payload = AddConversationMessagePayload(
+            conversation_id=conversation_id,
+            text=text,
+        )
+        first_success: dict | None = None
+        last_error = "add_message failed on all authorities"
+        for authority_ref in authorities:
+            try:
+                reply = await self._bus.request(
+                    ControlCommand(
+                        command_id=uuid4().hex,
+                        capability="conversation_projection",
+                        operation="add_message",
+                        payload_json=payload.model_dump_json(),
+                        authority_ref=authority_ref,
+                        idempotency_key=f"{conversation_id}:message:{text}",
+                    ),
+                    timeout_seconds=self.bus_timeout_seconds,
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            if reply.status == "failed":
+                last_error = reply.error or last_error
+                continue
+            result = json.loads(reply.result_json or "{}")
+            if first_success is None:
+                first_success = result
+        if first_success is None:
+            raise RuntimeError(last_error)
+        return first_success
+
+    async def submit_action(
+        self,
+        *,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        authorities = sorted(
+            self._directory.authorities_for_capability("conversation_projection")
+        )
+        if not authorities:
+            raise RuntimeError("no authority registered for conversation_projection")
+        payload = SubmitConversationActionPayload(
+            conversation_id=conversation_id,
+            envelope=envelope,
+        )
+        first_success: CoordinationActionResult | None = None
+        last_error = "submit_action failed on all authorities"
+        for authority_ref in authorities:
+            try:
+                reply = await self._bus.request(
+                    ControlCommand(
+                        command_id=uuid4().hex,
+                        capability="conversation_projection",
+                        operation="submit_action",
+                        payload_json=payload.model_dump_json(),
+                        authority_ref=authority_ref,
+                        idempotency_key=envelope.action_id,
+                    ),
+                    timeout_seconds=self.bus_timeout_seconds,
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            if reply.status == "failed":
+                last_error = reply.error or last_error
+                continue
+            result = CoordinationActionResult.model_validate_json(
+                reply.result_json or "{}"
+            )
+            if result.accepted and first_success is None:
+                first_success = result
+        if first_success is None:
+            raise RuntimeError(last_error)
+        return first_success

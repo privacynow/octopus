@@ -8,6 +8,7 @@ from octopus_sdk.registry.models import AgentCard
 from octopus_sdk.registry.client import RegistryClient as SdkRegistryClient
 from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.registry.models import AgentDiscoveryQuery
+from octopus_sdk.registry.models import CoordinationActionEnvelope
 from octopus_sdk.realtime import ConversationProgressUpdate as SdkConversationProgressUpdate
 from octopus_sdk.registry.models import RoutedTaskRequest
 from octopus_sdk.registry.models import RoutedTaskResult
@@ -69,6 +70,16 @@ class AgentRegistryClient(SdkRegistryClient):
 
     async def search(self, query: AgentDiscoveryQuery) -> list[dict[str, object]]:
         return await super().search(query)
+
+    async def add_message(self, conversation_id: str, text: str) -> dict[str, object]:
+        return await super().add_message(conversation_id, text)
+
+    async def submit_action(
+        self,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> dict[str, object]:
+        return await super().submit_action(conversation_id, envelope)
 
     async def submit_routed_task(self, request: RoutedTaskRequest) -> dict[str, object]:
         return await super().submit_routed_task(request)

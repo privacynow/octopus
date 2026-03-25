@@ -16,6 +16,8 @@ from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.registry.models import (
     AgentCard,
     AgentDiscoveryQuery,
+    CoordinationActionEnvelope,
+    CoordinationActionResult,
     ConversationCreate,
     ConversationProgressUpdate,
     RoutedTaskRequest,
@@ -158,6 +160,26 @@ class RegistryClient:
     async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/conversations/{conversation_id}")
 
+    async def add_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/messages",
+            json={"text": text},
+        )
+
+    async def submit_action(
+        self,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope | Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = _validated_model(envelope, CoordinationActionEnvelope)
+        result = await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/actions",
+            json=payload.model_dump(exclude_unset=True),
+        )
+        return CoordinationActionResult.model_validate(result).model_dump()
+
     async def get_agent_status(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/agents/{agent_id}/status")
 
@@ -277,6 +299,7 @@ class RegistryClient:
         # The routed task id is carried in the URL path; the registry rejects it in the body.
         body.pop("routed_task_id", None)
         body["updated_at"] = payload.updated_at
+        body["transition_id"] = payload.transition_id
         return await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/status",
@@ -293,6 +316,7 @@ class RegistryClient:
         # The routed task id is carried in the URL path; the registry rejects it in the body.
         body.pop("routed_task_id", None)
         body["completed_at"] = payload.completed_at
+        body["transition_id"] = payload.transition_id
         return await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/result",

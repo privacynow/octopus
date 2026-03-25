@@ -89,7 +89,12 @@ async def test_task_routing_result_timeout_returns_typed_unavailable() -> None:
     result = await adapter.report_routed_task_result(
         routed_task_id="task-1",
         authority_ref="registry:alpha",
-        result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
+        result=RoutedTaskResult(
+            routed_task_id="task-1",
+            status="completed",
+            transition_id="transition-1",
+            summary="done",
+        ),
     )
 
     assert result.status == "unavailable"
@@ -104,6 +109,7 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
         update=RoutedTaskUpdate(
             routed_task_id="task-1",
             status="running",
+            transition_id="transition-2",
             summary="halfway",
             timeline_events=(
                 {
@@ -124,8 +130,9 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
     payload = json.loads(bus.submitted[0].payload_json)
     assert payload["progress"] == 50
     assert payload["updated_at"] == "2026-03-20T00:00:00+00:00"
+    assert payload["transition_id"] == "transition-2"
     assert payload["timeline_events"][0]["event_id"] == "evt-1"
-    assert bus.submitted[0].idempotency_key == "task-1:2026-03-20T00:00:00+00:00"
+    assert bus.submitted[0].idempotency_key == "transition-2"
 
 
 async def test_agent_directory_scatter_gather_returns_partial_result_on_timeout() -> None:

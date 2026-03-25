@@ -89,6 +89,7 @@ class DelegatedTask:
 class PendingDelegation:
     """Parent-side delegated work waiting for child results."""
     conversation_ref: str
+    proposal_id: str = ""
     title: str = ""
     resume_instruction: str = ""
     tasks: list[DelegatedTask] = field(default_factory=list)

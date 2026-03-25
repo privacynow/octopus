@@ -36,6 +36,7 @@ class SubmitRoutedTaskPayload(BaseModel):
 class UpdateRoutedTaskStatusPayload(BaseModel):
     routed_task_id: str = Field(..., min_length=1)
     status: str = Field(..., min_length=1)
+    transition_id: str = Field(..., min_length=1)
     summary: str = ""
     timeline_events: list[TimelineEventPayload] = Field(default_factory=list)
     progress: int | None = None
@@ -45,6 +46,7 @@ class UpdateRoutedTaskStatusPayload(BaseModel):
 class ReportTaskResultPayload(BaseModel):
     routed_task_id: str = Field(..., min_length=1)
     status: str = Field(..., min_length=1)
+    transition_id: str = Field(..., min_length=1)
     summary: str = ""
     full_text: str = ""
     artifacts: list[dict[str, Any]] = Field(default_factory=list)

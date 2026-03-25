@@ -76,6 +76,7 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
     update = UpdateRoutedTaskStatusPayload(
         routed_task_id="task-1",
         status="running",
+        transition_id="task-1-running",
         summary="halfway",
         timeline_events=[event],
         progress=50,
@@ -84,6 +85,7 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
     result = ReportTaskResultPayload(
         routed_task_id="task-1",
         status="completed",
+        transition_id="task-1-complete",
         summary="done",
         full_text="all done",
         artifacts=[{"path": "/tmp/out.txt"}],

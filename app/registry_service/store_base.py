@@ -18,6 +18,18 @@ from app.content_models import (
 )
 
 from app.runtime_health import report_from_dict, report_to_dict
+from octopus_sdk.registry.models import (
+    ApproveDelegationActionPayload,
+    ApproveRejectActionPayload,
+    CancelDelegationActionPayload,
+    CancelTaskActionPayload,
+    CoordinationActionEnvelope,
+    DelegateTasksActionPayload,
+    DirectAssignActionPayload,
+    RecoveryActionPayload,
+    RetryDecisionActionPayload,
+    RetryTaskActionPayload,
+)
 
 _OFFLINE_AFTER_SECONDS = 60
 _MISSING = object()
@@ -26,7 +38,6 @@ PROTECTED_ROUTED_TASK_STATUSES = (
     "failed",
     "cancelled",
     "timed_out",
-    "partialfailed",
 )
 VALID_ACK_CLASSIFICATIONS = ("accepted", "rejected", "retry_later")
 VALID_REGISTRY_SCOPES = ("full", "channel", "coordination")
@@ -35,6 +46,11 @@ VALID_REGISTRY_SCOPES = ("full", "channel", "coordination")
 def hash_agent_token(token: str) -> str:
     """Return the stable server-side digest used for agent bearer-token lookup."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def stable_routed_task_id(conversation_id: str, action_id: str, index: int) -> str:
+    raw = f"{conversation_id}:{action_id}:{index}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:32]
 
 
 class CapabilityDisabledError(RuntimeError):
@@ -381,11 +397,12 @@ def validated_routed_task_status_payload(payload: dict[str, Any]) -> dict[str, A
     data = _require_mapping(payload, "routed_task_status payload")
     _reject_unknown_fields(
         data,
-        allowed_fields={"status", "summary", "timeline_events", "progress", "updated_at"},
+        allowed_fields={"status", "transition_id", "summary", "timeline_events", "progress", "updated_at"},
         field_name="routed_task_status payload",
     )
     normalized = {
         "status": _required_text(data.get("status"), "status"),
+        "transition_id": _required_text(data.get("transition_id"), "transition_id"),
         "summary": str(data.get("summary", "") or ""),
         "timeline_events": [],
     }
@@ -412,6 +429,7 @@ def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, A
         data,
         allowed_fields={
             "status",
+            "transition_id",
             "summary",
             "full_text",
             "artifacts",
@@ -422,6 +440,7 @@ def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, A
     )
     normalized = {
         "status": _required_text(data.get("status"), "status"),
+        "transition_id": _required_text(data.get("transition_id"), "transition_id"),
         "summary": str(data.get("summary", "") or ""),
         "full_text": str(data.get("full_text", "") or ""),
     }
@@ -453,13 +472,39 @@ def validated_conversation_message_text(text: Any) -> str:
     return value
 
 
-def validated_conversation_action(action: Any, payload: Any) -> tuple[str, dict[str, Any]]:
-    normalized_action = _required_text(action, "action")
-    if payload in (None, ""):
-        return normalized_action, {}
-    if not isinstance(payload, dict):
-        raise ValueError("payload must be an object")
-    return normalized_action, payload
+def validated_conversation_action(payload: Any) -> CoordinationActionEnvelope:
+    try:
+        envelope = CoordinationActionEnvelope.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    return envelope
+
+
+def validated_action_payload(envelope: CoordinationActionEnvelope) -> Any:
+    payload = dict(envelope.payload)
+    if envelope.action in {"approve", "reject"}:
+        return ApproveRejectActionPayload.model_validate(payload)
+    if envelope.action in {"retry_allow", "retry_skip"}:
+        return RetryDecisionActionPayload.model_validate(payload)
+    if envelope.action in {"recovery_discard", "recovery_replay"}:
+        return RecoveryActionPayload.model_validate(payload)
+    if envelope.action == "direct_assign":
+        return DirectAssignActionPayload.model_validate(payload)
+    if envelope.action == "delegate_tasks":
+        return DelegateTasksActionPayload.model_validate(payload)
+    if envelope.action == "approve_delegation":
+        return ApproveDelegationActionPayload.model_validate(payload)
+    if envelope.action == "cancel_delegation":
+        return CancelDelegationActionPayload.model_validate(payload)
+    if envelope.action == "cancel_task":
+        return CancelTaskActionPayload.model_validate(payload)
+    if envelope.action == "retry_task":
+        return RetryTaskActionPayload.model_validate(payload)
+    if envelope.action == "cancel_conversation":
+        if payload:
+            raise ValueError("cancel_conversation does not accept a payload")
+        return None
+    raise ValueError(f"Unsupported action: {envelope.action}")
 
 
 def decode_json_field(value: Any, default: Any) -> Any:
@@ -573,7 +618,7 @@ def routed_task_created_event(request: dict[str, Any]) -> dict[str, Any]:
         "conversation_id": str(request["parent_conversation_id"]),
         "kind": "task.status",
         "content": title,
-        "metadata": {"status": "queued"},
+        "metadata": {"routed_task_id": routed_task_id, "status": "queued"},
         "created_at": created_at,
     }
 
@@ -585,7 +630,11 @@ def routed_task_progress_event(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     created_at = str(payload.get("updated_at") or utcnow_iso())
-    metadata: dict[str, Any] = {"status": str(payload["status"])}
+    metadata: dict[str, Any] = {
+        "routed_task_id": routed_task_id,
+        "status": str(payload["status"]),
+        "transition_id": str(payload.get("transition_id", "")),
+    }
     if payload.get("progress") is not None:
         metadata["progress"] = payload["progress"]
     return {
@@ -614,7 +663,33 @@ def routed_task_result_event(
         "conversation_id": parent_conversation_id,
         "kind": "task.status",
         "content": content,
-        "metadata": {"status": str(payload["status"])},
+        "metadata": {
+            "routed_task_id": routed_task_id,
+            "status": str(payload["status"]),
+            "transition_id": str(payload.get("transition_id", "")),
+        },
+        "created_at": created_at,
+    }
+
+
+def delegation_event(
+    *,
+    kind: Literal["delegation.proposed", "delegation.submitted", "delegation.completed"],
+    proposal_id: str,
+    conversation_id: str,
+    tasks: list[dict[str, Any]],
+    created_at: str,
+    content: str = "",
+) -> dict[str, Any]:
+    return {
+        "event_id": f"{kind}:{proposal_id}",
+        "conversation_id": conversation_id,
+        "kind": kind,
+        "content": content,
+        "metadata": {
+            "proposal_id": proposal_id,
+            "tasks": tasks,
+        },
         "created_at": created_at,
     }
 
@@ -716,12 +791,17 @@ class AbstractRegistryStore(Protocol):
         """Queue a follow-up channel_input for an existing conversation."""
 
     def add_conversation_action(
-        self, conversation_id: str, action: str, payload: dict[str, Any] | None = None
+        self,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope | dict[str, Any],
     ) -> dict[str, Any]:
-        """Queue a channel_action for an existing conversation."""
+        """Submit a typed coordination action for an existing conversation."""
 
     def list_tasks(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, status: str = "") -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form with offset-based pagination."""
+
+    def get_task(self, routed_task_id: str) -> dict[str, Any]:
+        """Return one routed task in UI-ready form."""
 
     def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist events for a conversation. Idempotent on event_id (ON CONFLICT DO NOTHING)."""

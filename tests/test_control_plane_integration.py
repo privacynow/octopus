@@ -371,6 +371,7 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="task-1-complete",
                 summary="done",
                 full_text="full delegated result",
             ),
@@ -432,12 +433,22 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
             "created_at": "2026-03-20T00:00:00+00:00",
         }
     )
+    seeded.store.update_routed_task_status(
+        seeded.local_agent_token,
+        "task-status-1",
+        {
+            "status": "leased",
+            "transition_id": "task-status-1-lease",
+            "updated_at": "2026-03-20T00:00:05+00:00",
+        },
+    )
 
     async with _running_registry_processor(config):
         await services.control_plane.task_routing.update_routed_task_status(
             update=RoutedTaskUpdate(
                 routed_task_id="task-status-1",
                 status="running",
+                transition_id="task-status-1-running",
                 summary="halfway",
                 timeline_events=(
                     {
@@ -464,10 +475,9 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
 
     assert task["status"] == "running"
     assert task["summary"] == "halfway"
-    assert [event["metadata"].get("status") for event in timeline if event["kind"] == "task.status"] == [
-        "queued",
-        "running",
-    ]
+    status_events = [event["metadata"].get("status") for event in timeline if event["kind"] == "task.status"]
+    assert status_events[:2] == ["queued", "leased"]
+    assert status_events[-1] == "running"
     assert any(event["event_id"] == "evt-1" for event in timeline)
     assert any(event["metadata"].get("progress") == 50 for event in timeline)
 
@@ -541,12 +551,12 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
             ),
         )
         await _wait_for(
-            lambda: seeded.store.list_tasks()[0]["status"] == "partialfailed",
+            lambda: seeded.store.list_tasks()[0]["status"] == "failed",
             message="fallback routed-task status did not reach registry store",
         )
 
     task = seeded.store.list_tasks()[0]
 
     assert result.routed_result_status == "report_failed"
-    assert task["status"] == "partialfailed"
+    assert task["status"] == "failed"
     assert "could not be delivered" in task["summary"]

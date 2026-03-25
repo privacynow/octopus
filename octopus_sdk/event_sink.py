@@ -71,13 +71,13 @@ class NoOpEventSink:
     async def on_error(self, content: str, *, error_type: str = "execution", message: str = "") -> None:
         pass
 
-    async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_proposed(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         pass
 
-    async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_submitted(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         pass
 
-    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_completed(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         pass
 
 
@@ -277,31 +277,31 @@ class RegistryEventSink:
             },
         )
 
-    async def on_delegation_proposed(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_proposed(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         if not tasks:
             return
         await self._publish(
             "delegation.proposed",
             event_id=f"exec:{self._execution_event_prefix}:delegation:proposed",
-            metadata={"tasks": tasks},
+            metadata={"proposal_id": proposal_id, "tasks": tasks},
         )
 
-    async def on_delegation_submitted(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_submitted(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         if not tasks:
             return
         await self._publish(
             "delegation.submitted",
             event_id=f"exec:{self._execution_event_prefix}:delegation:submitted",
-            metadata={"tasks": tasks},
+            metadata={"proposal_id": proposal_id, "tasks": tasks},
         )
 
-    async def on_delegation_completed(self, tasks: list[dict[str, str]]) -> None:
+    async def on_delegation_completed(self, tasks: list[dict[str, str]], *, proposal_id: str) -> None:
         if not tasks:
             return
         await self._publish(
             "delegation.completed",
             event_id=f"exec:{self._execution_event_prefix}:delegation:completed",
-            metadata={"tasks": tasks},
+            metadata={"proposal_id": proposal_id, "tasks": tasks},
         )
 
 

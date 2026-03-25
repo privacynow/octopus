@@ -14,7 +14,6 @@ from typing import Any, Awaitable, Callable
 from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.approvals import build_preflight_prompt
 from octopus_sdk.channels import ChannelDescriptor
-from octopus_sdk.delegation import DelegationIntentParser, XmlTagDelegationParser
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.execution_events import ExecutionEventSink
 from octopus_sdk.formatting import extract_send_directives
@@ -30,7 +29,6 @@ from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 
 _log = logging.getLogger(__name__)
-_DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
 
 
 def _progress_working() -> str:
@@ -136,7 +134,6 @@ class ExecutionRuntime:
     send_directed_artifacts: Callable[..., Awaitable[None]]
     send_compact_reply: Callable[..., Awaitable[None]]
     propose_delegation_plan: Callable[..., Awaitable[RequestExecutionOutcome]]
-    delegation_parser: DelegationIntentParser | None = field(default=None)
     agent_directory: AgentDirectoryPort | None = field(default=None)
 
 
@@ -255,17 +252,6 @@ async def _discover_available_agents(
     except Exception:
         _log.debug("Agent discovery failed, proceeding without agent context", exc_info=True)
         return None
-
-
-def _parse_delegation_from_response(
-    text: str,
-    available_agents: list[dict[str, str]] | None,
-    parser: DelegationIntentParser | None = None,
-) -> list[dict[str, str]]:
-    if not available_agents:
-        return []
-    effective_parser = parser or _DEFAULT_DELEGATION_PARSER
-    return effective_parser.parse(text, available_agents)
 
 
 def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
@@ -567,24 +553,10 @@ async def execute_request(
             cost_usd=result.cost_usd,
         )
 
-    if not result.delegation_tasks and available_agents:
-        parsed_tasks = _parse_delegation_from_response(result.text, available_agents, parser=runtime.delegation_parser)
-        if parsed_tasks:
-            _log.info("Parsed %d delegation tasks from provider response", len(parsed_tasks))
-            result.delegation_tasks.extend(parsed_tasks)
-
-    if result.delegation_tasks:
-        _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
+    if result.coordination_intent is not None:
+        intent = result.coordination_intent
+        _log.info("Coordination intent present (%d task(s)), proposing plan", len(intent.tasks))
         await progress.update("Delegation plan ready.", force=True)
-        tasks_summary = [
-            {
-                "title": t.get("title", ""),
-                "target": t.get("target_agent_id", ""),
-                "status": "proposed",
-            }
-            for t in result.delegation_tasks
-        ]
-        await event_sink.on_delegation_proposed(tasks_summary)
         session = _load(runtime, conversation_key)
         return await runtime.propose_delegation_plan(
             conversation_key,

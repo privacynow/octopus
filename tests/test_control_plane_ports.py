@@ -54,7 +54,12 @@ async def test_noop_task_routing_returns_unavailable_for_request_reply_methods()
         title="Delegate",
         instructions="Do the thing",
     )
-    result = RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done")
+    result = RoutedTaskResult(
+        routed_task_id="task-1",
+        status="completed",
+        transition_id="task-1-complete",
+        summary="done",
+    )
 
     assert isinstance(routing, TaskRoutingPort)
 
@@ -81,6 +86,7 @@ async def test_noop_task_routing_status_update_is_fire_and_forget() -> None:
     update = RoutedTaskUpdate(
         routed_task_id="task-1",
         status="running",
+        transition_id="task-1-running",
         summary="halfway",
     )
 

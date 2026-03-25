@@ -15,11 +15,13 @@ from app.agents.registry_runtime import RegistryRuntime
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
 from app.control_plane.requests import (
+    AddConversationMessagePayload,
     PublishHealthRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
     SearchAgentsRequest,
     SubmitRoutedTaskPayload,
+    SubmitConversationActionPayload,
     TimelineEventPayload,
     UpdateRoutedTaskStatusPayload,
 )
@@ -27,6 +29,7 @@ from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     DiscoveredAgentRef,
+    CoordinationActionEnvelope,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
@@ -106,6 +109,25 @@ class RegistryControlProcessor(ControlProcessor):
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
+        if command.operation == "add_message":
+            payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
+            response = await client.add_message(payload.conversation_id, payload.text)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
+        if command.operation == "submit_action":
+            payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
+            response = await client.submit_action(
+                payload.conversation_id,
+                payload.envelope,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
         return ControlReply(
             command_id=command.command_id,
             status="failed",
@@ -133,6 +155,25 @@ class RegistryControlProcessor(ControlProcessor):
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
+        if command.operation == "add_message":
+            payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
+            response = await client.add_message(payload.conversation_id, payload.text)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
+        if command.operation == "submit_action":
+            payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
+            response = await client.submit_action(
+                payload.conversation_id,
+                payload.envelope,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=json.dumps(response),
+            )
         return ControlReply(
             command_id=command.command_id,
             status="failed",
@@ -170,6 +211,7 @@ class RegistryControlProcessor(ControlProcessor):
             result = RoutedTaskResult(
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
+                transition_id=payload.transition_id,
                 summary=payload.summary,
                 full_text=payload.full_text,
                 artifacts=[dict(item) for item in payload.artifacts],
@@ -190,6 +232,7 @@ class RegistryControlProcessor(ControlProcessor):
             update = RoutedTaskUpdate(
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
+                transition_id=payload.transition_id,
                 summary=payload.summary,
                 timeline_events=[event.model_dump() for event in payload.timeline_events],
                 progress=payload.progress,

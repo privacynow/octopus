@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from octopus_sdk.registry.models import CoordinationActionEnvelope, CoordinationActionResult
+
 
 @runtime_checkable
 class ConversationProjectionPort(Protocol):
@@ -27,6 +29,24 @@ class ConversationProjectionPort(Protocol):
         """Publish events to a registry conversation. Idempotent on event_id."""
         ...
 
+    async def add_message(
+        self,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> dict:
+        """Add one operator/channel message to an existing conversation."""
+        ...
+
+    async def submit_action(
+        self,
+        *,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        """Submit one typed coordination action for an existing conversation."""
+        ...
+
 
 class NoOpConversationProjection:
     async def create_conversation(
@@ -47,3 +67,27 @@ class NoOpConversationProjection:
         events: list,
     ) -> None:
         del conversation_id, events
+
+    async def add_message(
+        self,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> dict:
+        del conversation_id, text
+        return {"accepted": False}
+
+    async def submit_action(
+        self,
+        *,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        del conversation_id, envelope
+        return CoordinationActionResult(
+            conversation_id="",
+            action_id="",
+            action="",
+            accepted=False,
+            status="unavailable",
+        )

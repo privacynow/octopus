@@ -72,11 +72,9 @@ class ProviderGuidanceService:
     def _format_agent_discovery_section(agents: list[dict[str, str]]) -> str:
         lines = [
             "## Available Agents\n",
-            "You can delegate work to these agents. When a task should be handled by a specialist,",
-            "include a delegation block in your response:\n",
-            "<delegation>",
-            '{"tasks": [{"target": "agent-slug", "title": "task title", "instructions": "what to do"}]}',
-            "</delegation>\n",
+            "These specialists are currently reachable through the coordination layer.",
+            "Reference them naturally if needed, but do not emit coordination protocol text.",
+            "",
             "| Agent | Slug | Role | Capabilities | Status |",
             "|-------|------|------|--------------|--------|",
         ]

@@ -311,7 +311,10 @@ async def handle_delegation_approve(
     _save_session(runtime, conversation_key, session)
     if event_sink is not None:
         tasks_summary = [{"title": t.title, "target": t.target_agent_id, "status": "submitted"} for t in session.pending_delegation.tasks]
-        await event_sink.on_delegation_submitted(tasks_summary)
+        await event_sink.on_delegation_submitted(
+            tasks_summary,
+            proposal_id=(session.pending_delegation.proposal_id or f"delegation:{conversation_key}"),
+        )
     await channel_egress.send_text(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
         " I'll continue when results arrive."

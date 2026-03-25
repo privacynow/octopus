@@ -149,6 +149,7 @@ def test_apply_delegation_result_atomically_merges_concurrent_updates(postgres_t
                     result=RoutedTaskResult(
                         routed_task_id=task_id,
                         status="completed",
+                        transition_id=f"{task_id}-complete",
                         summary=summary,
                     ),
                 )
@@ -199,6 +200,7 @@ def test_apply_delegation_result_atomically_does_not_touch_other_conversations(p
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="task-1-complete",
                 summary="updated",
             ),
         )

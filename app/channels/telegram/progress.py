@@ -7,6 +7,7 @@ import html
 import logging
 import re
 import time
+from uuid import uuid4
 
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, TimedOut
@@ -99,6 +100,7 @@ async def routed_task_progress_callback(
             # Terminal routed-task state is owned by report_routed_task_result().
             # Progress callbacks only publish in-flight summaries.
             status="running",
+            transition_id=uuid4().hex,
             summary=summary,
         ),
         authority_ref=authority_ref,

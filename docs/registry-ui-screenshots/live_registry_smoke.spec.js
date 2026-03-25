@@ -125,6 +125,7 @@ test("live registry ui smoke", async ({ page }) => {
         },
         body: JSON.stringify({
           status: "completed",
+          transition_id: `${taskId}-complete`,
           summary: "4",
           full_text: "4",
           completed_at: new Date().toISOString(),

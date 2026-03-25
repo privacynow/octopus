@@ -1,7 +1,6 @@
 """Machine tests for delegation progression."""
 
-from octopus_sdk.registry.models import RoutedTaskResult
-from app.workflows.delegation.contracts import DelegationTaskDraft
+from octopus_sdk.registry.models import DelegationTaskDraft, RoutedTaskResult, TargetSelector
 from app.workflows.delegation.machine import (
     CancelDelegationAction,
     DelegationSnapshot,
@@ -15,9 +14,9 @@ from app.workflows.delegation.machine import (
 
 def _draft(routed_task_id: str, *, title: str = "Task") -> DelegationTaskDraft:
     return DelegationTaskDraft(
-        routed_task_id=routed_task_id,
+        draft_id=routed_task_id,
+        selector=TargetSelector(kind="agent", value="worker-1", preferred_agent_id="worker-1"),
         title=title,
-        target_agent_id="worker-1",
         instructions="Do the work.",
     )
 

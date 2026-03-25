@@ -23,6 +23,7 @@ from octopus_sdk.health_publication import AuthorityStatus, ConnectionSummary
 from octopus_sdk.task_routing import TaskSubmissionResult
 from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.providers import RunContext, RunResult
+from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
@@ -194,19 +195,39 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             )
 
         monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        async def fake_submit_action(*, conversation_id, envelope):
+            return CoordinationActionResult(
+                conversation_id=conversation_id,
+                action_id=envelope.action_id,
+                action=envelope.action,
+                accepted=True,
+                status="submitted",
+            )
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.conversation_projection,
+            "submit_action",
+            fake_submit_action,
+        )
         prov.run_results = [
             RunResult(
                 text="",
-                delegation_title="Delegation plan",
-                delegation_resume_instruction="Resume after child completion.",
-                delegation_tasks=[
-                    {
-                        "routed_task_id": "task-1",
-                        "title": "Delegate task",
-                        "target_agent_id": "developer-1",
-                        "instructions": "Do the delegated work.",
-                    }
-                ],
+                coordination_intent=DelegationIntent(
+                    title="Delegation plan",
+                    resume_instruction="Resume after child completion.",
+                    tasks=[
+                        DelegationTaskDraft(
+                            draft_id="task-1",
+                            selector=TargetSelector(
+                                kind="agent",
+                                value="developer-1",
+                                preferred_agent_id="developer-1",
+                            ),
+                            title="Delegate task",
+                            instructions="Do the delegated work.",
+                        )
+                    ],
+                ),
             )
         ]
 
@@ -685,16 +706,22 @@ async def test_delegation_proposed_event_published(monkeypatch):
         prov.run_results = [
             RunResult(
                 text="",
-                delegation_title="Feature delegation",
-                delegation_resume_instruction="Continue after the child tasks return.",
-                delegation_tasks=[
-                    {
-                        "routed_task_id": "task-1",
-                        "title": "Implement feature",
-                        "target_agent_id": "developer-1",
-                        "instructions": "Build the feature.",
-                    }
-                ],
+                coordination_intent=DelegationIntent(
+                    title="Feature delegation",
+                    resume_instruction="Continue after the child tasks return.",
+                    tasks=[
+                        DelegationTaskDraft(
+                            draft_id="task-1",
+                            selector=TargetSelector(
+                                kind="agent",
+                                value="developer-1",
+                                preferred_agent_id="developer-1",
+                            ),
+                            title="Implement feature",
+                            instructions="Build the feature.",
+                        )
+                    ],
+                ),
             )
         ]
 
@@ -928,12 +955,12 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         assert [entry[1].status for entry in status_updates] == [
             "running",
             "running",
-            "partialfailed",
+            "failed",
         ]
         authority_ref, update = status_updates[-1]
         assert authority_ref == "registry:default"
         assert update.routed_task_id == "routed-task-2"
-        assert update.status == "partialfailed"
+        assert update.status == "failed"
         assert "could not be delivered" in update.summary
 
 
@@ -1042,6 +1069,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-1-complete",
                         "summary": "Implementation complete",
                         "full_text": "The delegated developer task completed successfully.",
                     },
@@ -1100,6 +1128,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-1-complete",
                         "summary": "Implementation done",
                         "full_text": "Feature implemented successfully.",
                     },
@@ -1163,6 +1192,7 @@ async def test_registry_routed_result_skips_completion_summary_for_registry_pare
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-1-complete",
                         "summary": "Implementation done",
                         "full_text": "Feature implemented successfully.",
                     },
@@ -1217,6 +1247,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-1-complete",
                         "summary": "Implementation done",
                         "full_text": "Feature implemented successfully.",
                     },
@@ -1234,6 +1265,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "failed",
+                        "transition_id": "child-task-2-fail",
                         "summary": "Review crashed",
                         "full_text": "Review tool crashed.",
                     },
@@ -1291,6 +1323,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-2-complete",
                         "summary": "Review complete",
                         "full_text": "The reviewer finished and returned notes.",
                     },
@@ -1349,6 +1382,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-dup-complete",
                         "summary": "Review complete",
                         "full_text": "The reviewer finished and returned notes.",
                     },
@@ -1411,6 +1445,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-a-complete",
                         "summary": "Developer complete",
                         "full_text": "Developer child result.",
                     },
@@ -1438,6 +1473,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-b-complete",
                         "summary": "Reviewer complete",
                         "full_text": "Reviewer child result.",
                     },
@@ -1504,6 +1540,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
                     "parent_conversation_id": conversation_ref,
                     "result": {
                         "status": "completed",
+                        "transition_id": "child-task-registry-complete",
                         "summary": "Requirements complete",
                         "full_text": "Requirements child result.",
                     },

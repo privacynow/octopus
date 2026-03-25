@@ -214,6 +214,7 @@ def test_apply_delegation_result_atomically_merges_concurrent_updates_for_same_c
                     result=RoutedTaskResult(
                         routed_task_id=task_id,
                         status="completed",
+                        transition_id=f"{task_id}-complete",
                         summary=summary,
                     ),
                 )
@@ -271,6 +272,7 @@ def test_apply_delegation_result_atomically_does_not_touch_other_conversations()
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="task-1-complete",
                 summary="updated",
             ),
         )

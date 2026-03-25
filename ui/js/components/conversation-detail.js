@@ -129,6 +129,30 @@ function renderConversationDetail(container, params) {
     composer.className = 'compose-box';
     timelinePanel.appendChild(composer);
 
+    const composeControls = document.createElement('div');
+    composeControls.className = 'compose-controls';
+    composer.appendChild(composeControls);
+
+    const modeSelect = document.createElement('select');
+    modeSelect.setAttribute('aria-label', 'Compose mode');
+    modeSelect.innerHTML =
+        '<option value="message">Message</option>' +
+        '<option value="direct_assign">Send directly</option>';
+    composeControls.appendChild(modeSelect);
+
+    const targetInput = document.createElement('input');
+    targetInput.type = 'text';
+    targetInput.placeholder = '@agent or @cap:capability or @role:role';
+    targetInput.setAttribute('aria-label', 'Direct target');
+    targetInput.hidden = true;
+    const targetListId = `conversation-targets-${UI.safeFilename(convoId)}`;
+    targetInput.setAttribute('list', targetListId);
+    composeControls.appendChild(targetInput);
+
+    const targetList = document.createElement('datalist');
+    targetList.id = targetListId;
+    composeControls.appendChild(targetList);
+
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'Send a message to this conversation';
     textarea.setAttribute('aria-label', 'Message text');
@@ -144,6 +168,29 @@ function renderConversationDetail(container, params) {
     composer.appendChild(sendBtn);
 
     let progressTimer = null;
+
+    function updateComposeMode() {
+        const direct = modeSelect.value === 'direct_assign';
+        targetInput.hidden = !direct;
+        textarea.placeholder = direct
+            ? 'Describe the delegated task'
+            : 'Send a message to this conversation';
+    }
+
+    async function loadTargetSuggestions() {
+        try {
+            const data = await API.listAgents({ state: 'connected', limit: 100 });
+            const agents = data.agents || data || [];
+            targetList.textContent = '';
+            agents.forEach((agent) => {
+                const option = document.createElement('option');
+                option.value = '@' + (agent.slug || agent.agent_id || '');
+                targetList.appendChild(option);
+            });
+        } catch {
+            targetList.textContent = '';
+        }
+    }
 
     function clearProgressBanner() {
         progressBanner.hidden = true;
@@ -234,20 +281,38 @@ function renderConversationDetail(container, params) {
     });
 
     sendBtn.addEventListener('click', sendMessage);
+    modeSelect.addEventListener('change', updateComposeMode);
 
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
         sendBtn.disabled = true;
         textarea.disabled = true;
+        modeSelect.disabled = true;
+        targetInput.disabled = true;
         try {
-            await API.sendMessage(convoId, text);
+            if (modeSelect.value === 'direct_assign') {
+                const selector = _parseConversationTargetSelector(targetInput.value);
+                if (!selector) {
+                    throw new Error('Choose a target like @m2, @cap:review, or @role:reviewer.');
+                }
+                await API.conversationAction(convoId, 'direct_assign', {
+                    selector,
+                    title: text.slice(0, 120),
+                    instructions: text,
+                });
+                targetInput.value = '';
+            } else {
+                await API.sendMessage(convoId, text);
+            }
             textarea.value = '';
         } catch (err) {
             UI.reportError('Failed to send the message', err, { context: 'Conversation send failed' });
         }
         sendBtn.disabled = false;
         textarea.disabled = false;
+        modeSelect.disabled = false;
+        targetInput.disabled = false;
         textarea.focus();
     }
 
@@ -491,8 +556,27 @@ function renderConversationDetail(container, params) {
     cleanups.add(unsub);
 
     loadConversation();
+    loadTargetSuggestions();
     reloadEvents();
     cleanups.add(() => clearTimeout(progressTimer));
+    updateComposeMode();
+}
+
+function _parseConversationTargetSelector(raw) {
+    const text = String(raw || '').trim();
+    if (!text.startsWith('@')) return null;
+    const body = text.slice(1);
+    if (body.startsWith('cap:')) {
+        const value = body.slice(4).trim();
+        return value ? { kind: 'capability', value } : null;
+    }
+    if (body.startsWith('role:')) {
+        const value = body.slice(5).trim();
+        return value ? { kind: 'role', value } : null;
+    }
+    const value = body.trim();
+    if (!value) return null;
+    return { kind: 'agent', value, preferred_agent_id: value };
 }
 
 function _readConversationViewParam() {

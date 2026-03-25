@@ -6,13 +6,13 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from octopus_sdk.registry.models import DelegationTaskDraft, TargetSelector
 from octopus_sdk.registry.models import RoutedTaskResult
 from app.formatting import trim_text
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.time_utils import age_seconds, utc_now
 from app.workflows.delegation.contracts import (
     DelegationApprovalPreparation,
-    DelegationTaskDraft,
     DelegationUpdateOutcome,
 )
 from app.workflows.delegation.machine import (
@@ -50,6 +50,8 @@ def build_delegation_plan(
     title: str,
     resume_instruction: str,
     tasks: list[dict[str, str]],
+    *,
+    proposal_id: str = "",
 ) -> PendingDelegation:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=None),
@@ -59,11 +61,23 @@ def build_delegation_plan(
             resume_instruction=resume_instruction,
             tasks=tuple(
                 DelegationTaskDraft(
-                    routed_task_id=str(task["routed_task_id"]),
+                    draft_id=str(task.get("draft_id") or task.get("routed_task_id") or ""),
+                    selector=TargetSelector(
+                        kind=str(task.get("selector_kind") or "agent"),
+                        value=str(
+                            task.get("selector_value")
+                            or task.get("target_agent_id")
+                            or task.get("target")
+                            or ""
+                        ),
+                        preferred_agent_id=str(task.get("target_agent_id") or task.get("target") or ""),
+                    ),
                     authority_ref=str(task.get("authority_ref", "")),
                     title=str(task.get("title", "")),
-                    target_agent_id=str(task.get("target_agent_id", "")),
                     instructions=str(task.get("instructions", "")),
+                    priority=str(task.get("priority", "normal")),
+                    requested_capabilities=list(task.get("requested_capabilities", []) or []),
+                    context=dict(task.get("context", {}) or {}),
                 )
                 for task in tasks
             ),
@@ -72,6 +86,7 @@ def build_delegation_plan(
     pending = decision.effects.set_pending
     if pending is None:
         raise RuntimeError("Delegation plan creation did not produce pending state")
+    pending.proposal_id = proposal_id
     return pending
 
 

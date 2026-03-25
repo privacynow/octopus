@@ -210,6 +210,7 @@ async def handle_registry_delivery(
         routed_result = RoutedTaskResult(
             routed_task_id=routed_task_id,
             status=str(result.get("status", "") or ""),
+            transition_id=str(result.get("transition_id", "") or ""),
             summary=str(result.get("summary", "") or ""),
             full_text=str(result.get("full_text", "") or ""),
             artifacts=tuple(result.get("artifacts", ()) or ()),
@@ -301,7 +302,10 @@ async def handle_registry_delivery(
                 config,
             )
             tasks_summary = [{"title": t.title, "target": t.target_agent_id, "status": t.status} for t in (applied.pending.tasks or [])]
-            await sink.on_delegation_completed(tasks_summary)
+            await sink.on_delegation_completed(
+                tasks_summary,
+                proposal_id=(applied.pending.proposal_id or f"delegation:{conversation_key}"),
+            )
         return "accepted"
 
     return "rejected"

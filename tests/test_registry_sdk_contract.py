@@ -76,10 +76,19 @@ def test_validate_event_metadata_accepts_all_sdk_kinds():
             "decided_by": "operator",
             "decision": "approved",
         },
-        "delegation.proposed": {"tasks": [{"title": "t", "target": "a", "status": "proposed"}]},
-        "delegation.submitted": {"tasks": [{"title": "t", "target": "a", "status": "submitted"}]},
-        "delegation.completed": {"tasks": [{"title": "t", "target": "a", "status": "completed"}]},
-        "task.status": {"status": "running"},
+        "delegation.proposed": {
+            "proposal_id": "proposal-1",
+            "tasks": [{"draft_id": "draft-1", "title": "t", "target": "a", "status": "proposed"}],
+        },
+        "delegation.submitted": {
+            "proposal_id": "proposal-1",
+            "tasks": [{"draft_id": "draft-1", "title": "t", "target": "a", "status": "submitted"}],
+        },
+        "delegation.completed": {
+            "proposal_id": "proposal-1",
+            "tasks": [{"draft_id": "draft-1", "title": "t", "target": "a", "status": "completed"}],
+        },
+        "task.status": {"routed_task_id": "task-1", "status": "running"},
         "error": {"error_type": "execution", "message": "boom"},
     }
     for kind in EVENT_METADATA_SCHEMAS:
@@ -319,6 +328,7 @@ def test_sdk_client_routed_task_status_uses_path_id_not_body_id():
                 {
                     "routed_task_id": "task-1",
                     "status": "running",
+                    "transition_id": "transition-1",
                     "summary": "halfway",
                 },
             )
@@ -328,6 +338,7 @@ def test_sdk_client_routed_task_status_uses_path_id_not_body_id():
     assert captured["url"].endswith("/v1/agents/routed-tasks/task-1/status")
     assert captured["json"]["status"] == "running"
     assert captured["json"]["summary"] == "halfway"
+    assert captured["json"]["transition_id"] == "transition-1"
     assert "routed_task_id" not in captured["json"]
     assert "updated_at" in captured["json"]
 
@@ -364,6 +375,7 @@ def test_sdk_client_routed_task_result_uses_path_id_not_body_id():
                 {
                     "routed_task_id": "task-1",
                     "status": "completed",
+                    "transition_id": "transition-2",
                     "summary": "done",
                     "full_text": "done",
                 },
@@ -375,6 +387,7 @@ def test_sdk_client_routed_task_result_uses_path_id_not_body_id():
     assert captured["json"]["status"] == "completed"
     assert captured["json"]["summary"] == "done"
     assert captured["json"]["full_text"] == "done"
+    assert captured["json"]["transition_id"] == "transition-2"
     assert "routed_task_id" not in captured["json"]
     assert "completed_at" in captured["json"]
 

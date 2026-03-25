@@ -3,7 +3,6 @@
 Tests the new modules introduced by the remediation plan:
 - TransportIdentity (contracts.py)
 - ExecutionEventSink / RegistryEventSink / NoOpEventSink (event_sink.py)
-- XmlTagDelegationParser (delegation_parser.py)
 - normalize_conversation_id / delegation_session_key (identity.py)
 - registry_agent_ids on BotConfig (config.py)
 - prompt_weight parity with system_prompt (provider_guidance_service.py)
@@ -65,8 +64,9 @@ class TestNoOpEventSink:
         await sink.on_provider_response(prompt_tokens=10)
         await sink.on_bot_reply("world")
         await sink.on_error("fail")
-        await sink.on_delegation_proposed([])
-        await sink.on_delegation_submitted([])
+        await sink.on_delegation_proposed([], proposal_id="proposal-1")
+        await sink.on_delegation_submitted([], proposal_id="proposal-1")
+        await sink.on_delegation_completed([], proposal_id="proposal-1")
 
     def test_noop_is_singleton(self):
         from octopus_sdk.event_sink import _NOOP_SINK, NoOpEventSink
@@ -186,70 +186,6 @@ class TestRegistryEventSink:
 
             assert projection.created == []
             assert projection.published == []
-
-
-# ---------------------------------------------------------------------------
-# XmlTagDelegationParser
-# ---------------------------------------------------------------------------
-
-class TestXmlTagDelegationParser:
-    def test_parses_valid_delegation(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = 'Some text\n<delegation>\n{"tasks": [{"target": "m3", "title": "Add numbers", "instructions": "2+2"}]}\n</delegation>'
-        agents = [{"slug": "m3", "agent_id": "agent-m3", "display_name": "M3"}]
-        tasks = parser.parse(text, agents)
-        assert len(tasks) == 1
-        assert tasks[0]["target_agent_id"] == "agent-m3"
-        assert tasks[0]["title"] == "Add numbers"
-
-    def test_no_delegation_block_returns_empty(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        assert parser.parse("just a normal response", [{"slug": "m3", "agent_id": "a"}]) == []
-
-    def test_unknown_slug_skipped(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>{"tasks": [{"target": "unknown-bot", "title": "X"}]}</delegation>'
-        agents = [{"slug": "m3", "agent_id": "a"}]
-        assert parser.parse(text, agents) == []
-
-    def test_empty_agents_returns_empty(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>{"tasks": [{"target": "m3"}]}</delegation>'
-        assert parser.parse(text, []) == []
-
-    def test_malformed_json_returns_empty(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>not json</delegation>'
-        assert parser.parse(text, [{"slug": "m3", "agent_id": "a"}]) == []
-
-    def test_missing_closing_tag_returns_empty(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>{"tasks": [{"target": "m3"}]}'
-        assert parser.parse(text, [{"slug": "m3", "agent_id": "a"}]) == []
-
-    def test_defaults_title_when_missing(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>{"tasks": [{"target": "m3", "instructions": "do it"}]}</delegation>'
-        agents = [{"slug": "m3", "agent_id": "a"}]
-        tasks = parser.parse(text, agents)
-        assert tasks[0]["title"] == "Delegated task"
-
-    def test_multiple_tasks(self):
-        from octopus_sdk.delegation import XmlTagDelegationParser
-        parser = XmlTagDelegationParser()
-        text = '<delegation>{"tasks": [{"target": "m2", "title": "A"}, {"target": "m3", "title": "B"}]}</delegation>'
-        agents = [{"slug": "m2", "agent_id": "a2"}, {"slug": "m3", "agent_id": "a3"}]
-        tasks = parser.parse(text, agents)
-        assert len(tasks) == 2
-        assert tasks[0]["target_agent_id"] == "a2"
-        assert tasks[1]["target_agent_id"] == "a3"
 
 
 # ---------------------------------------------------------------------------
@@ -405,11 +341,11 @@ class TestExecutionRuntimeShape:
         assert "build_channel_context" not in fields
         assert "conversation_projection" not in fields
 
-    def test_delegation_parser_is_optional(self):
+    def test_delegation_parser_is_removed(self):
         from octopus_sdk.execution import ExecutionRuntime
         import dataclasses
-        field_map = {f.name: f for f in dataclasses.fields(ExecutionRuntime)}
-        assert field_map["delegation_parser"].default is None
+        field_names = {f.name for f in dataclasses.fields(ExecutionRuntime)}
+        assert "delegation_parser" not in field_names
 
 
 # ---------------------------------------------------------------------------

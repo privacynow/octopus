@@ -178,6 +178,7 @@ class RegistryChannelEgress(ChannelEgress):
                     update=RoutedTaskUpdate(
                         routed_task_id=self.routed_task_id,
                         status="running",
+                        transition_id=uuid.uuid4().hex,
                         summary=summary,
                     ),
                     authority_ref=self.authority_ref,

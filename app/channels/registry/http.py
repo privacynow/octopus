@@ -34,7 +34,7 @@ from app.channels.registry.auth import (
 )
 from app.channels.registry.ws import WebSocketManager
 from app.capability_service import CapabilityService
-from octopus_sdk.registry.models import ConversationCreate
+from octopus_sdk.registry.models import ConversationCreate, CoordinationActionEnvelope
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.realtime import ConversationProgressUpdate
 from app.channels.registry.ingress import (
@@ -795,18 +795,13 @@ async def resource_add_message(
 @app.post("/v1/conversations/{conversation_id}/actions")
 async def resource_add_action(
     conversation_id: str,
-    payload: dict[str, Any],
+    payload: CoordinationActionEnvelope,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     conversation_id = normalize_conversation_id(conversation_id)
-    action = payload.get("action", "").strip()
     try:
-        result = store.add_conversation_action(
-            conversation_id,
-            action,
-            payload.get("payload", {}),
-        )
+        result = store.add_conversation_action(conversation_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
     except ValueError as exc:
@@ -865,6 +860,26 @@ def resource_list_tasks(
         status=status,
     )
     return _paginated_response("tasks", tasks, cursor, limit)
+
+
+@app.get("/v1/tasks/{routed_task_id}")
+def resource_get_task(
+    routed_task_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        task = store.get_task(routed_task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
+    if auth.agent_id:
+        agent_id = auth.agent_id
+        if agent_id not in {
+            str(task.get("origin_agent_id", "")),
+            str(task.get("target_agent_id", "")),
+        }:
+            raise HTTPException(status_code=403, detail="Not authorized for this task resource.")
+    return task
 
 
 @app.get("/v1/capabilities")

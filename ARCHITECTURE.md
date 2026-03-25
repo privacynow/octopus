@@ -36,8 +36,6 @@ The system map above shows running systems. The layering view below is narrower:
 it shows code ownership boundaries and the main dependency direction between
 `app/`, `octopus_sdk/`, and the registry service.
 
-Option A keeps the SDK edges explicit per transport and runtime component:
-
 ```mermaid
 flowchart TB
     CLI["./octopus"]
@@ -65,39 +63,6 @@ flowchart TB
     Slack --> Api
     Providers --> SDK
     Workflows --> SDK
-```
-
-Option B collapses those SDK dependencies into one shared lower layer:
-
-```mermaid
-flowchart TB
-    CLI2["./octopus"]
-    UI2["Registry SPA"]
-    Main2["app/main"]
-    Telegram2["Telegram transport"]
-    Slack2["Slack transport (later)"]
-    Providers2["Providers"]
-    Workflows2["Workflows / adapters"]
-    SDK2["octopus_sdk"]
-    Api2["Registry API"]
-    Store2["Registry store"]
-
-    CLI2 --> Main2
-    UI2 --> Api2
-    Main2 --> Api2
-    Api2 --> Store2
-
-    Main2 --> Telegram2
-    Main2 --> Slack2
-    Main2 --> Providers2
-    Main2 --> Workflows2
-
-    Telegram2 --> Api2
-    Slack2 --> Api2
-    Telegram2 --> SDK2
-    Slack2 --> SDK2
-    Providers2 --> SDK2
-    Workflows2 --> SDK2
 ```
 
 ## Deployment And Process Model

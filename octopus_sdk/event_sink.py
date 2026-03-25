@@ -103,6 +103,13 @@ class RegistryEventSink:
         self._conversation_id: str | None = None
         self._execution_event_prefix = uuid4().hex
 
+    def _skip_user_message_mirror(self) -> bool:
+        conversation_ref = self._transport.conversation_ref or ""
+        return (
+            self._transport.origin_channel == "registry"
+            and ":conversation:" in conversation_ref
+        )
+
     async def _ensure_conversation(self) -> str | None:
         if self._conversation_id is not None:
             return self._conversation_id
@@ -150,6 +157,8 @@ class RegistryEventSink:
             log.warning("registry publish: publish_events failed for %s", kind, exc_info=True)
 
     async def on_user_message(self, content: str, *, actor: str = "") -> None:
+        if self._skip_user_message_mirror():
+            return
         await self._publish(
             "message.user",
             event_id=f"exec:{self._execution_event_prefix}:user",

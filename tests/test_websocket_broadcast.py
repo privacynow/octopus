@@ -163,6 +163,23 @@ def _ws_progress_recorder(monkeypatch):
     return calls
 
 
+@pytest.fixture()
+def _ws_heartbeat_recorder(monkeypatch):
+    calls: list[dict[str, Any]] = []
+    original_manager = registry_http._ws_manager
+
+    async def fake_broadcast(agent_id: str, status_data: dict) -> None:
+        calls.append(
+            {
+                "agent_id": agent_id,
+                "status_data": status_data,
+            }
+        )
+
+    monkeypatch.setattr(original_manager, "broadcast_heartbeat", fake_broadcast)
+    return calls
+
+
 def test_publish_events_broadcasts_via_websocket(
     monkeypatch, tmp_path: Path, _ws_recorder,
 ) -> None:
@@ -449,3 +466,83 @@ def test_publish_progress_broadcasts_ephemeral_progress(
                 },
             }
         ]
+
+
+def test_agent_heartbeat_broadcasts_targeted_update_without_collection_invalidation(
+    monkeypatch,
+    tmp_path: Path,
+    _ws_heartbeat_recorder,
+    _ws_invalidation_recorder,
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        agent_id, token = _enroll_and_register(client, "ws-heartbeat-bot")
+        _ws_heartbeat_recorder.clear()
+        _ws_invalidation_recorder.clear()
+
+        resp = client.post(
+            "/v1/agents/heartbeat",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "connectivity_state": "connected",
+                "current_capacity": 1,
+                "max_capacity": 2,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert _ws_heartbeat_recorder == [
+            {
+                "agent_id": agent_id,
+                "status_data": resp.json()["agent"],
+            }
+        ]
+        assert _ws_invalidation_recorder == []
+
+
+def test_routed_task_running_status_without_timeline_events_does_not_broadcast_parent_event(
+    monkeypatch,
+    tmp_path: Path,
+    _ws_recorder,
+    _ws_invalidation_recorder,
+) -> None:
+    _configure(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        origin_id, origin_token = _enroll_and_register(client, "ws-origin-running")
+        target_id, target_token = _enroll_and_register(client, "ws-target-running")
+        conv_id = _create_conversation(client, origin_token, origin_id)
+
+        create_resp = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": "ws-task-running",
+                "parent_conversation_id": conv_id,
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": "Compute something",
+                "instructions": "Think for a bit",
+                "requested_capabilities": ["python"],
+                "created_at": "2026-03-24T00:00:00+00:00",
+            },
+        )
+
+        assert create_resp.status_code == 200
+        _ws_recorder.clear()
+        _ws_invalidation_recorder.clear()
+
+        status_resp = client.post(
+            "/v1/agents/routed-tasks/ws-task-running/status",
+            headers={"Authorization": f"Bearer {target_token}"},
+            json={
+                "status": "running",
+                "summary": "Working…",
+                "updated_at": "2026-03-24T00:00:10+00:00",
+            },
+        )
+
+        assert status_resp.status_code == 200
+        assert status_resp.json()["events_written"] is False
+        assert _ws_recorder == []
+        topics = {item["topic"] for item in _ws_invalidation_recorder}
+        assert {"tasks", "conversations", "summary"} <= topics

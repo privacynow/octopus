@@ -377,6 +377,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            previous_effective_state = effective_connectivity_state(
+                row["connectivity_state"],
+                row["last_heartbeat_at"],
+            )
             runtime_health_payload = heartbeat_payload.get("runtime_health")
             with _cur(conn) as cur:
                 cur.execute(
@@ -409,7 +413,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
             row = self._token_row(conn, agent_token)
             assert row is not None
-            return {"agent": self._row_to_agent(row), "server_time": now}
+            current_agent = self._row_to_agent(row)
+            return {
+                "agent": current_agent,
+                "collections_changed": previous_effective_state != current_agent["connectivity_state"],
+                "server_time": now,
+            }
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         normalized = capability_name.strip().lower()
@@ -885,7 +894,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 task_row = cur.fetchone()
             if updated > 0:
                 source_events = list(validated_payload["timeline_events"])
-                if not source_events and task_row is not None:
+                if (
+                    not source_events
+                    and task_row is not None
+                    and validated_payload["status"] != "running"
+                ):
                     source_events = [
                         routed_task_progress_event(
                             routed_task_id=routed_task_id,

@@ -58,6 +58,7 @@ test("live registry ui smoke", async ({ page }) => {
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
   await expect(page.getByRole("heading", { name: "Conversation" })).toBeVisible();
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
+  await page.getByRole("tab", { name: "Full activity" }).click();
   await expect(page.locator(".timeline-events")).toContainText(EXISTING_TASK_TITLE);
 
   await page.goto("/ui/conversations");

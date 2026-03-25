@@ -315,11 +315,12 @@ async def heartbeat(
     agent_id = agent_data.get("agent_id", "")
     if agent_id:
         await _ws_manager.broadcast_heartbeat(agent_id, agent_data)
-    await _broadcast_invalidations(
-        topics=("agents", "summary"),
-        reason="agent.heartbeat",
-        agent_id=str(agent_id or ""),
-    )
+    if result.get("collections_changed"):
+        await _broadcast_invalidations(
+            topics=("agents", "summary"),
+            reason="agent.heartbeat",
+            agent_id=str(agent_id or ""),
+        )
     return result
 
 

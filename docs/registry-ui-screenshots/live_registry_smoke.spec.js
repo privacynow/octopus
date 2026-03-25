@@ -42,10 +42,10 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByLabel(/password/i).fill(UI_TOKEN);
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/\/ui\/?$/, { timeout: 5000 });
-  await expect(page.getByRole("heading", { name: /registry/i })).toBeVisible();
-  await expect(page.getByText("Operator workspace").first()).toBeVisible();
-  await expect(page.getByText("Blocking approvals").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByText("Needs attention").first()).toBeVisible();
   await expect(page.getByText("Open conversations").first()).toBeVisible();
+  await expect(page.getByText("Agents").first()).toBeVisible();
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
@@ -62,20 +62,19 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/tasks");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  await expect(page.getByText("Task board").first()).toBeVisible();
   await expect(page.getByText(EXISTING_TASK_TITLE).first()).toBeVisible();
-  const existingTaskItem = page.locator(".task-list-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
-  await existingTaskItem.locator(".task-summary-row").click();
-  await expect(existingTaskItem.getByRole("link", { name: "View parent conversation" })).toBeVisible();
+  const existingTaskItem = page.locator(".task-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
+  await existingTaskItem.locator(".task-item-row").click();
+  await expect(existingTaskItem.getByRole("link", { name: /open conversation/i })).toBeVisible();
 
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
   await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
   await expect(page.locator(".timeline-events")).toContainText(PARENT_PROMPT);
   await expect(page.locator(".compose-hint")).toBeHidden();
   await expect(page.getByLabel("Message text")).toBeInViewport();
-  await expect(page.locator(".conversation-panel-header")).toHaveCount(0);
   await expect(page.locator(".chat-timeline")).toBeVisible();
   await expect(page.locator(".conversation-task-view")).toHaveAttribute("hidden", "");
+
   const liveUiTaskTitle = `Live UI direct ${Date.now()}`;
   const targetSelector = await page.evaluate(async ({ targetAgentId }) => {
     const response = await fetch("/v1/agents?limit=20", { credentials: "same-origin" });
@@ -91,6 +90,7 @@ test("live registry ui smoke", async ({ page }) => {
       slug: match.slug,
     };
   }, { targetAgentId: TARGET_AGENT_ID });
+
   await page.getByLabel("Message text").fill("@");
   await expect(page.locator(".compose-hint")).toContainText(/choose an agent, capability, or role/i);
   await expect(page.locator(".compose-suggestions")).toContainText(`@${targetSelector.selectorValue}`);
@@ -100,6 +100,7 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByRole("button", { name: "Assign" }).click();
   await expect(page.locator(".timeline-events")).toContainText(liveUiTaskTitle, { timeout: 5000 });
   await expect(page.locator(".timeline-events")).toContainText("Delegated work started", { timeout: 5000 });
+
   await page.getByRole("tab", { name: "Tasks" }).click();
   await expect(page.locator(".conversation-task-view")).not.toHaveAttribute("hidden", "");
   await expect(page.locator(".chat-timeline")).toHaveAttribute("hidden", "");
@@ -109,13 +110,14 @@ test("live registry ui smoke", async ({ page }) => {
 
   await page.goto("/ui/conversations");
   await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible();
-  await expect(page.locator(".conversation-launcher-button")).toHaveCount(2);
+  await expect(page.locator(".quickstart-chip")).toHaveCount(2);
   await Promise.all([
     page.waitForURL(/\/ui\/conversations\//, { timeout: 5000 }),
-    page.locator(".conversation-launcher-button").nth(0).click(),
+    page.locator(".quickstart-chip").nth(0).click(),
   ]);
   await expect(page).toHaveURL(/\/ui\/conversations\//, { timeout: 5000 });
   await expect(page.locator(".conversation-meta")).toBeVisible();
+
   await page.goto("/ui/conversations");
   await expect(page.getByText(EXISTING_BASIC_TITLE).first()).toBeVisible();
   await expect(page.getByText(DELEGATION_CONVERSATION_TITLE).first()).toBeVisible();
@@ -208,7 +210,7 @@ test("live registry ui smoke", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();
   const usageRow = page
     .locator("#usage-table tbody tr")
-    .filter({ has: page.locator(`a[href="/ui/conversations/${PARENT_CONVERSATION_ID}"]`) })
+    .filter({ has: page.locator(`a[href=\"/ui/conversations/${PARENT_CONVERSATION_ID}\"]`) })
     .first();
   await expect(usageRow).toBeVisible({ timeout: 10000 });
   await expect.poll(async () => {

@@ -1,5 +1,5 @@
 /**
- * Conversation list — all conversations with search/filter and pagination.
+ * Conversation list — direct work start plus active thread roster.
  */
 function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
@@ -13,19 +13,18 @@ function renderConversationList(container) {
     let quickStartLoaded = false;
     let openingConversationFor = '';
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Conversations</h2><p>Follow active threads, send replies, and jump into work that still needs a decision.</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Conversations</h2>';
     container.appendChild(header);
 
     const quickStart = document.createElement('section');
-    quickStart.className = 'card conversation-launcher-panel';
+    quickStart.className = 'quickstart-strip';
     container.appendChild(quickStart);
 
-    // Filter bar
-    const filterBar = document.createElement('div');
-    filterBar.className = 'filter-bar';
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    container.appendChild(controls);
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
@@ -33,54 +32,77 @@ function renderConversationList(container) {
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search conversations');
     searchInput.setAttribute('title', 'Press / to focus search');
-    filterBar.appendChild(searchInput);
+    controls.appendChild(searchInput);
 
-    const searchHint = document.createElement('span');
-    searchHint.className = 'search-shortcut-hint';
-    searchHint.textContent = 'Shortcut: /';
-    filterBar.appendChild(searchHint);
+    const statusBar = document.createElement('div');
+    statusBar.className = 'segmented-control';
+    statusBar.setAttribute('role', 'tablist');
+    statusBar.setAttribute('aria-label', 'Conversation status filter');
+    controls.appendChild(statusBar);
 
-    const statusSelect = document.createElement('select');
-    statusSelect.setAttribute('aria-label', 'Filter conversations by status');
-    statusSelect.innerHTML =
-        '<option value="">All statuses</option>' +
-        '<option value="open">Open</option>' +
-        '<option value="running">Running</option>' +
-        '<option value="completed">Completed</option>' +
-        '<option value="failed">Failed</option>';
-    filterBar.appendChild(statusSelect);
+    const statuses = [
+        ['all', '', 'All'],
+        ['open', 'open', 'Open'],
+        ['running', 'running', 'Running'],
+        ['completed', 'completed', 'Done'],
+        ['failed', 'failed', 'Needs follow-up'],
+    ];
 
-    container.appendChild(filterBar);
+    statuses.forEach(([key, value, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn';
+        btn.dataset.key = key;
+        btn.textContent = label;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(currentStatus === value));
+        btn.tabIndex = currentStatus === value ? 0 : -1;
+        if (currentStatus === value) btn.classList.add('active');
+        btn.addEventListener('click', () => {
+            currentStatus = value;
+            cursor = 0;
+            cursorStack = [];
+            syncStatusButtons();
+            UI.updateQueryParams({ q: currentQ, status: currentStatus });
+            loadPage();
+        });
+        statusBar.appendChild(btn);
+    });
+
+    const listShell = document.createElement('section');
+    listShell.className = 'list-shell';
+    container.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.className = 'list-container';
-    container.appendChild(listEl);
+    listShell.appendChild(listEl);
 
     const pagEl = document.createElement('div');
-    container.appendChild(pagEl);
+    pagEl.className = 'pagination-shell';
+    listShell.appendChild(pagEl);
 
-    // Debounced search
+    searchInput.value = currentQ;
+
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
-            const q = searchInput.value.trim();
-            currentQ = q;
+            currentQ = searchInput.value.trim();
             cursor = 0;
             cursorStack = [];
             UI.updateQueryParams({ q: currentQ, status: currentStatus });
             loadPage();
-        }, 300);
+        }, 250);
     });
 
-    statusSelect.addEventListener('change', () => {
-        currentStatus = statusSelect.value;
-        cursor = 0;
-        cursorStack = [];
-        UI.updateQueryParams({ q: currentQ, status: currentStatus });
-        loadPage();
-    });
-    searchInput.value = currentQ;
-    statusSelect.value = currentStatus;
+    function syncStatusButtons() {
+        statusBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const match = statuses.find(([key]) => key === btn.dataset.key);
+            const active = !!match && currentStatus === match[1];
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
+        });
+    }
 
     function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
         const wrapper = document.createElement('div');
@@ -96,56 +118,49 @@ function renderConversationList(container) {
 
     function renderQuickStart(agents) {
         const shell = document.createElement('div');
-        shell.className = 'conversation-launcher';
-        shell.dataset.key = 'launcher-shell';
+        shell.className = 'quickstart-shell';
+        shell.dataset.key = 'quickstart-shell';
 
         const head = document.createElement('div');
-        head.className = 'conversation-launcher-head';
-        head.innerHTML = '<div><strong>Start or reopen with</strong><span>Jump straight into a conversation with a connected agent.</span></div>';
+        head.className = 'quickstart-header';
+
+        const label = document.createElement('strong');
+        label.className = 'quickstart-title';
+        label.textContent = 'Start with';
+        head.appendChild(label);
+
         const links = document.createElement('div');
-        links.className = 'conversation-launcher-links';
+        links.className = 'quickstart-links';
 
-        const allAgents = document.createElement('a');
-        allAgents.href = '/ui/agents';
-        allAgents.className = 'section-link';
-        allAgents.textContent = 'All agents';
-        links.appendChild(allAgents);
+        const agentsLink = document.createElement('a');
+        agentsLink.href = '/ui/agents';
+        agentsLink.className = 'section-link';
+        agentsLink.textContent = 'Agents';
+        links.appendChild(agentsLink);
 
-        const approvals = document.createElement('a');
-        approvals.href = '/ui/approvals';
-        approvals.className = 'section-link';
-        approvals.textContent = 'Review approvals';
-        links.appendChild(approvals);
+        const approvalsLink = document.createElement('a');
+        approvalsLink.href = '/ui/approvals';
+        approvalsLink.className = 'section-link';
+        approvalsLink.textContent = 'Approvals';
+        links.appendChild(approvalsLink);
 
         head.appendChild(links);
         shell.appendChild(head);
 
-        const launcherList = document.createElement('div');
-        launcherList.className = 'conversation-launcher-list';
-        launcherList.dataset.key = 'launcher-list';
+        const row = document.createElement('div');
+        row.className = 'quickstart-row';
+        row.dataset.key = 'quickstart-row';
 
         if (!agents.length) {
-            launcherList.appendChild(UI.renderEmptyState('No connected agents are ready right now.', true));
+            row.appendChild(UI.renderEmptyState('No connected agents.', true));
         } else {
             agents.forEach((agent) => {
                 const button = document.createElement('button');
                 button.type = 'button';
-                button.className = 'conversation-launcher-button';
+                button.className = 'quickstart-chip';
                 button.dataset.key = agent.agent_id;
                 button.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
-
-                const title = document.createElement('strong');
-                title.textContent = agent.display_name || agent.slug || agent.agent_id;
-                button.appendChild(title);
-
-                const subtitle = document.createElement('span');
-                subtitle.textContent = [
-                    agent.role || 'agent',
-                    agent.provider || '',
-                    agent.slug || '',
-                ].filter(Boolean).join(' · ');
-                button.appendChild(subtitle);
-
+                button.textContent = agent.display_name || agent.slug || agent.agent_id;
                 button.addEventListener('click', async () => {
                     if (openingConversationFor === agent.agent_id) return;
                     openingConversationFor = agent.agent_id;
@@ -160,15 +175,14 @@ function renderConversationList(container) {
                         openingConversationFor = '';
                         button.disabled = false;
                         button.classList.remove('busy');
-                        UI.reportError('Failed to open a conversation for this agent', err, { context: 'Conversation list quick start failed' });
+                        UI.reportError('Failed to open a conversation for this agent', err, { context: 'Conversation quick start failed' });
                     }
                 });
-
-                launcherList.appendChild(button);
+                row.appendChild(button);
             });
         }
 
-        shell.appendChild(launcherList);
+        shell.appendChild(row);
         UI.reconcileChildren(quickStart, [shell]);
     }
 
@@ -176,7 +190,7 @@ function renderConversationList(container) {
         if (!soft || !quickStartLoaded) {
             UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
         }
-        API.listAgents({ state: 'connected', limit: 8 }).then((data) => {
+        API.listAgents({ state: 'connected', limit: 12 }).then((data) => {
             renderQuickStart(data.agents || data || []);
             quickStartLoaded = true;
         }).catch((err) => {
@@ -188,91 +202,87 @@ function renderConversationList(container) {
         });
     }
 
-    function loadPage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+    function renderRows(conversations, data) {
+        if (!conversations.length) {
+            const emptyMessage = currentQ || currentStatus ? 'No conversations match this view.' : 'No conversations yet.';
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
             UI.reconcileChildren(pagEl, []);
+            return;
         }
 
+        const rows = conversations.map((item) => {
+            const sub = document.createElement('span');
+            const parts = [];
+            if (item.target_display_name || item.target_agent_id) parts.push(item.target_display_name || item.target_agent_id);
+            if (item.origin_channel) parts.push(item.origin_channel);
+            if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
+            if (item.event_count !== undefined) parts.push(`${item.event_count} ${item.event_count === 1 ? 'event' : 'events'}`);
+            sub.textContent = parts.join(' · ');
+
+            const row = UI.renderListRow({
+                href: '/ui/conversations/' + item.conversation_id,
+                label: item.title || item.conversation_id,
+                sublabelNode: sub,
+                badgeText: item.status || 'open',
+                badgeClass: 'badge-' + (item.status || 'open'),
+            });
+            row.dataset.key = item.conversation_id;
+            return row;
+        });
+        UI.reconcileChildren(listEl, rows);
+
+        renderPaginationState({
+            hasPrev: cursorStack.length > 0,
+            hasNext: !!data.has_more,
+            onPrev: () => {
+                cursor = cursorStack.pop() || 0;
+                loadPage();
+            },
+            onNext: () => {
+                cursorStack.push(cursor);
+                cursor = data.next_cursor;
+                loadPage();
+            },
+        });
+        hasLoaded = true;
+    }
+
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
+            UI.reconcileChildren(pagEl, []);
+        }
         const params = { cursor, limit };
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;
-
-        API.listConversations(params).then(data => {
-            const convos = data.conversations || data || [];
-
-            if (convos.length === 0) {
-                UI.reconcileChildren(listEl, [UI.renderEmptyState('No conversations found')]);
-                UI.reconcileChildren(pagEl, []);
-                return;
-            }
-
-            const rows = convos.map(c => {
-                const sub = document.createElement('span');
-                const prefixParts = [];
-                if (c.target_display_name || c.target_agent_id) {
-                    prefixParts.push(c.target_display_name || c.target_agent_id);
-                }
-                if (c.origin_channel) prefixParts.push(c.origin_channel);
-                if (prefixParts.length > 0) {
-                    sub.appendChild(document.createTextNode(prefixParts.join(' \u00b7 ') + ' \u00b7 '));
-                }
-                const timeSpan = document.createElement('span');
-                timeSpan.setAttribute('data-timestamp', c.updated_at || c.created_at || '');
-                timeSpan.textContent = UI.relativeTime(c.updated_at || c.created_at);
-                sub.appendChild(timeSpan);
-                if (c.event_count !== undefined) {
-                    sub.appendChild(document.createTextNode(' \u00b7 ' + c.event_count + ' events'));
-                }
-                const row = UI.renderListRow({
-                    href: '/ui/conversations/' + c.conversation_id,
-                    label: c.title || c.conversation_id,
-                    sublabelNode: sub,
-                    badgeText: c.status || 'open',
-                    badgeClass: 'badge-' + (c.status || 'open'),
-                });
-                row.dataset.key = c.conversation_id;
-                return row;
-            });
-            UI.reconcileChildren(listEl, rows);
-
-            renderPaginationState({
-                hasPrev: cursorStack.length > 0,
-                hasNext: !!data.has_more,
-                onPrev: () => {
-                    cursor = cursorStack.pop() || 0;
-                    loadPage();
-                },
-                onNext: () => {
-                    cursorStack.push(cursor);
-                    cursor = data.next_cursor;
-                    loadPage();
-                },
-            });
-            hasLoaded = true;
-        }).catch(err => {
+        API.listConversations(params).then((data) => {
+            renderRows(data.conversations || data || [], data);
+        }).catch((err) => {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });
                 return;
             }
-            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed: ' + err.message, loadPage)]);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadPage)]);
             UI.reconcileChildren(pagEl, []);
         });
     }
 
+    let quickStartReload = null;
+    let listReload = null;
+    cleanups.add(WS.subscribe('agents', () => {
+        clearTimeout(quickStartReload);
+        quickStartReload = setTimeout(() => loadQuickStart({ soft: true }), 350);
+    }));
+    cleanups.add(WS.subscribe('conversations', () => {
+        clearTimeout(listReload);
+        listReload = setTimeout(() => loadPage({ soft: true }), 350);
+    }));
+
+    syncStatusButtons();
     loadQuickStart();
     loadPage();
 
-    let reloadDebounce = null;
-    cleanups.add(WS.subscribe('conversations', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 400);
-    }));
-    cleanups.add(WS.subscribe('agents', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadQuickStart({ soft: true }), 400);
-    }));
-
     cleanups.add(() => clearTimeout(searchTimeout));
-    cleanups.add(() => clearTimeout(reloadDebounce));
+    cleanups.add(() => clearTimeout(quickStartReload));
+    cleanups.add(() => clearTimeout(listReload));
 }

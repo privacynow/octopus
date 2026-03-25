@@ -38,11 +38,11 @@ function renderConversationDetail(container, params) {
     container.appendChild(page);
 
     const shell = document.createElement('section');
-    shell.className = 'card conversation-shell';
+    shell.className = 'conversation-shell';
     page.appendChild(shell);
 
-    const metaCard = document.createElement('div');
-    metaCard.className = 'conversation-meta';
+    const metaCard = document.createElement('header');
+    metaCard.className = 'workspace-header conversation-meta';
     shell.appendChild(metaCard);
 
     const toolbar = document.createElement('div');
@@ -89,8 +89,7 @@ function renderConversationDetail(container, params) {
     filterGroup.appendChild(messagesBtn);
 
     const actionGroup = document.createElement('div');
-    actionGroup.className = 'toolbar-actions';
-    toolbar.appendChild(actionGroup);
+    actionGroup.className = 'workspace-actions';
 
     const exportBtn = document.createElement('button');
     exportBtn.className = 'btn btn-sm';
@@ -104,7 +103,7 @@ function renderConversationDetail(container, params) {
 
     const layout = document.createElement('div');
     layout.className = 'conversation-layout';
-    page.appendChild(layout);
+    shell.appendChild(layout);
 
     const timelinePanel = document.createElement('div');
     timelinePanel.className = 'card conversation-panel';
@@ -173,7 +172,7 @@ function renderConversationDetail(container, params) {
     composeMeta.appendChild(targetPreview);
 
     const textarea = document.createElement('textarea');
-    textarea.placeholder = 'Send a message to this conversation';
+    textarea.placeholder = 'Reply in this conversation';
     textarea.setAttribute('aria-label', 'Message text');
     textarea.setAttribute('title', 'Enter sends. Shift+Enter adds a new line.');
     textarea.rows = 1;
@@ -301,7 +300,7 @@ function renderConversationDetail(container, params) {
         timelinePanel.dataset.view = activeView;
         timeline.hidden = activeView === 'tasks';
         taskView.hidden = activeView !== 'tasks';
-        syncConversationDensity(activeView !== 'tasks' && !eventList.childElementCount);
+        syncConversationDensityForCurrentView();
     }
 
     function applyFilter(nextView) {
@@ -503,7 +502,7 @@ function renderConversationDetail(container, params) {
         if (selectorPrefix) {
             targetPreview.hidden = true;
             setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
-            textarea.placeholder = 'Choose a routing target or keep typing';
+            textarea.placeholder = 'Choose a target or keep typing';
             sendBtn.textContent = 'Send';
             sendBtn.setAttribute('aria-label', 'Send message');
             renderTargetSuggestions(selectorToken);
@@ -514,7 +513,7 @@ function renderConversationDetail(container, params) {
         }
         targetPreview.hidden = true;
         setComposeHint('');
-        textarea.placeholder = 'Send a message to this conversation';
+        textarea.placeholder = 'Reply in this conversation';
         sendBtn.textContent = 'Send';
         sendBtn.setAttribute('aria-label', 'Send message');
         renderTargetSuggestions('');
@@ -594,67 +593,53 @@ function renderConversationDetail(container, params) {
     function renderMetaCard(data) {
         meta = data;
         const title = data.title || convoId;
-        const hero = document.createElement('div');
-        hero.className = 'conversation-meta-hero';
-        hero.dataset.key = 'meta-hero';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'workspace-header-main';
+        titleRow.dataset.key = 'meta-title-row';
 
         const info = document.createElement('div');
-        info.className = 'conversation-meta-copy';
-
-        const backLink = document.createElement('a');
-        backLink.href = '/ui/conversations';
-        backLink.className = 'conversation-back-link';
-        backLink.textContent = 'All conversations';
-        info.appendChild(backLink);
+        info.className = 'workspace-title-group';
 
         const titleEl = document.createElement('h2');
         titleEl.className = 'conversation-meta-title';
         titleEl.textContent = title;
         info.appendChild(titleEl);
 
-        const sub = document.createElement('div');
-        sub.className = 'conversation-meta-subtitle';
-        const parts = [];
-        if (data.target_display_name || data.target_agent_id) {
-            parts.push(`With ${data.target_display_name || data.target_agent_id}`);
-        }
-        if (data.origin_channel) parts.push(`Started on ${data.origin_channel}`);
-        sub.textContent = parts.join(' \u00b7 ');
-        info.appendChild(sub);
-        hero.appendChild(info);
+        titleRow.appendChild(info);
+        titleRow.appendChild(actionGroup);
 
-        const statusWrap = document.createElement('div');
-        statusWrap.className = 'meta-badge-stack';
+        const metaRow = document.createElement('div');
+        metaRow.className = 'meta-inline meta-inline-quiet';
+        metaRow.dataset.key = 'meta-inline';
+
+        const metaParts = [];
+        if (data.target_display_name || data.target_agent_id) {
+            metaParts.push(['Agent', data.target_display_name || data.target_agent_id]);
+        }
+        metaParts.push(['Source', data.origin_channel || 'registry']);
+        if (data.external_conversation_ref) metaParts.push(['Ref', data.external_conversation_ref]);
+        if (data.event_count !== undefined) metaParts.push(['Events', String(data.event_count)]);
+        if (data.updated_at) metaParts.push(['Updated', UI.relativeTime(data.updated_at)]);
+
+        metaParts.forEach(([label, value], index) => {
+            const item = document.createElement('span');
+            item.className = label === 'Ref' ? 'meta-inline-item meta-inline-item-mono' : 'meta-inline-item';
+            item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
+            metaRow.appendChild(item);
+            if (index < metaParts.length - 1) {
+                const sep = document.createElement('span');
+                sep.className = 'meta-inline-separator';
+                sep.textContent = '·';
+                metaRow.appendChild(sep);
+            }
+        });
+
         const status = document.createElement('span');
         status.className = `badge badge-${data.status || 'open'}`;
         status.textContent = data.status || 'open';
-        statusWrap.appendChild(status);
+        metaRow.appendChild(status);
 
-        if (data.updated_at) {
-            const updated = document.createElement('span');
-            updated.className = 'meta-timestamp';
-            updated.setAttribute('data-timestamp', data.updated_at);
-            updated.textContent = UI.relativeTime(data.updated_at);
-            statusWrap.appendChild(updated);
-        }
-        hero.appendChild(statusWrap);
-
-        const facts = document.createElement('div');
-        facts.className = 'conversation-meta-facts';
-        facts.dataset.key = 'meta-facts';
-        [
-            ['Agent', data.target_display_name || data.target_agent_id || '—'],
-            ['Source', data.origin_channel || 'registry'],
-            ['Reference', data.external_conversation_ref || '—'],
-            ['Events', data.event_count !== undefined ? String(data.event_count) : '—'],
-        ].forEach(([label, value]) => {
-            const item = document.createElement('div');
-            item.className = 'conversation-meta-fact';
-            item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
-            facts.appendChild(item);
-        });
-
-        UI.reconcileChildren(metaCard, [hero, facts]);
+        UI.reconcileChildren(metaCard, [titleRow, metaRow]);
     }
 
     function renderTaskSummaryStrip(tasks) {
@@ -665,6 +650,10 @@ function renderConversationDetail(container, params) {
             attention: tasks.filter((task) => ['failed', 'cancelled', 'timed_out'].includes(task.status || '')).length,
             done: tasks.filter((task) => task.status === 'completed').length,
         };
+        if (!tasks.length) {
+            UI.reconcileChildren(taskSummaryStrip, []);
+            return;
+        }
         const chips = [
             ['Total', counts.total],
             ['Queued', counts.queued],
@@ -684,7 +673,7 @@ function renderConversationDetail(container, params) {
     function renderRelatedTasks(tasks) {
         renderTaskSummaryStrip(tasks);
         if (!tasks.length) {
-            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated tasks for this conversation yet.', true)]);
+            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated work yet.', true)]);
             return;
         }
         const lanes = [
@@ -785,25 +774,25 @@ function renderConversationDetail(container, params) {
             if (!visibleEvents.length) {
                 UI.reconcileChildren(eventList, [UI.renderEmptyState(
                     activeView === 'conversation'
-                        ? 'No messages or routed-work milestones yet. Start below.'
+                        ? 'No messages yet.'
                         : activeView === 'activity'
                             ? 'No activity yet.'
                             : 'No events yet.',
                     true,
                 )]);
-                syncConversationDensity(activeView === 'conversation');
+                syncConversationDensityForCurrentView();
             } else {
                 UI.reconcileChildren(eventList, visibleEvents.map((event) => _createConversationEventElement(event, convoId)));
                 requestAnimationFrame(() => {
                     timeline.scrollTop = timeline.scrollHeight;
                 });
-                syncConversationDensity(false);
+                syncConversationDensityForCurrentView();
             }
             updateHistoryStatus();
             initHistoryObserver();
         } catch (err) {
             UI.reconcileChildren(eventList, [UI.createErrorCard('Failed to load events: ' + err.message, reloadEvents)]);
-            syncConversationDensity(false);
+            syncConversationDensityForCurrentView();
         }
     }
 
@@ -898,7 +887,7 @@ function renderConversationDetail(container, params) {
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId));
-        syncConversationDensity(false);
+        syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
         if (meta) {
             meta.event_count = Number(meta.event_count || 0) + 1;
@@ -943,6 +932,11 @@ function renderConversationDetail(container, params) {
     function syncConversationDensity(compact) {
         page.classList.toggle('conversation-page-compact', Boolean(compact));
         timelinePanel.classList.toggle('conversation-panel-compact', Boolean(compact));
+    }
+
+    function syncConversationDensityForCurrentView() {
+        const compact = activeView !== 'tasks' && eventList.childElementCount <= 3;
+        syncConversationDensity(compact);
     }
 }
 

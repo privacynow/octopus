@@ -1,20 +1,25 @@
 /**
- * Usage view — token/cost summary with date range selection.
+ * Usage view — compact rollup with conversation table.
  */
 function renderUsageView(container) {
     const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
     let hasLoaded = false;
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Usage</h2><p>Prompt, completion, and cost totals from provider responses and delegated task results</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Usage</h2>';
     container.appendChild(header);
 
-    // Date range bar
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    container.appendChild(controls);
+
     const rangeBar = document.createElement('div');
-    rangeBar.className = 'date-range-bar';
+    rangeBar.className = 'segmented-control';
+    rangeBar.setAttribute('role', 'tablist');
+    rangeBar.setAttribute('aria-label', 'Usage date range');
+    controls.appendChild(rangeBar);
 
     const ranges = [
         { label: 'Today', value: '1d' },
@@ -22,37 +27,48 @@ function renderUsageView(container) {
         { label: '30 days', value: '30d' },
     ];
 
-    ranges.forEach(r => {
+    ranges.forEach((range) => {
         const btn = document.createElement('button');
-        btn.className = 'btn btn-sm' + (r.value === currentRange ? ' active' : '');
-        btn.textContent = r.label;
-        btn.setAttribute('data-range', r.value);
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn' + (range.value === currentRange ? ' active' : '');
+        btn.textContent = range.label;
+        btn.dataset.value = range.value;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(range.value === currentRange));
+        btn.tabIndex = range.value === currentRange ? 0 : -1;
         btn.addEventListener('click', () => {
-            currentRange = r.value;
-            rangeBar.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
+            currentRange = range.value;
+            syncRangeButtons();
             loadUsage();
         });
         rangeBar.appendChild(btn);
     });
 
-    container.appendChild(rangeBar);
-
-    // Summary card
-    const summaryEl = document.createElement('div');
-    summaryEl.id = 'usage-summary';
+    const summaryEl = document.createElement('section');
+    summaryEl.className = 'summary-rail';
     container.appendChild(summaryEl);
 
-    // Table
+    const tableShell = document.createElement('section');
+    tableShell.className = 'list-shell';
+    container.appendChild(tableShell);
+
     const tableEl = document.createElement('div');
     tableEl.id = 'usage-table';
-    container.appendChild(tableEl);
+    tableShell.appendChild(tableEl);
+
+    function syncRangeButtons() {
+        rangeBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const active = btn.dataset.value === currentRange;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
+        });
+    }
 
     function _rangeToParams(range) {
         const now = new Date();
         const since = new Date(now);
         if (range === '1d') {
-            // Calendar midnight today (not 24h ago)
             since.setHours(0, 0, 0, 0);
         } else if (range === '7d') {
             since.setDate(since.getDate() - 6);
@@ -67,124 +83,94 @@ function renderUsageView(container) {
         };
     }
 
-    function loadUsage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(summaryEl, UI.createSkeletonNodes(1, 'card'));
-            UI.reconcileChildren(tableEl, UI.createSkeletonNodes(3, 'row'));
+    function renderSummary(daily) {
+        const items = [
+            ['prompt', (daily.prompt_tokens || 0).toLocaleString(), 'Prompt tokens'],
+            ['completion', (daily.completion_tokens || 0).toLocaleString(), 'Completion tokens'],
+            ['cost', '$' + (daily.cost_usd || 0).toFixed(4), 'Total cost'],
+        ];
+        UI.reconcileChildren(summaryEl, items.map(([key, value, label]) => {
+            const card = UI.renderStatCard({ value, label });
+            card.dataset.key = key;
+            return card;
+        }));
+    }
+
+    function renderTable(rows) {
+        if (!rows.length) {
+            UI.reconcileChildren(tableEl, [UI.renderEmptyState('No usage for this range.', true)]);
+            return;
         }
 
-        const params = _rangeToParams(currentRange);
-        API.getUsage(params).then(usage => {
-            const daily = usage.daily_total || {};
-            const rows = Array.isArray(usage)
-                ? usage
-                : (usage.by_conversation || []);
+        const wrap = document.createElement('div');
+        wrap.className = 'table-wrap';
+        wrap.dataset.key = 'usage-table-wrap';
 
-            // Summary card
-            const card = document.createElement('div');
-            card.className = 'summary-card';
-            card.dataset.key = 'usage-summary-card';
+        const table = document.createElement('table');
+        table.className = 'data-table responsive';
 
-            const promptStat = _createStat(
-                (daily.prompt_tokens || 0).toLocaleString(),
-                'Prompt Tokens'
-            );
-            card.appendChild(promptStat);
+        const thead = document.createElement('thead');
+        thead.innerHTML = '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>';
+        table.appendChild(thead);
 
-            const compStat = _createStat(
-                (daily.completion_tokens || 0).toLocaleString(),
-                'Completion Tokens'
-            );
-            card.appendChild(compStat);
+        const tbody = document.createElement('tbody');
+        rows.forEach((item) => {
+            const tr = document.createElement('tr');
+            tr.dataset.key = item.conversation_id || '';
 
-            const costStat = _createStat(
-                '$' + (daily.cost_usd || 0).toFixed(4),
-                'Total Cost'
-            );
-            card.appendChild(costStat);
+            const linkTd = document.createElement('td');
+            linkTd.setAttribute('data-label', 'Conversation');
+            const link = document.createElement('a');
+            link.href = '/ui/conversations/' + encodeURIComponent(item.conversation_id || '');
+            link.textContent = item.title || item.conversation_id || '';
+            linkTd.appendChild(link);
+            tr.appendChild(linkTd);
 
-            UI.reconcileChildren(summaryEl, [card]);
-
-            // Per-conversation table
-            if (rows.length === 0) {
-                UI.reconcileChildren(tableEl, [UI.renderEmptyState('No usage data for this period')]);
-                hasLoaded = true;
-                return;
-            }
-
-            const wrap = document.createElement('div');
-            wrap.className = 'table-wrap';
-            wrap.dataset.key = 'usage-table-wrap';
-            const tbl = document.createElement('table');
-            tbl.className = 'data-table responsive';
-
-            const thead = document.createElement('thead');
-            thead.innerHTML = '<tr><th>Conversation</th><th>Prompt Tokens</th><th>Completion Tokens</th><th>Cost</th></tr>';
-            tbl.appendChild(thead);
-
-            const tbody = document.createElement('tbody');
-            rows.forEach(u => {
-                const tr = document.createElement('tr');
-                tr.dataset.key = u.conversation_id || '';
-
-                const conversationTd = document.createElement('td');
-                conversationTd.setAttribute('data-label', 'Conversation');
-                const conversationLink = document.createElement('a');
-                conversationLink.href = '/ui/conversations/' + encodeURIComponent(u.conversation_id || '');
-                conversationLink.textContent = u.title || u.conversation_id || '';
-                conversationTd.appendChild(conversationLink);
-                tr.appendChild(conversationTd);
-
-                [
-                    ['Prompt Tokens', (u.prompt_tokens || 0).toLocaleString()],
-                    ['Completion Tokens', (u.completion_tokens || 0).toLocaleString()],
-                    ['Cost', '$' + (u.cost_usd || 0).toFixed(4)],
-                ].forEach(([label, val]) => {
-                    const td = document.createElement('td');
-                    td.setAttribute('data-label', label);
-                    td.textContent = val;
-                    tr.appendChild(td);
-                });
-
-                tbody.appendChild(tr);
+            [
+                ['Prompt', (item.prompt_tokens || 0).toLocaleString()],
+                ['Completion', (item.completion_tokens || 0).toLocaleString()],
+                ['Cost', '$' + (item.cost_usd || 0).toFixed(4)],
+            ].forEach(([label, value]) => {
+                const td = document.createElement('td');
+                td.setAttribute('data-label', label);
+                td.textContent = value;
+                tr.appendChild(td);
             });
-            tbl.appendChild(tbody);
-            wrap.appendChild(tbl);
-            UI.reconcileChildren(tableEl, [wrap]);
-            hasLoaded = true;
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        UI.reconcileChildren(tableEl, [wrap]);
+    }
 
-        }).catch(err => {
+    function loadUsage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            UI.reconcileChildren(summaryEl, UI.createSkeletonNodes(3, 'card'));
+            UI.reconcileChildren(tableEl, UI.createSkeletonNodes(4, 'row'));
+        }
+        API.getUsage(_rangeToParams(currentRange)).then((usage) => {
+            const daily = usage.daily_total || {};
+            const rows = Array.isArray(usage) ? usage : (usage.by_conversation || []);
+            renderSummary(daily);
+            renderTable(rows);
+            hasLoaded = true;
+        }).catch((err) => {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh usage', err, { context: 'Usage soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(summaryEl, []);
-            UI.reconcileChildren(tableEl, [UI.createErrorCard('Failed: ' + err.message, loadUsage)]);
+            UI.reconcileChildren(tableEl, [UI.createErrorCard('Failed to load usage: ' + err.message, loadUsage)]);
         });
     }
 
-    function _createStat(value, label) {
-        const stat = document.createElement('div');
-        stat.className = 'summary-stat';
-        const val = document.createElement('span');
-        val.className = 'stat-value';
-        val.textContent = value;
-        stat.appendChild(val);
-        const lbl = document.createElement('span');
-        lbl.className = 'stat-label';
-        lbl.textContent = label;
-        stat.appendChild(lbl);
-        return stat;
-    }
-
-    loadUsage();
-
-    // WS: reload usage on new events (token costs update)
     let reloadDebounce = null;
-    const unsub = WS.subscribe('usage', () => {
+    cleanups.add(WS.subscribe('usage', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadUsage({ soft: true }), 600);
-    });
+        reloadDebounce = setTimeout(() => loadUsage({ soft: true }), 500);
+    }));
+
+    syncRangeButtons();
+    loadUsage();
     cleanups.add(() => clearTimeout(reloadDebounce));
-    cleanups.add(unsub);
 }

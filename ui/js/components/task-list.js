@@ -1,5 +1,5 @@
 /**
- * Task view — status board plus detailed task log.
+ * Task view — compact routed-work queue with status filters.
  */
 function renderTaskList(container) {
     const cleanups = UI.beginCleanupScope();
@@ -8,61 +8,115 @@ function renderTaskList(container) {
         contentInner.classList.add('workspace-route-wide');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
     }
+
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentStatus = UI.readQueryParam('status', '');
-    let boardLoaded = false;
+    let summaryLoaded = false;
     let listLoaded = false;
 
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Tasks</h2><p>See queued, active, blocked, and completed delegated work without digging through raw activity.</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Tasks</h2>';
     container.appendChild(header);
 
-    const boardShell = document.createElement('section');
-    boardShell.className = 'task-board-shell';
-    container.appendChild(boardShell);
+    const summaryRail = document.createElement('section');
+    summaryRail.className = 'summary-rail';
+    container.appendChild(summaryRail);
 
-    const filterBar = document.createElement('div');
-    filterBar.className = 'filter-bar';
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    container.appendChild(controls);
 
-    const statusSelect = document.createElement('select');
-    statusSelect.setAttribute('aria-label', 'Filter task log by status');
-    statusSelect.innerHTML =
-        '<option value="">All statuses</option>' +
-        '<option value="queued">Queued</option>' +
-        '<option value="running">Running</option>' +
-        '<option value="completed">Completed</option>' +
-        '<option value="failed">Failed</option>' +
-        '<option value="cancelled">Cancelled</option>';
-    filterBar.appendChild(statusSelect);
-    container.appendChild(filterBar);
+    const statusBar = document.createElement('div');
+    statusBar.className = 'segmented-control';
+    statusBar.setAttribute('role', 'tablist');
+    statusBar.setAttribute('aria-label', 'Task status filter');
+    controls.appendChild(statusBar);
 
-    const listSection = document.createElement('section');
-    listSection.className = 'task-log-shell';
-    container.appendChild(listSection);
+    const statuses = [
+        ['all', '', 'All'],
+        ['queued', 'queued', 'Queued'],
+        ['running', 'running', 'Running'],
+        ['completed', 'completed', 'Done'],
+        ['failed', 'failed', 'Needs follow-up'],
+        ['cancelled', 'cancelled', 'Cancelled'],
+    ];
 
-    const listHeader = document.createElement('div');
-    listHeader.className = 'task-feed-header';
-    listHeader.innerHTML = '<strong>Task log</strong><span>Recent routed work with details, actions, and parent conversation links.</span>';
-    listSection.appendChild(listHeader);
+    statuses.forEach(([key, value, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn';
+        btn.dataset.key = key;
+        btn.textContent = label;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(currentStatus === value));
+        btn.tabIndex = currentStatus === value ? 0 : -1;
+        if (currentStatus === value) btn.classList.add('active');
+        btn.addEventListener('click', () => {
+            currentStatus = value;
+            cursor = 0;
+            cursorStack = [];
+            syncStatusButtons();
+            UI.updateQueryParams({ status: currentStatus });
+            loadList();
+        });
+        statusBar.appendChild(btn);
+    });
+
+    const listShell = document.createElement('section');
+    listShell.className = 'list-shell';
+    container.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.className = 'list-container list-container-loose';
-    listSection.appendChild(listEl);
+    listShell.appendChild(listEl);
 
     const pagEl = document.createElement('div');
-    listSection.appendChild(pagEl);
+    pagEl.className = 'pagination-shell';
+    listShell.appendChild(pagEl);
 
-    statusSelect.addEventListener('change', () => {
-        currentStatus = statusSelect.value;
-        cursor = 0;
-        cursorStack = [];
-        UI.updateQueryParams({ status: currentStatus });
-        loadList();
-    });
-    statusSelect.value = currentStatus;
+    function syncStatusButtons() {
+        statusBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const match = statuses.find(([key]) => key === btn.dataset.key);
+            const active = !!match && currentStatus === match[1];
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
+        });
+    }
+
+    function renderSummary(summary) {
+        const items = [
+            {
+                key: 'pending',
+                value: String(summary.tasks?.pending || 0),
+                label: 'Pending',
+                detail: 'queued or submitted',
+                href: '/ui/tasks?status=queued',
+            },
+            {
+                key: 'running',
+                value: String(summary.tasks?.running || 0),
+                label: 'Running',
+                detail: 'currently active',
+                href: '/ui/tasks?status=running',
+            },
+            {
+                key: 'failed',
+                value: String(summary.tasks?.failed_24h || 0),
+                label: 'Needs follow-up',
+                detail: 'failed in the last day',
+                href: '/ui/tasks?status=failed',
+            },
+        ];
+        UI.reconcileChildren(summaryRail, items.map((item) => {
+            const card = UI.renderStatCard(item);
+            card.dataset.key = item.key;
+            return card;
+        }));
+    }
 
     function _taskSummary(task) {
         return task.result_summary || task.result_text || task.summary || task.instructions || '';
@@ -73,7 +127,7 @@ function renderTaskList(container) {
             const cancelBtn = document.createElement('button');
             cancelBtn.type = 'button';
             cancelBtn.className = 'btn btn-sm btn-danger';
-            cancelBtn.textContent = 'Cancel task';
+            cancelBtn.textContent = 'Cancel';
             cancelBtn.addEventListener('click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -92,11 +146,12 @@ function renderTaskList(container) {
             });
             actions.appendChild(cancelBtn);
         }
+
         if (['failed', 'cancelled', 'timed_out'].includes(task.status || '')) {
             const retryBtn = document.createElement('button');
             retryBtn.type = 'button';
             retryBtn.className = 'btn btn-sm';
-            retryBtn.textContent = 'Retry task';
+            retryBtn.textContent = 'Retry';
             retryBtn.addEventListener('click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -117,215 +172,122 @@ function renderTaskList(container) {
         }
     }
 
-    function _createBoardTaskCard(task) {
-        const card = document.createElement('article');
-        card.className = 'task-board-card';
-        card.dataset.key = task.routed_task_id;
+    function createTaskItem(task) {
+        const item = document.createElement('article');
+        item.className = 'task-item';
+        item.dataset.key = task.routed_task_id;
 
-        const head = document.createElement('div');
-        head.className = 'task-board-card-header';
-        head.innerHTML = `<strong>${UI.esc(task.title || task.routed_task_id)}</strong><span class="badge badge-${UI.esc(task.status || 'queued')}">${UI.esc(task.status || 'queued')}</span>`;
-        card.appendChild(head);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'task-item-row';
+        row.setAttribute('aria-expanded', 'false');
 
-        const meta = document.createElement('div');
-        meta.className = 'task-board-card-meta';
-        meta.innerHTML = `<span>${UI.esc(task.target_display_name || task.target_agent_id || 'agent')}</span>`;
-        const stamp = document.createElement('span');
-        stamp.setAttribute('data-timestamp', task.updated_at || task.created_at || '');
-        stamp.textContent = UI.relativeTime(task.updated_at || task.created_at || '');
-        meta.appendChild(stamp);
-        card.appendChild(meta);
+        const primary = document.createElement('div');
+        primary.className = 'task-item-main';
+
+        const title = document.createElement('strong');
+        title.className = 'task-item-title';
+        title.textContent = task.title || task.routed_task_id;
+        primary.appendChild(title);
+
+        const meta = document.createElement('span');
+        meta.className = 'task-item-meta';
+        meta.textContent = [
+            task.target_display_name || task.target_agent_id || 'agent',
+            task.parent_conversation_title || task.parent_conversation_id || '',
+            UI.relativeTime(task.updated_at || task.created_at),
+        ].filter(Boolean).join(' · ');
+        primary.appendChild(meta);
+
+        row.appendChild(primary);
+
+        const trailing = document.createElement('div');
+        trailing.className = 'task-item-trailing';
+        const badge = document.createElement('span');
+        badge.className = `badge badge-${task.status || 'queued'}`;
+        badge.textContent = task.status || 'queued';
+        trailing.appendChild(badge);
+        row.appendChild(trailing);
+
+        item.appendChild(row);
+
+        const detail = document.createElement('div');
+        detail.className = 'task-item-detail';
+        detail.hidden = true;
 
         const summary = _taskSummary(task);
         if (summary) {
-            const body = document.createElement('p');
-            body.className = 'task-board-card-summary';
-            body.textContent = summary.slice(0, 180);
-            card.appendChild(body);
+            const summaryBlock = document.createElement('div');
+            summaryBlock.className = 'task-item-summary';
+            summaryBlock.textContent = summary;
+            detail.appendChild(summaryBlock);
         }
 
-        const footer = document.createElement('div');
-        footer.className = 'task-board-card-footer';
+        const facts = document.createElement('div');
+        facts.className = 'metadata-grid';
+        [
+            ['Origin', task.origin_display_name || task.origin_agent_id || '—'],
+            ['Target', task.target_display_name || task.target_agent_id || '—'],
+            ['Conversation', task.parent_conversation_title || task.parent_conversation_id || '—'],
+        ].forEach(([label, value]) => {
+            const fact = document.createElement('div');
+            fact.className = 'metadata-item';
+            fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
+            facts.appendChild(fact);
+        });
+        detail.appendChild(facts);
+
+        const actions = document.createElement('div');
+        actions.className = 'task-action-row';
         const openLink = document.createElement('a');
         openLink.href = task.parent_conversation_id ? '/ui/conversations/' + task.parent_conversation_id : '/ui/tasks';
+        openLink.className = 'btn btn-sm';
         openLink.textContent = 'Open conversation';
         openLink.addEventListener('click', (e) => {
-            e.preventDefault();
             e.stopPropagation();
-            Router.navigate(openLink.href);
         });
-        footer.appendChild(openLink);
-        card.appendChild(footer);
+        actions.appendChild(openLink);
 
-        return card;
+        const statusText = document.createElement('span');
+        statusText.className = 'task-action-status';
+        actions.appendChild(statusText);
+        _attachTaskActions(actions, task, statusText);
+        detail.appendChild(actions);
+
+        item.appendChild(detail);
+
+        row.addEventListener('click', () => {
+            const nextExpanded = detail.hidden;
+            detail.hidden = !nextExpanded;
+            row.setAttribute('aria-expanded', String(nextExpanded));
+        });
+
+        return item;
     }
 
-    function renderBoard(tasks) {
-        const head = document.createElement('div');
-        head.className = 'task-feed-header';
-        head.dataset.key = 'board-header';
-        head.innerHTML = '<strong>Task board</strong><span>Grouped by current status so you can spot stalled or unhealthy work at a glance.</span>';
-
-        const counts = {
-            total: tasks.length,
-            queued: tasks.filter((task) => ['queued', 'submitted', 'leased'].includes(task.status || '')).length,
-            running: tasks.filter((task) => task.status === 'running').length,
-            attention: tasks.filter((task) => ['failed', 'cancelled', 'timed_out'].includes(task.status || '')).length,
-            done: tasks.filter((task) => task.status === 'completed').length,
-        };
-        const summaryStrip = document.createElement('div');
-        summaryStrip.className = 'task-summary-strip';
-        summaryStrip.dataset.key = 'board-summary';
-        [
-            ['Total', counts.total],
-            ['Queued', counts.queued],
-            ['Running', counts.running],
-            ['Needs follow-up', counts.attention],
-            ['Done', counts.done],
-        ].forEach(([label, value]) => {
-            const chip = document.createElement('div');
-            chip.className = 'task-summary-chip';
-            chip.dataset.key = String(label).toLowerCase().replace(/\s+/g, '-');
-            chip.innerHTML = `<strong>${UI.esc(String(value))}</strong><span>${UI.esc(label)}</span>`;
-            summaryStrip.appendChild(chip);
+    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
+            hasPrev,
+            hasNext,
+            info: '',
+            onPrev,
+            onNext,
         });
-
-        const board = document.createElement('div');
-        board.className = 'task-board';
-        board.dataset.key = 'task-board';
-        const lanes = [
-            ['queued', 'Queued', ['queued', 'submitted', 'leased']],
-            ['running', 'Running', ['running']],
-            ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
-            ['done', 'Done', ['completed']],
-        ];
-        lanes.forEach(([laneKey, title, statuses]) => {
-            const lane = document.createElement('section');
-            lane.className = 'task-lane';
-            lane.dataset.key = laneKey;
-            lane.dataset.lane = laneKey;
-
-            const laneHeader = document.createElement('div');
-            laneHeader.className = 'task-lane-header';
-            const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
-            laneHeader.innerHTML = `<strong>${UI.esc(title)}</strong><span>${laneTasks.length}</span>`;
-            lane.appendChild(laneHeader);
-
-            const laneBody = document.createElement('div');
-            laneBody.className = 'task-lane-body';
-            if (!laneTasks.length) {
-                laneBody.appendChild(UI.renderEmptyState('Nothing here right now.', true));
-            } else {
-                laneTasks.slice(0, 12).forEach((task) => laneBody.appendChild(_createBoardTaskCard(task)));
-            }
-            lane.appendChild(laneBody);
-            board.appendChild(lane);
-        });
-        UI.reconcileChildren(boardShell, [head, summaryStrip, board]);
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
     }
 
     function renderList(tasks, data) {
-        if (tasks.length === 0) {
-            UI.reconcileChildren(listEl, [UI.renderEmptyState('No tasks match this filter.')]);
+        if (!tasks.length) {
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(currentStatus ? 'No tasks in this state.' : 'No tasks yet.', true)]);
             UI.reconcileChildren(pagEl, []);
             return;
         }
 
-        const items = tasks.map((task) => {
-            const item = document.createElement('div');
-            item.className = 'task-list-item';
-            item.dataset.key = task.routed_task_id;
-
-            const sub = document.createElement('span');
-            const parts = [];
-            if (task.origin_display_name || task.origin_agent_id) {
-                parts.push('From ' + (task.origin_display_name || task.origin_agent_id));
-            }
-            if (task.target_display_name || task.target_agent_id) {
-                parts.push('To ' + (task.target_display_name || task.target_agent_id));
-            }
-            if (task.updated_at) {
-                parts.push(UI.relativeTime(task.updated_at));
-            }
-            sub.textContent = parts.join(' · ');
-
-            const row = UI.renderListRow({
-                label: task.title || task.routed_task_id,
-                sublabelNode: sub,
-                badgeText: task.status || 'queued',
-                badgeClass: 'badge-' + (task.status || 'queued'),
-                onClick: () => {
-                    const nextExpanded = detail.hidden;
-                    detail.hidden = !nextExpanded;
-                    row.setAttribute('aria-expanded', String(nextExpanded));
-                },
-                className: 'task-summary-row',
-            });
-            row.setAttribute('aria-expanded', 'false');
-            item.appendChild(row);
-
-            const detail = document.createElement('div');
-            detail.className = 'task-detail';
-            detail.hidden = true;
-
-            if (task.instructions) {
-                const instrLabel = document.createElement('div');
-                instrLabel.className = 'detail-label';
-                instrLabel.textContent = 'Instructions';
-                detail.appendChild(instrLabel);
-                const instrBody = document.createElement('div');
-                instrBody.className = 'detail-body';
-                instrBody.textContent = task.instructions;
-                detail.appendChild(instrBody);
-            }
-
-            const resultText = task.result_summary || task.result_text || task.summary || '';
-            if (resultText) {
-                const resultLabel = document.createElement('div');
-                resultLabel.className = 'detail-label';
-                resultLabel.textContent = 'Latest result';
-                detail.appendChild(resultLabel);
-                const resultBody = document.createElement('div');
-                resultBody.className = 'detail-body';
-                resultBody.textContent = resultText;
-                detail.appendChild(resultBody);
-            }
-
-            if (task.parent_conversation_id) {
-                const linkWrap = document.createElement('div');
-                linkWrap.style.marginTop = '8px';
-                const link = document.createElement('a');
-                link.href = '/ui/conversations/' + task.parent_conversation_id;
-                link.textContent = 'View parent conversation';
-                link.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    Router.navigate('/ui/conversations/' + task.parent_conversation_id);
-                });
-                linkWrap.appendChild(link);
-                detail.appendChild(linkWrap);
-            }
-
-            const actions = document.createElement('div');
-            actions.className = 'task-action-row';
-            const statusText = document.createElement('span');
-            statusText.className = 'task-action-status';
-            actions.appendChild(statusText);
-            _attachTaskActions(actions, task, statusText);
-            if (actions.childElementCount > 1) {
-                detail.appendChild(actions);
-            }
-
-            item.appendChild(detail);
-            return item;
-        });
-        UI.reconcileChildren(listEl, items);
-
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
+        UI.reconcileChildren(listEl, tasks.map(createTaskItem));
+        renderPaginationState({
             hasPrev: cursorStack.length > 0,
             hasNext: !!data.has_more,
-            info: '',
             onPrev: () => {
                 cursor = cursorStack.pop() || 0;
                 loadList();
@@ -336,50 +298,56 @@ function renderTaskList(container) {
                 loadList();
             },
         });
-        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
+        listLoaded = true;
     }
 
-    function loadBoard({ soft = false } = {}) {
-        if (!soft || !boardLoaded) {
-            UI.reconcileChildren(boardShell, UI.createSkeletonNodes(4, 'card'));
+    function loadSummary({ soft = false } = {}) {
+        if (!soft || !summaryLoaded) {
+            UI.reconcileChildren(summaryRail, UI.createSkeletonNodes(3, 'card'));
         }
-        API.listTasks({ limit: 100 }).then((data) => {
-            renderBoard(data.tasks || data || []);
-            boardLoaded = true;
+        API.getSummary().then((summary) => {
+            renderSummary(summary);
+            summaryLoaded = true;
         }).catch((err) => {
-            UI.reconcileChildren(boardShell, [UI.createErrorCard('Failed to load task board: ' + err.message, loadBoard)]);
+            if (soft && summaryLoaded) {
+                UI.reportError('Failed to refresh task summary', err, { context: 'Task summary soft refresh failed' });
+                return;
+            }
+            UI.reconcileChildren(summaryRail, [UI.createErrorCard('Failed to load task summary: ' + err.message, loadSummary)]);
         });
     }
 
     function loadList({ soft = false } = {}) {
         if (!soft || !listLoaded) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'card'));
             UI.reconcileChildren(pagEl, []);
         }
-
         const params = { cursor, limit };
         if (currentStatus) params.status = currentStatus;
-
         API.listTasks(params).then((data) => {
             renderList(data.tasks || data || [], data);
-            listLoaded = true;
         }).catch((err) => {
+            if (soft && listLoaded) {
+                UI.reportError('Failed to refresh tasks', err, { context: 'Task list soft refresh failed' });
+                return;
+            }
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load tasks: ' + err.message, loadList)]);
             UI.reconcileChildren(pagEl, []);
         });
     }
 
-    loadBoard();
-    loadList();
-
     let reloadDebounce = null;
-    const unsub = WS.subscribe('tasks', () => {
+    cleanups.add(WS.subscribe('tasks', () => {
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => {
-            loadBoard({ soft: true });
+            loadSummary({ soft: true });
             loadList({ soft: true });
-        }, 400);
-    });
+        }, 350);
+    }));
+
+    syncStatusButtons();
+    loadSummary();
+    loadList();
+
     cleanups.add(() => clearTimeout(reloadDebounce));
-    cleanups.add(unsub);
 }

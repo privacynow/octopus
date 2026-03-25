@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -39,7 +38,6 @@ from app.octopus_cli.models import (
     Workspace,
 )
 from app.subprocess_env import build_subprocess_env
-from octopus_sdk.registry.client import RegistryClient, RegistryClientError
 
 
 LOCAL_REGISTRY_INTERNAL_URL = "http://registry:8787"
@@ -960,21 +958,26 @@ class OctopusManager:
             result = self.docker.bot_compose(target.identifier, "exec", "bot", "sh", capture_output=False, check=False)
         return result.returncode
 
-    async def _registry_identity_valid_async(self, connection: RegistryConnection, state: dict[str, str]) -> bool:
+    def registry_identity_valid(self, connection: RegistryConnection, state: dict[str, str]) -> bool:
         agent_id = state.get("agent_id", "")
         agent_token = state.get("agent_token", "")
         if not agent_id or not agent_token:
             return False
         base_url = self.local_registry_public_base_url() if connection.url == LOCAL_REGISTRY_INTERNAL_URL else connection.url
-        client = RegistryClient(base_url, agent_token=agent_token)
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/v1/agents/{agent_id}/status",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            method="GET",
+        )
         try:
-            await client.get_agent_status(agent_id)
-        except RegistryClientError:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.status >= 400:
+                    return False
+                payload = json.loads(response.read() or b"{}")
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, ValueError):
             return False
-        return True
-
-    def registry_identity_valid(self, connection: RegistryConnection, state: dict[str, str]) -> bool:
-        return asyncio.run(self._registry_identity_valid_async(connection, state))
+        response_agent_id = str(payload.get("agent_id", "")).strip()
+        return not response_agent_id or response_agent_id == agent_id
 
     def verify_registry_enrollment(self, slug: str, registry_id: str) -> None:
         for _ in range(10):

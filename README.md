@@ -21,7 +21,7 @@ local registry.
 - optional registry mode with:
   - operator browser UI at `/ui`
   - conversation projection
-  - routed-task coordination
+  - structured routed-task coordination
   - agent discovery and health publication
   - per-connection scope: `full`, `channel`, or `coordination`
 - Claude or Codex provider runtimes
@@ -95,10 +95,16 @@ step. Main screens:
 - **Dashboard** — attention-first home screen with drillable summary cards
 - **Approvals** — pending operator decisions
 - **Agents** — list rows with server-side search/state filters
-- **Conversations** — server-side search/status filters, compose, cancel,
-  export, human-first default timeline
+- **Conversations** — server-side search/status filters, compose, direct
+  assignment, cancel, export, human-first default timeline
 - **Tasks** — routed task rows with inline detail and parent-conversation links
 - **Capabilities**, **Skills**, **Usage**, **Guidance**
+
+Conversation compose currently supports two operator modes:
+
+- **Message** — send a normal message into the conversation
+- **Send directly** — submit a structured task to a selected bot, capability,
+  or role without relying on text parsing in the registry UI
 
 Realtime comes from `/v1/ws` and uses explicit typed topics for:
 
@@ -124,6 +130,13 @@ Realtime comes from `/v1/ws` and uses explicit typed topics for:
     `tool.execution`, `approval.requested`, `approval.decided`,
     `delegation.proposed`, `delegation.submitted`, `delegation.completed`
   - `full`: currently the same set as `standard`
+
+Delegation and routed work are now structured end to end:
+
+- registry-origin direct assignment and delegation go through typed
+  conversation actions
+- routed tasks use explicit lifecycle transitions such as `queued`, `leased`,
+  `running`, `completed`, `failed`, `cancelled`, and `timed_out`
 
 ## Shared Workspaces
 

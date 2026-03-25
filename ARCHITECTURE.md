@@ -148,7 +148,7 @@ Unknown or malformed refs fail fast.
 | `octopus_sdk.execution_context` | authoritative resolved execution context and context hashing |
 | `octopus_sdk.execution_events` | `ExecutionEventSink` protocol |
 | `octopus_sdk.event_sink` | `RegistryEventSink`, `NoOpEventSink` |
-| `octopus_sdk.delegation` | `DelegationIntentParser`, `XmlTagDelegationParser` |
+| `octopus_sdk.task_protocol` | routed-task lifecycle states, transitions, and idempotent transition validation |
 | `octopus_sdk.providers` | provider protocol and execution result/tool models |
 
 The runtime surface is protocol-based, not builder-based. `octopus_sdk.runtime`
@@ -164,6 +164,16 @@ These are bundled into `ExecutionServices`, and
 `build_execution_runtime(...)` assembles a typed `ExecutionRuntime`. Concrete
 applications and channel implementations provide the adapters and callbacks.
 
+Structured coordination now flows through the SDK as well:
+
+- providers return `RunResult.coordination_intent` when they want the runtime
+  to propose delegated work
+- `ConversationProjectionPort.submit_action(...)` is the shared write surface
+  for typed coordination actions such as `direct_assign`, `delegate_tasks`,
+  `approve_delegation`, and `cancel_delegation`
+- routed-task status/result changes are validated by
+  `octopus_sdk.task_protocol.apply_task_transition(...)`
+
 ### Config, Sessions, And Control-Plane Ports
 
 | Module | Owns |
@@ -177,6 +187,52 @@ applications and channel implementations provide the adapters and callbacks.
 
 The SDK owns these interfaces and models. Bus-backed, no-op, HTTP-backed, or
 transport-specific implementations live in the application layer.
+
+### Structured Coordination And Task Protocol
+
+The current coordination model has two explicit lanes:
+
+- **content lane**
+  - user/operator messages
+  - provider reasoning
+  - bot replies
+- **coordination lane**
+  - typed conversation actions
+  - delegation proposals and approvals
+  - routed-task submission, status, and result updates
+
+The coordination lane is no longer based on provider-emitted XML. Registry and
+Telegram coordination go through typed SDK and registry contracts.
+
+Current typed action family in `octopus_sdk.registry.models`:
+
+- `approve`
+- `reject`
+- `cancel_conversation`
+- `retry_allow`
+- `retry_skip`
+- `recovery_discard`
+- `recovery_replay`
+- `direct_assign`
+- `delegate_tasks`
+- `approve_delegation`
+- `cancel_delegation`
+- `cancel_task`
+- `retry_task`
+
+Current routed-task lifecycle in `octopus_sdk.task_protocol`:
+
+- `queued`
+- `leased`
+- `running`
+- `completed`
+- `failed`
+- `cancelled`
+- `timed_out`
+
+Every routed-task transition carries a `transition_id`, and registry stores use
+that together with the current task snapshot to enforce transition legality and
+idempotency.
 
 ### Example: Adding A Slack Transport
 
@@ -335,6 +391,9 @@ Important current behavior:
 - conversation list supports server-side `q` and `status`
 - task list supports server-side `status`
 - usage is derived from provider response events
+- conversation detail can submit typed actions through `POST /v1/conversations/{id}/actions`
+- direct operator routing and delegated coordination share the same action
+  surface and backend state model
 
 ### Realtime Model
 
@@ -358,6 +417,14 @@ Current realtime envelope types:
 The SPA is a vanilla JS application in `ui/` and subscribes to explicit topics
 through `ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
 topics; conversation detail also renders progress updates.
+
+Conversation detail in `ui/js/components/conversation-detail.js` is also the
+main operator entrypoint for structured coordination today:
+
+- normal conversation messages still go through `POST /v1/conversations/{id}/messages`
+- direct task assignment goes through typed `direct_assign` actions
+- the default “Conversation” tab filters out low-level machine activity, while
+  “Full activity” shows the full stored event stream
 
 ## Main Interaction Flows
 
@@ -401,20 +468,19 @@ sequenceDiagram
 
 ### Delegation And Routed Tasks
 
-This is how one bot delegates work to another through the registry.
+This is how one bot delegates work to another through the registry now.
 
 ```mermaid
 sequenceDiagram
     participant O as Origin bot
-    participant D as Delegation parser
-    participant T as Task router
+    participant X as SDK execution
+    participant P as Projection
     participant R as Registry
     participant G as Target bot
 
-    O->>D: parse output
-    D-->>O: task intents
-    O->>T: submit task
-    T->>R: create task
+    O->>X: provider result with coordination_intent
+    X->>P: submit typed action
+    P->>R: direct_assign / delegate_tasks / approve_delegation
     R->>G: deliver task
     G->>R: status / result
     R->>O: deliver result
@@ -479,8 +545,10 @@ Current defaults:
 4. Channels own ref formats, ingress, and egress behavior.
 5. `octopus_sdk.execution` owns channel-neutral execution orchestration; transport implementations supply adapters and callbacks.
 6. `octopus_sdk.runtime` is protocol-based composition, not a builder API.
-7. Projection, routing, discovery, and health publication go through SDK ports.
-8. Stored registry events use contracts from `octopus_sdk.events`.
-9. Websocket realtime uses contracts from `octopus_sdk.realtime` and explicit topic subscriptions.
-10. Live per-registry agent identity comes from runtime registry state, not from the startup-only `BotConfig.registry_agent_ids` snapshot.
-11. SQLite and Postgres backends must remain behaviorally aligned.
+7. Structured coordination goes through typed SDK and registry contracts, not provider-emitted XML.
+8. Projection, routing, discovery, and health publication go through SDK ports.
+9. Routed-task lifecycle legality and idempotency are enforced through `octopus_sdk.task_protocol`.
+10. Stored registry events use contracts from `octopus_sdk.events`.
+11. Websocket realtime uses contracts from `octopus_sdk.realtime` and explicit topic subscriptions.
+12. Live per-registry agent identity comes from runtime registry state, not from the startup-only `BotConfig.registry_agent_ids` snapshot.
+13. SQLite and Postgres backends must remain behaviorally aligned.

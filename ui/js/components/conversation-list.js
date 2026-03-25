@@ -3,11 +3,6 @@
  */
 function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
-    const contentInner = container.closest('.content-inner');
-    if (contentInner) {
-        contentInner.classList.add('workspace-route-wide');
-        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
-    }
     let cursor = 0;
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
@@ -17,39 +12,15 @@ function renderConversationList(container) {
     let hasLoaded = false;
     let quickStartLoaded = false;
     let openingConversationFor = '';
-    const statusOptions = [
-        { label: 'All', value: '' },
-        { label: 'Open', value: 'open' },
-        { label: 'Running', value: 'running' },
-        { label: 'Done', value: 'completed' },
-        { label: 'Failed', value: 'failed' },
-    ];
 
     // Header
     const header = document.createElement('div');
-    header.className = 'page-header page-header-inline page-header-tight';
-    const titleWrap = document.createElement('div');
-    titleWrap.className = 'page-header-title-wrap';
-    titleWrap.innerHTML = '<h2>Conversations</h2>';
-    header.appendChild(titleWrap);
-
-    const headerActions = document.createElement('div');
-    headerActions.className = 'page-header-actions page-header-actions-inline';
-    const allAgents = document.createElement('a');
-    allAgents.href = '/ui/agents';
-    allAgents.className = 'section-link';
-    allAgents.textContent = 'Agents';
-    headerActions.appendChild(allAgents);
-    const approvalsLink = document.createElement('a');
-    approvalsLink.href = '/ui/approvals';
-    approvalsLink.className = 'section-link';
-    approvalsLink.textContent = 'Approvals';
-    headerActions.appendChild(approvalsLink);
-    header.appendChild(headerActions);
+    header.className = 'page-header';
+    header.innerHTML = '<h2>Conversations</h2><p>Follow active threads, send replies, and jump into work that still needs a decision.</p>';
     container.appendChild(header);
 
     const quickStart = document.createElement('section');
-    quickStart.className = 'conversation-launcher-panel conversation-launcher-panel-compact';
+    quickStart.className = 'card conversation-launcher-panel';
     container.appendChild(quickStart);
 
     // Filter bar
@@ -58,16 +29,26 @@ function renderConversationList(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = 'Search';
+    searchInput.placeholder = 'Search conversations';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search conversations');
+    searchInput.setAttribute('title', 'Press / to focus search');
     filterBar.appendChild(searchInput);
 
-    const statusBar = document.createElement('div');
-    statusBar.className = 'segmented-control';
-    statusBar.setAttribute('role', 'tablist');
-    statusBar.setAttribute('aria-label', 'Filter conversations by status');
-    filterBar.appendChild(statusBar);
+    const searchHint = document.createElement('span');
+    searchHint.className = 'search-shortcut-hint';
+    searchHint.textContent = 'Shortcut: /';
+    filterBar.appendChild(searchHint);
+
+    const statusSelect = document.createElement('select');
+    statusSelect.setAttribute('aria-label', 'Filter conversations by status');
+    statusSelect.innerHTML =
+        '<option value="">All statuses</option>' +
+        '<option value="open">Open</option>' +
+        '<option value="running">Running</option>' +
+        '<option value="completed">Completed</option>' +
+        '<option value="failed">Failed</option>';
+    filterBar.appendChild(statusSelect);
 
     container.appendChild(filterBar);
 
@@ -91,32 +72,15 @@ function renderConversationList(container) {
         }, 300);
     });
 
+    statusSelect.addEventListener('change', () => {
+        currentStatus = statusSelect.value;
+        cursor = 0;
+        cursorStack = [];
+        UI.updateQueryParams({ q: currentQ, status: currentStatus });
+        loadPage();
+    });
     searchInput.value = currentQ;
-
-    function renderStatusFilters() {
-        const buttons = statusOptions.map((option) => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = `segmented-control-btn${option.value === currentStatus ? ' active' : ''}`;
-            btn.textContent = option.label;
-            btn.setAttribute('role', 'tab');
-            btn.setAttribute('aria-selected', String(option.value === currentStatus));
-            btn.tabIndex = option.value === currentStatus ? 0 : -1;
-            btn.dataset.key = option.value || 'all';
-            btn.addEventListener('click', () => {
-                if (option.value === currentStatus) return;
-                currentStatus = option.value;
-                cursor = 0;
-                cursorStack = [];
-                UI.updateQueryParams({ q: currentQ, status: currentStatus });
-                renderStatusFilters();
-                loadPage();
-            });
-            return btn;
-        });
-        UI.reconcileChildren(statusBar, buttons);
-    }
-    renderStatusFilters();
+    statusSelect.value = currentStatus;
 
     function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
         const wrapper = document.createElement('div');
@@ -131,56 +95,77 @@ function renderConversationList(container) {
     }
 
     function renderQuickStart(agents) {
-        const connected = [...agents].sort((a, b) =>
-            String(a.display_name || a.slug || a.agent_id).localeCompare(String(b.display_name || b.slug || b.agent_id))
-        );
-        if (!connected.length) {
-            UI.reconcileChildren(quickStart, []);
-            return;
-        }
         const shell = document.createElement('div');
-        shell.className = 'conversation-launcher conversation-launcher-compact';
+        shell.className = 'conversation-launcher';
         shell.dataset.key = 'launcher-shell';
+
+        const head = document.createElement('div');
+        head.className = 'conversation-launcher-head';
+        head.innerHTML = '<div><strong>Start or reopen with</strong><span>Jump straight into a conversation with a connected agent.</span></div>';
+        const links = document.createElement('div');
+        links.className = 'conversation-launcher-links';
+
+        const allAgents = document.createElement('a');
+        allAgents.href = '/ui/agents';
+        allAgents.className = 'section-link';
+        allAgents.textContent = 'All agents';
+        links.appendChild(allAgents);
+
+        const approvals = document.createElement('a');
+        approvals.href = '/ui/approvals';
+        approvals.className = 'section-link';
+        approvals.textContent = 'Review approvals';
+        links.appendChild(approvals);
+
+        head.appendChild(links);
+        shell.appendChild(head);
 
         const launcherList = document.createElement('div');
         launcherList.className = 'conversation-launcher-list';
         launcherList.dataset.key = 'launcher-list';
 
-        connected.slice(0, 16).forEach((agent) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'conversation-launcher-chip';
-            button.dataset.key = agent.agent_id;
-            button.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
-            button.title = [agent.role || 'agent', agent.provider || '', agent.slug || ''].filter(Boolean).join(' · ');
-            button.textContent = agent.display_name || agent.slug || agent.agent_id;
+        if (!agents.length) {
+            launcherList.appendChild(UI.renderEmptyState('No connected agents are ready right now.', true));
+        } else {
+            agents.forEach((agent) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'conversation-launcher-button';
+                button.dataset.key = agent.agent_id;
+                button.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
 
-            button.addEventListener('click', async () => {
-                if (openingConversationFor === agent.agent_id) return;
-                openingConversationFor = agent.agent_id;
-                button.disabled = true;
-                button.classList.add('busy');
-                try {
-                    const conversation = await API.openConversationForAgent(agent.agent_id, {
-                        title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
-                    });
-                    Router.navigate('/ui/conversations/' + conversation.conversation_id);
-                } catch (err) {
-                    openingConversationFor = '';
-                    button.disabled = false;
-                    button.classList.remove('busy');
-                    UI.reportError('Failed to open a conversation for this agent', err, { context: 'Conversation list quick start failed' });
-                }
+                const title = document.createElement('strong');
+                title.textContent = agent.display_name || agent.slug || agent.agent_id;
+                button.appendChild(title);
+
+                const subtitle = document.createElement('span');
+                subtitle.textContent = [
+                    agent.role || 'agent',
+                    agent.provider || '',
+                    agent.slug || '',
+                ].filter(Boolean).join(' · ');
+                button.appendChild(subtitle);
+
+                button.addEventListener('click', async () => {
+                    if (openingConversationFor === agent.agent_id) return;
+                    openingConversationFor = agent.agent_id;
+                    button.disabled = true;
+                    button.classList.add('busy');
+                    try {
+                        const conversation = await API.openConversationForAgent(agent.agent_id, {
+                            title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
+                        });
+                        Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                    } catch (err) {
+                        openingConversationFor = '';
+                        button.disabled = false;
+                        button.classList.remove('busy');
+                        UI.reportError('Failed to open a conversation for this agent', err, { context: 'Conversation list quick start failed' });
+                    }
+                });
+
+                launcherList.appendChild(button);
             });
-
-            launcherList.appendChild(button);
-        });
-        if (connected.length > 16) {
-            const moreLink = document.createElement('a');
-            moreLink.href = '/ui/agents';
-            moreLink.className = 'conversation-launcher-chip conversation-launcher-chip-link';
-            moreLink.textContent = `+${connected.length - 16}`;
-            launcherList.appendChild(moreLink);
         }
 
         shell.appendChild(launcherList);
@@ -188,7 +173,10 @@ function renderConversationList(container) {
     }
 
     function loadQuickStart({ soft = false } = {}) {
-        API.listAgents({ state: 'connected', limit: 32 }).then((data) => {
+        if (!soft || !quickStartLoaded) {
+            UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
+        }
+        API.listAgents({ state: 'connected', limit: 8 }).then((data) => {
             renderQuickStart(data.agents || data || []);
             quickStartLoaded = true;
         }).catch((err) => {
@@ -196,7 +184,7 @@ function renderConversationList(container) {
                 UI.reportError('Failed to refresh connected agents', err, { context: 'Conversation quick start soft refresh failed' });
                 return;
             }
-            UI.reconcileChildren(quickStart, []);
+            UI.reconcileChildren(quickStart, [UI.createErrorCard('Failed to load connected agents: ' + err.message, loadQuickStart)]);
         });
     }
 
@@ -214,7 +202,7 @@ function renderConversationList(container) {
             const convos = data.conversations || data || [];
 
             if (convos.length === 0) {
-                UI.reconcileChildren(listEl, [UI.renderEmptyState(currentQ || currentStatus ? 'No matches.' : 'No conversations yet.', true)]);
+                UI.reconcileChildren(listEl, [UI.renderEmptyState('No conversations found')]);
                 UI.reconcileChildren(pagEl, []);
                 return;
             }

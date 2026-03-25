@@ -1333,10 +1333,6 @@ select {
     max-width: 1680px;
 }
 
-#content > .content-inner.workspace-route-conversation {
-    max-width: 1780px;
-}
-
 .route-enter {
     opacity: 0;
     transform: translateY(8px);
@@ -1350,8 +1346,8 @@ select {
 
 .page-header {
     border-bottom: 1px solid var(--border);
-    padding-bottom: var(--space-3);
-    margin-bottom: var(--space-4);
+    padding-bottom: var(--space-4);
+    margin-bottom: var(--space-5);
 }
 
 .page-header h2 {
@@ -1364,17 +1360,6 @@ select {
     color: var(--text-secondary);
     font-size: var(--text-base);
     max-width: 48rem;
-}
-
-.page-header-inline {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: var(--space-3);
-}
-
-.page-header-title-wrap {
-    min-width: 0;
 }
 
 .page-header-hero {
@@ -1390,11 +1375,6 @@ select {
     justify-content: flex-end;
     gap: var(--space-2);
     margin: calc(var(--space-4) * -1) 0 var(--space-3);
-}
-
-.page-header-actions-inline {
-    margin: 0;
-    flex-wrap: wrap;
 }
 
 .card,
@@ -1471,19 +1451,18 @@ select {
 
 .segmented-control {
     display: inline-flex;
-    padding: 0.2rem;
+    padding: 0.3rem;
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--bg-tertiary);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
-    flex-wrap: wrap;
 }
 
 .segmented-control-btn {
     border: none;
     background: transparent;
     color: var(--text-secondary);
-    padding: 0.48rem 0.82rem;
+    padding: 0.6rem 0.95rem;
     border-radius: 999px;
     cursor: pointer;
     font-weight: 600;
@@ -1628,7 +1607,7 @@ select {
 
 .empty-state,
 .error-card {
-    padding: var(--space-4);
+    padding: var(--space-6);
 }
 
 .error-card p,
@@ -1650,9 +1629,9 @@ select {
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--bg-secondary);
-    padding: 1rem 1.05rem;
+    padding: var(--space-5);
     box-shadow: var(--shadow-card);
-    min-height: 104px;
+    min-height: 136px;
 }
 
 a.stat-card {
@@ -1668,9 +1647,9 @@ a.stat-card:hover {
 
 .stat-card-value {
     font-family: var(--font-display);
-    font-size: 2rem;
+    font-size: 2.5rem;
     line-height: 1;
-    margin-bottom: 0.35rem;
+    margin-bottom: var(--space-2);
 }
 
 .stat-card-label {
@@ -1687,7 +1666,37 @@ a.stat-card:hover {
 .dashboard-shell {
     display: flex;
     flex-direction: column;
+    gap: var(--space-5);
+}
+
+.dashboard-command {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: var(--space-4);
+    padding: 1.2rem 1.35rem;
+}
+
+.dashboard-command-copy {
+    display: grid;
+    gap: 0.3rem;
+    max-width: 36rem;
+}
+
+.dashboard-command h3 {
+    font-size: 1.25rem;
+    line-height: 1.1;
+}
+
+.dashboard-command p {
+    color: var(--text-secondary);
+    font-size: 0.96rem;
+}
+
+.dashboard-command-actions {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    display: flex;
 }
 
 .dashboard-summary-rail {
@@ -1698,11 +1707,11 @@ a.stat-card:hover {
 
 .dashboard-summary-rail .stat-card {
     min-height: 0;
-    padding: 0.9rem 0.95rem;
+    padding: 1.2rem 1.1rem;
 }
 
 .dashboard-summary-rail .stat-card-value {
-    font-size: 1.7rem;
+    font-size: 2.05rem;
 }
 
 .dashboard-work-grid {
@@ -1711,42 +1720,29 @@ a.stat-card:hover {
     gap: var(--space-4);
 }
 
-.dashboard-work-grid.dashboard-work-grid-single {
-    grid-template-columns: minmax(0, 1fr);
-    max-width: 56rem;
-}
-
 .dashboard-section {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-4);
 }
 
 .dashboard-section-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
 }
 
-.dashboard-section-title {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-}
-
 .dashboard-section-header strong {
     display: block;
-    font-size: 0.98rem;
+    font-size: 1.05rem;
 }
 
-.dashboard-section-count {
+.dashboard-section-header span {
     color: var(--text-secondary);
-    font-size: 0.82rem;
-    padding: 0.18rem 0.48rem;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--bg-tertiary);
+    font-size: 0.92rem;
+    margin-top: 0.25rem;
+    display: block;
 }
 
 .section-link {
@@ -1766,7 +1762,7 @@ a.stat-card:hover {
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    padding: 0.82rem 0.95rem;
+    padding: 1rem 1.1rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     color: var(--text);
@@ -1791,9 +1787,8 @@ a.stat-card:hover {
 }
 
 .empty-state-compact {
-    padding: var(--space-2) 0;
+    padding: var(--space-4) 0 var(--space-2);
     text-align: left;
-    font-size: 0.9rem;
 }
 
 .task-board-shell,
@@ -1812,17 +1807,24 @@ a.stat-card:hover {
 
 .task-feed-header strong {
     display: block;
-    font-size: 0.96rem;
+    font-size: 1.05rem;
+}
+
+.task-feed-header span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+    margin-top: 0.25rem;
 }
 
 .task-summary-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
-    gap: var(--space-2);
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: var(--space-3);
 }
 
 .task-summary-chip {
-    padding: 0.72rem 0.8rem;
+    padding: 0.95rem 1rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg-secondary);
@@ -1831,28 +1833,28 @@ a.stat-card:hover {
 .task-summary-chip strong {
     display: block;
     font-family: var(--font-display);
-    font-size: 1.15rem;
+    font-size: 1.45rem;
     line-height: 1;
     margin-bottom: 0.25rem;
 }
 
 .task-summary-chip span {
     color: var(--text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.84rem;
 }
 
 .task-board {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-4);
 }
 
 .task-lane {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
     min-height: 0;
-    padding: var(--space-3);
+    padding: var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--surface-glass);
@@ -1867,17 +1869,17 @@ a.stat-card:hover {
 }
 
 .task-lane-header strong {
-    font-size: 0.92rem;
+    font-size: 1rem;
 }
 
 .task-lane-header span {
     color: var(--text-secondary);
-    font-size: 0.8rem;
+    font-size: 0.88rem;
 }
 
 .task-lane-body {
     display: grid;
-    gap: var(--space-2);
+    gap: var(--space-3);
     align-content: start;
     min-height: 0;
 }
@@ -1885,8 +1887,8 @@ a.stat-card:hover {
 .task-board-card,
 .conversation-task-card {
     display: grid;
-    gap: 0.5rem;
-    padding: 0.85rem 0.9rem;
+    gap: var(--space-2);
+    padding: 1rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg-secondary);
@@ -1986,7 +1988,7 @@ a.stat-card:hover {
 .conversation-page {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
-    gap: var(--space-2);
+    gap: var(--space-3);
     flex: 1;
     min-height: 0;
 }
@@ -1997,21 +1999,18 @@ a.stat-card:hover {
 
 .conversation-shell {
     display: grid;
-    gap: var(--space-2);
-    padding: 0;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
+    gap: var(--space-3);
+    padding: var(--space-4);
 }
 
 .conversation-meta {
     display: grid;
-    gap: 0.65rem;
+    gap: var(--space-3);
 }
 
 .conversation-meta-hero {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-3);
 }
@@ -2021,46 +2020,61 @@ a.stat-card:hover {
     gap: 0.35rem;
 }
 
+.conversation-back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.conversation-back-link:hover {
+    color: var(--accent);
+}
+
 .conversation-meta-title {
     margin: 0;
-    font-size: clamp(1.25rem, 1.7vw, 1.65rem);
-    line-height: 1.08;
+    font-size: clamp(1.55rem, 2vw, 2rem);
+    line-height: 1.12;
 }
 
 .conversation-meta-subtitle {
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: 0.95rem;
 }
 
 .conversation-meta-facts {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
+    gap: var(--space-2);
 }
 
-.conversation-meta-chip {
+.conversation-meta-fact {
     display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.34rem 0.58rem;
-    border-radius: 999px;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    font-size: 0.8rem;
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    background: var(--bg-tertiary);
+}
+
+.conversation-meta-fact span {
+    color: var(--text-muted);
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.conversation-meta-fact strong {
+    color: var(--text);
+    word-break: break-word;
+    font-size: 0.92rem;
 }
 
 .meta-badge-stack {
     display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.55rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.4rem;
 }
 
 .meta-timestamp {
@@ -2097,21 +2111,21 @@ a.stat-card:hover {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-4);
     background: linear-gradient(180deg, var(--bg-tertiary), var(--bg));
 }
 
 .conversation-panel-compact .chat-timeline {
     flex: 0 0 auto;
-    min-height: 0;
-    max-height: 18rem;
+    min-height: 8.5rem;
+    max-height: 12rem;
 }
 
 .conversation-task-view {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-4);
     background: linear-gradient(180deg, var(--bg-tertiary), var(--bg));
     display: grid;
     gap: var(--space-3);
@@ -2160,7 +2174,7 @@ a.stat-card:hover {
     grid-template-columns: 1fr auto;
     gap: var(--space-3);
     align-items: end;
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border);
     background: linear-gradient(180deg, rgba(244, 239, 232, 0.98), rgba(248, 244, 238, 0.98));
 }
@@ -2186,7 +2200,7 @@ a.stat-card:hover {
 
 .compose-hint {
     color: var(--text-muted);
-    font-size: 0.82rem;
+    font-size: 0.88rem;
 }
 
 .compose-target-preview {
@@ -2199,18 +2213,40 @@ a.stat-card:hover {
 }
 
 .conversation-toolbar-shell {
-    border-top: 0;
-    padding-top: 0;
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-3);
     margin-bottom: 0;
 }
 
 .conversation-launcher-panel {
-    padding: 0 0 var(--space-1);
+    padding: var(--space-4);
 }
 
 .conversation-launcher {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.conversation-launcher-head {
     display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
     align-items: flex-start;
+}
+
+.conversation-launcher-head strong {
+    display: block;
+    font-size: 1rem;
+}
+
+.conversation-launcher-head span {
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+}
+
+.conversation-launcher-links {
+    display: flex;
+    align-items: center;
     gap: var(--space-3);
     flex-wrap: wrap;
 }
@@ -2218,40 +2254,41 @@ a.stat-card:hover {
 .conversation-launcher-list {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem;
+    gap: var(--space-2);
 }
 
-.conversation-launcher-chip {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 0;
-    padding: 0.42rem 0.75rem;
-    border-radius: 999px;
+.conversation-launcher-button {
+    display: grid;
+    gap: 0.2rem;
+    min-width: 12rem;
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg-secondary);
     color: var(--text);
-    text-align: center;
-    font-size: 0.88rem;
-    font-weight: 600;
-    text-decoration: none;
+    text-align: left;
     cursor: pointer;
     transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.conversation-launcher-chip:hover,
-.conversation-launcher-chip:focus-visible {
+.conversation-launcher-button:hover,
+.conversation-launcher-button:focus-visible {
     border-color: rgba(150, 67, 39, 0.35);
     box-shadow: var(--shadow-soft);
     transform: translateY(-1px);
 }
 
-.conversation-launcher-chip.busy {
-    opacity: 0.72;
+.conversation-launcher-button strong {
+    font-size: 0.97rem;
 }
 
-.conversation-launcher-chip-link {
-    color: var(--accent);
+.conversation-launcher-button span {
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+}
+
+.conversation-launcher-button.busy {
+    opacity: 0.72;
 }
 
 .compose-suggestions {
@@ -2537,13 +2574,13 @@ a.stat-card:hover {
 
 .approval-list {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-4);
 }
 
 .approval-card {
     display: grid;
-    gap: var(--space-3);
-    padding: var(--space-3);
+    gap: var(--space-4);
+    padding: var(--space-4);
 }
 
 .approval-card-header {
@@ -2562,11 +2599,11 @@ a.stat-card:hover {
 .approval-facts {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-2);
+    gap: var(--space-3);
 }
 
 .approval-fact {
-    padding: 0.7rem 0.8rem;
+    padding: 0.9rem 1rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg-tertiary);
@@ -2716,7 +2753,7 @@ a.stat-card:hover {
 }
 
 .list-row-action {
-    margin-right: var(--space-2);
+    margin-right: var(--space-3);
     white-space: nowrap;
 }
 
@@ -2862,11 +2899,6 @@ a.stat-card:hover {
         justify-content: flex-start;
     }
 
-    .page-header-inline {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
     .conversation-page {
         min-height: auto;
         grid-template-rows: auto auto auto;
@@ -2886,17 +2918,19 @@ a.stat-card:hover {
         max-height: none;
     }
 
+    .dashboard-command {
+        flex-direction: column;
+    }
+
+    .dashboard-command-actions,
+    .dashboard-summary-rail,
     .dashboard-work-grid,
+    .task-summary-strip,
     .task-board,
     .task-board-conversation,
     .metadata-grid,
     .inline-metrics {
         grid-template-columns: 1fr;
-    }
-
-    .dashboard-summary-rail,
-    .task-summary-strip {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .conversation-meta-facts,
@@ -2943,19 +2977,22 @@ a.stat-card:hover {
         align-items: stretch;
     }
 
-    .conversation-toolbar .toolbar-actions {
+    .conversation-launcher-head,
+    .toolbar-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .conversation-launcher-links,
+    .toolbar-actions {
         margin-left: 0;
-        width: auto;
+        width: 100%;
         justify-content: flex-start;
     }
 
-    .conversation-launcher-chip {
-        flex: 0 1 auto;
-        min-width: 0;
-    }
-
-    .conversation-toolbar .toolbar-actions > * {
-        flex: 0 0 auto;
+    .conversation-launcher-button,
+    .toolbar-actions > * {
+        flex: 1 1 0;
         min-width: 0;
     }
 
@@ -2968,8 +3005,8 @@ a.stat-card:hover {
         flex-direction: column;
     }
 
-    .meta-badge-stack {
-        justify-content: flex-start;
+    .conversation-shell {
+        padding: var(--space-3);
     }
 
     .conversation-meta-facts,
@@ -3033,10 +3070,6 @@ a.stat-card:hover {
 
     .toolbar-actions > * {
         flex-basis: 100%;
-    }
-
-    .task-summary-strip {
-        grid-template-columns: 1fr;
     }
 }
 

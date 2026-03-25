@@ -8,15 +8,13 @@ function renderUsageView(container) {
 
     // Header
     const header = document.createElement('div');
-    header.className = 'page-header page-header-tight';
-    header.innerHTML = '<h2>Usage</h2>';
+    header.className = 'page-header';
+    header.innerHTML = '<h2>Usage</h2><p>Prompt, completion, and cost totals from provider responses and delegated task results</p>';
     container.appendChild(header);
 
     // Date range bar
     const rangeBar = document.createElement('div');
-    rangeBar.className = 'segmented-control';
-    rangeBar.setAttribute('role', 'tablist');
-    rangeBar.setAttribute('aria-label', 'Usage range');
+    rangeBar.className = 'date-range-bar';
 
     const ranges = [
         { label: 'Today', value: '1d' },
@@ -26,17 +24,13 @@ function renderUsageView(container) {
 
     ranges.forEach(r => {
         const btn = document.createElement('button');
-        btn.className = 'segmented-control-btn' + (r.value === currentRange ? ' active' : '');
+        btn.className = 'btn btn-sm' + (r.value === currentRange ? ' active' : '');
         btn.textContent = r.label;
         btn.setAttribute('data-range', r.value);
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(r.value === currentRange));
         btn.addEventListener('click', () => {
             currentRange = r.value;
-            rangeBar.querySelectorAll('.segmented-control-btn').forEach((button) => {
-                button.classList.toggle('active', button === btn);
-                button.setAttribute('aria-selected', String(button === btn));
-            });
+            rangeBar.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
             loadUsage();
         });
         rangeBar.appendChild(btn);

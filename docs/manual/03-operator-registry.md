@@ -2,27 +2,60 @@
 
 [← Manual home](README.md) · [Prev: Octopus](02-operator-octopus.md) · [Next: Sign in →](registry-ui/sign-in.md)
 
-The Registry **operator SPA** (`ui/`) lets you inspect enrolled bots, conversations, routed tasks, approvals, usage, and provider guidance from one browser shell. Octopus prints a **`/ui`** URL when the registry runs; sign in with **`REGISTRY_UI_TOKEN`** from **`.deploy/registry/.env`**.
+The Registry operator UI is the browser console under `/ui`. It is the main
+surface for:
 
-The manual splits the UI into **feature pages** below. Most pages embed the same **annotated desktop screenshots** used by [registry-guide.md](../registry-guide.md), under `docs/assets/registry/ui/`; the mobile quick-look page uses raw mobile captures so the narrow layout stays readable. For regeneration, see the registry guide § *Regenerating UI screenshots*.
+- watching active conversations and routed work
+- approving or rejecting blocked actions
+- opening or reusing conversations with connected agents
+- following task state without dropping into raw logs
+- reviewing full stored activity when you need diagnostics
 
-## Registry UI — feature pages (read in order)
+The shell is one responsive SPA:
 
-1. [Sign in](registry-ui/sign-in.md) — login form and operator credential
-2. [Dashboard](registry-ui/dashboard.md) — attention-first landing page with summary, queue previews, and health
-3. [Approvals](registry-ui/approvals.md) — pending decisions in one queue
-4. [Agents list](registry-ui/agents-list.md) — registry members, server-side search/state filters, pagination
-5. [Agent detail](registry-ui/agent-detail.md) — identity, workers, inline conversations
-6. [Agent-scoped conversations](registry-ui/agent-conversations.md) — full-page list for one agent
-7. [All conversations (list)](registry-ui/conversations-list.md) — create, search, status filter
-8. [Conversation search](registry-ui/conversations-search.md) — debounced query (`q`, ≥3 characters)
-9. [Conversation detail](registry-ui/conversation-detail.md) — human-first timeline, compose, cancel, export
-10. [Routed tasks](registry-ui/tasks.md) — routed work row summaries, inline detail, and parent conversation links
-11. [Capabilities](registry-ui/capabilities.md) — global coordination toggles
-12. [Skills catalog](registry-ui/skills-catalog.md) — search plus install / uninstall
-13. [Usage](registry-ui/usage.md) — token/cost rollups and date ranges
-14. [Provider guidance](registry-ui/guidance.md) — provider selector, draft editor, lifecycle controls
-15. [Deep links](registry-ui/deep-links.md) — bookmarkable dashboard/detail URLs
-16. [Mobile quick look](registry-ui/mobile.md) — drawer navigation, one-column approvals, and compact conversation detail
+- left rail on desktop, drawer on mobile
+- compact route header
+- one primary work surface per route
+- shared segmented controls, list rows, summary cards, and task/conversation
+  semantics across desktop and mobile
 
-**Also:** CLI registry flows (SVG) — [Octopus CLI](02-operator-octopus.md) and [`docs/assets/registry/`](../assets/registry/).
+Sign in with `REGISTRY_UI_TOKEN` from
+`.deploy/registry/.env` after `./octopus start registry` and `./octopus connect`
+have enrolled the bots you want to see.
+
+## Main Routes
+
+1. [Sign in](registry-ui/sign-in.md) — operator login
+2. [Dashboard](registry-ui/dashboard.md) — summary rail plus current needs
+3. [Approvals](registry-ui/approvals.md) — pending decisions with direct actions
+4. [Agents list](registry-ui/agents-list.md) — search, state filter, open conversation
+5. [Agent detail](registry-ui/agent-detail.md) — overview, workers, inline conversations
+6. [Agent conversation deep link](registry-ui/agent-conversations.md) — compatibility route that lands on the same agent workspace
+7. [Conversations list](registry-ui/conversations-list.md) — quick start, search, status filter, active threads
+8. [Conversation search](registry-ui/conversations-search.md) — debounced server-side query on the same route
+9. [Conversation detail](registry-ui/conversation-detail.md) — Conversation / Tasks / Full activity plus shared composer
+10. [Tasks](registry-ui/tasks.md) — routed-task queue with summary rail, filters, expandable details
+11. [Capabilities](registry-ui/capabilities.md) — coordination toggles
+12. [Skills catalog](registry-ui/skills-catalog.md) — catalog, install, uninstall
+13. [Usage](registry-ui/usage.md) — prompt/completion/cost rollups
+14. [Provider guidance](registry-ui/guidance.md) — provider-specific guidance lifecycle
+15. [Deep links](registry-ui/deep-links.md) — bookmarkable agent and conversation URLs
+16. [Mobile quick look](registry-ui/mobile.md) — current small-screen layout
+
+## What The UI Assumes
+
+- Conversations are the main operator workspace.
+- The same composer handles normal replies and direct routing:
+  `@m2`, `@cap:review`, or `@role:reviewer`.
+- Routed work is represented as first-class tasks, not as provider-generated
+  XML or free-form timeline text.
+- Usage totals come from provider-response usage data and can roll delegated
+  child work into the parent conversation when that usage is reported.
+
+## Screenshots
+
+Desktop screenshots on the feature pages use the annotated assets under
+[`docs/assets/registry/ui/`](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui).
+The mobile page uses the raw mobile captures from the same harness so the
+layouts stay legible. Regeneration steps live in
+[registry-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-guide.md).

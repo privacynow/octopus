@@ -2,8 +2,13 @@
 
 [← Manual home](../README.md) · [Prev: Conversations list](conversations-list.md) · [Next: Conversation detail →](conversation-detail.md)
 
-**Route:** still **`/ui/conversations`** — the search box is **debounced**; the server receives **`q`** only after you type **at least three characters**, which keeps noise and load down.
+**Route:** `/ui/conversations`
 
-The screenshot below uses the demo query **`Release`** against synthetic conversation titles from the doc capture seed (FTS-backed list narrowing).
+Search stays on the same route. The input is debounced and sends the query to
+the server as `q`, so the filtered list reflects the real registry dataset
+rather than only the conversations already rendered in the browser.
+
+The screenshot below uses `Release` from the seeded docs dataset so you can see
+the list narrow without leaving the page.
 
 ![Conversations filtered](../../assets/registry/ui/05b-conversations-filtered-annotated.png)

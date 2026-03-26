@@ -1,18 +1,18 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 145.796875,
-      "width": 1060,
-      "height": 58,
+      "x": 258,
+      "y": 111.484375,
+      "width": 1076,
+      "height": 61.25,
       "label": "Client-side search across the skill catalog",
       "color": "#ff9800"
     },
     {
-      "x": 274,
-      "y": 238.90625,
-      "width": 1060,
-      "height": 112.796875,
+      "x": 258,
+      "y": 198.421875,
+      "width": 1076,
+      "height": 147.46875,
       "label": "Catalog row with install or uninstall action",
       "color": "#2196f3"
     }

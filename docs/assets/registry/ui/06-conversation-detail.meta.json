@@ -1,35 +1,35 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 139.796875,
-      "width": 1060,
-      "height": 201.96875,
-      "label": "Readable summary: who this is with, source, status, and reference",
+      "x": 258,
+      "y": 26,
+      "width": 1076,
+      "height": 100.53125,
+      "label": "Compact operator-facing header with With / Assigned to / Started in, status, activity shortcut, and Copy ref action",
       "color": "#ff9800"
     },
     {
-      "x": 274,
-      "y": 359.765625,
-      "width": 1060,
-      "height": 66.78125,
-      "label": "Default conversation view plus optional full activity log",
+      "x": 258,
+      "y": 126.53125,
+      "width": 1076,
+      "height": 62.21875,
+      "label": "Conversation, Tasks, and Full activity views",
       "color": "#4caf50"
     },
     {
-      "x": 273,
-      "y": 536.53125,
-      "width": 1062,
-      "height": 1383.53125,
-      "label": "Human-first conversation flow with approvals and progress updates",
+      "x": 281,
+      "y": 211.75,
+      "width": 1030,
+      "height": 846.234375,
+      "label": "Conversation view with messages, approvals, delegation milestones, and task status updates",
       "color": "#2196f3"
     },
     {
-      "x": 275,
-      "y": 1922.0625,
-      "width": 1058,
-      "height": 105,
-      "label": "Operator compose box for /messages",
+      "x": 283,
+      "y": 1043.984375,
+      "width": 1026,
+      "height": 108.1875,
+      "label": "Shared composer for normal replies and leading-@ direct routing",
       "color": "#9c27b0"
     }
   ],

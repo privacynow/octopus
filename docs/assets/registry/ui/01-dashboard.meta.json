@@ -3,33 +3,33 @@
     {
       "x": 0,
       "y": 0,
-      "width": 260,
+      "width": 244,
       "height": 872,
       "label": "Primary navigation",
       "color": "#ff9800"
     },
     {
-      "x": 272,
-      "y": 151.796875,
-      "width": 1064,
-      "height": 221.8125,
-      "label": "Start with the next decision, not the raw telemetry",
+      "x": 256,
+      "y": 70.234375,
+      "width": 1080,
+      "height": 123,
+      "label": "Summary rail for open conversations, running work, follow-up, and agent health",
       "color": "#2196f3"
     },
     {
-      "x": 272,
-      "y": 393.609375,
-      "width": 1064,
-      "height": 265.09375,
-      "label": "Action-first panels for approvals, health, and failed work",
+      "x": 256,
+      "y": 209.234375,
+      "width": 540,
+      "height": 505.78125,
+      "label": "Needs-attention queue for approvals, failed work, and unhealthy agents",
       "color": "#4caf50"
     },
     {
-      "x": 272,
-      "y": 1019.921875,
-      "width": 1064,
-      "height": 684.5625,
-      "label": "Preview lists for review work, conversations, and failures",
+      "x": 256,
+      "y": 209.234375,
+      "width": 1080,
+      "height": 1173.15625,
+      "label": "Direct jump lists for conversations, tasks, and agents",
       "color": "#9c27b0"
     }
   ],

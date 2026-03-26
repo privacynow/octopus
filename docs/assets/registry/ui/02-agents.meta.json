@@ -1,27 +1,27 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 145.796875,
-      "width": 1060,
-      "height": 58,
-      "label": "Server-side search and state filters",
+      "x": 258,
+      "y": 72.234375,
+      "width": 1076,
+      "height": 62.21875,
+      "label": "Server-side search plus segmented connectivity filters",
       "color": "#ff9800"
     },
     {
-      "x": 275,
-      "y": 210.796875,
-      "width": 1058,
-      "height": 93.296875,
-      "label": "Agent row → detail",
+      "x": 259,
+      "y": 139.453125,
+      "width": 1074,
+      "height": 92.796875,
+      "label": "Agent row with connectivity context",
       "color": "#2196f3"
     },
     {
-      "x": 275,
-      "y": 292.09375,
-      "width": 1058,
-      "height": 93.296875,
-      "label": "Additional enrolled registry member",
+      "x": 1246.78125,
+      "y": 159.859375,
+      "width": 74.21875,
+      "height": 50.96875,
+      "label": "Direct Open action to reuse or start a conversation",
       "color": "#4caf50"
     }
   ],

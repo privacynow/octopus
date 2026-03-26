@@ -89,29 +89,44 @@ CLI is intentionally local-first:
 
 ## Registry UI
 
-The operator UI under `ui/` is a vanilla SPA with no framework and no build
-step. Main screens:
+The operator UI under `ui/` is a vanilla SPA with no framework or build step.
+It is designed as an operator console, not a generic admin panel: one left rail,
+one main work surface per route, compact metadata, and the same conversation
+and task model on desktop and mobile.
 
-- **Dashboard** — compact operator workspace for blocking approvals, open
-  conversations, task follow-up, and agent health
-- **Approvals** — pending operator decisions
-- **Agents** — list rows with server-side search/state filters
-- **Conversations** — server-side search/status filters, a main composer that
-  routes on leading `@agent` / `@cap:` / `@role:`, tabs for Conversation,
-  Tasks, and Full activity, plus cancel/export
-- **Tasks** — status board plus detailed task log with retry/cancel actions and
-  parent-conversation links
-- **Capabilities**, **Skills**, **Usage**, **Guidance**
+Current main routes:
 
-Conversation compose is now one flow:
+- **Dashboard** — dense overview of what needs attention now: open
+  conversations, running work, follow-up items, and agent health
+- **Approvals** — pending operator decisions with direct approve/reject/open
+  actions
+- **Agents** — roster with search + state filters and direct
+  **Open conversation** actions
+- **Conversations** — compact quick-start row for connected agents, server-side
+  search/status filters, and a list of active threads
+- **Conversation detail** — one composer for both replies and direct routing,
+  tabs for **Conversation**, **Tasks**, and **Full activity**, compact
+  operator-facing header metadata (`With`, `Assigned to`, `Started in`), plus
+  export/cancel and activity/ref actions
+- **Tasks** — routed-task queue with compact summary cards, segmented status
+  filters, expandable task rows, and links back to the parent conversation
+- **Usage** — per-conversation token/cost rollups
+- **Capabilities**, **Skills**, **Guidance** — operator configuration and
+  catalog surfaces
 
-- type a normal message to continue the conversation
+Conversation work now happens in one flow:
+
+- type a normal message to continue the thread
 - start with `@m2`, `@cap:review`, or `@role:reviewer` to submit a structured
   direct assignment from the same composer
-- use the dedicated **Tasks** tab in conversation detail to monitor routed work
-  and retry/cancel it without reading raw activity cards
+- use **Tasks** for routed-work state and actions
+- use **Full activity** for the full stored event stream when you need
+  diagnostics
 
-Realtime comes from `/v1/ws` and uses explicit typed topics for:
+Usage reflects provider-response costs/tokens and rolls delegated child work up
+into the parent conversation when that routed work returns usage data.
+
+Realtime comes from `/v1/ws` and uses explicit typed topics:
 
 - `summary`
 - `agents`
@@ -189,6 +204,8 @@ This harness:
 - copies the saved deployment snapshot into `.tmp/e2e-live-smoke/`
 - launches a fresh disposable registry + bot stack from the current repo
 - runs API smoke plus the Chromium live smoke
+- covers the operator UI on desktop and mobile, including dark theme and
+  keyboard navigation on segmented controls
 - tears the disposable stack down afterward
 
 Use `--skip-playwright` to run the API/runtime portion only.
@@ -196,11 +213,15 @@ Use `--skip-playwright` to run the API/runtime portion only.
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — systems, subsystems, ports, SDK, APIs,
-  stores, and interaction flows
+  stores, interaction flows, and the current registry SPA model
 - [docs/manual/README.md](docs/manual/README.md) — operator/user manual
-- [docs/registry-guide.md](docs/registry-guide.md) — registry lifecycle and UI
-  guide
+- [docs/registry-guide.md](docs/registry-guide.md) — registry lifecycle,
+  operator UI tour, and screenshot regeneration guide
 - [docs/flows-catalog.md](docs/flows-catalog.md) — flow inventory with code
   pointers
+
+The registry guide and manual pages now track the same desktop and mobile
+screenshots generated from `docs/registry-ui-screenshots/`, so those docs are
+the authoritative browser walkthrough for the current UI.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

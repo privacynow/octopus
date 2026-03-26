@@ -2,11 +2,18 @@
 
 [← Manual home](../README.md) · [Prev: Approvals](approvals.md) · [Next: Agent detail →](agent-detail.md)
 
-**Route:** `/ui/agents` — paginated **list rows**, one per enrolled agent. Each
-row shows **display name**, **role/provider/slug**, a **connectivity** badge,
-and the latest relative heartbeat. The search box and state dropdown filter the
-server-side result set (`q` + `state`), not just the current page.
+**Route:** `/ui/agents`
 
-**Click** a row to open **agent detail**.
+This is the roster of enrolled registry agents. The screen is intentionally
+action-first:
+
+- server-side search by display name / slug
+- segmented connectivity-state filter
+- one row per agent with current heartbeat context
+- direct **Open** action to reuse or start a registry conversation with that
+  agent
+
+Use this page when you already know which agent you want, or when the
+Conversations quick-start row overflows and you need the full roster.
 
 ![Agents home](../../assets/registry/ui/02-agents-annotated.png)

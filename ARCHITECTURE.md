@@ -390,7 +390,8 @@ Important current behavior:
 - agent list supports server-side `q` and `state`
 - conversation list supports server-side `q` and `status`
 - task list supports server-side `status`
-- usage is derived from provider response events
+- usage is derived from provider response events, and delegated child usage can
+  roll into the parent conversation when routed-task results carry usage data
 - conversation detail can submit typed actions through `POST /v1/conversations/{id}/actions`
 - direct operator routing and delegated coordination share the same action
   surface and backend state model
@@ -418,13 +419,60 @@ The SPA is a vanilla JS application in `ui/` and subscribes to explicit topics
 through `ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
 topics; conversation detail also renders progress updates.
 
+### SPA Shell And Route Model
+
+The registry UI is a route-driven operator console:
+
+- one left rail / drawer shell
+- one main work surface per route
+- shared summary rails, segmented controls, list rows, task cards, and compact
+  metadata rows across desktop and mobile
+
+Core browser routes today:
+
+| Route | Main purpose |
+|---|---|
+| `/ui` | dashboard summary + attention lists |
+| `/ui/approvals` | pending approval queue |
+| `/ui/agents` | agent roster with direct open-conversation actions |
+| `/ui/agents/{id}` | agent overview, workers, inline conversations |
+| `/ui/conversations` | quick start plus active thread roster |
+| `/ui/conversations/{id}` | conversation workspace with Conversation / Tasks / Full activity |
+| `/ui/tasks` | routed-task queue |
+| `/ui/usage` | per-conversation usage rollups |
+
+Important SPA primitives:
+
+- `ui/js/helpers/ui.js`
+  - `UI.reconcileChildren(...)` wraps `morphdom` for keyed DOM reconciliation
+  - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
+    segmented controls
+- `Fuse.js` is used for `@target` suggestion ranking in conversation detail
+- theme state is owned in `ui/js/app.js` and applies to both light and dark
+  modes without a separate mobile app
+
+The current component split matches operator jobs rather than raw resource
+types:
+
+- dashboard: summary + immediate follow-up
+- conversations: start/reopen work and inspect active threads
+- conversation detail: human conversation, routed work, and diagnostics in one
+  workspace
+- tasks: cross-conversation routed-task queue
+- agents: health and direct entry into work
+- usage: cost/token accounting tied back to conversations
+
 Conversation detail in `ui/js/components/conversation-detail.js` is also the
 main operator entrypoint for structured coordination today:
 
 - normal conversation messages still go through `POST /v1/conversations/{id}/messages`
 - a leading selector such as `@m2`, `@cap:review`, or `@role:reviewer` routes
   through typed `direct_assign` actions from the same main composer
-- the default `Conversation` tab stays human-first
+- the default `Conversation` tab stays human-first while still surfacing
+  delegation milestones and terminal task status events
+- the conversation header uses operator-facing metadata (`With`, `Assigned to`,
+  `Started in`) while demoting raw refs into a copy action and turning event
+  counts into an `Activity (n)` action
 - the `Tasks` tab renders routed work as first-class task objects with task
   actions
 - `Full activity` keeps the full stored event stream for diagnostics

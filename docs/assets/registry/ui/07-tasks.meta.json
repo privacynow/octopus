@@ -1,19 +1,27 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 145.796875,
-      "width": 1060,
-      "height": 58,
-      "label": "Status filter for routed work",
+      "x": 258,
+      "y": 72.234375,
+      "width": 1076,
+      "height": 119,
+      "label": "Summary rail for pending, running, and follow-up work",
       "color": "#ff9800"
     },
     {
-      "x": 273,
-      "y": 208.796875,
-      "width": 1062,
-      "height": 97.296875,
-      "label": "Task rows expand inline and link to parent conversation",
+      "x": 258,
+      "y": 195.234375,
+      "width": 546.609375,
+      "height": 62.21875,
+      "label": "Segmented task status filter",
+      "color": "#4caf50"
+    },
+    {
+      "x": 256,
+      "y": 259.453125,
+      "width": 1080,
+      "height": 279.578125,
+      "label": "Expandable task row with origin, target, and parent conversation actions",
       "color": "#2196f3"
     }
   ],

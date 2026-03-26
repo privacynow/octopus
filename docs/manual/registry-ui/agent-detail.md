@@ -1,9 +1,18 @@
 # Registry UI: Agent detail
 
-[← Manual home](../README.md) · [Prev: Agents list](agents-list.md) · [Next: Agent-scoped conversations →](agent-conversations.md)
+[← Manual home](../README.md) · [Prev: Agents list](agents-list.md) · [Next: Agent conversation deep link →](agent-conversations.md)
 
-**Route:** `/ui/agents/{agent_id}` — opened from the list or a **deep link**.
+**Route:** `/ui/agents/{agent_id}`
 
-You see **identity** (agent id, slug, registry **scope**, version, last heartbeat), **capabilities** and **tags** as badges, and optionally a **workers** table when the runtime reports worker rows. Below that, an **inline** paginated list of **conversations for this agent** (same data as the dedicated scoped route).
+Agent detail is a compact workspace for one enrolled agent. It includes:
+
+- a direct **Open conversation** action
+- **Overview** facts such as agent id, scope, version, and last heartbeat
+- capability chips
+- optional **Workers** table when the runtime publishes worker snapshots
+- inline **Conversations** for that agent, with the same rows you see elsewhere
+
+This is the best route when you need to answer “is this agent healthy?” and
+then jump straight into the right thread.
 
 ![Agent detail](../../assets/registry/ui/03-agent-detail-annotated.png)

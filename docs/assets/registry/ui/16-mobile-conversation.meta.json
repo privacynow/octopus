@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 10,
+      "y": 64.390625,
+      "width": 370,
+      "height": 186.421875,
+      "label": "Header metadata stacks into one readable mobile block with action shortcuts preserved",
+      "color": "#ff9800"
+    },
+    {
+      "x": 10,
+      "y": 250.8125,
+      "width": 370,
+      "height": 62.21875,
+      "label": "Conversation, Tasks, and Full activity remain in one segmented control",
+      "color": "#4caf50"
+    },
+    {
+      "x": 33,
+      "y": 1831.40625,
+      "width": 324,
+      "height": 168.96875,
+      "label": "Composer stays inside the conversation workspace",
+      "color": "#2196f3"
+    }
+  ],
+  "arrows": []
+}

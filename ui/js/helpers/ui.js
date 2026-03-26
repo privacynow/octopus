@@ -335,6 +335,9 @@ window.UI = (() => {
     }
 
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
+        if (!hasPrev && !hasNext && !String(info || '').trim()) {
+            return;
+        }
         const nav = document.createElement('nav');
         nav.className = 'pagination';
         nav.setAttribute('aria-label', 'Pagination');

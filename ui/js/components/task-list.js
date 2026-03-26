@@ -16,6 +16,25 @@ function renderTaskList(container) {
     let summaryLoaded = false;
     let listLoaded = false;
 
+    function isOpaqueIdentifier(value) {
+        const text = String(value || '').trim();
+        if (!text) return false;
+        if (/^[0-9a-f]{24,}$/i.test(text)) return true;
+        if (/^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)) return true;
+        if (text.length >= 24 && !/[A-Z]/.test(text) && /^[a-z0-9._:-]+$/i.test(text)) return true;
+        return false;
+    }
+
+    function visibleLabel(...candidates) {
+        for (const candidate of candidates) {
+            const text = String(candidate || '').trim();
+            if (!text) continue;
+            if (isOpaqueIdentifier(text)) continue;
+            return text;
+        }
+        return '';
+    }
+
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = '<h2>Tasks</h2>';
@@ -197,11 +216,19 @@ function renderTaskList(container) {
         const meta = document.createElement('span');
         meta.className = 'task-item-meta';
         meta.textContent = [
-            task.target_display_name || task.target_agent_id || 'agent',
-            task.parent_conversation_title || task.parent_conversation_id || '',
+            visibleLabel(task.target_display_name, task.target_agent_id) || 'Assigned agent',
+            visibleLabel(task.parent_conversation_title),
             UI.relativeTime(task.updated_at || task.created_at),
         ].filter(Boolean).join(' · ');
         primary.appendChild(meta);
+
+        const summary = _taskSummary(task);
+        if (summary && ['completed', 'failed', 'cancelled', 'timed_out'].includes(task.status || '')) {
+            const preview = document.createElement('span');
+            preview.className = 'task-item-preview';
+            preview.textContent = summary;
+            primary.appendChild(preview);
+        }
 
         row.appendChild(primary);
 
@@ -219,7 +246,6 @@ function renderTaskList(container) {
         detail.className = 'task-item-detail';
         detail.hidden = true;
 
-        const summary = _taskSummary(task);
         if (summary) {
             const summaryBlock = document.createElement('div');
             summaryBlock.className = 'task-item-summary';
@@ -230,9 +256,9 @@ function renderTaskList(container) {
         const facts = document.createElement('div');
         facts.className = 'metadata-grid';
         [
-            ['Origin', task.origin_display_name || task.origin_agent_id || '—'],
-            ['Target', task.target_display_name || task.target_agent_id || '—'],
-            ['Conversation', task.parent_conversation_title || task.parent_conversation_id || '—'],
+            ['Origin', visibleLabel(task.origin_display_name, task.origin_agent_id) || '—'],
+            ['Target', visibleLabel(task.target_display_name, task.target_agent_id) || '—'],
+            ['Conversation', visibleLabel(task.parent_conversation_title) || 'Current thread'],
         ].forEach(([label, value]) => {
             const fact = document.createElement('div');
             fact.className = 'metadata-item';

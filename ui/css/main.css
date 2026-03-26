@@ -413,7 +413,7 @@ select {
 }
 
 .page-header.page-header-compact {
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-3);
 }
 
 .page-header.page-header-compact p {
@@ -535,7 +535,7 @@ select {
     align-items: center;
     flex-wrap: wrap;
     gap: var(--space-3);
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-3);
 }
 
 .search-input,
@@ -733,7 +733,7 @@ select {
 
 .list-shell {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
 }
 
 .list-container {
@@ -873,7 +873,10 @@ select {
 }
 
 .empty-state-compact {
-    padding: 0.65rem 0.1rem;
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0.72rem 1.05rem;
     border: 0;
     background: transparent;
 }
@@ -1109,7 +1112,7 @@ select {
 }
 
 .quickstart-strip {
-    margin-bottom: var(--space-4);
+    margin-bottom: var(--space-3);
 }
 
 .quickstart-shell {
@@ -1210,7 +1213,7 @@ select {
 
 .conversation-page {
     display: grid;
-    gap: var(--space-4);
+    gap: var(--space-3);
     min-height: 0;
     flex: 1;
 }
@@ -1220,18 +1223,18 @@ select {
 }
 
 .conversation-page.conversation-page-compact .conversation-layout {
-    min-height: clamp(360px, 48vh, 560px);
+    min-height: 0;
 }
 
 .conversation-shell {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
 }
 
 .conversation-meta {
     margin-bottom: 0;
     display: grid;
-    gap: 8px;
+    gap: 4px;
 }
 
 .conversation-meta-title {
@@ -1247,7 +1250,7 @@ select {
 
 .conversation-layout {
     display: flex;
-    min-height: min(70vh, 780px);
+    min-height: clamp(340px, 56vh, 660px);
 }
 
 .conversation-panel {
@@ -1277,7 +1280,7 @@ select {
 }
 
 .conversation-panel.conversation-panel-compact {
-    min-height: 360px;
+    min-height: 0;
 }
 
 .chat-timeline,
@@ -1285,7 +1288,7 @@ select {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-4) var(--space-5);
+    padding: var(--space-3) var(--space-4);
     background: linear-gradient(180deg, rgba(255,255,255,0), rgba(0,0,0,0));
 }
 
@@ -1321,9 +1324,9 @@ select {
 .compose-box {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: var(--space-3);
+    gap: var(--space-2);
     align-items: end;
-    padding: var(--space-4) var(--space-5);
+    padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border);
     background: var(--bg-secondary);
 }
@@ -1465,7 +1468,7 @@ select {
 }
 
 .event-card {
-    padding: 0.95rem 1rem;
+    padding: 0.82rem 0.92rem;
     border-left: 3px solid transparent;
 }
 
@@ -1506,6 +1509,12 @@ select {
     cursor: pointer;
 }
 
+.event-card-header-stacked {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+}
+
 .event-card-heading {
     display: grid;
     gap: 2px;
@@ -1530,6 +1539,21 @@ select {
     text-align: right;
 }
 
+.event-summary-stacked {
+    grid-column: 1 / 2;
+    text-align: left;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    margin-top: 2px;
+}
+
+.event-card-header-stacked .event-card-time {
+    grid-column: 2 / 3;
+    grid-row: 1 / span 2;
+    align-self: start;
+    justify-self: end;
+}
+
 .event-card-body {
     display: none;
 }
@@ -1538,7 +1562,7 @@ select {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    margin-top: var(--space-3);
+    margin-top: var(--space-2);
 }
 
 .delegation-milestone-list {
@@ -1730,6 +1754,15 @@ select {
 .task-item-meta {
     color: var(--text-secondary);
     font-size: var(--text-sm);
+}
+
+.task-item-preview {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .task-item-detail {
@@ -2064,9 +2097,11 @@ select {
     }
 
     #content > .content-inner.conversation-route-shell {
+        height: calc(100dvh - 4.4rem - var(--space-5));
         min-height: calc(100dvh - 4.4rem - var(--space-5));
         display: flex;
         flex-direction: column;
+        overflow: hidden;
     }
 
     .workspace-header-main,
@@ -2092,6 +2127,7 @@ select {
         flex: 1 1 auto;
         min-height: 0;
         height: 100%;
+        overflow: hidden;
     }
 
     .conversation-screen {
@@ -2106,6 +2142,7 @@ select {
         flex: 1 1 auto;
         min-height: 0;
         height: 100%;
+        overflow: hidden;
     }
 
     .conversation-panel {

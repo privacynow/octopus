@@ -210,7 +210,7 @@ function renderConversationDetail(container, params) {
             const seen = new Set();
             availableTargets = [];
             function pushTarget(item) {
-                const key = `${item.kind}:${String(item.label || '').toLowerCase()}`;
+                const key = `${item.kind}:${String(item.key || item.label || '').toLowerCase()}`;
                 if (seen.has(key)) return;
                 seen.add(key);
                 availableTargets.push(item);
@@ -218,41 +218,50 @@ function renderConversationDetail(container, params) {
             agents.forEach((agent) => {
                 const slug = (agent.slug || agent.agent_id || '').trim();
                 if (!slug) return;
-                const detail = [agent.role || '', (agent.capabilities || []).slice(0, 2).join(', ')].filter(Boolean).join(' · ');
-                pushTarget({
-                    label: '@' + slug,
-                    kind: 'agent',
-                    display: agent.display_name || slug,
-                    detail,
-                });
                 const displayName = String(agent.display_name || '').trim();
-                if (displayName && !/\s/.test(displayName) && displayName.toLowerCase() !== slug.toLowerCase()) {
-                    pushTarget({
-                        label: '@' + displayName,
-                        kind: 'agent',
-                        display: displayName,
-                        detail,
-                    });
-                }
+                const compactDisplayName = displayName && !/\s/.test(displayName) ? displayName : '';
+                const preferredLabel = '@' + (compactDisplayName || slug);
+                const aliases = Array.from(new Set([
+                    preferredLabel,
+                    '@' + slug,
+                    compactDisplayName ? '@' + compactDisplayName : '',
+                ].filter(Boolean)));
+                const detail = [
+                    compactDisplayName && compactDisplayName.toLowerCase() !== slug.toLowerCase() ? slug : '',
+                    agent.role || '',
+                    (agent.capabilities || []).slice(0, 2).join(', '),
+                ].filter(Boolean).join(' · ');
+                pushTarget({
+                    key: agent.agent_id || slug,
+                    label: preferredLabel,
+                    kind: 'agent',
+                    display: displayName || slug,
+                    detail,
+                    aliases,
+                });
             });
             agents.forEach((agent) => {
                 const role = String(agent.role || '').trim();
                 if (!role) return;
                 pushTarget({
+                    key: role,
                     label: '@role:' + role,
                     kind: 'role',
                     display: role,
                     detail: 'Role target',
+                    aliases: ['@role:' + role],
                 });
             });
             capabilities.forEach((capability) => {
                 const value = String(capability.name || capability.capability || capability || '').trim();
                 if (!value) return;
                 pushTarget({
+                    key: value,
                     label: '@cap:' + value,
                     kind: 'capability',
                     display: value,
                     detail: 'Capability target',
+                    aliases: ['@cap:' + value],
                 });
             });
             if (typeof Fuse === 'function') {
@@ -261,9 +270,10 @@ function renderConversationDetail(container, params) {
                     threshold: 0.34,
                     ignoreLocation: true,
                     keys: [
-                        { name: 'label', weight: 0.45 },
-                        { name: 'display', weight: 0.35 },
-                        { name: 'detail', weight: 0.20 },
+                        { name: 'label', weight: 0.36 },
+                        { name: 'aliases', weight: 0.30 },
+                        { name: 'display', weight: 0.22 },
+                        { name: 'detail', weight: 0.12 },
                     ],
                 });
             } else {
@@ -440,7 +450,11 @@ function renderConversationDetail(container, params) {
     function selectorMatchesAvailableTarget(selectorToken) {
         const token = String(selectorToken || '').trim().toLowerCase();
         if (!token) return false;
-        return availableTargets.some((item) => String(item.label || '').trim().toLowerCase() === token);
+        return availableTargets.some((item) => {
+            if (String(item.label || '').trim().toLowerCase() === token) return true;
+            return Array.isArray(item.aliases)
+                && item.aliases.some((alias) => String(alias || '').trim().toLowerCase() === token);
+        });
     }
 
     function clearSuggestions() {
@@ -532,6 +546,7 @@ function renderConversationDetail(container, params) {
                     .filter((item) => {
                         const haystack = [
                             item.label,
+                            ...(Array.isArray(item.aliases) ? item.aliases : []),
                             item.display,
                             item.detail,
                         ].join(' ').toLowerCase();
@@ -607,7 +622,7 @@ function renderConversationDetail(container, params) {
         metaRow.dataset.key = 'meta-inline';
 
         const metaParts = [];
-        const conversationWith = String(data.target_display_name || data.target_agent_id || '').trim();
+        const conversationWith = _visibleOperatorLabel(data.target_display_name, data.target_agent_id);
         const assignedTo = _conversationAssignedTargetLabel(relatedTasks, conversationWith);
         if (conversationWith) {
             metaParts.push(`With ${conversationWith}`);
@@ -754,6 +769,8 @@ function renderConversationDetail(container, params) {
             if (meta) renderMetaCard(meta);
             if (activeView === 'tasks') {
                 renderRelatedTasks(relatedTasks);
+            } else if (eventList.childElementCount) {
+                reloadEvents();
             }
         } catch (err) {
             if (activeView === 'tasks' && !silent) {
@@ -946,6 +963,9 @@ function renderConversationDetail(container, params) {
         ) {
             liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
         }
+        if (['delegation.submitted', 'delegation.completed', 'task.status'].includes(event.kind || '')) {
+            loadRelatedTasks({ soft: true, silent: true });
+        }
         if (
             event.kind === 'message.bot'
             || event.kind === 'error'
@@ -1136,7 +1156,11 @@ function _createConversationEventElement(event, convoId, taskContext = []) {
             break;
     }
 
-    const startExpanded = kind === 'approval.requested';
+    const startExpanded = kind === 'approval.requested' || _shouldStartExpanded(kind, event);
+    if (_shouldStackSummary(kind, event)) {
+        header.classList.add('event-card-header-stacked');
+        summary.classList.add('event-summary-stacked');
+    }
     body.classList.toggle('expanded', startExpanded);
     header.setAttribute('aria-expanded', String(startExpanded));
     header.addEventListener('click', () => {
@@ -1451,7 +1475,10 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
     meta.className = 'conversation-task-card-meta';
     const parts = [];
     if (task.target_display_name || task.target_agent_id) {
-        parts.push(`To ${task.target_display_name || task.target_agent_id}`);
+        const targetLabel = _visibleOperatorLabel(task.target_display_name, task.target_agent_id);
+        if (targetLabel) {
+            parts.push(`To ${targetLabel}`);
+        }
     }
     if (task.updated_at || task.created_at) {
         const stamp = document.createElement('span');
@@ -1694,17 +1721,35 @@ function _eventActorLabel(event) {
     return event.actor || '';
 }
 
+function _isOpaqueIdentifier(value) {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    if (/^[0-9a-f]{24,}$/i.test(text)) return true;
+    if (/^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)) return true;
+    if (text.length >= 24 && !/[A-Z]/.test(text) && /^[a-z0-9._:-]+$/i.test(text)) return true;
+    return false;
+}
+
+function _visibleOperatorLabel(...candidates) {
+    for (const candidate of candidates) {
+        const text = String(candidate || '').trim();
+        if (!text || _isOpaqueIdentifier(text)) continue;
+        return text;
+    }
+    return '';
+}
+
 function _delegationTaskTargetLabel(task, taskContext = []) {
     const routedTaskId = String(task.routed_task_id || '').trim();
     if (routedTaskId) {
         const match = (Array.isArray(taskContext) ? taskContext : []).find((candidate) => String(candidate.routed_task_id || '').trim() === routedTaskId);
         if (match) {
-            return String(
+            return _visibleOperatorLabel(
                 match.target_display_name
                 || match.target
                 || match.target_agent_id
                 || ''
-            ).trim();
+            );
         }
     }
     const targetAgentId = String(task.target_agent_id || task.target || '').trim();
@@ -1714,21 +1759,21 @@ function _delegationTaskTargetLabel(task, taskContext = []) {
             return candidateTarget && candidateTarget === targetAgentId;
         });
         if (matchByTarget) {
-            return String(
+            return _visibleOperatorLabel(
                 matchByTarget.target_display_name
                 || matchByTarget.target
                 || matchByTarget.target_agent_id
                 || ''
-            ).trim();
+            );
         }
     }
-    return String(
+    return _visibleOperatorLabel(
         task.target_display_name
         || task.target
         || task.target_agent_id
         || task.authority_ref
         || ''
-    ).trim();
+    );
 }
 
 function _uniqueDelegationTargets(tasks, taskContext = []) {
@@ -1798,4 +1843,17 @@ function _conversationAssignedTargetLabel(tasks, conversationWith) {
     if (!label) return '';
     if (normalizedWith && label.toLowerCase() === normalizedWith) return '';
     return label;
+}
+
+function _shouldStartExpanded(kind, event) {
+    if (kind !== 'task.status') return false;
+    const status = String((event.metadata && event.metadata.status) || '').trim().toLowerCase();
+    const hasOutcome = Boolean(String(event.content || '').trim());
+    return hasOutcome && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
+}
+
+function _shouldStackSummary(kind, event) {
+    if (kind !== 'task.status') return false;
+    const status = String((event.metadata && event.metadata.status) || '').trim().toLowerCase();
+    return Boolean(String(event.content || '').trim()) && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
 }

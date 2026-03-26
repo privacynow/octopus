@@ -97,6 +97,8 @@ test("live registry ui smoke", async ({ page }) => {
   const existingTaskItem = page.locator(".task-item").filter({ hasText: EXISTING_TASK_TITLE }).first();
   await existingTaskItem.locator(".task-item-row").click();
   await expect(existingTaskItem.getByRole("link", { name: /open conversation/i })).toBeVisible();
+  await expect(existingTaskItem).not.toContainText(PARENT_CONVERSATION_ID);
+  await expect(existingTaskItem).not.toContainText(TARGET_AGENT_ID);
 
   await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
   await expect(page.getByRole("tablist", { name: "Conversation timeline view" })).toBeVisible();
@@ -125,6 +127,9 @@ test("live registry ui smoke", async ({ page }) => {
   await page.getByLabel("Message text").fill("@");
   await expect(page.locator(".compose-hint")).toContainText(/choose an agent, capability, or role/i);
   await expect(page.locator(".compose-suggestions")).toContainText(`@${targetSelector.selectorValue}`);
+  await expect(
+    page.locator(".compose-suggestion strong").filter({ hasText: new RegExp(`^@${escapeRegExp(targetSelector.selectorValue)}$`) })
+  ).toHaveCount(1);
   await page.getByLabel("Message text").fill(`@${targetSelector.selectorValue} ${liveUiTaskTitle}`);
   await expect(page.getByText(new RegExp(`Routing directly to @${escapeRegExp(targetSelector.selectorValue)}`))).toBeVisible();
   await expect(page.getByRole("button", { name: "Assign" })).toBeVisible();
@@ -202,8 +207,9 @@ test("live registry ui smoke", async ({ page }) => {
   await page.goto("/ui/tasks");
   const liveTaskTitle = `Live WS task ${Date.now()}`;
   const liveTaskId = `live-ws-task-${Date.now()}`;
+  const liveTaskResult = `Delegated answer ${Date.now()} = 4`;
   await page.evaluate(
-    async ({ taskId, title, parentId, originToken, targetToken, originAgentId, targetAgentId }) => {
+    async ({ taskId, title, parentId, originToken, targetToken, originAgentId, targetAgentId, taskResult }) => {
       const createdAt = new Date().toISOString();
       const createResp = await fetch("/v1/agents/routed-tasks", {
         method: "POST",
@@ -232,8 +238,8 @@ test("live registry ui smoke", async ({ page }) => {
         body: JSON.stringify({
           status: "completed",
           transition_id: `${taskId}-complete`,
-          summary: "4",
-          full_text: "4",
+          summary: taskResult,
+          full_text: taskResult,
           prompt_tokens: 17,
           completion_tokens: 9,
           cost_usd: 0.21,
@@ -251,9 +257,18 @@ test("live registry ui smoke", async ({ page }) => {
       targetToken: TARGET_TOKEN,
       originAgentId: ORIGIN_AGENT_ID,
       targetAgentId: TARGET_AGENT_ID,
+      taskResult: liveTaskResult,
     },
   );
   await expect(page.getByText(liveTaskTitle).first()).toBeVisible({ timeout: 5000 });
+  const liveTaskItem = page.locator(".task-item").filter({ hasText: liveTaskTitle }).first();
+  await expect(liveTaskItem).toContainText(liveTaskResult);
+  await expect(liveTaskItem).not.toContainText(PARENT_CONVERSATION_ID);
+  await expect(liveTaskItem).not.toContainText(TARGET_AGENT_ID);
+
+  await page.goto(`/ui/conversations/${PARENT_CONVERSATION_ID}`);
+  await expect(page.locator(".timeline-events")).toContainText(liveTaskResult, { timeout: 5000 });
+  await expect(page.locator(".timeline-events")).not.toContainText(TARGET_AGENT_ID);
 
   await page.goto("/ui/usage");
   await expect(page.getByRole("heading", { name: "Usage" })).toBeVisible();

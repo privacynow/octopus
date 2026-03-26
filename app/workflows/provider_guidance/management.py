@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from app.content_models import ProviderGuidanceRevisionRecord, ProviderGuidanceTrackRecord
+from octopus_sdk.content_models import ProviderGuidanceRevisionRecord, ProviderGuidanceTrackRecord
 from app.content_store import get_content_store
 from app.workflows.lifecycle_machine import (
     LifecycleDecision,
     build_lifecycle_snapshot,
     decide_lifecycle_action,
 )
-from app.workflows.provider_guidance.contracts import (
+from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleApproval,
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleMutation,

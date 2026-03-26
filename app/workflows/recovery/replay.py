@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app import user_messages as _msg
 from octopus_sdk.identity import resolve_event_conversation_ref
-from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.workflows.recovery.contracts import (
+from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.workflows.recovery import (
     RecoveryActionOutcome,
     RecoveryReplayPlan,
     RecoveryPort,
@@ -18,7 +18,7 @@ from app.workflows.recovery.contracts import (
 from app import work_queue
 from octopus_sdk.inbound_types import InboundMessage, deserialize_inbound
 from app.runtime.work_admission import trust_tier_for_ref
-from app.workflows.recovery.results import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption
 
 
 class RecoveryUseCases(RecoveryPort):
@@ -38,7 +38,7 @@ class RecoveryUseCases(RecoveryPort):
         worker_id: str,
         ignore_claimed_item_id: str = "",
         config,
-        dispatcher: ChannelDispatcher | None = None,
+        dispatcher: TransportDispatcher | None = None,
     ) -> RecoveryActionOutcome:
         try:
             recovery_item = work_queue.get_pending_recovery_for_update(

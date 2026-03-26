@@ -1,4 +1,4 @@
-"""Canonical content-domain models for runtime skills and provider guidance."""
+"""Canonical SDK content-domain models for runtime skills and provider guidance."""
 
 from __future__ import annotations
 

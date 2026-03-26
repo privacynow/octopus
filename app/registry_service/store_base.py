@@ -8,7 +8,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Protocol
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
@@ -19,16 +19,42 @@ from app.content_models import (
 
 from app.runtime_health import report_from_dict, report_to_dict
 from octopus_sdk.registry.models import (
+    AckResult,
+    AgentCard,
+    AgentDiscoveryQuery,
+    AgentHeartbeatRequest,
+    AgentRegisterRequest,
+    AgentRecord,
+    AgentStatusRecord,
+    ApprovalRecord,
     ApproveDelegationActionPayload,
     ApproveRejectActionPayload,
     CancelDelegationActionPayload,
     CancelTaskActionPayload,
+    CapabilityRecord,
+    ConversationRecord,
+    ConversationSearchHitRecord,
     CoordinationActionEnvelope,
+    CoordinationActionResult,
+    DeliveryPollResult,
+    DeliveryRecord,
     DelegateTasksActionPayload,
     DirectAssignActionPayload,
+    EnrollmentResult,
+    EventRecord,
+    EventPageRecord,
+    HealthSummary,
+    MessageRecord,
+    MessagePageRecord,
+    PublishEventsResult,
+    RegistryRecordModel,
+    RegistrySummaryRecord,
     RecoveryActionPayload,
     RetryDecisionActionPayload,
     RetryTaskActionPayload,
+    RuntimeHealthDetailRecord,
+    TaskRecord,
+    UsageSummaryRecord,
 )
 
 _OFFLINE_AFTER_SECONDS = 60
@@ -514,7 +540,13 @@ def validated_conversation_action(payload: Any) -> CoordinationActionEnvelope:
 
 
 def validated_action_payload(envelope: CoordinationActionEnvelope) -> Any:
-    payload = dict(envelope.payload)
+    raw_payload = envelope.payload
+    if raw_payload is None:
+        payload: dict[str, Any] = {}
+    elif hasattr(raw_payload, "model_dump"):
+        payload = raw_payload.model_dump(mode="json")
+    else:
+        payload = dict(raw_payload)
     if envelope.action in {"approve", "reject"}:
         return ApproveRejectActionPayload.model_validate(payload)
     if envelope.action in {"retry_allow", "retry_skip"}:
@@ -730,47 +762,53 @@ def delegation_event(
 class AbstractRegistryStore(Protocol):
     """Backend-neutral contract for the registry service persistence layer."""
 
-    def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
+    def enroll(self, requested_card: AgentCard) -> EnrollmentResult:
         """Persist a new agent card, issue an agent token, and return enrollment metadata."""
 
-    def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def register(self, agent_token: str, payload: AgentRegisterRequest) -> AgentRecord:
         """Refresh an enrolled agent's card and runtime state, returning the stored agent view."""
 
-    def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         """Update heartbeat state for a known agent and return the refreshed runtime view."""
 
-    def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
+    def search_agents(self, query: AgentDiscoveryQuery) -> list[AgentRecord]:
         """Return agents matching the requested discovery constraints."""
 
-    def resolve_agent_for_token(self, agent_token: str) -> dict[str, Any] | None:
+    def resolve_agent_for_token(self, agent_token: str) -> AgentRecord | None:
         """Return the agent row for this token, or None if unknown. Used for auth context resolution."""
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
         """Validate that the authenticated agent token has one of the required scopes."""
 
-    def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_delivery(
+        self,
+        *,
+        target_agent_id: str,
+        kind: str,
+        payload: RegistryRecordModel,
+    ) -> DeliveryRecord:
         """Queue a delivery for an agent and return its durable identifiers."""
 
-    def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
+    def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         """Persist a routed task and queue the corresponding agent delivery."""
 
-    def poll(self, agent_token: str, *, cursor: int, limit: int) -> dict[str, Any]:
+    def poll(self, agent_token: str, *, cursor: int, limit: int) -> DeliveryPollResult:
         """Lease queued deliveries for an authenticated agent after the requested cursor."""
 
-    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> dict[str, Any]:
+    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         """Acknowledge previously polled deliveries for an authenticated agent."""
 
     def update_routed_task_status(
-        self, agent_token: str, routed_task_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, agent_token: str, routed_task_id: str, payload: RegistryRecordModel
+    ) -> TaskRecord:
         """Update routed-task status and any timeline mirrors published by the worker."""
 
     def update_routed_task_result(
-        self, agent_token: str, routed_task_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, agent_token: str, routed_task_id: str, payload: RegistryRecordModel
+    ) -> TaskRecord:
         """Persist a routed-task terminal result and queue the routed_result delivery upstream."""
 
-    def deregister(self, agent_token: str) -> dict[str, Any]:
+    def deregister(self, agent_token: str) -> AgentRecord:
         """Mark an agent offline while preserving its durable registry identity."""
 
     def get_capability_override(self, capability_name: str) -> bool | None:
@@ -779,7 +817,7 @@ class AbstractRegistryStore(Protocol):
     def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
         """Persist or update a global capability override."""
 
-    def list_capabilities(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[CapabilityRecord]:
         """Return the declared capability universe merged with override state."""
 
     def list_agents(
@@ -790,44 +828,51 @@ class AbstractRegistryStore(Protocol):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[AgentRecord]:
         """Return registered agents in UI-ready form with offset-based pagination."""
 
-    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         """Return mirrored runtime-health detail for a registered agent."""
 
     def agent_exists(self, agent_id: str) -> bool:
         """Return True when the agent_id is enrolled."""
 
-    def create_conversation(self, *, target_agent_id: str, title: str, origin_channel: str = "registry", external_conversation_ref: str = "") -> dict[str, Any]:
+    def create_conversation(
+        self,
+        *,
+        target_agent_id: str,
+        title: str,
+        origin_channel: str = "registry",
+        external_conversation_ref: str = "",
+    ) -> ConversationRecord:
         """Create a new registry-originated conversation."""
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
         """Return the registry conversation index with offset-based pagination."""
 
-    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+    def get_conversation(self, conversation_id: str) -> ConversationRecord:
         """Return one conversation including any linked routed tasks."""
 
-    def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search_conversations(self, q: str, limit: int = 20) -> list[ConversationSearchHitRecord]:
         """Return conversation search hits with highlighted snippets."""
 
-    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[UsageSummaryRecord]:
         """Return reported usage timeline rows within the provided UTC ISO timestamp range."""
 
-    def get_summary(self, *, now_iso: str) -> dict[str, Any]:
+    def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
         """Return global dashboard aggregates for the registry UI."""
 
-    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         """Return currently pending conversation approvals in UI-ready form with offset-based pagination."""
 
-    def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+    def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
         """Queue a follow-up channel_input for an existing conversation."""
 
     def add_conversation_action(
         self,
         conversation_id: str,
-        envelope: CoordinationActionEnvelope | dict[str, Any],
-    ) -> dict[str, Any]:
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
         """Submit a typed coordination action for an existing conversation."""
 
     def list_tasks(
@@ -838,13 +883,18 @@ class AbstractRegistryStore(Protocol):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[TaskRecord]:
         """Return routed tasks in UI-ready form with offset-based pagination."""
 
-    def get_task(self, routed_task_id: str) -> dict[str, Any]:
+    def get_task(self, routed_task_id: str) -> TaskRecord:
         """Return one routed task in UI-ready form."""
 
-    def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    def publish_events(
+        self,
+        agent_token: str,
+        conversation_id: str,
+        events: list[RegistryRecordModel],
+    ) -> PublishEventsResult:
         """Persist events for a conversation. Idempotent on event_id (ON CONFLICT DO NOTHING)."""
 
     def list_events(
@@ -855,19 +905,19 @@ class AbstractRegistryStore(Protocol):
         before_seq: int = 0,
         after_seq: int = 0,
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> EventPageRecord:
         """Return paginated events for a conversation using latest/before/after windows."""
 
-    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         """Return paginated message events (message.user, message.bot) for a conversation."""
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[ConversationRecord]:
         """Return paginated conversations for a specific agent."""
 
-    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:
         """Return agent status joining agents + workers + event-derived counts."""
 
-    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
+    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:
         """Return usage summary, filterable by agent/conversation/date range."""
 
     def export_conversation(self, conversation_id: str) -> str:

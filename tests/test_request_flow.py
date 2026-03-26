@@ -31,7 +31,9 @@ import datetime
 import os
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -61,7 +63,9 @@ from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
     current_bot_instance,
+    current_execution_message,
     current_execution_runtime,
+    current_transport_identity,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -508,13 +512,14 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
+        execution_message = current_execution_message(msg)
         await execute_request(
-            current_execution_runtime().build_transport_identity(
-                msg,
+            current_transport_identity(
+                execution_message,
                 chat.id,
                 actor_key=telegram_actor_key(999),
             ),
-            "test prompt", [], msg,
+            "test prompt", [], execution_message,
             trust_tier="public",
             runtime=current_execution_runtime(),
         )
@@ -551,13 +556,14 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
+        execution_message = current_execution_message(msg)
         await execute_request(
-            current_execution_runtime().build_transport_identity(
-                msg,
+            current_transport_identity(
+                execution_message,
                 chat.id,
                 actor_key=telegram_actor_key(42),
             ),
-            "test prompt", [], msg,
+            "test prompt", [], execution_message,
             trust_tier="trusted",
             runtime=current_execution_runtime(),
         )
@@ -572,41 +578,30 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_user_message():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="resume")
+        message = current_execution_message(FakeMessage(chat=chat, text="resume"))
         base_runtime = current_execution_runtime()
         sink = _RecordingEventSink()
+        services = replace(base_runtime.services, conversation_projection=object())
         runtime = base_runtime.__class__(
             dispatch=base_runtime.dispatch,
-            services=base_runtime.services,
+            services=services,
             interrupted_exc=base_runtime.interrupted_exc,
-            build_transport_identity=base_runtime.build_transport_identity,
-            build_event_sink=lambda _transport: sink,
-            render_provider_error=base_runtime.render_provider_error,
-            show_foreign_setup=base_runtime.show_foreign_setup,
-            show_setup_prompt=base_runtime.show_setup_prompt,
-            send_retry_prompt=base_runtime.send_retry_prompt,
-            send_approval_prompt=base_runtime.send_approval_prompt,
-            send_formatted_reply=base_runtime.send_formatted_reply,
-            send_directed_artifacts=base_runtime.send_directed_artifacts,
-            send_compact_reply=base_runtime.send_compact_reply,
-            propose_delegation_plan=base_runtime.propose_delegation_plan,
-            agent_directory=base_runtime.agent_directory,
         )
-
-        outcome = await execute_request(
-            TransportIdentity(
-                conversation_key=telegram_conversation_key(chat.id),
-                origin_channel="registry",
-                external_conversation_ref="registry-conv-1",
-                conversation_ref="registry:default:conversation:registry-conv-1",
-                target_agent_id="agent-1",
-                actor="reg:delegation-resume:child-task-1",
-            ),
-            "Synthetic resume prompt",
-            [],
-            message,
-            runtime=runtime,
-        )
+        with patch("octopus_sdk.event_sink.build_event_sink_for_context", return_value=sink):
+            outcome = await execute_request(
+                TransportIdentity(
+                    conversation_key=telegram_conversation_key(chat.id),
+                    origin_channel="registry",
+                    external_conversation_ref="registry-conv-1",
+                    conversation_ref="registry:default:conversation:registry-conv-1",
+                    target_agent_id="agent-1",
+                    actor="reg:delegation-resume:child-task-1",
+                ),
+                "Synthetic resume prompt",
+                [],
+                message,
+                runtime=runtime,
+            )
 
         assert outcome is not None
         assert outcome.status == "completed"
@@ -995,7 +990,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
             telegram_conversation_ref(current_runtime().config, chat.id),
             normalize_user(public_user),
             config=current_runtime().config,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
         resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (

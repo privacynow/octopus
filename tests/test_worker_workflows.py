@@ -74,7 +74,7 @@ def test_admit_worker_message_fails_unauthorized_telegram_item() -> None:
             conversation_ref=telegram_conversation_ref(current_runtime().config, 12345),
             user=InboundUser(id=telegram_actor_key(42), username="blocked"),
             config=current_runtime().config,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         row = work_queue.debug_transport_connection(data_dir).execute(
@@ -102,7 +102,7 @@ def test_admit_worker_message_allows_registry_input() -> None:
             conversation_ref=registry_conversation_ref("default", "conv-1"),
             user=InboundUser(id="registry:actor", username="registry"),
             config=current_runtime().config,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         assert result.allowed is True
@@ -134,7 +134,7 @@ def test_admit_worker_message_does_not_auto_allow_unknown_surface() -> None:
             conversation_ref="future:workspace:room-1",
             user=InboundUser(id=telegram_actor_key(42), username="blocked"),
             config=current_runtime().config,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         row = work_queue.debug_transport_connection(data_dir).execute(
@@ -190,7 +190,7 @@ def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch)
             action="recovery_replay",
             worker_id="worker-1",
             config=cfg,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         assert outcome.status == "replay_ready"
@@ -231,7 +231,7 @@ def test_recovery_prepare_action_recovers_telegram_ref_from_numeric_conversation
             action="recovery_replay",
             worker_id="worker-1",
             config=cfg,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         assert outcome.status == "replay_ready"
@@ -272,7 +272,7 @@ def test_recovery_prepare_action_uses_raw_conversation_key_for_non_telegram_payl
             action="recovery_replay",
             worker_id="worker-1",
             config=cfg,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         assert outcome.status == "replay_ready"
@@ -383,8 +383,8 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
 
         monkeypatch.setattr(
             telegram_worker,
-            "get_recovery_use_cases",
-            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            "_recovery_runtime",
+            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
         )
 
         async def fake_bind(self, *, title, config):
@@ -447,8 +447,8 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
 
         monkeypatch.setattr(
             telegram_worker,
-            "get_recovery_use_cases",
-            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            "_recovery_runtime",
+            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
         )
 
         async def fake_bind(self, *, title, config):
@@ -502,8 +502,8 @@ async def test_worker_recovery_raises_on_unexpected_recovery_outcome(monkeypatch
 
         monkeypatch.setattr(
             telegram_worker,
-            "get_recovery_use_cases",
-            lambda: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            "_recovery_runtime",
+            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
         )
 
         event = InboundMessage(

@@ -11,15 +11,15 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.recovery.transport_contract import (
+from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
+from octopus_sdk.work_queue import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
 )
-from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
 from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,

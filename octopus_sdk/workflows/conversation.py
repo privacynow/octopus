@@ -1,4 +1,4 @@
-"""Workflow-local contracts for conversation control and settings."""
+"""SDK workflow contracts for conversation control and settings."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from app.config import BotConfig
+from octopus_sdk.config import BotConfigBase
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
 
-ProviderStateFactory = Callable[[str], dict]
+ProviderStateFactory = Callable[[str], ProviderStateRecord]
 
 
 @dataclass(frozen=True)
@@ -75,7 +76,7 @@ class ConversationSettingsPort(Protocol):
     def model_profile_state(
         self,
         session: SessionState,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         trust_tier: str,
         effective_model: str,
     ) -> ModelProfileState: ...
@@ -97,7 +98,7 @@ class ConversationSettingsPort(Protocol):
         session: SessionState,
         profile: str,
         *,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         provider_name: str,
         trust_tier: str,
     ) -> SettingMutationOutcome: ...
@@ -107,7 +108,7 @@ class ConversationSettingsPort(Protocol):
         session: SessionState,
         value: str,
         *,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         provider_state_factory: ProviderStateFactory,
         conversation_key: str,
     ) -> SettingMutationOutcome: ...
@@ -117,7 +118,7 @@ class ConversationSettingsPort(Protocol):
         session: SessionState,
         value: str,
         *,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         provider_name: str,
         trust_tier: str,
         provider_state_factory: ProviderStateFactory,

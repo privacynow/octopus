@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 
 from octopus_sdk.providers import PreflightContext, RunContext
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
-from app.skill_types import SkillMeta, SkillRequirement
+from octopus_sdk.skill_types import SkillMeta, SkillRequirement
 
 
 CATALOG_DIR = BUILTIN_SKILL_CATALOG_DIR

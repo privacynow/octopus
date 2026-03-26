@@ -21,6 +21,7 @@ from app.control_plane.requests import (
     UpdateRoutedTaskStatusPayload,
 )
 from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
+from octopus_sdk.registry.models import AgentRecord, ConversationRecord, HealthSummary, TaskRecord
 from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
 
 
@@ -47,25 +48,25 @@ class _FakeRegistryClient:
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.submitted_tasks.append(request)
-        return {"routed_task_id": request.routed_task_id, "delivery_id": "delivery-1"}
+        return TaskRecord(routed_task_id=request.routed_task_id, delivery_id="delivery-1")
 
     async def routed_task_result(self, routed_task_id, result):
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.reported_results.append((routed_task_id, result))
-        return {"routed_task_id": routed_task_id, "status": "completed"}
+        return TaskRecord(routed_task_id=routed_task_id, status="completed")
 
     async def routed_task_status(self, routed_task_id, update):
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.status_updates.append((routed_task_id, update))
-        return {"routed_task_id": routed_task_id, "status": update.status}
+        return TaskRecord(routed_task_id=routed_task_id, status=update.status)
 
     async def search(self, query):
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.last_search = query
-        return list(self.search_rows)
+        return [AgentRecord.model_validate(row) for row in self.search_rows]
 
     async def create_conversation(self, *, target_agent_id, origin_channel, external_conversation_ref, title=""):
         if self.fail:
@@ -77,7 +78,13 @@ class _FakeRegistryClient:
             "title": title,
         }
         self.created_conversations.append(record)
-        return {"conversation_id": f"conv-{len(self.created_conversations)}"}
+        return ConversationRecord(
+            conversation_id=f"conv-{len(self.created_conversations)}",
+            target_agent_id=target_agent_id,
+            origin_channel=origin_channel,
+            external_conversation_ref=external_conversation_ref,
+            title=title,
+        )
 
     async def publish_events(self, conversation_id, events):
         if self.fail:
@@ -89,10 +96,10 @@ class _FakeRegistryClient:
         if self.fail:
             raise RegistryClientError("registry unavailable", operator_detail="registry unavailable")
         self.heartbeats.append(kwargs)
-        return {"ok": True}
+        return HealthSummary()
 
 
-class _FakeRegistryRuntime:
+class _FakeRegistryAccess:
     def __init__(self, registries, clients: dict[str, _FakeRegistryClient], *, origin_ids: dict[str, str] | None = None) -> None:
         self.registries = tuple(registries)
         self._clients = clients
@@ -170,7 +177,7 @@ async def test_registry_control_processor_processes_health_commands() -> None:
         registry_scope="full",
     )
     client = _FakeRegistryClient()
-    processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
+    processor = RegistryControlProcessor(_FakeRegistryAccess((registry,), {"alpha": client}))
 
     health_reply = await processor.process(
         _command(
@@ -222,7 +229,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
             }
         ]
     )
-    runtime = _FakeRegistryRuntime((registry,), {"alpha": client}, origin_ids={"alpha": "self-alpha"})
+    runtime = _FakeRegistryAccess((registry,), {"alpha": client}, origin_ids={"alpha": "self-alpha"})
     processor = RegistryControlProcessor(runtime)
 
     submit_reply = await processor.process(
@@ -349,7 +356,7 @@ async def test_registry_control_processor_returns_failed_reply_without_blocking_
         enroll_token="enroll-beta",
         registry_scope="full",
     )
-    runtime = _FakeRegistryRuntime(
+    runtime = _FakeRegistryAccess(
         (alpha, beta),
         {
             "alpha": _FakeRegistryClient(fail=True),
@@ -399,7 +406,7 @@ async def test_registry_control_processor_processes_create_conversation() -> Non
         registry_scope="full",
     )
     client = _FakeRegistryClient()
-    processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
+    processor = RegistryControlProcessor(_FakeRegistryAccess((registry,), {"alpha": client}))
 
     import json
 
@@ -435,7 +442,7 @@ async def test_registry_control_processor_processes_publish_events() -> None:
         registry_scope="full",
     )
     client = _FakeRegistryClient()
-    processor = RegistryControlProcessor(_FakeRegistryRuntime((registry,), {"alpha": client}))
+    processor = RegistryControlProcessor(_FakeRegistryAccess((registry,), {"alpha": client}))
 
     import json
 

@@ -5,11 +5,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.access import get_authorization
 from app.channels.telegram.egress import TelegramChannelEgress, TelegramEditableHandle
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
+from app.runtime import composition
+from app.runtime.registry_participant import build_noop_registry_participant
+import app.runtime_backend as runtime_backend
 from tests.support.handler_support import MinimalFakeBot
 
 
@@ -24,14 +28,18 @@ def _services(*, publish=None) -> BotServices:
             task_routing=NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
             health_publication=NoOpHealthPublication(),
-        )
+        ),
+        registry=build_noop_registry_participant(),
+        workflows=composition.workflows(),
+        authorization=get_authorization(),
+        work_queue=runtime_backend.transport_store(),
     )
 
 
 @pytest.mark.asyncio
 async def test_send_message_delegates_to_send_text():
     bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(bot, chat_id=1)
+    channel_egress = TelegramChannelEgress(bot, chat_id=1, services=_services())
 
     handle = await channel_egress.send_message("hello")
 
@@ -42,7 +50,7 @@ async def test_send_message_delegates_to_send_text():
 @pytest.mark.asyncio
 async def test_send_recovery_notice_uses_presenter_markup_shape():
     bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(bot, chat_id=1)
+    channel_egress = TelegramChannelEgress(bot, chat_id=1, services=_services())
 
     await channel_egress.send_recovery_notice(
         preview="preview",
@@ -99,5 +107,3 @@ async def test_on_outcome_is_noop_for_telegram():
 
     await channel_egress.on_outcome(outcome)
     # Telegram egress on_outcome is a no-op
-
-

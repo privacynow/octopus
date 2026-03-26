@@ -1,7 +1,7 @@
 # Octopus Agent Platform
 
-Run Claude or Codex through Telegram, with an optional registry for operator
-visibility, routed tasks, multi-agent coordination, and a browser UI.
+Run Claude or Codex through Telegram with built-in registry participation for
+operator visibility, routed tasks, multi-agent coordination, and a browser UI.
 
 The primary command is:
 
@@ -18,9 +18,9 @@ local registry.
 - Telegram chat UX for end users
 - `./octopus` operator CLI for setup, lifecycle, logs, shell, doctor, and
   local registry operations
-- optional registry mode with:
+- registry-backed operator stack with:
   - operator browser UI at `/ui`
-  - conversation projection
+  - mirrored conversation projection
   - structured routed-task coordination
   - agent discovery and health publication
   - per-connection scope: `full`, `channel`, or `coordination`
@@ -108,7 +108,15 @@ live local registry stack:
 
 ## Registry Model
 
-Registry mode is optional.
+For the shipped Telegram runtime in this repo, registry participation is part
+of the product profile.
+
+- Telegram bots run in `BOT_AGENT_MODE=registry`
+- Telegram startup requires registry connections with full participant
+  coverage across `channel` and `coordination`
+- the SDK can still model other transport profiles, including registry-only or
+  non-enrolled runtimes, but the local Octopus Telegram deployment and
+  operator UI assume registry-connected bots
 
 - local registry UI: `http://localhost:<port>/ui`
 - bot-to-local-registry URL inside Docker: `http://registry:8787`

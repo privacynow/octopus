@@ -23,13 +23,12 @@ import app.channels.telegram.progress as _telegram_progress
 import app.channels.telegram.worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
 from app.channels.registry.channel import register_registry_channels
-from app.channels.telegram.channel import TelegramChannelBootstrap
-from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
+from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from octopus_sdk.providers import RunResult
-from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.runtime.services import build_bus_bot_services, build_noop_bot_services
+from app.runtime.transport_dispatcher import TransportDispatcher
+from app.runtime.services import build_bus_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
@@ -49,14 +48,23 @@ def current_execution_runtime():
     runtime = current_runtime()
     collaborators = _telegram_execution.bind_execution_collaborators(
         runtime,
-        progress_factory=_telegram_progress.TelegramProgress,
-        keep_typing_fn=_telegram_progress.keep_typing,
-        heartbeat_fn=_telegram_progress.heartbeat,
         progress_timeline_callback_fn=_telegram_progress.progress_timeline_callback,
         routed_task_progress_callback_fn=_telegram_progress.routed_task_progress_callback,
-        propose_delegation_plan_fn=_propose_delegation_plan,
     )
     return _telegram_execution.build_execution_runtime(runtime, collaborators=collaborators)
+
+
+def current_transport_identity(message, chat_id: int | str, *, actor_key: str = ""):
+    return _telegram_execution.build_transport_identity(
+        current_runtime(),
+        message,
+        chat_id,
+        actor_key=actor_key,
+    )
+
+
+def current_execution_message(message):
+    return _telegram_execution.TelegramExecutionMessage(current_runtime(), message)
 
 
 def current_shared_runtime_builders():
@@ -144,7 +152,8 @@ def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-bo
             item.registry_id: item.registry_scope
             for item in getattr(cfg, "agent_registries", ())
         }
-        for registry_id, agent_id in getattr(cfg, "registry_agent_ids", {}).items():
+        seeded_agent_ids = getattr(cfg, "_test_registry_agent_ids", {})
+        for registry_id, agent_id in seeded_agent_ids.items():
             if not str(agent_id or "").strip():
                 continue
             save_registry_connection_state(
@@ -422,8 +431,9 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         services=current_runtime().services,
+        submitter=current_runtime().submitter,
         bot=bot,
-        dispatcher=current_runtime().channel_dispatcher,
+        dispatcher=current_runtime().transport_dispatcher,
     )
 
 
@@ -563,13 +573,11 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
-    services = (
-        build_bus_bot_services(
-            ControlPlaneBus(config.data_dir), directory,
-            agent_id_for_authority=_agent_id_for_authority,
-        )
-        if authority_capabilities
-        else build_noop_bot_services()
+    services = build_bus_bot_services(
+        ControlPlaneBus(config.data_dir),
+        directory,
+        config=config,
+        agent_id_for_authority=_agent_id_for_authority,
     )
     _TEST_RUNTIME = build_telegram_runtime(
         config,
@@ -578,11 +586,16 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         bot_instance=test_bot,
         services=services,
     )
-    dispatcher = ChannelDispatcher()
-    dispatcher.register(TelegramChannelBootstrap(config, provider, services))
+    dispatcher = TransportDispatcher()
+    dispatcher.register(TelegramTransport(config, provider, services))
     if config.agent_mode == "registry" and config.agent_registries:
-        register_registry_channels(config, config.agent_registries, dispatcher)
-    _TEST_RUNTIME.channel_dispatcher = dispatcher
+        register_registry_channels(
+            config,
+            config.agent_registries,
+            dispatcher,
+            services=services,
+        )
+    _TEST_RUNTIME.transport_dispatcher = dispatcher
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 
@@ -621,7 +634,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     an item was drained, False if queue was empty.
     """
     from octopus_sdk.inbound_types import deserialize_inbound
-    from app.workflows.recovery.results import TransportStateCorruption
+    from octopus_sdk.work_queue import TransportStateCorruption
 
     runtime = current_runtime()
     boot_id = runtime.boot_id

@@ -11,12 +11,12 @@ from telegram.constants import ParseMode
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from octopus_sdk.egress import (
-    ChannelCapabilities,
-    ChannelEgress,
+from octopus_sdk.transport import (
     EditableHandle,
+    TransportCapabilities,
+    TransportEgress,
 )
-from app.runtime.services import BotServices, build_noop_bot_services
+from app.runtime.services import BotServices
 
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class TelegramEditableHandle(EditableHandle):
         await self._message.edit_message_reply_markup(reply_markup=reply_markup, **kwargs)
 
 
-class TelegramChannelEgress(ChannelEgress):
+class TelegramChannelEgress(TransportEgress):
     """PTB-backed channel egress for Telegram conversations."""
 
     def __init__(
@@ -49,7 +49,7 @@ class TelegramChannelEgress(ChannelEgress):
         *,
         config: BotConfig | None = None,
         conversation_ref: str = "",
-        services: BotServices | None = None,
+        services: BotServices,
         mirror_input_event: bool = True,
         target_message_id: int | None = None,
     ) -> None:
@@ -57,7 +57,7 @@ class TelegramChannelEgress(ChannelEgress):
         self.chat_id = chat_id
         self._config = config
         self.conversation_ref = conversation_ref
-        self._services = services or build_noop_bot_services()
+        self._services = services
         self._mirror_input_event = mirror_input_event
         self._target_message_id = target_message_id
         self.chat = _ChatShim(self)
@@ -65,8 +65,8 @@ class TelegramChannelEgress(ChannelEgress):
         self.replies: list[str] = []
 
     @property
-    def capabilities(self) -> ChannelCapabilities:
-        return ChannelCapabilities(channel_name="telegram")
+    def capabilities(self) -> TransportCapabilities:
+        return TransportCapabilities(channel_name="telegram")
 
     async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         sent = await self._bot.send_message(self.chat_id, text, **kwargs)
@@ -121,6 +121,97 @@ class TelegramChannelEgress(ChannelEgress):
             f"<i>{_msg.recovery_notice_intro()}</i>\n\n{preview}\n\n{prompt}",
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
+        )
+
+    async def show_foreign_setup(self, foreign_setup) -> None:
+        from app.channels.telegram.execution import show_foreign_setup
+
+        await show_foreign_setup(self, foreign_setup)
+
+    async def show_setup_prompt(self, missing_skill: str, first_requirement: dict[str, object]) -> None:
+        from app.channels.telegram.execution import show_setup_prompt
+
+        await show_setup_prompt(self, missing_skill, first_requirement)
+
+    async def send_retry_prompt(self, denials: tuple[dict[str, Any], ...], callback_token: str) -> None:
+        from app.channels.telegram.execution import send_retry_prompt
+
+        await send_retry_prompt(self, denials, callback_token)
+
+    async def send_approval_prompt(self, callback_token: str) -> None:
+        from app.channels.telegram.execution import send_approval_prompt
+
+        await send_approval_prompt(self, callback_token)
+
+    async def send_formatted_reply(self, text: str) -> None:
+        from app.channels.telegram.execution import send_formatted_reply
+
+        await send_formatted_reply(self, text)
+
+    async def send_directed_artifacts(
+        self,
+        conversation_key_value: str,
+        directives: list[tuple[str, str]],
+        *,
+        resolved_ctx: Any = None,
+    ) -> None:
+        from app.channels.telegram.execution import send_path_to_chat
+        from app.channels.telegram import presenters as telegram_presenters
+        from app.storage import chat_upload_dir, resolve_allowed_path
+
+        cfg = self._config
+        if cfg is None:
+            return
+        if resolved_ctx is not None:
+            roots: list[Path] = [Path(resolved_ctx.working_dir)]
+            roots.extend(Path(d) for d in resolved_ctx.base_extra_dirs)
+        else:
+            roots = [cfg.working_dir]
+            roots.extend(cfg.extra_dirs)
+        roots.append(chat_upload_dir(cfg.data_dir, conversation_key_value))
+        allowed_roots = [root.resolve() for root in roots]
+
+        for dtype, raw_path in directives:
+            allowed_path = resolve_allowed_path(raw_path, allowed_roots)
+            if not allowed_path:
+                rendered = telegram_presenters.cannot_send_path_message(raw_path)
+                await self.reply_text(rendered.text, **rendered.kwargs())
+                continue
+            await send_path_to_chat(self, allowed_path, force_image=(dtype == "IMAGE"))
+
+    async def send_compact_reply(self, text: str, conversation_key_value: str, slot: int) -> None:
+        from app.channels.telegram.execution import send_compact_reply
+
+        await send_compact_reply(self, text, conversation_key_value, slot)
+
+    async def propose_delegation_plan(
+        self,
+        conversation_key_value: str,
+        session,
+        *,
+        conversation_ref: str,
+        result,
+    ):
+        from app.channels.telegram.delegation_channel import propose_delegation_plan
+        from types import SimpleNamespace
+
+        if self._config is None:
+            raise RuntimeError("Telegram delegation requires config")
+        runtime = SimpleNamespace(
+            config=self._config,
+            provider=SimpleNamespace(
+                name=self._config.provider_name,
+                new_provider_state=lambda _conversation_key: {},
+            ),
+            services=self._services,
+        )
+        return await propose_delegation_plan(
+            runtime,
+            conversation_key_value,
+            self,
+            session,
+            conversation_ref=conversation_ref,
+            result=result,
         )
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:

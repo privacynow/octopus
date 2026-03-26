@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import filesystem_component_for_key
-from app.workflows.delegation.contracts import DelegationUpdateOutcome
+from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 

@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from app import work_queue_postgres_impl
-from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.recovery.transport_contract import CancelRequestResult, DiscardResult
+from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
+from octopus_sdk.work_queue import (
+    CancelRequestResult,
+    DiscardResult,
+    UsageRecord,
+    UserAccessRecord,
+    WorkItemRecord,
+    coerce_usage_records,
+    coerce_user_access_records,
+    coerce_work_item_record,
+    coerce_work_item_records,
+)
 
 
 class PostgresTransportStore:
@@ -101,17 +110,19 @@ class PostgresTransportStore:
 
     def claim_for_update(
         self, data_dir: Path, conversation_key: str, event_id: str, worker_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.claim_for_update(conn, conversation_key, event_id, worker_id)
+            return coerce_work_item_record(
+                work_queue_postgres_impl.claim_for_update(conn, conversation_key, event_id, worker_id)
+            )
 
-    def claim_next(self, data_dir: Path, conversation_key: str, worker_id: str) -> dict[str, Any] | None:
+    def claim_next(self, data_dir: Path, conversation_key: str, worker_id: str) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.claim_next(conn, conversation_key, worker_id)
+            return coerce_work_item_record(work_queue_postgres_impl.claim_next(conn, conversation_key, worker_id))
 
-    def claim_next_any(self, data_dir: Path, worker_id: str) -> dict[str, Any] | None:
+    def claim_next_any(self, data_dir: Path, worker_id: str) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.claim_next_any(conn, worker_id)
+            return coerce_work_item_record(work_queue_postgres_impl.claim_next_any(conn, worker_id))
 
     def complete_work_item(self, data_dir: Path, item_id: str) -> None:
         with self._conn() as conn:
@@ -157,9 +168,9 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return work_queue_postgres_impl.get_update_payload(conn, event_id)
 
-    def get_work_items_for_chat(self, data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
+    def get_work_items_for_chat(self, data_dir: Path, conversation_key: str) -> list[WorkItemRecord]:
         with self._conn() as conn:
-            return work_queue_postgres_impl.get_work_items_for_chat(conn, conversation_key)
+            return coerce_work_item_records(work_queue_postgres_impl.get_work_items_for_chat(conn, conversation_key))
 
     def get_queue_snapshot(self, data_dir: Path) -> QueueSnapshot:
         with self._conn() as conn:
@@ -183,15 +194,15 @@ class PostgresTransportStore:
 
     def get_pending_recovery_for_update(
         self, data_dir: Path, conversation_key: str, event_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.get_pending_recovery_for_update(
-                conn, conversation_key, event_id
+            return coerce_work_item_record(
+                work_queue_postgres_impl.get_pending_recovery_for_update(conn, conversation_key, event_id)
             )
 
-    def get_latest_pending_recovery(self, data_dir: Path, conversation_key: str) -> dict[str, Any] | None:
+    def get_latest_pending_recovery(self, data_dir: Path, conversation_key: str) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.get_latest_pending_recovery(conn, conversation_key)
+            return coerce_work_item_record(work_queue_postgres_impl.get_latest_pending_recovery(conn, conversation_key))
 
     def supersede_pending_recovery(self, data_dir: Path, conversation_key: str) -> int:
         with self._conn() as conn:
@@ -208,13 +219,15 @@ class PostgresTransportStore:
         worker_id: str,
         *,
         ignore_claimed_item_id: str = "",
-    ) -> dict[str, Any] | None:
+    ) -> WorkItemRecord | None:
         with self._conn() as conn:
-            return work_queue_postgres_impl.reclaim_for_replay(
-                conn,
-                item_id,
-                worker_id,
-                ignore_claimed_item_id=ignore_claimed_item_id,
+            return coerce_work_item_record(
+                work_queue_postgres_impl.reclaim_for_replay(
+                    conn,
+                    item_id,
+                    worker_id,
+                    ignore_claimed_item_id=ignore_claimed_item_id,
+                )
             )
 
     def recover_stale_claims(
@@ -248,9 +261,9 @@ class PostgresTransportStore:
         with self._conn() as conn:
             work_queue_postgres_impl.set_user_access(conn, actor_key, access, reason, granted_by)
 
-    def list_user_access(self, data_dir: Path) -> list[dict]:
+    def list_user_access(self, data_dir: Path) -> list[UserAccessRecord]:
         with self._conn() as conn:
-            return work_queue_postgres_impl.list_user_access(conn)
+            return coerce_user_access_records(work_queue_postgres_impl.list_user_access(conn))
 
     def record_usage(
         self,
@@ -279,9 +292,9 @@ class PostgresTransportStore:
         data_dir: Path,
         *,
         since_epoch: float,
-    ) -> list[dict]:
+    ) -> list[UsageRecord]:
         with self._conn() as conn:
-            return work_queue_postgres_impl.get_usage_since(conn, since_epoch=since_epoch)
+            return coerce_usage_records(work_queue_postgres_impl.get_usage_since(conn, since_epoch=since_epoch))
 
     def close_transport_db(self, data_dir: Path) -> None:
         pass

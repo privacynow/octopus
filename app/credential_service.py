@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from app.credential_store import get_credential_store
-from app.credential_types import CredentialMap, CredentialValidator
+from octopus_sdk.credential_types import CredentialMap, CredentialValidator
 from app.credential_validation import validate_credential as default_validate_credential
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 
 
 class CredentialService:

@@ -1,11 +1,11 @@
-"""Workflow-local contracts for credential-management flows."""
+"""SDK workflow contracts for credential management."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.credential_types import CredentialMap
+from octopus_sdk.credential_types import CredentialMap
 from octopus_sdk.sessions import SessionState
 
 

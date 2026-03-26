@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_seed import builtin_skill_tracks
 from app.content_store import get_content_store
-from app.skill_types import SkillMeta, SkillRequirement
+from octopus_sdk.skill_types import SkillMeta, SkillRequirement
 
 
 def _requirements_from_track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:

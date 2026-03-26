@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
@@ -63,11 +63,36 @@ from app.registry_service.store_base import (
     validated_registry_scope,
 )
 from octopus_sdk.registry.models import (
+    AckResult,
+    AgentCard,
+    AgentDiscoveryQuery,
+    AgentHeartbeatRequest,
+    AgentRegisterRequest,
+    AgentRecord,
+    AgentStatusRecord,
+    ApprovalRecord,
+    CapabilityRecord,
     CoordinationActionEnvelope,
     CoordinationActionResult,
+    ConversationRecord,
+    ConversationSearchHitRecord,
+    DeliveryPollResult,
+    DeliveryRecord,
     DelegationTaskDraft,
     DirectAssignActionPayload,
+    EnrollmentResult,
+    EventRecord,
+    EventPageRecord,
+    HealthSummary,
+    MessageRecord,
+    MessagePageRecord,
+    PublishEventsResult,
+    RegistryRecordModel,
+    RegistrySummaryRecord,
+    RuntimeHealthDetailRecord,
     TargetSelector,
+    TaskRecord,
+    UsageSummaryRecord,
 )
 from octopus_sdk.task_protocol import (
     RoutedTaskSnapshot,
@@ -76,6 +101,14 @@ from octopus_sdk.task_protocol import (
 )
 
 _SCHEMA_VERSION = 1
+
+
+def _record(model_cls, payload):
+    return model_cls.model_validate(payload)
+
+
+def _records(model_cls, rows):
+    return [_record(model_cls, row) for row in rows]
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -331,14 +364,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             suffix += 1
         return slug
 
-    def _row_to_agent(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _row_to_agent(self, row: sqlite3.Row) -> AgentRecord:
         row_keys = row.keys()
         effective_state = (
             row["effective_state"]
             if "effective_state" in row_keys
             else effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
         )
-        return {
+        return _record(AgentRecord, {
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
@@ -358,7 +391,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "updated_at": row["updated_at"],
             "runtime_health_summary": runtime_health_summary(row["runtime_health_json"]),
             "runtime_health_generated_at": runtime_health_generated_at(row["runtime_health_json"]),
-        }
+        })
 
     def _replace_runtime_health_workers(
         self,
@@ -428,19 +461,24 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             (hash_agent_token(token),),
         ).fetchone()
 
-    def resolve_agent_for_token(self, agent_token: str) -> dict[str, Any] | None:
+    def resolve_agent_for_token(self, agent_token: str) -> AgentRecord | None:
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
                 return None
-            return dict(row)
+            return self._row_to_agent(row)
 
     def _offline_before(self) -> str:
         return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
 
-    def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
+    def enroll(self, requested_card: AgentCard) -> EnrollmentResult:
         now = utcnow_iso()
-        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
+        requested_payload = (
+            requested_card.model_dump(mode="json")
+            if hasattr(requested_card, "model_dump")
+            else requested_card
+        )
+        card = validated_agent_card_payload(requested_payload, require_registry_scope=True)
         bot_key = str(card.get("bot_key", "") or "").strip()
         if not bot_key:
             raise ValueError("bot_key requires non-empty text")
@@ -460,12 +498,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "UPDATE agents SET agent_token = ?, updated_at = ? WHERE bot_key = ?",
                         (agent_token_hash, now, bot_key),
                     )
-                    return {
+                    return _record(EnrollmentResult, {
                         "agent_id": existing["agent_id"],
                         "slug": existing["slug"],
                         "agent_token": agent_token,
                         "poll_cursor": "0",
-                    }
+                    })
 
             slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
             conn.execute(
@@ -501,12 +539,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     now,
                 ),
             )
-        return {
+        return _record(EnrollmentResult, {
             "agent_id": agent_id,
             "slug": slug,
             "agent_token": agent_token,
             "poll_cursor": "0",
-        }
+        })
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
         with self._connect() as conn:
@@ -515,9 +553,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, required_scopes)
 
-    def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def register(self, agent_token: str, payload: AgentRegisterRequest) -> AgentRecord:
         now = utcnow_iso()
-        register_payload = validated_register_payload(payload)
+        register_payload = validated_register_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         card = register_payload["agent_card"]
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
@@ -563,10 +603,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             assert row is not None
             return self._row_to_agent(row)
 
-    def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
-        heartbeat_payload = validated_heartbeat_payload(payload)
+        heartbeat_payload = validated_heartbeat_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -608,11 +650,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             assert row is not None
             current_agent = self._row_to_agent(row)
-            return {
+            return _record(HealthSummary, {
                 "agent": current_agent,
                 "collections_changed": previous_effective_state != current_agent["connectivity_state"],
                 "server_time": now,
-            }
+            })
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         normalized = capability_name.strip().lower()
@@ -641,7 +683,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             conn.commit()
 
-    def list_capabilities(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[CapabilityRecord]:
         with self._connect() as conn:
             offline_before = self._offline_before()
             declared_rows = conn.execute(
@@ -702,7 +744,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
+        return _records(
+            CapabilityRecord,
+            sorted(merged.values(), key=lambda item: item["capability_name"].lower()),
+        )
 
     def _disabled_capabilities(self, conn: sqlite3.Connection) -> set[str]:
         rows = conn.execute(
@@ -710,8 +755,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         ).fetchall()
         return {str(row["skill_name"]).lower() for row in rows}
 
-    def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
-        validated_query = validated_search_query(query)
+    def search_agents(self, query: AgentDiscoveryQuery) -> list[AgentRecord]:
+        validated_query = validated_search_query(
+            query.model_dump(mode="json") if hasattr(query, "model_dump") else query
+        )
         role = validated_query.get("role", "").strip().lower()
         required_state = validated_query.get("required_state", "connected")
         capabilities = query_capabilities(validated_query)
@@ -812,15 +859,22 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             rows = conn.execute("".join(sql), params).fetchall()
         return [self._row_to_agent(row) for row in rows]
 
-    def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_delivery(
+        self,
+        *,
+        target_agent_id: str,
+        kind: str,
+        payload: RegistryRecordModel,
+    ) -> DeliveryRecord:
         now = utcnow_iso()
         delivery_id = uuid.uuid4().hex
+        payload_data = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
         with self._connect() as conn:
             return self._create_delivery(
                 conn,
                 target_agent_id=target_agent_id,
                 kind=kind,
-                payload=payload,
+                payload=payload_data,
                 now=now,
                 delivery_id=delivery_id,
             )
@@ -934,7 +988,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         content: str,
         metadata: dict[str, Any],
         created_at: str,
-    ) -> dict[str, Any] | None:
+    ) -> EventRecord | None:
         cursor = conn.execute(
             """
             INSERT INTO events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
@@ -958,7 +1012,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "SELECT seq FROM events WHERE event_id = ?",
             (event_id,),
         ).fetchone()
-        return {
+        return _record(EventRecord, {
             "seq": int(seq_row["seq"]) if seq_row is not None else 0,
             "event_id": event_id,
             "conversation_id": conversation_id,
@@ -968,10 +1022,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "content": content,
             "metadata": metadata,
             "created_at": created_at,
-        }
+        })
 
-    def _task_row_to_summary(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+    def _task_row_to_summary(self, row: sqlite3.Row) -> TaskRecord:
+        return _record(TaskRecord, {
             "routed_task_id": row["routed_task_id"],
             "parent_conversation_id": row["parent_conversation_id"],
             "origin_agent_id": row["origin_agent_id"],
@@ -981,7 +1035,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "summary": row["summary"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-        }
+        })
 
     @staticmethod
     def _task_snapshot_from_row(row: sqlite3.Row) -> RoutedTaskSnapshot:
@@ -1001,7 +1055,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         request: dict[str, Any],
         *,
         now: str,
-    ) -> dict[str, Any]:
+    ) -> DeliveryRecord:
         validated_request = validated_routed_task_request(request)
         disabled_capabilities = self._disabled_capabilities(conn)
         for capability in requested_routed_capabilities(validated_request):
@@ -1086,15 +1140,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "SELECT seq FROM deliveries WHERE delivery_id = ?",
             (delivery_id,),
         ).fetchone()["seq"]
-        return {
+        return _record(DeliveryRecord, {
             "delivery_id": delivery_id,
             "seq": seq,
-        }
+        })
 
-    def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
+    def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         now = utcnow_iso()
         with self._connect() as conn:
-            validated_request = validated_routed_task_request(request)
+            validated_request = validated_routed_task_request(
+                request.model_dump(mode="json") if hasattr(request, "model_dump") else request
+            )
             conversation_row = conn.execute(
                 "SELECT conversation_id FROM conversations WHERE conversation_id = ?",
                 (validated_request["parent_conversation_id"],),
@@ -1108,7 +1164,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             delivery = created["delivery"]
             inserted_events = [created["event"]] if created.get("event") is not None else []
-        return {
+        return _record(TaskRecord, {
             "routed_task_id": validated_request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
             "events_written": bool(inserted_events),
@@ -1116,9 +1172,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "parent_conversation_id": validated_request["parent_conversation_id"],
             "origin_agent_id": validated_request["origin_agent_id"],
             "target_agent_id": validated_request["target_agent_id"],
-        }
+        })
 
-    def poll(self, agent_token: str, *, cursor: int, limit: int) -> dict[str, Any]:
+    def poll(self, agent_token: str, *, cursor: int, limit: int) -> DeliveryPollResult:
         now = utcnow_iso()
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
@@ -1194,20 +1250,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                             (decision.new_state, now, routed_task_id),
                         )
         items = [
-            {
+            _record(DeliveryRecord, {
                 "cursor": str(item["seq"]),
                 "delivery_id": item["delivery_id"],
                 "kind": item["kind"],
                 "payload": decode_json_field(item["payload_json"], {}),
                 "state": "leased" if item["delivery_id"] in delivery_ids else item["state"],
                 "created_at": item["created_at"],
-            }
+            })
             for item in deliveries
         ]
         next_cursor = str(max([cursor] + [int(item["cursor"]) for item in items]))
-        return {"deliveries": items, "next_cursor": next_cursor}
+        return _record(DeliveryPollResult, {"deliveries": items, "next_cursor": next_cursor})
 
-    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> dict[str, Any]:
+    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
         validated_ids, validated_classification = validated_ack_request(
             delivery_ids=delivery_ids,
@@ -1238,11 +1294,21 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         row["agent_id"],
                     ),
                 )
-        return {"updated": len(validated_ids), "classification": validated_classification}
+        return _record(
+            AckResult,
+            {"updated": len(validated_ids), "classification": validated_classification},
+        )
 
-    def update_routed_task_status(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_routed_task_status(
+        self,
+        agent_token: str,
+        routed_task_id: str,
+        payload: RegistryRecordModel,
+    ) -> TaskRecord:
         now = utcnow_iso()
-        validated_payload = validated_routed_task_status_payload(payload)
+        validated_payload = validated_routed_task_status_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1351,7 +1417,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                         (inserted_events[-1]["created_at"], task_row["parent_conversation_id"]),
                     )
-            return {
+            return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
@@ -1360,11 +1426,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "parent_conversation_id": task_row["parent_conversation_id"],
                 "origin_agent_id": task_row["origin_agent_id"],
                 "target_agent_id": task_row["target_agent_id"],
-            }
+            })
 
-    def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_routed_task_result(
+        self,
+        agent_token: str,
+        routed_task_id: str,
+        payload: RegistryRecordModel,
+    ) -> TaskRecord:
         now = utcnow_iso()
-        validated_payload = validated_routed_task_result_payload(payload)
+        validated_payload = validated_routed_task_result_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1478,7 +1551,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                         (completed_at, task["parent_conversation_id"]),
                     )
-            return {
+            return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
@@ -1487,9 +1560,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "parent_conversation_id": task["parent_conversation_id"],
                 "origin_agent_id": task["origin_agent_id"],
                 "target_agent_id": task["target_agent_id"],
-            }
+            })
 
-    def deregister(self, agent_token: str) -> dict[str, Any]:
+    def deregister(self, agent_token: str) -> AgentRecord:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
@@ -1504,7 +1577,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 """,
                 (now, now, agent_token_hash),
             )
-            return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
+            return _record(
+                AgentRecord,
+                {"agent_id": row["agent_id"], "connectivity_state": "offline"},
+            )
 
     def list_agents(
         self,
@@ -1514,7 +1590,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[AgentRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             if q or connectivity_state:
@@ -1549,7 +1625,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 ).fetchall()
         return [self._row_to_agent(row) for row in rows]
 
-    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM agents WHERE agent_id = ?",
@@ -1557,10 +1633,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if row is None:
                 return None
-            return runtime_health_detail(
+            detail = runtime_health_detail(
                 row["runtime_health_json"],
                 self._runtime_worker_rows(conn, agent_id),
             )
+            return _record(RuntimeHealthDetailRecord, detail) if detail is not None else None
 
     def agent_exists(self, agent_id: str) -> bool:
         with self._connect() as conn:
@@ -1577,7 +1654,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         title: str,
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
-    ) -> dict[str, Any]:
+    ) -> ConversationRecord:
         if not origin_channel or not origin_channel.strip():
             raise ValueError("origin_channel must not be empty")
         if not external_conversation_ref or not external_conversation_ref.strip():
@@ -1621,7 +1698,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             actual_id = row["conversation_id"] if row else conversation_id
         return self.get_conversation(actual_id)
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
         # When a search query is provided (>= 3 chars), use FTS-based search
         if q and len(q) >= 3:
@@ -1684,7 +1761,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 """
                 params_list.extend([fetch_limit, cursor])
                 rows = conn.execute(sql, params_list).fetchall()
-        return [
+        return _records(ConversationRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "target_agent_id": row["target_agent_id"],
@@ -1698,9 +1775,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "event_count": int(row["event_count"] or 0),
             }
             for row in rows
-        ]
+        ])
 
-    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+    def get_conversation(self, conversation_id: str) -> ConversationRecord:
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -1745,10 +1822,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             }
             for task in task_rows
         ]
-        return {
+        return _record(ConversationRecord, {
             "conversation_id": row["conversation_id"],
             "target_agent_id": row["target_agent_id"],
             "target_display_name": row["target_name"] or "",
+            "target_name": row["target_name"] or "",
             "title": row["title"],
             "status": row["status"],
             "created_at": row["created_at"],
@@ -1757,9 +1835,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "external_conversation_ref": row["external_conversation_ref"],
             "event_count": int(row["event_count"] or 0),
             "linked_routed_tasks": tasks,
-        }
+        })
 
-    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
             if until_iso:
                 rows = conn.execute(
@@ -1789,7 +1867,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     """,
                     (since_iso,),
                 ).fetchall()
-        return [
+        return _records(UsageSummaryRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "title": row["title"] or "",
@@ -1797,9 +1875,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "created_at": row["created_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_summary(self, *, now_iso: str) -> dict[str, Any]:
+    def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
         window_start = (
             datetime.fromisoformat(now_iso) - timedelta(hours=24)
         ).isoformat()
@@ -1865,7 +1943,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
             usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
             usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
-        return {
+        return _record(RegistrySummaryRecord, {
             "generated_at": now_iso,
             "agents": {
                 "total": len(agent_rows),
@@ -1884,9 +1962,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "failed_24h": int(task_totals["failed_24h"] or 0),
             },
             "usage_24h": usage_total,
-        }
+        })
 
-    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             sql = """
@@ -1923,7 +2001,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             """
             params.extend([fetch_limit, cursor])
             rows = conn.execute(sql, params).fetchall()
-        return [
+        return _records(ApprovalRecord, [
             {
                 "request_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
@@ -1938,9 +2016,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 **decode_json_field(row["metadata_json"], {}),
             }
             for row in rows
-        ]
+        ])
 
-    def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search_conversations(self, q: str, limit: int = 20) -> list[ConversationSearchHitRecord]:
         try:
             with self._connect() as conn:
                 rows = conn.execute(
@@ -1968,9 +2046,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 ).fetchall()
         except sqlite3.OperationalError:
             return []
-        return [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows]
+        return _records(
+            ConversationSearchHitRecord,
+            [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows],
+        )
 
-    def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+    def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
         validated_text = validated_conversation_message_text(text)
         with self._connect() as conn:
             conversation = conn.execute(
@@ -2025,7 +2106,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             inserted_event = None
             if inserted_event_row:
-                inserted_event = {
+                inserted_event = _record(EventRecord, {
                     "seq": inserted_event_row["seq"],
                     "event_id": inserted_event_row["event_id"],
                     "conversation_id": inserted_event_row["conversation_id"],
@@ -2035,15 +2116,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     "content": inserted_event_row["content"],
                     "metadata": decode_json_field(inserted_event_row["metadata_json"], {}),
                     "created_at": inserted_event_row["created_at"],
-                }
-        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
+                })
+        return _record(
+            MessageRecord,
+            {"conversation_id": conversation_id, "accepted": True, "event": inserted_event},
+        )
 
     def add_conversation_action(
         self,
         conversation_id: str,
-        envelope: CoordinationActionEnvelope | dict[str, Any],
-    ) -> dict[str, Any]:
-        validated_envelope = validated_conversation_action(envelope)
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        validated_envelope = validated_conversation_action(
+            envelope.model_dump(mode="json") if hasattr(envelope, "model_dump") else envelope
+        )
         action_payload = validated_action_payload(validated_envelope)
         with self._connect() as conn:
             conversation = conn.execute(
@@ -2057,14 +2143,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             routed_tasks: list[dict[str, Any]] = []
             duplicate = False
 
-            def _event_from_row(event_id: str) -> dict[str, Any] | None:
+            def _event_from_row(event_id: str) -> EventRecord | None:
                 row = conn.execute(
                     "SELECT * FROM events WHERE event_id = ?",
                     (event_id,),
                 ).fetchone()
                 if row is None:
                     return None
-                return {
+                return _record(EventRecord, {
                     "seq": row["seq"],
                     "event_id": row["event_id"],
                     "conversation_id": row["conversation_id"],
@@ -2074,7 +2160,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     "content": row["content"],
                     "metadata": decode_json_field(row["metadata_json"], {}),
                     "created_at": row["created_at"],
-                }
+                })
 
             if validated_envelope.action in {"approve", "reject", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
                 agent_row = conn.execute(
@@ -2151,7 +2237,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     accepted=True,
                     duplicate=duplicate,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "delegate_tasks":
                 proposal = action_payload
@@ -2193,7 +2279,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     duplicate=duplicate,
                     proposal_id=validated_envelope.action_id,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "approve_delegation":
                 proposal_id = action_payload.proposal_id
@@ -2287,7 +2373,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     proposal_id=proposal_id,
                     routed_tasks=routed_tasks,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "direct_assign":
                 assignment = action_payload
@@ -2387,7 +2473,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     routed_tasks=routed_tasks,
                     inserted_events=inserted_events,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action in {"cancel_task", "retry_task", "cancel_delegation"}:
                 if validated_envelope.action == "cancel_delegation":
@@ -2421,7 +2507,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         duplicate=duplicate,
                         proposal_id=action_payload.proposal_id,
                         event=inserted_event,
-                    ).model_dump()
+                    )
 
                 routed_task_id = action_payload.routed_task_id
                 task_row = conn.execute(
@@ -2500,7 +2586,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     duplicate=duplicate,
                     routed_tasks=routed_tasks,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             raise ValueError(f"Unsupported action: {validated_envelope.action}")
 
@@ -2512,7 +2598,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[TaskRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             sql = """
@@ -2537,7 +2623,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             sql += " ORDER BY t.updated_at DESC LIMIT ? OFFSET ?"
             params.extend([fetch_limit, cursor])
             rows = conn.execute(sql, params).fetchall()
-        return [
+        return _records(TaskRecord, [
             {
                 "routed_task_id": row["routed_task_id"],
                 "parent_conversation_id": row["parent_conversation_id"],
@@ -2555,9 +2641,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "updated_at": row["updated_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_task(self, routed_task_id: str) -> dict[str, Any]:
+    def get_task(self, routed_task_id: str) -> TaskRecord:
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -2571,7 +2657,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ).fetchone()
             if row is None:
                 raise KeyError(routed_task_id)
-        return {
+        return _record(TaskRecord, {
             "routed_task_id": row["routed_task_id"],
             "parent_conversation_id": row["parent_conversation_id"],
             "origin_agent_id": row["origin_agent_id"],
@@ -2585,9 +2671,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "result": decode_json_field(row["result_json"], {}),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-        }
+        })
 
-    def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    def publish_events(
+        self,
+        agent_token: str,
+        conversation_id: str,
+        events: list[RegistryRecordModel],
+    ) -> PublishEventsResult:
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -2604,8 +2695,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             inserted = 0
             skipped = 0
             inserted_ids: set[str] = set()
-            inserted_events: list[dict[str, Any]] = []
-            for event in events:
+            inserted_events: list[EventRecord] = []
+            for event_model in events:
+                event = (
+                    event_model.model_dump(mode="json")
+                    if hasattr(event_model, "model_dump")
+                    else event_model
+                )
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
                     raise ValueError("Event exceeds 256KB size limit")
@@ -2641,7 +2737,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         (event_id,),
                     ).fetchone()
                     if row:
-                        inserted_events.append({
+                        inserted_events.append(_record(EventRecord, {
                             "seq": row["seq"],
                             "event_id": row["event_id"],
                             "conversation_id": row["conversation_id"],
@@ -2651,10 +2747,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                             "content": row["content"],
                             "metadata": decode_json_field(row["metadata_json"], {}),
                             "created_at": row["created_at"],
-                        })
+                        }))
                 else:
                     skipped += 1
-        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids), "inserted_events": inserted_events}
+        return _record(
+            PublishEventsResult,
+            {
+                "inserted": inserted,
+                "skipped": skipped,
+                "inserted_ids": list(inserted_ids),
+                "inserted_events": inserted_events,
+            },
+        )
 
     def list_events(
         self,
@@ -2664,7 +2768,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         before_seq: int = 0,
         after_seq: int = 0,
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> EventPageRecord:
         if before_seq and after_seq:
             raise ValueError("before_seq and after_seq cannot both be set")
         kinds = [item.strip() for item in kind.split(",") if item.strip()]
@@ -2715,14 +2819,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             }
             for row in rows
         ]
-        return {
-            "events": events_list,
-            "has_more_before": has_more_before,
-            "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
-            "next_after_seq": events_list[-1]["seq"] if events_list else None,
-        }
+        return _record(
+            EventPageRecord,
+            {
+                "events": _records(EventRecord, events_list),
+                "has_more_before": has_more_before,
+                "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
+                "next_after_seq": events_list[-1]["seq"] if events_list else None,
+            },
+        )
 
-    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -2748,9 +2855,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             for row in rows
         ]
         next_cursor = events_list[-1]["seq"] if events_list else 0
-        return {"events": events_list, "next_cursor": next_cursor}
+        return _record(
+            MessagePageRecord,
+            {"events": _records(EventRecord, events_list), "next_cursor": next_cursor},
+        )
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[ConversationRecord]:
         fetch_limit = limit + 1
         effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
@@ -2765,7 +2875,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 """,
                 (effective_agent_id, fetch_limit, cursor),
             ).fetchall()
-        return [
+        return _records(ConversationRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "target_agent_id": row["target_agent_id"],
@@ -2777,9 +2887,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "updated_at": row["updated_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM agents WHERE agent_id = ?",
@@ -2809,9 +2919,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         agent["workers"] = workers
         agent["active_conversations"] = active_conversations
         agent["recent_errors"] = recent_errors
-        return agent
+        return _record(AgentStatusRecord, agent)
 
-    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
+    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
             sql = (
                 "SELECT e.*, c.title AS conversation_title "
@@ -2834,7 +2944,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 params.append(until)
             sql += " ORDER BY e.created_at"
             rows = conn.execute(sql, params).fetchall()
-        return [
+        return _records(UsageSummaryRecord, [
             {
                 "event_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
@@ -2844,7 +2954,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "created_at": row["created_at"],
             }
             for row in rows
-        ]
+        ])
 
     def export_conversation(self, conversation_id: str) -> str:
         with self._connect() as conn:

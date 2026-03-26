@@ -1,21 +1,21 @@
 import asyncio
+from dataclasses import fields
 
 import pytest
 
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_conversation_ref
-from octopus_sdk.channels import ChannelDescriptor
-from app.channels.telegram.delegation_channel import propose_delegation_plan
+from octopus_sdk.transport import TransportDescriptor
 from app.channels.telegram.execution import (
     TelegramExecutionCollaborators,
+    TelegramExecutionMessage,
+    build_transport_identity as build_telegram_transport_identity,
     build_dispatch_runtime,
     execution_channel_metadata,
     build_execution_runtime,
-    send_compact_reply,
-    send_directed_artifacts,
 )
 from app.summarize import format_provider_error
-from octopus_sdk.runtime_dispatch import (
-    RuntimeDispatchRuntime,
+from octopus_sdk.bot_runtime import (
+    ProviderDispatchRuntime,
     run_provider_preflight,
     run_provider_request,
 )
@@ -43,11 +43,15 @@ async def _no_op(*args, **kwargs):
 
 
 class _GenericStatusHandle:
-    pass
+    async def edit_text(self, text: str, **kwargs):
+        del text, kwargs
+
+    async def edit_reply_markup(self, reply_markup=None, **kwargs):
+        del reply_markup, kwargs
 
 
 class _GenericProgress:
-    def __init__(self, status_message, timeline_callback):
+    def __init__(self, status_message, _config, timeline_callback=None):
         self.status_message = status_message
         self.timeline_callback = timeline_callback
         self.content_started = None
@@ -59,7 +63,7 @@ class _GenericProgress:
 async def test_run_provider_request_uses_explicit_runtime_plumbing():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="hello")
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="hello"))
         runtime = current_execution_runtime().dispatch
 
         outcome = await run_provider_request(
@@ -81,15 +85,6 @@ async def test_run_provider_request_does_not_require_telegram_message_api():
     typing_targets: list[object] = []
     typing_started = asyncio.Event()
 
-    async def fake_send_status(message, label: str):
-        message.labels.append(label)
-        return _GenericStatusHandle()
-
-    async def fake_keep_typing(target):
-        typing_targets.append(target)
-        typing_started.set()
-        await asyncio.sleep(0)
-
     with fresh_env() as (_data_dir, cfg, prov):
         target = object()
         original_run = prov.run
@@ -110,23 +105,27 @@ async def test_run_provider_request_does_not_require_telegram_message_api():
         class GenericMessage:
             def __init__(self):
                 self.labels: list[str] = []
+                self.actions: list[str] = []
                 self.target = target
 
-        runtime = RuntimeDispatchRuntime(
+            async def send_status(self, label: str):
+                self.labels.append(label)
+                return _GenericStatusHandle()
+
+            def typing_target(self):
+                return self
+
+            async def send_action(self, action: str) -> None:
+                self.actions.append(action)
+                typing_targets.append(target)
+                typing_started.set()
+                del action
+
+        runtime = ProviderDispatchRuntime(
             config=cfg,
             provider=prov,
             boot_id="dispatch-test",
             cancellations={},
-            progress_factory=lambda status_message, _cfg, timeline_callback=None: _GenericProgress(
-                status_message,
-                timeline_callback,
-            ),
-            send_status=fake_send_status,
-            typing_target=lambda message: message.target,
-            keep_typing=fake_keep_typing,
-            heartbeat=_no_op,
-            format_provider_error=current_execution_runtime().dispatch.format_provider_error,
-            run_result_was_interrupted=lambda _returncode: False,
         )
         message = GenericMessage()
 
@@ -147,20 +146,9 @@ async def test_run_provider_request_does_not_require_telegram_message_api():
         assert runtime.cancellations == {}
 
 
-def test_dispatch_runtime_uses_injected_collaborators() -> None:
-    async def fake_heartbeat(*args, **kwargs):
-        del args, kwargs
-        return None
-
-    async def fake_propose(*args, **kwargs):
-        del args, kwargs
-        return RequestExecutionOutcome(status="completed")
-
+def test_dispatch_runtime_has_no_callable_constructor_fields() -> None:
     with fresh_env():
         collaborators = TelegramExecutionCollaborators(
-            progress_factory=FakeChat,
-            keep_typing=lambda chat: ("typing", chat),
-            heartbeat=fake_heartbeat,
             build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
                 lambda html_text, force=False: _no_op(
                     conversation_ref,
@@ -177,14 +165,15 @@ def test_dispatch_runtime_uses_injected_collaborators() -> None:
                     force=force,
                 )
             ),
-            propose_delegation_plan=fake_propose,
         )
-
         runtime = build_dispatch_runtime(current_runtime(), collaborators=collaborators)
-
-        assert runtime.progress_factory is FakeChat
-        assert runtime.keep_typing("chat-1") == ("typing", "chat-1")
-        assert runtime.heartbeat is fake_heartbeat
+        assert [field.name for field in fields(ProviderDispatchRuntime)] == [
+            "config",
+            "provider",
+            "boot_id",
+            "cancellations",
+        ]
+        assert runtime.boot_id == current_runtime().boot_id
 
 
 def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> None:
@@ -196,37 +185,34 @@ def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> 
         del args, kwargs
         return None
 
-    async def fake_propose(*args, **kwargs):
-        del args, kwargs
-        return RequestExecutionOutcome(status="completed")
-
     with fresh_env():
         collaborators = TelegramExecutionCollaborators(
-            progress_factory=FakeChat,
-            keep_typing=lambda chat: chat,
-            heartbeat=_no_op,
             build_conversation_progress_callback=lambda _conversation_ref, _routed_task_id: fake_timeline,
             build_routed_task_progress_callback=lambda _routed_task_id, _authority_ref: fake_routed_task,
-            propose_delegation_plan=fake_propose,
         )
 
         runtime = build_execution_runtime(current_runtime(), collaborators=collaborators)
         message = FakeMessage(chat=FakeChat(12345))
         message.conversation_ref = telegram_conversation_ref(current_runtime().config, 12345)
-        context = runtime.build_transport_identity(message, 12345)
+        context = build_telegram_transport_identity(
+            current_runtime(),
+            message,
+            12345,
+            collaborators=collaborators,
+        )
 
         assert context.timeline_callback is fake_timeline
-        assert runtime.propose_delegation_plan is fake_propose
 
 
 async def test_execute_request_runs_from_explicit_execution_runtime():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="hello")
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="hello"))
         runtime = current_execution_runtime()
 
         outcome = await execute_request(
-            runtime.build_transport_identity(
+            build_telegram_transport_identity(
+                current_runtime(),
                 message,
                 chat.id,
                 actor_key=telegram_actor_key(42),
@@ -243,57 +229,22 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
 
 
 async def test_request_approval_runs_from_explicit_execution_runtime():
-    approval_prompts: list[str] = []
-
-    async def send_approval_prompt(_message, callback_token: str) -> None:
-        approval_prompts.append(callback_token)
-
     with fresh_env() as (data_dir, _cfg, prov):
         chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="hello")
-        from octopus_sdk.event_sink import NoOpEventSink
-        _noop = NoOpEventSink()
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="hello"))
         base_runtime = current_execution_runtime()
         runtime = ExecutionRuntime(
             dispatch=base_runtime.dispatch,
             services=base_runtime.services,
             interrupted_exc=base_runtime.interrupted_exc,
-            build_transport_identity=lambda _message, _chat_id, *, actor_key="": TransportIdentity(
-                conversation_key=f"tg:{_chat_id}" if isinstance(_chat_id, int) else str(_chat_id),
-                origin_channel="telegram" if isinstance(_chat_id, int) else "registry",
-                external_conversation_ref=str(_chat_id),
-                actor=actor_key or "tg:42",
-            ),
-            build_event_sink=lambda _transport: _noop,
-            render_provider_error=lambda text: text,
-            show_foreign_setup=_no_op,
-            show_setup_prompt=_no_op,
-            send_retry_prompt=_no_op,
-            send_approval_prompt=send_approval_prompt,
-            send_formatted_reply=current_execution_runtime().send_formatted_reply,
-            send_directed_artifacts=lambda conversation_key_value, message, directives, resolved_ctx=None: send_directed_artifacts(
-                conversation_key_value,
-                message,
-                directives,
-                resolved_ctx,
-                runtime=current_runtime(),
-            ),
-            send_compact_reply=send_compact_reply,
-            propose_delegation_plan=lambda conversation_key_value, message, session, conversation_ref, result: propose_delegation_plan(
-                current_runtime(),
-                conversation_key_value,
-                message,
-                session,
-                conversation_ref=conversation_ref,
-                result=result,
-            ),
         )
 
         await request_approval(
-            runtime.build_transport_identity(
-                message,
-                chat.id,
-                actor_key=telegram_actor_key(42),
+            TransportIdentity(
+                conversation_key=f"tg:{chat.id}",
+                origin_channel="telegram",
+                external_conversation_ref=str(chat.id),
+                actor=telegram_actor_key(42),
             ),
             "please review files",
             [],
@@ -305,22 +256,24 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert session.get("pending_approval") is not None
         assert len(prov.preflight_calls) == 1
-        assert len(approval_prompts) == 1
-        assert approval_prompts[0]
+        assert len(message.chat.sent_messages) == 1
+        assert message.chat.sent_messages[0]["reply_markup"] is not None
 
 
 def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             conversation_key="registry:conversation:12345",
-            descriptor=ChannelDescriptor(
-                channel_type="registry",
+            origin_channel="registry",
+            actor="registry:operator",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_channel_capability=True,
-                accepts_channel_input=True,
+                contributes_transport_capability=True,
+                accepts_transport_input=True,
                 supports_conversation_binding=True,
                 supports_timeline=True,
             ),
@@ -355,14 +308,16 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             conversation_key="registry:ops:task:task-1",
-            descriptor=ChannelDescriptor(
-                channel_type="registry",
+            origin_channel="registry",
+            actor="registry:operator",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry Tasks",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_channel_capability=False,
-                accepts_channel_input=False,
+                contributes_transport_capability=False,
+                accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,
             ),
@@ -406,14 +361,16 @@ async def test_workflow_context_builder_chooses_routed_task_callback_by_concern(
     context = build_transport_identity_from_metadata(
         ExecutionChannelMetadata(
             conversation_key="registry:ops:task:task-1",
-            descriptor=ChannelDescriptor(
-                channel_type="registry",
+            origin_channel="registry",
+            actor="registry:operator",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry Tasks",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_channel_capability=False,
-                accepts_channel_input=False,
+                contributes_transport_capability=False,
+                accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,
             ),

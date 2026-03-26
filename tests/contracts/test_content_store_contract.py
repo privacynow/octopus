@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
     RuntimeSkillTrackRecord,

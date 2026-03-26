@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import app.content_store as content_store_mod
-from app.content_models import RuntimeSkillTrackRecord, SkillFileRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillFileRecord, SkillRevisionRecord
 from app.content_store import get_content_store, init_content_store_for_config
 from octopus_sdk.execution_context import resolve_execution_context
 from app.provider_guidance_service import get_provider_guidance_service

@@ -10,7 +10,7 @@ from app.workflows.runtime_skills.setup_machine import (
     StartSetupAction,
     decide_setup_action,
 )
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 
 
 def _requirement(key: str) -> SkillRequirement:

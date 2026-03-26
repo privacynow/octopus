@@ -35,15 +35,15 @@ from app.channels.telegram.presenters import (
     skill_add_confirmation,
     welcome_message,
 )
-from app.workflows.provider_guidance.contracts import (
+from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleApproval,
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
 )
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
-from app.workflows.delegation.contracts import DelegationTargetPreview
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.delegation import DelegationTargetPreview
+from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleRevision,

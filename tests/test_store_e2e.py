@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from octopus_sdk.providers import RunResult
 from app.skill_catalog_service import get_skill_catalog_service

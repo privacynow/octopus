@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
 from app.workflows.lifecycle_machine import (
@@ -12,7 +12,7 @@ from app.workflows.lifecycle_machine import (
     build_lifecycle_snapshot,
     decide_lifecycle_action,
 )
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     RuntimeSkillAuthoringPort,
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,

@@ -1,6 +1,6 @@
 import time
 
-from app.workflows.delegation.coordination import (
+from octopus_sdk.workflows.delegation import (
     all_tasks_terminal,
     any_task_failed,
     apply_routed_result,

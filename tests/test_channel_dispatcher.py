@@ -1,4 +1,4 @@
-"""Contract tests for channel dispatcher routing and ingress lifecycle."""
+"""Contract tests for transport dispatcher routing and lifecycle."""
 
 from __future__ import annotations
 
@@ -8,10 +8,32 @@ from typing import Any
 
 import pytest
 
-from octopus_sdk.channels import Channel, ChannelBootstrap, ChannelDescriptor, ChannelIngress
-from octopus_sdk.egress import ChannelCapabilities, ChannelEgress, EditableHandle
-from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport import EditableHandle
+from octopus_sdk.transport import TransportCapabilities
+from octopus_sdk.transport import TransportDescriptor
+from octopus_sdk.transport import TransportEgress
+from octopus_sdk.transport import TransportImplementation
+from octopus_sdk.transport import InboundSubmissionResult
 from tests.support.config_support import make_config
+
+
+class _RuntimeHandle:
+    async def submit(self, envelope, *, worker_id=None):
+        del envelope, worker_id
+        return InboundSubmissionResult(status="admitted")
+
+    async def admit_message(self, envelope):
+        del envelope
+        return InboundSubmissionResult(status="admitted")
+
+    async def enqueue(self, envelope, *, worker_id=None):
+        del envelope, worker_id
+        return InboundSubmissionResult(status="queued")
+
+    async def record(self, envelope):
+        del envelope
+        return True
 
 
 class _DummyHandle(EditableHandle):
@@ -22,12 +44,12 @@ class _DummyHandle(EditableHandle):
         del reply_markup, kwargs
 
 
-class _FakeEgress(ChannelEgress):
-    def __init__(self, channel_name: str) -> None:
-        self._capabilities = ChannelCapabilities(channel_name=channel_name)
+class _FakeEgress(TransportEgress):
+    def __init__(self, transport_name: str) -> None:
+        self._capabilities = TransportCapabilities(channel_name=transport_name)
 
     @property
-    def capabilities(self) -> ChannelCapabilities:
+    def capabilities(self) -> TransportCapabilities:
         return self._capabilities
 
     async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
@@ -47,22 +69,30 @@ class _FakeEgress(ChannelEgress):
         del text, show_alert
 
 
-class _FakeIngress(ChannelIngress):
-    def __init__(self, descriptor: ChannelDescriptor, channel_id: str) -> None:
+class _FakeTransport(TransportImplementation):
+    def __init__(self, prefix: str, descriptor: TransportDescriptor) -> None:
+        self._prefix = prefix
         self._descriptor = descriptor
-        self._channel_id = channel_id
         self.started = False
         self.stopped = False
 
     @property
-    def channel_id(self) -> str:
-        return self._channel_id
+    def transport_id(self) -> str:
+        return self._prefix.rstrip(":")
 
     @property
-    def descriptor(self) -> ChannelDescriptor:
+    def descriptor(self) -> TransportDescriptor:
         return self._descriptor
 
-    async def start(self, *, stop_event: asyncio.Event) -> None:
+    def ref_prefix(self) -> str:
+        return self._prefix
+
+    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+        del conversation_ref, config, kw
+        return _FakeEgress(self._descriptor.transport_type)
+
+    async def start(self, *, runtime, stop_event: asyncio.Event) -> None:
+        del runtime
         self.started = True
         await stop_event.wait()
 
@@ -73,55 +103,14 @@ class _FakeIngress(ChannelIngress):
         return {"ok": True}
 
 
-class _FailingIngress(_FakeIngress):
-    async def start(self, *, stop_event: asyncio.Event) -> None:
-        del stop_event
+class _FailingTransport(_FakeTransport):
+    async def start(self, *, runtime, stop_event: asyncio.Event) -> None:
+        del runtime, stop_event
         raise RuntimeError("boom")
 
 
-class _FakeChannel(Channel):
-    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
-        self._prefix = prefix
-        self._descriptor = descriptor
-
-    @property
-    def channel_id(self) -> str:
-        return self._prefix.rstrip(":")
-
-    @property
-    def descriptor(self) -> ChannelDescriptor:
-        return self._descriptor
-
-    def ref_prefix(self) -> str:
-        return self._prefix
-
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
-        del conversation_ref, config, kw
-        return _FakeEgress(self._descriptor.channel_type)
-
-
-class _FakeBootstrap(_FakeChannel, ChannelBootstrap):
-    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
-        super().__init__(prefix, descriptor)
-        self.ingress = _FakeIngress(descriptor, self.channel_id)
-
-    def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
-        del config, delivery_handler
-        return self.ingress
-
-
-class _FailingBootstrap(_FakeChannel, ChannelBootstrap):
-    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
-        super().__init__(prefix, descriptor)
-        self.ingress = _FailingIngress(descriptor, self.channel_id)
-
-    def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
-        del config, delivery_handler
-        return self.ingress
-
-
-class _BotDependentChannel(_FakeChannel):
-    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
+class _BotDependentTransport(_FakeTransport):
+    def __init__(self, prefix: str, descriptor: TransportDescriptor) -> None:
         super().__init__(prefix, descriptor)
         self.build_calls = 0
         self.readiness_calls = 0
@@ -131,34 +120,34 @@ class _BotDependentChannel(_FakeChannel):
         self.readiness_calls += 1
         return kw.get("bot") is not None
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
+    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
         del conversation_ref, config
         self.build_calls += 1
         if kw.get("bot") is None:
             raise RuntimeError("bot not ready")
-        return _FakeEgress(self._descriptor.channel_type)
+        return _FakeEgress(self._descriptor.transport_type)
 
 
 def test_dispatcher_routes_by_registered_prefix() -> None:
-    dispatcher = ChannelDispatcher()
-    telegram = _FakeBootstrap(
+    dispatcher = TransportDispatcher()
+    telegram = _FakeTransport(
         "telegram:",
-        ChannelDescriptor(
-            channel_type="telegram",
+        TransportDescriptor(
+            transport_type="telegram",
             display_name="Telegram",
             supports_multiple=False,
-            requires_polling=False,
+            inbound_model="poll",
         ),
     )
-    registry_task = _FakeChannel(
+    registry_task = _FakeTransport(
         "registry:prod:task:",
-        ChannelDescriptor(
-            channel_type="registry",
+        TransportDescriptor(
+            transport_type="registry",
             display_name="Registry Task",
             supports_multiple=True,
-            requires_polling=True,
-            contributes_channel_capability=False,
-            accepts_channel_input=False,
+            inbound_model="delivery",
+            contributes_transport_capability=False,
+            accepts_transport_input=False,
             supports_conversation_binding=False,
         ),
     )
@@ -175,35 +164,35 @@ def test_dispatcher_routes_by_registered_prefix() -> None:
 
 
 def test_dispatcher_rejects_conflicting_prefixes() -> None:
-    dispatcher = ChannelDispatcher()
+    dispatcher = TransportDispatcher()
     dispatcher.register(
-        _FakeChannel(
+        _FakeTransport(
             "registry:prod:",
-            ChannelDescriptor(
-                channel_type="registry",
+            TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
             ),
         )
     )
 
-    with pytest.raises(ValueError, match="conflicting channel prefix"):
+    with pytest.raises(ValueError, match="conflicting transport prefix"):
         dispatcher.register(
-            _FakeChannel(
+            _FakeTransport(
                 "registry:prod:task:",
-                ChannelDescriptor(
-                    channel_type="registry",
+                TransportDescriptor(
+                    transport_type="registry",
                     display_name="Registry Task",
                     supports_multiple=True,
-                    requires_polling=True,
+                    inbound_model="delivery",
                 ),
             )
         )
 
 
 def test_dispatcher_rejects_unknown_refs() -> None:
-    dispatcher = ChannelDispatcher()
+    dispatcher = TransportDispatcher()
     cfg = make_config()
 
     with pytest.raises(ValueError, match="unknown conversation ref"):
@@ -211,14 +200,14 @@ def test_dispatcher_rejects_unknown_refs() -> None:
 
 
 def test_dispatcher_egress_ready_for_ref_checks_runtime_readiness() -> None:
-    dispatcher = ChannelDispatcher()
-    telegram = _BotDependentChannel(
+    dispatcher = TransportDispatcher()
+    telegram = _BotDependentTransport(
         "telegram:",
-        ChannelDescriptor(
-            channel_type="telegram",
+        TransportDescriptor(
+            transport_type="telegram",
             display_name="Telegram",
             supports_multiple=False,
-            requires_polling=False,
+            inbound_model="poll",
         ),
     )
     dispatcher.register(telegram)
@@ -230,103 +219,98 @@ def test_dispatcher_egress_ready_for_ref_checks_runtime_readiness() -> None:
     assert telegram.build_calls == 0
 
 
-def test_active_channel_types_deduplicates_and_skips_non_capability_channels() -> None:
-    dispatcher = ChannelDispatcher()
+def test_active_transport_types_deduplicates_and_skips_non_capability_transports() -> None:
+    dispatcher = TransportDispatcher()
     dispatcher.register(
-        _FakeBootstrap(
+        _FakeTransport(
             "telegram:",
-            ChannelDescriptor(
-                channel_type="telegram",
+            TransportDescriptor(
+                transport_type="telegram",
                 display_name="Telegram",
                 supports_multiple=False,
-                requires_polling=False,
+                inbound_model="poll",
             ),
         )
     )
     dispatcher.register(
-        _FakeChannel(
+        _FakeTransport(
             "registry:prod:conversation:",
-            ChannelDescriptor(
-                channel_type="registry",
+            TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry Conversation",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
             ),
         )
     )
     dispatcher.register(
-        _FakeChannel(
+        _FakeTransport(
             "registry:prod:task:",
-            ChannelDescriptor(
-                channel_type="registry",
+            TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry Task",
                 supports_multiple=True,
-                requires_polling=True,
-                contributes_channel_capability=False,
-                accepts_channel_input=False,
+                inbound_model="delivery",
+                contributes_transport_capability=False,
+                accepts_transport_input=False,
                 supports_conversation_binding=False,
             ),
         )
     )
 
-    assert dispatcher.active_channel_types() == ["telegram", "registry"]
+    assert dispatcher.active_transport_types() == ["telegram", "registry"]
 
 
-async def test_build_start_and_stop_all_ingresses_only_uses_bootstraps() -> None:
-    dispatcher = ChannelDispatcher()
-    telegram = _FakeBootstrap(
+async def test_start_and_stop_all_transports() -> None:
+    dispatcher = TransportDispatcher()
+    telegram = _FakeTransport(
         "telegram:",
-        ChannelDescriptor(
-            channel_type="telegram",
+        TransportDescriptor(
+            transport_type="telegram",
             display_name="Telegram",
             supports_multiple=False,
-            requires_polling=False,
+            inbound_model="poll",
         ),
     )
     dispatcher.register(telegram)
     dispatcher.register(
-        _FakeChannel(
+        _FakeTransport(
             "registry:prod:task:",
-            ChannelDescriptor(
-                channel_type="registry",
+            TransportDescriptor(
+                transport_type="registry",
                 display_name="Registry Task",
                 supports_multiple=True,
-                requires_polling=True,
-                contributes_channel_capability=False,
-                accepts_channel_input=False,
+                inbound_model="delivery",
+                contributes_transport_capability=False,
+                accepts_transport_input=False,
                 supports_conversation_binding=False,
             ),
         )
     )
 
-    ingresses = dispatcher.build_all_ingresses(config=make_config(), delivery_handler=lambda *args: args)
-    assert list(ingresses) == ["telegram"]
-    assert dispatcher.get_ingress("telegram") is telegram.ingress
-
     stop_event = asyncio.Event()
-    await dispatcher.start_all_ingresses(stop_event=stop_event)
+    await dispatcher.start_all_transports(runtime=_RuntimeHandle(), stop_event=stop_event)
     await asyncio.sleep(0)
-    assert telegram.ingress.started is True
+    assert telegram.started is True
 
     stop_event.set()
-    await dispatcher.stop_all_ingresses()
-    assert telegram.ingress.stopped is True
+    await dispatcher.stop_all_transports()
+    assert telegram.stopped is True
 
 
-async def test_start_all_ingresses_surfaces_startup_failures() -> None:
-    dispatcher = ChannelDispatcher()
+async def test_start_all_transports_surfaces_startup_failures() -> None:
+    dispatcher = TransportDispatcher()
     dispatcher.register(
-        _FailingBootstrap(
+        _FailingTransport(
             "telegram:",
-            ChannelDescriptor(
-                channel_type="telegram",
+            TransportDescriptor(
+                transport_type="telegram",
                 display_name="Telegram",
                 supports_multiple=False,
-                requires_polling=False,
+                inbound_model="poll",
             ),
         )
     )
-    dispatcher.build_all_ingresses(config=make_config(), delivery_handler=lambda *args: args)
 
     with pytest.raises(RuntimeError, match="boom"):
-        await dispatcher.start_all_ingresses(stop_event=asyncio.Event())
+        await dispatcher.start_all_transports(runtime=_RuntimeHandle(), stop_event=asyncio.Event())

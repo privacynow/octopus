@@ -10,7 +10,7 @@ import pytest
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime_health import WorkerHeartbeat
 from app.storage import ensure_data_dirs
-from app.workflows.recovery.transport_contract import CancelRequestResult, DiscardResult
+from octopus_sdk.work_queue import CancelRequestResult, DiscardResult
 from app.work_queue import (
     cancel_queued_fresh_for_chat,
     clear_worker_heartbeat,

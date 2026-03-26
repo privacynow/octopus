@@ -28,7 +28,7 @@ from octopus_sdk.inbound_types import (
     InboundMessage,
     deserialize_inbound,
 )
-from app.workflows.recovery.results import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 

@@ -12,23 +12,23 @@ from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
-    build_registry_message_delivery,
+    build_registry_message_envelope,
     qualify_registry_parent_ref,
 )
 from octopus_sdk.registry.models import RoutedTaskResult
 from app.agents.state import runtime_registry_agent_id
 from app.config import BotConfig
 from octopus_sdk.identity import conversation_key_for_ref
-from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
-from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices
+from octopus_sdk.transport import BotRuntimeHandle
 from app.runtime.session_runtime import (
     apply_runtime_delegation_result,
     load_runtime_session,
     save_runtime_session,
 )
 from app.skill_activation_service import get_skill_activation_service
-from app.workflows.delegation.coordination import send_delegation_completion_message
+from octopus_sdk.workflows.delegation import send_delegation_completion_message
 
 log = logging.getLogger(__name__)
 
@@ -38,8 +38,9 @@ class RegistryDeliveryRuntime:
     provider_name: str
     provider_state_factory: Callable[[str], dict[str, Any]]
     services: BotServices
+    submitter: BotRuntimeHandle | None = None
     bot: Any | None = None
-    dispatcher: ChannelDispatcher | None = None
+    dispatcher: TransportDispatcher | None = None
 
 
 def build_registry_delivery_runtime(
@@ -47,13 +48,15 @@ def build_registry_delivery_runtime(
     provider_name: str,
     provider_state_factory: Callable[[str], dict[str, Any]],
     services: BotServices,
+    submitter: BotRuntimeHandle | None = None,
     bot: Any | None = None,
-    dispatcher: ChannelDispatcher | None = None,
+    dispatcher: TransportDispatcher | None = None,
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
         services=services,
+        submitter=submitter,
         bot=bot,
         dispatcher=dispatcher,
     )
@@ -136,10 +139,14 @@ async def handle_registry_delivery(
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
     registry_id = str(delivery.get("registry_id", "") or "")
+    submitter = runtime.submitter
+    if submitter is None:
+        raise RuntimeError("Registry delivery runtime is missing a bot runtime submitter")
     if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(
             config,
             delivery,
+            submitter=submitter,
             dispatcher=runtime.dispatcher,
         )
 
@@ -174,7 +181,7 @@ async def handle_registry_delivery(
         if envelope is None:
             return "rejected"
         if action == "cancel_conversation":
-            is_new = record_inbound_envelope(config.data_dir, envelope)
+            is_new = await submitter.record(envelope)
             if not is_new:
                 return "accepted"
             result = work_queue.request_cancel(
@@ -190,7 +197,7 @@ async def handle_registry_delivery(
                     envelope.event_id,
                 )
             return "accepted"
-        enqueue_inbound_envelope(config.data_dir, envelope)
+        await submitter.enqueue(envelope)
         return "accepted"
 
     if kind == "routed_result":
@@ -248,26 +255,21 @@ async def handle_registry_delivery(
         resume_delivery_id = (
             f"delegation-resume:{parent_conversation_id}:{int(applied.pending.created_at * 1000)}"
         )
-        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
+        envelope = build_registry_message_envelope(
             conversation_ref=parent_conversation_id,
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
             delivery_id=resume_delivery_id,
             external_conversation_ref=parent_external_conversation_ref,
-            registry_id=registry_id,
             skip_approval=True,
+            registry_id=registry_id,
         )
-        admit_status, _ = work_queue.record_and_admit_message(
-            config.data_dir,
-            event_id,
-            conversation_key,
-            actor_key,
-            "message",
-            serialized,
-        )
+        submission = await submitter.admit_message(envelope)
+        admit_status = submission.status
         if admit_status == "admitted":
             if runtime.dispatcher is None:
                 raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
+            conversation_key = envelope.conversation_key
             channel_egress = runtime.dispatcher.create_egress(
                 parent_conversation_id,
                 config=config,
@@ -278,7 +280,7 @@ async def handle_registry_delivery(
             )
             if not parent_conversation_id.startswith("registry:"):
                 try:
-                    await send_delegation_completion_message(applied.pending, channel_egress)
+                    await send_delegation_completion_message(applied.pending, channel_egress.send_text)
                 except Exception:
                     log.warning(
                         "Failed to send delegation completion summary for %s",
@@ -295,6 +297,7 @@ async def handle_registry_delivery(
                     parent_external_conversation_ref or parent_conversation_id
                 ),
                 target_agent_id=runtime_registry_agent_id(config.data_dir, registry_id),
+                actor="registry:delegation-resume",
             )
             sink = build_event_sink_for_context(
                 transport,

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app import work_queue
 from app.agents.registry_capabilities import registry_authority_ref
 from app.channels.registry.refs import (
     binding_external_id_for_ref,
@@ -21,6 +20,7 @@ from octopus_sdk.inbound_types import (
     InboundUser,
     serialize_inbound,
 )
+from octopus_sdk.transport import BotRuntimeHandle
 
 
 def qualify_registry_parent_ref(registry_id: str, conversation_ref: str) -> str:
@@ -41,27 +41,60 @@ def build_registry_message_delivery(
     skip_approval: bool = False,
     conversation_key_override: str = "",
 ) -> tuple[str, str, str, str]:
+    envelope = build_registry_message_envelope(
+        conversation_ref=conversation_ref,
+        text=text,
+        actor_ref=actor_ref,
+        delivery_id=delivery_id,
+        external_conversation_ref=external_conversation_ref,
+        routed_task_id=routed_task_id,
+        registry_id=registry_id,
+        skip_approval=skip_approval,
+        conversation_key_override=conversation_key_override,
+    )
+    payload = serialize_inbound(envelope.event)
+    return envelope.conversation_key, envelope.actor_key, envelope.event_id, payload
+
+
+def build_registry_message_envelope(
+    *,
+    conversation_ref: str,
+    text: str,
+    actor_ref: str,
+    delivery_id: str,
+    external_conversation_ref: str = "",
+    routed_task_id: str = "",
+    registry_id: str,
+    skip_approval: bool = False,
+    conversation_key_override: str = "",
+) -> InboundEnvelope:
     if not registry_id:
         raise ValueError("Registry message delivery requires an explicit registry_id")
     conversation_key = conversation_key_override or conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
-    payload = serialize_inbound(
-        InboundMessage(
-            user=InboundUser(id=actor_key, username="registry"),
-            conversation_key=conversation_key,
-            text=text,
-            attachments=(),
-            source="registry",
-            transport="registry",
-            conversation_ref=conversation_ref,
-            external_conversation_ref=external_conversation_ref,
-            routed_task_id=routed_task_id,
-            authority_ref=registry_authority_ref(registry_id),
-            skip_approval=skip_approval,
-        )
+    event = InboundMessage(
+        user=InboundUser(id=actor_key, username="registry"),
+        conversation_key=conversation_key,
+        text=text,
+        attachments=(),
+        source="registry",
+        transport="registry",
+        conversation_ref=conversation_ref,
+        external_conversation_ref=external_conversation_ref,
+        routed_task_id=routed_task_id,
+        authority_ref=registry_authority_ref(registry_id),
+        skip_approval=skip_approval,
     )
-    return conversation_key, actor_key, event_id, payload
+    return InboundEnvelope(
+        transport="registry",
+        event_id=event_id,
+        conversation_key=conversation_key,
+        actor_key=actor_key,
+        received_at=datetime.now(timezone.utc),
+        event=event,
+        conversation_ref=conversation_ref,
+    )
 
 
 def build_registry_action_envelope(
@@ -105,6 +138,7 @@ async def admit_registry_delivery(
     config: BotConfig,
     delivery: dict[str, Any],
     *,
+    submitter: BotRuntimeHandle,
     dispatcher: Any | None = None,
 ) -> str:
     """Convert a registry delivery into a normal local work item or control action."""
@@ -112,8 +146,6 @@ async def admit_registry_delivery(
     payload = delivery.get("payload", {})
     delivery_id = delivery.get("delivery_id", "")
     registry_id = str(delivery.get("registry_id", "") or "")
-    data_dir = config.data_dir
-
     if kind == "channel_input":
         if not registry_id:
             return "rejected"
@@ -121,7 +153,7 @@ async def admit_registry_delivery(
         # Use stable_event_id from the delivery payload for cross-registry dedup
         stable_event_id = str(payload.get("stable_event_id", "") or "")
         effective_delivery_id = stable_event_id if stable_event_id else delivery_id
-        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
+        envelope = build_registry_message_envelope(
             conversation_ref=conversation_ref,
             text=payload.get("text", ""),
             actor_ref=f"registry-ui:{conversation_ref}",
@@ -129,21 +161,14 @@ async def admit_registry_delivery(
             external_conversation_ref=str(payload.get("external_conversation_ref", "") or ""),
             registry_id=registry_id,
         )
-        status, _ = work_queue.record_and_admit_message(
-            data_dir,
-            event_id,
-            conversation_key,
-            actor_key,
-            "message",
-            serialized,
-        )
-        if status in {"admitted", "queued", "duplicate"}:
+        submission = await submitter.admit_message(envelope)
+        if submission.status in {"admitted", "queued", "duplicate"}:
             if dispatcher is None:
                 raise RuntimeError("Registry delivery admission requires a channel dispatcher")
             channel_egress = dispatcher.create_egress(
                 conversation_ref,
                 config=config,
-                conversation_key=conversation_key,
+                conversation_key=envelope.conversation_key,
                 source="registry",
             )
             await channel_egress.sync_binding(
@@ -183,7 +208,7 @@ async def admit_registry_delivery(
             shared_key = delegation_session_key(origin_agent_id, parent_conversation_id)
         else:
             shared_key = ""
-        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
+        envelope = build_registry_message_envelope(
             conversation_ref=conversation_ref,
             conversation_key_override=shared_key,
             text=text,
@@ -192,14 +217,7 @@ async def admit_registry_delivery(
             routed_task_id=request["routed_task_id"],
             registry_id=registry_id,
         )
-        status, _ = work_queue.record_and_admit_message(
-            data_dir,
-            event_id,
-            conversation_key,
-            actor_key,
-            "message",
-            serialized,
-        )
+        await submitter.admit_message(envelope)
         return "accepted"
 
     return "rejected"

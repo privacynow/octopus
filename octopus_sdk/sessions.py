@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from octopus_sdk.providers import DenialRecord, ProviderStateRecord, coerce_denial_records, coerce_provider_state
+
 @dataclass
 class ProjectBinding:
     """Resolved project configuration from BotConfig.projects.
@@ -54,10 +56,13 @@ class PendingRetry:
     prompt: str
     image_paths: list[str]
     context_hash: str
-    denials: list[dict[str, Any]]
+    denials: list[DenialRecord]
     callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self.denials = coerce_denial_records(self.denials)
 
 
 @dataclass
@@ -106,7 +111,7 @@ class SessionState:
     All runtime paths operate on this object.
     """
     provider: str
-    provider_state: dict[str, Any]
+    provider_state: ProviderStateRecord
     approval_mode: str
     approval_mode_explicit: bool = False
     active_skills: list[str] = field(default_factory=list)
@@ -121,6 +126,9 @@ class SessionState:
     model_profile: str = ""  # "fast", "balanced", "best", or "" (use config default)
     created_at: str = ""
     updated_at: str = ""
+
+    def __post_init__(self) -> None:
+        self.provider_state = coerce_provider_state(self.provider_state)
 
     # -- Convenience accessors ------------------------------------------------
 
@@ -147,7 +155,21 @@ class SessionState:
 
 def session_to_dict(s: SessionState) -> dict[str, Any]:
     """Convert a SessionState to a storage-ready dict via dataclasses.asdict()."""
-    return dataclasses.asdict(s)
+    data = dataclasses.asdict(s)
+    provider_state = data.get("provider_state")
+    if isinstance(provider_state, dict) and "values" in provider_state:
+        data["provider_state"] = provider_state.get("values", {})
+    pending_retry = data.get("pending_retry")
+    if isinstance(pending_retry, dict):
+        denials = pending_retry.get("denials")
+        if isinstance(denials, list):
+            pending_retry["denials"] = [
+                item.get("values", item)
+                if isinstance(item, dict)
+                else item
+                for item in denials
+            ]
+    return data
 
 
 def session_from_dict(d: dict[str, Any]) -> SessionState:
@@ -189,7 +211,7 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
 
     return SessionState(
         provider=d.get("provider", ""),
-        provider_state=d.get("provider_state", {}),
+        provider_state=coerce_provider_state(d.get("provider_state", {})),
         approval_mode=d.get("approval_mode", "off"),
         approval_mode_explicit=d.get("approval_mode_explicit", False),
         active_skills=d.get("active_skills", []),
@@ -209,17 +231,20 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
 
 def default_session(
     provider_name: str,
-    provider_state: dict[str, Any],
+    provider_state: ProviderStateRecord | dict[str, Any] | callable,
     approval_mode: str,
     role: str = "",
     default_skills: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     from datetime import datetime, timezone
 
+    if callable(provider_state):
+        provider_state = provider_state("")
+    state = coerce_provider_state(provider_state)
     now = datetime.now(timezone.utc).isoformat()
     return {
         "provider": provider_name,
-        "provider_state": provider_state,
+        "provider_state": state.to_dict(),
         "approval_mode": approval_mode,
         "active_skills": list(default_skills),
         "role": role,

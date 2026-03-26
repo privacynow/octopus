@@ -17,10 +17,10 @@ from app.agents.delivery import build_registry_delivery_runtime, handle_registry
 from app.agents.runtime import AgentRuntime, _registered_card_hash
 from app.agents.state import RegistryConnectionState
 from octopus_sdk.registry.models import AgentDiscoveryQuery
-from app.channels.registry.channel import _services_for_registry
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.agents.registry_capabilities import registry_authority_ref
 from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import build_control_plane_directory
 from app.config import derive_agent_slug
 import octopus_sdk.identity as identity_module
 from octopus_sdk.identity import (
@@ -30,9 +30,10 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
 )
 from octopus_sdk.inbound_types import deserialize_inbound
-from app.runtime.services import build_noop_bot_services
+from octopus_sdk.transport import InboundSubmissionResult
+from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
-from app.workflows.delegation.contracts import DelegationUpdateOutcome
+from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 from app.agents.state import (
     load_registry_connection_state,
     load_runtime_registry_connection_state,
@@ -40,10 +41,29 @@ from app.agents.state import (
 )
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env
+from tests.support.service_support import build_test_bot_services
 
 
 def _reg_conv(conversation_ref: str) -> str:
     return conversation_key_for_ref(conversation_ref)
+
+
+class _QueuedRegistrySubmitter:
+    async def submit(self, envelope, *, worker_id=None):
+        del envelope, worker_id
+        return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    async def admit_message(self, envelope):
+        del envelope
+        return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    async def enqueue(self, envelope, *, worker_id=None):
+        del envelope, worker_id
+        return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    async def record(self, envelope):
+        del envelope
+        return True
 
 
 def test_derive_agent_slug_normalizes_display_name():
@@ -139,11 +159,16 @@ def test_registry_channel_services_resolve_runtime_agent_id_after_enrollment(tmp
         agent_mode="registry",
         agent_registries=(registry,),
     )
-    services = _services_for_registry(
+    services = build_bus_bot_services(
         ControlPlaneBus(tmp_path),
-        registry=registry,
-        authority_capabilities={registry_authority_ref("local"): {"conversation_projection"}},
+        build_control_plane_directory(
+            {registry_authority_ref("local"): {"conversation_projection"}}
+        ),
         config=config,
+        agent_id_for_authority=lambda authority_ref: load_runtime_registry_connection_state(
+            tmp_path,
+            authority_ref.rsplit(":", 1)[-1],
+        ).agent_id,
     )
 
     save_registry_connection_state(
@@ -852,10 +877,6 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
             egress_kwargs.append(dict(kwargs))
             return _FakeEgress()
 
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -870,6 +891,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
             "registry_id": "prod",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
     outcome_task = await admit_registry_delivery(
@@ -886,6 +908,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
                 "requested_capabilities": ["reviewer"],
             },
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
 
@@ -923,10 +946,6 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
             del conversation_ref, config, kwargs
             return _FakeEgress()
 
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -944,6 +963,7 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
                 "text": "hello from slack",
             },
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
 
@@ -977,10 +997,6 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
             del conversation_ref, config, kwargs
             return _FakeEgress()
 
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -999,6 +1015,7 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
                 "external_conversation_ref": "operator-conv-1",
             },
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
 
@@ -1013,11 +1030,6 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
 
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
-
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
 
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
@@ -1038,6 +1050,7 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
             "delivery_id": "delivery-legacy",
             "payload": {"conversation_id": "conv-legacy", "text": "hello"},
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
 
@@ -1055,7 +1068,7 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
         }
     ) as (_data_dir, config, prov):
         parent_conversation_ref = telegram_conversation_ref(config, 12345)
-        dispatcher = current_runtime().channel_dispatcher
+        dispatcher = current_runtime().transport_dispatcher
         services = current_runtime().services
 
         def fake_create_egress(conversation_ref, *, config, **kwargs):
@@ -1084,6 +1097,7 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
                 provider_name=prov.name,
                 provider_state_factory=prov.new_provider_state,
                 services=services,
+                submitter=current_runtime().submitter,
                 bot=None,
                 dispatcher=dispatcher,
             ),
@@ -1095,11 +1109,6 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
 
 async def test_admit_registry_delivery_rejects_missing_registry_id(monkeypatch, tmp_path: Path):
     seen: list[str] = []
-
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
 
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
@@ -1120,6 +1129,7 @@ async def test_admit_registry_delivery_rejects_missing_registry_id(monkeypatch, 
             "delivery_id": "delivery-missing-registry",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
+        submitter=_QueuedRegistrySubmitter(),
         dispatcher=_FakeDispatcher(),
     )
 
@@ -1138,6 +1148,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
             services=current_runtime().services,
+            submitter=current_runtime().submitter,
             bot=None,
         )
 
@@ -1202,6 +1213,7 @@ async def test_handle_registry_channel_action_preserves_already_qualified_future
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
             services=current_runtime().services,
+            submitter=current_runtime().submitter,
             bot=None,
         )
         qualified_ref = "slack:eng:12345"
@@ -1228,10 +1240,6 @@ async def test_handle_registry_channel_action_preserves_already_qualified_future
 async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 
-    monkeypatch.setattr(
-        "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("queued", "queued-item"),
-    )
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -1254,7 +1262,8 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
         runtime=build_registry_delivery_runtime(
             provider_name="claude",
             provider_state_factory=dict,
-            services=build_noop_bot_services(),
+            services=build_test_bot_services(),
+            submitter=_QueuedRegistrySubmitter(),
             bot=None,
             dispatcher=_RejectingDispatcher(),
         ),
@@ -1275,6 +1284,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
             provider_name=_prov.name,
             provider_state_factory=_prov.new_provider_state,
             services=current_runtime().services,
+            submitter=current_runtime().submitter,
             bot=None,
         )
 
@@ -1304,6 +1314,7 @@ async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=current_runtime().services,
+            submitter=current_runtime().submitter,
             bot=None,
         )
 
@@ -1341,7 +1352,8 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
-            services=build_noop_bot_services(),
+            services=build_test_bot_services(),
+            submitter=current_runtime().submitter,
             bot=None,
             dispatcher=_FakeDispatcher(),
         )
@@ -1404,11 +1416,12 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
             "app.agents.delivery.apply_runtime_delegation_result",
             lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
         )
-        services = build_noop_bot_services()
+        services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
+            submitter=current_runtime().submitter,
             bot=None,
             dispatcher=_FakeDispatcher(),
         )
@@ -1466,11 +1479,12 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
                 ready_to_resume=False,
             ),
         )
-        services = build_noop_bot_services()
+        services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
+            submitter=current_runtime().submitter,
             bot=None,
             dispatcher=_FakeDispatcher(),
         )

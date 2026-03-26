@@ -19,7 +19,6 @@ from octopus_sdk.config import (
     RegistryConnectionConfig,
     should_publish_event as sdk_should_publish_event,
 )
-from app.agents.state import load_registry_connection_state
 from octopus_sdk.identity import parse_actor_key, telegram_numeric_id
 from octopus_sdk.sessions import ProjectBinding
 from app.providers.codex_security import validate_codex_sandbox
@@ -444,13 +443,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         # Fallback: all allowed users are admins
         admin_actor_keys, admin_names = actor_keys, usernames
 
-    # Read agent IDs from enrollment state files (single writer: enrollment pipeline)
     data_dir = Path(get("BOT_DATA_DIR", str(default_data)))
-    registry_agent_ids: dict[str, str] = {}
-    for reg in agent_registries:
-        state = load_registry_connection_state(data_dir, reg.registry_id, default_scope=reg.registry_scope)
-        if state.agent_id:
-            registry_agent_ids[reg.registry_id] = state.agent_id
 
     return BotConfig(
         instance=instance,
@@ -523,7 +516,6 @@ def load_config(instance: str | None = None) -> BotConfig:
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
         db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
         registry_publish_level=_validated_publish_level(get("BOT_REGISTRY_PUBLISH_LEVEL", "standard")),
-        registry_agent_ids=registry_agent_ids,
     )
 
 
@@ -632,7 +624,6 @@ def load_config_provider_health() -> BotConfig:
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
         registry_publish_level="standard",
-        registry_agent_ids={},
     )
 
 

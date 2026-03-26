@@ -324,7 +324,16 @@ def test_extracted_telegram_modules_import_only_shared_types_and_routing_targets
         "session_io.py": {"state"},
         "progress.py": {"state"},
         "delegation_channel.py": {"presenters", "session_io", "state"},
-        "execution.py": {"presenters", "conversation", "pending", "runtime_skills", "session_io", "state"},
+        "execution.py": {
+            "presenters",
+            "conversation",
+            "delegation_channel",
+            "pending",
+            "progress",
+            "runtime_skills",
+            "session_io",
+            "state",
+        },
         "worker.py": {"presenters", "conversation", "execution", "pending", "runtime_skills", "session_io", "state"},
         "shared_mode_dispatch.py": {
             "presenters",
@@ -609,7 +618,7 @@ def test_telegram_ingress_does_not_build_ptb_applications_or_register_handlers()
 
 def test_runtime_dispatch_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "bot_runtime.py"
     text = dispatch_path.read_text()
     assert "app.channels" not in text, (
         f"channel import still referenced in {dispatch_path}"
@@ -627,7 +636,7 @@ def test_runtime_composition_has_no_channel_imports() -> None:
 
 def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "bot_runtime.py"
     text = dispatch_path.read_text()
     forbidden = (
         "from telegram",
@@ -698,7 +707,7 @@ def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes
     repo_root = Path(__file__).resolve().parents[1]
     inbound_types_path = repo_root / "octopus_sdk" / "inbound_types.py"
     session_state_path = repo_root / "octopus_sdk" / "sessions.py"
-    coordination_path = repo_root / "app" / "workflows" / "delegation" / "coordination.py"
+    coordination_path = repo_root / "octopus_sdk" / "workflows" / "delegation.py"
     presenters_path = repo_root / "app" / "channels" / "telegram" / "presenters.py"
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
 
@@ -752,13 +761,9 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
 def test_dead_registry_runtime_api_is_deleted() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     registry_runtime_path = repo_root / "app" / "agents" / "registry_runtime.py"
-    registry_runtime_text = registry_runtime_path.read_text()
-    assert "def runtime_for_registry(" not in registry_runtime_text
-    assert "def resolve_target_registry_id(" not in registry_runtime_text
+    assert not registry_runtime_path.exists(), f"dead registry runtime survived at {registry_runtime_path}"
 
     for path in repo_root.joinpath("app").rglob("*.py"):
-        if path == registry_runtime_path:
-            continue
         text = path.read_text()
         assert "runtime_for_registry(" not in text, f"runtime_for_registry survived in {path}"
         assert "resolve_target_registry_id(" not in text, (
@@ -777,6 +782,36 @@ def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_nam
     work_admission_text = work_admission_path.read_text()
     assert 'channel_type != "telegram"' not in work_admission_text
     assert 'channel_type == "telegram"' not in work_admission_text
+
+
+def test_telegram_ingress_submission_flows_do_not_reach_into_work_admission_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        ("app", "channels", "telegram", "ingress.py"),
+        ("app", "channels", "telegram", "shared_mode_dispatch.py"),
+    ):
+        path = repo_root.joinpath(*relative)
+        text = path.read_text()
+        forbidden = (
+            "admit_fresh_message(",
+            "enqueue_inbound_envelope(",
+            "record_inbound_envelope(",
+        )
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_runtime_process_does_not_branch_on_config_registry_agent_ids_for_live_enrollment() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    process_path = repo_root / "app" / "runtime" / "process.py"
+    assert "config.registry_agent_ids" not in process_path.read_text()
+
+
+def test_telegram_discover_command_stays_on_registry_participant_surface() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    assert "services.control_plane.agent_directory.search_agents" not in text
 
 
 def test_worker_dispatch_documents_completion_ownership() -> None:
@@ -985,10 +1020,7 @@ def test_agents_delivery_has_no_channel_imports() -> None:
 def test_agents_delegation_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delegation_path = repo_root / "app" / "agents" / "delegation.py"
-    text = delegation_path.read_text()
-    assert "app.channels" not in text, (
-        f"channel import still referenced in {delegation_path}"
-    )
+    assert not delegation_path.exists(), f"legacy delegation owner still exists at {delegation_path}"
 
 
 def test_handler_support_does_not_mutate_legacy_ingress_globals() -> None:
@@ -1059,9 +1091,9 @@ def test_workflows_package_root_has_no_transitional_reexports() -> None:
     assert "import " not in text, f"transitional re-export still present in {workflows_init}"
 
 
-def test_recovery_transport_contract_owner_exists_under_concern_package() -> None:
+def test_recovery_transport_contract_owner_lives_in_sdk() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    owner_path = repo_root / "app" / "workflows" / "recovery" / "transport_contract.py"
+    owner_path = repo_root / "octopus_sdk" / "work_queue.py"
     assert owner_path.exists(), f"recovery transport contract owner missing at {owner_path}"
 
 
@@ -1077,10 +1109,9 @@ def test_stale_transport_era_test_files_are_gone() -> None:
 
 def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    agent_paths = (
-        repo_root / "app" / "agents" / "delegation.py",
-        repo_root / "app" / "agents" / "delivery.py",
-    )
+    delegation_path = repo_root / "app" / "agents" / "delegation.py"
+    assert not delegation_path.exists(), f"legacy delegation owner still exists at {delegation_path}"
+    agent_paths = (repo_root / "app" / "agents" / "delivery.py",)
     forbidden = (
         "task.status =",
         "delegation.status =",
@@ -1220,3 +1251,123 @@ def test_generic_health_and_discover_paths_do_not_reference_registry_scope() -> 
     for path in candidate_paths:
         text = path.read_text()
         assert "registry_scope" not in text, f"registry_scope still referenced in {path}"
+
+
+def test_octopus_sdk_never_imports_app_modules() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sdk_root = repo_root / "octopus_sdk"
+    python_files = sorted(path for path in sdk_root.rglob("*.py") if "__pycache__" not in path.parts)
+    pattern = re.compile(r"^\s*(from|import)\s+app(\.|$)", re.MULTILINE)
+    for path in python_files:
+        text = path.read_text()
+        assert pattern.search(text) is None, f"octopus_sdk imports app code in {path}"
+
+
+def test_runtime_composition_does_not_reach_into_telegram_transport_internals() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    process_path = repo_root / "app" / "runtime" / "process.py"
+    text = process_path.read_text()
+    forbidden = (
+        "telegram_transport.application",
+        "telegram_transport.runtime",
+        "telegram_transport.worker_dispatch",
+        "telegram_transport.worker_deserialize_failure_notifier",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in runtime composition"
+
+
+def test_runtime_startup_does_not_use_deleted_noop_bot_services_builder() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate_paths = (
+        repo_root / "app" / "main.py",
+        repo_root / "app" / "runtime" / "process.py",
+        repo_root / "app" / "channels" / "telegram" / "channel.py",
+        repo_root / "app" / "channels" / "telegram" / "bootstrap.py",
+        repo_root / "app" / "channels" / "telegram" / "state.py",
+        repo_root / "app" / "channels" / "telegram" / "egress.py",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        assert "build_noop_bot_services" not in text, f"deleted noop builder still referenced in {path}"
+
+
+def test_main_entrypoint_delegates_runtime_preparation_to_process_module() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    main_path = repo_root / "app" / "main.py"
+    text = main_path.read_text()
+
+    assert "prepare_and_run_runtime(" in text
+    forbidden = (
+        "ensure_data_dirs(",
+        "init_content_store_for_config(",
+        "init_credential_store_for_config(",
+        "recover_stale_claims(",
+        "purge_old(",
+        "TransportDispatcher(",
+        "register_registry_channels(",
+        "build_registry_delivery_transport(",
+        "TelegramTransport(",
+        "build_worker_bundle(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in thin entrypoint {main_path}"
+
+
+def test_registry_delivery_transport_is_the_only_live_owner_of_agent_runtime_lifecycle() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed = {
+        app_root / "agents" / "__init__.py",
+        app_root / "agents" / "runtime.py",
+        app_root / "channels" / "registry" / "delivery_transport.py",
+    }
+    for path in sorted(app_root.rglob("*.py")):
+        if path in allowed or "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        assert "AgentRuntime" not in text, f"live AgentRuntime ownership leaked into {path}"
+
+
+def test_registry_delivery_helpers_are_confined_to_registry_delivery_path() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed = {
+        app_root / "agents" / "bridge.py",
+        app_root / "agents" / "delivery.py",
+        app_root / "channels" / "registry" / "delivery_transport.py",
+    }
+    forbidden = (
+        "app.agents.bridge",
+        "app.agents.delivery",
+        "handle_registry_delivery(",
+        "build_registry_delivery_runtime(",
+        "admit_registry_delivery(",
+        "build_registry_message_envelope(",
+        "build_registry_action_envelope(",
+    )
+    for path in sorted(app_root.rglob("*.py")):
+        if path in allowed or "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still leaked outside registry delivery path in {path}"
+
+
+def test_test_suite_does_not_patch_deleted_main_runtime_setup_hooks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    forbidden = (
+        'patch("app.main.ensure_data_dirs"',
+        'patch("app.main.init_content_store_for_config"',
+        'patch("app.main.init_credential_store_for_config"',
+        'patch("app.main.recover_stale_claims"',
+        'patch("app.main.purge_old"',
+    )
+    for path in sorted(
+        candidate for candidate in tests_root.rglob("*.py") if "__pycache__" not in candidate.parts and candidate != gate_path
+    ):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"

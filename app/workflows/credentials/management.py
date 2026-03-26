@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.credential_service import get_credential_service
 from octopus_sdk.sessions import SessionState
-from app.workflows.credentials.contracts import CredentialClearOutcome, CredentialManagementPort
+from octopus_sdk.workflows.credentials import CredentialClearOutcome, CredentialManagementPort
 from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 
 

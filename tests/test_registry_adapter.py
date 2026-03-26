@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.access import get_authorization
 from app.channels.registry.channel import (
     RegistryConversationChannel,
     RegistryTaskChannel,
@@ -15,12 +16,18 @@ from app.channels.registry.channel import (
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from octopus_sdk.providers import RunResult
-from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.transport_dispatcher import TransportDispatcher
 from app.runtime.services import (
     BotServices,
     ControlPlaneServices,
-    build_noop_control_plane_services,
 )
+from app.runtime import composition
+import app.runtime_backend as runtime_backend
+from app.runtime.registry_participant import build_noop_registry_participant
+from octopus_sdk.agent_directory import NoOpAgentDirectory
+from octopus_sdk.conversation_projection import NoOpConversationProjection
+from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.config_support import make_config, make_registry_connection
 from octopus_sdk.config import RegistryConnectionConfig
 
@@ -48,14 +55,23 @@ class _ProjectionRecorder:
 
 
 def _services(recorder: _ProjectionRecorder) -> BotServices:
-    noop = build_noop_control_plane_services()
+    noop = ControlPlaneServices(
+        conversation_projection=NoOpConversationProjection(),
+        task_routing=NoOpTaskRouting(),
+        agent_directory=NoOpAgentDirectory(),
+        health_publication=NoOpHealthPublication(),
+    )
     return BotServices(
         control_plane=ControlPlaneServices(
             conversation_projection=recorder,
             task_routing=noop.task_routing,
             agent_directory=noop.agent_directory,
             health_publication=noop.health_publication,
-        )
+        ),
+        registry=build_noop_registry_participant(),
+        workflows=composition.workflows(),
+        authorization=get_authorization(),
+        work_queue=runtime_backend.transport_store(),
     )
 
 
@@ -351,7 +367,7 @@ def test_register_registry_channels_registers_channels_by_scope(tmp_path):
         registry_scope="coordination",
         poll_interval_seconds=5.0,
     )
-    dispatcher = ChannelDispatcher()
+    dispatcher = TransportDispatcher()
 
     register_registry_channels(
         make_config(
@@ -361,12 +377,13 @@ def test_register_registry_channels_registers_channels_by_scope(tmp_path):
         ),
         (prod, ops),
         dispatcher,
+        services=_services(_ProjectionRecorder()),
     )
 
-    assert dispatcher.channel_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
-    assert dispatcher.channel_type_for_ref("registry:ops:task:task-1") == "registry"
-    assert dispatcher.channel_type_for_ref("registry:prod:task:task-1") is None
-    assert dispatcher.active_channel_types() == ["registry"]
+    assert dispatcher.transport_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
+    assert dispatcher.transport_type_for_ref("registry:ops:task:task-1") == "registry"
+    assert dispatcher.transport_type_for_ref("registry:prod:task:task-1") is None
+    assert dispatcher.active_transport_types() == ["registry"]
 
 
 def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
@@ -389,6 +406,6 @@ def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
         services=_services(_ProjectionRecorder()),
     )
 
-    assert task_channel.descriptor.contributes_channel_capability is False
-    assert task_channel.descriptor.accepts_channel_input is False
+    assert task_channel.descriptor.contributes_transport_capability is False
+    assert task_channel.descriptor.accepts_transport_input is False
     assert task_channel.descriptor.supports_timeline is False

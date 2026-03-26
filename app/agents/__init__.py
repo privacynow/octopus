@@ -29,16 +29,12 @@ __all__ = [
     "load_registry_connection_state",
     "save_registry_connection_state",
     "AgentRuntime",
-    "start_agent_runtime_task",
 ]
 
 
 def __getattr__(name: str):
-    if name in {"AgentRuntime", "start_agent_runtime_task"}:
-        from app.agents.runtime import AgentRuntime, start_agent_runtime_task
+    if name == "AgentRuntime":
+        from app.agents.runtime import AgentRuntime
 
-        return {
-            "AgentRuntime": AgentRuntime,
-            "start_agent_runtime_task": start_agent_runtime_task,
-        }[name]
+        return AgentRuntime
     raise AttributeError(name)

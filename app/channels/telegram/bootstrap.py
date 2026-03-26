@@ -21,11 +21,10 @@ from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram import progress as telegram_progress
 from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram import worker as telegram_worker
-from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
 from octopus_sdk.providers import Provider
-from app.runtime.services import BotServices, build_noop_bot_services
+from app.runtime.services import BotServices
 
 
 @dataclass(frozen=True)
@@ -50,12 +49,8 @@ class TelegramWorkerBundle:
 def _execution_runtime(runtime: TelegramRuntime):
     execution_collaborators = telegram_execution.bind_execution_collaborators(
         runtime,
-        progress_factory=telegram_progress.TelegramProgress,
-        keep_typing_fn=telegram_progress.keep_typing,
-        heartbeat_fn=telegram_progress.heartbeat,
         progress_timeline_callback_fn=telegram_progress.progress_timeline_callback,
         routed_task_progress_callback_fn=telegram_progress.routed_task_progress_callback,
-        propose_delegation_plan_fn=propose_delegation_plan,
     )
     return telegram_execution.build_execution_runtime(
         runtime,
@@ -214,14 +209,14 @@ def build_worker_bundle(
     config: BotConfig,
     provider: Provider,
     *,
-    services: BotServices | None = None,
+    services: BotServices,
 ) -> TelegramWorkerBundle:
     """Construct the Telegram-owned worker/runtime collaborators without PTB ingress."""
 
     runtime = build_telegram_runtime(
         config,
         provider,
-        services=services or build_noop_bot_services(),
+        services=services,
     )
     execution_runtime = _execution_runtime(runtime)
     return TelegramWorkerBundle(
@@ -242,14 +237,14 @@ def build_bootstrap(
     config: BotConfig,
     provider: Provider,
     *,
-    services: BotServices | None = None,
+    services: BotServices,
 ) -> TelegramBootstrap:
     """Construct the Telegram runtime, PTB application, and worker dispatch."""
 
     worker_bundle = build_worker_bundle(
         config,
         provider,
-        services=services or build_noop_bot_services(),
+        services=services,
     )
     runtime = worker_bundle.runtime
     application = build_application(runtime)

@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from app import runtime_backend
-from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.recovery.transport_contract import (
+from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
+from octopus_sdk.work_queue import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,
     LeaveClaimed,
     PendingRecovery,
     ReclaimBlocked,
+    UsageRecord,
+    UserAccessRecord,
+    WorkItemRecord,
+    coerce_usage_records,
+    coerce_user_access_records,
+    coerce_work_item_record,
+    coerce_work_item_records,
 )
 
 __all__ = [
@@ -144,16 +150,18 @@ def update_payload(data_dir: Path, event_id: str, payload: str) -> None:
 
 def claim_for_update(
     data_dir: Path, conversation_key: str, event_id: str, worker_id: str,
-) -> dict[str, Any] | None:
-    return _store().claim_for_update(data_dir, conversation_key, event_id, worker_id)
+) -> WorkItemRecord | None:
+    return coerce_work_item_record(
+        _store().claim_for_update(data_dir, conversation_key, event_id, worker_id)
+    )
 
 
-def claim_next(data_dir: Path, conversation_key: str, worker_id: str) -> dict[str, Any] | None:
-    return _store().claim_next(data_dir, conversation_key, worker_id)
+def claim_next(data_dir: Path, conversation_key: str, worker_id: str) -> WorkItemRecord | None:
+    return coerce_work_item_record(_store().claim_next(data_dir, conversation_key, worker_id))
 
 
-def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
-    return _store().claim_next_any(data_dir, worker_id)
+def claim_next_any(data_dir: Path, worker_id: str) -> WorkItemRecord | None:
+    return coerce_work_item_record(_store().claim_next_any(data_dir, worker_id))
 
 
 def complete_work_item(data_dir: Path, item_id: str) -> None:
@@ -214,8 +222,8 @@ def set_user_access(
     _store().set_user_access(data_dir, actor_key, access, reason, granted_by)
 
 
-def list_user_access(data_dir: Path) -> list[dict]:
-    return _store().list_user_access(data_dir)
+def list_user_access(data_dir: Path) -> list[UserAccessRecord]:
+    return coerce_user_access_records(_store().list_user_access(data_dir))
 
 
 def record_usage(
@@ -239,13 +247,13 @@ def record_usage(
     )
 
 
-def get_usage_since(data_dir: Path, *, since_epoch: float) -> list[dict]:
-    return _store().get_usage_since(data_dir, since_epoch=since_epoch)
+def get_usage_since(data_dir: Path, *, since_epoch: float) -> list[UsageRecord]:
+    return coerce_usage_records(_store().get_usage_since(data_dir, since_epoch=since_epoch))
 
 
-def get_work_items_for_chat(data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
+def get_work_items_for_chat(data_dir: Path, conversation_key: str) -> list[WorkItemRecord]:
     """Return work items for a conversation: id, event_id, state, error, dispatch_mode, kind."""
-    return _store().get_work_items_for_chat(data_dir, conversation_key)
+    return coerce_work_item_records(_store().get_work_items_for_chat(data_dir, conversation_key))
 
 
 def get_queue_snapshot(data_dir: Path) -> QueueSnapshot:
@@ -271,12 +279,14 @@ def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
 
 def get_pending_recovery_for_update(
     data_dir: Path, conversation_key: str, event_id: str,
-) -> dict[str, Any] | None:
-    return _store().get_pending_recovery_for_update(data_dir, conversation_key, event_id)
+) -> WorkItemRecord | None:
+    return coerce_work_item_record(
+        _store().get_pending_recovery_for_update(data_dir, conversation_key, event_id)
+    )
 
 
-def get_latest_pending_recovery(data_dir: Path, conversation_key: str) -> dict[str, Any] | None:
-    return _store().get_latest_pending_recovery(data_dir, conversation_key)
+def get_latest_pending_recovery(data_dir: Path, conversation_key: str) -> WorkItemRecord | None:
+    return coerce_work_item_record(_store().get_latest_pending_recovery(data_dir, conversation_key))
 
 
 def supersede_pending_recovery(data_dir: Path, conversation_key: str) -> int:
@@ -293,13 +303,13 @@ def reclaim_for_replay(
     worker_id: str,
     *,
     ignore_claimed_item_id: str = "",
-) -> dict[str, Any] | None:
-    return _store().reclaim_for_replay(
+) -> WorkItemRecord | None:
+    return coerce_work_item_record(_store().reclaim_for_replay(
         data_dir,
         item_id,
         worker_id,
         ignore_claimed_item_id=ignore_claimed_item_id,
-    )
+    ))
 
 
 def recover_stale_claims(

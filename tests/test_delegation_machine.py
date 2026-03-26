@@ -1,7 +1,7 @@
 """Machine tests for delegation progression."""
 
 from octopus_sdk.registry.models import DelegationTaskDraft, RoutedTaskResult, TargetSelector
-from app.workflows.delegation.machine import (
+from octopus_sdk.workflows.delegation import (
     CancelDelegationAction,
     DelegationSnapshot,
     FinalizeResumeAction,

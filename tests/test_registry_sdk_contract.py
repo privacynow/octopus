@@ -9,7 +9,15 @@ import pytest
 from octopus_sdk.event_sink import RegistryEventSink
 from octopus_sdk.execution import TransportIdentity
 from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
+from octopus_sdk.registry.authority_client import RegistryAuthorityClient
+from app.agents.client import AgentRegistryClient
 from octopus_sdk.registry.models import (
+    ConversationRecord,
+    DeliveryPollResult,
+    EnrollmentResult,
+    HealthSummary,
+    RuntimeHealthPayload,
+    TaskRecord,
     ConversationCreate,
     extract_target_selector_message,
     parse_target_selector,
@@ -219,6 +227,8 @@ def test_sdk_client_enroll_sends_body_not_header():
             )
         )
 
+    assert isinstance(client, RegistryAuthorityClient)
+    assert isinstance(result, EnrollmentResult)
     assert captured["json"]["enrollment_token"] == "enroll-secret"
     assert captured["json"]["agent_card"] == {
         "bot_key": "bot:demo",
@@ -226,6 +236,11 @@ def test_sdk_client_enroll_sends_body_not_header():
     }
     assert "X-Enrollment-Token" not in captured.get("headers", {})
     assert result["agent_id"] == "a1"
+
+
+def test_agent_registry_client_satisfies_authority_client_protocol() -> None:
+    client = AgentRegistryClient("http://test:8787", agent_token="test-token")
+    assert isinstance(client, RegistryAuthorityClient)
 
 
 def test_sdk_client_publish_progress_uses_progress_endpoint():
@@ -367,6 +382,7 @@ async def test_registry_event_sink_skips_bot_reply_mirror_for_registry_conversat
                 external_conversation_ref="ext-1",
                 conversation_ref="registry:local:conversation:conv-1",
                 target_agent_id="agent-1",
+                actor="registry:system",
             ),
             config=cfg,
         )
@@ -403,7 +419,7 @@ def test_sdk_client_submit_routed_task_includes_created_at_from_model_default():
         return FakeResp()
 
     with patch("httpx.AsyncClient.request", side_effect=mock_request):
-        asyncio.run(
+        result = asyncio.run(
             client.submit_routed_task(
                 {
                     "routed_task_id": "task-1",
@@ -416,6 +432,7 @@ def test_sdk_client_submit_routed_task_includes_created_at_from_model_default():
             )
         )
 
+    assert isinstance(result, TaskRecord)
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/v1/agents/routed-tasks")
     assert captured["json"]["routed_task_id"] == "task-1"
@@ -449,7 +466,7 @@ def test_sdk_client_routed_task_status_uses_path_id_not_body_id():
         return FakeResp()
 
     with patch("httpx.AsyncClient.request", side_effect=mock_request):
-        asyncio.run(
+        result = asyncio.run(
             client.routed_task_status(
                 "task-1",
                 {
@@ -461,6 +478,7 @@ def test_sdk_client_routed_task_status_uses_path_id_not_body_id():
             )
         )
 
+    assert isinstance(result, TaskRecord)
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/v1/agents/routed-tasks/task-1/status")
     assert captured["json"]["status"] == "running"
@@ -496,7 +514,7 @@ def test_sdk_client_routed_task_result_uses_path_id_not_body_id():
         return FakeResp()
 
     with patch("httpx.AsyncClient.request", side_effect=mock_request):
-        asyncio.run(
+        result = asyncio.run(
             client.routed_task_result(
                 "task-1",
                 {
@@ -509,6 +527,7 @@ def test_sdk_client_routed_task_result_uses_path_id_not_body_id():
             )
         )
 
+    assert isinstance(result, TaskRecord)
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/v1/agents/routed-tasks/task-1/result")
     assert captured["json"]["status"] == "completed"
@@ -531,3 +550,187 @@ def test_sdk_agent_card_contract_has_no_agent_id_field():
 
     dumped = card.model_dump()
     assert "agent_id" not in dumped
+
+
+def test_sdk_client_create_conversation_returns_typed_record():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"conversation_id":"conv-1","target_agent_id":"agent-1","title":"Hello","origin_channel":"telegram","external_conversation_ref":"ref-1","status":"open"}'
+            text = content.decode()
+
+            def json(self):
+                return {
+                    "conversation_id": "conv-1",
+                    "target_agent_id": "agent-1",
+                    "title": "Hello",
+                    "origin_channel": "telegram",
+                    "external_conversation_ref": "ref-1",
+                    "status": "open",
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        result = asyncio.run(
+            client.create_conversation(
+                target_agent_id="agent-1",
+                origin_channel="telegram",
+                external_conversation_ref="ref-1",
+                title="Hello",
+            )
+        )
+
+    assert isinstance(result, ConversationRecord)
+    assert result.conversation_id == "conv-1"
+
+
+def test_sdk_client_poll_returns_typed_delivery_result():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+
+    async def mock_request(method, url, **kwargs):
+        class FakeResp:
+            status_code = 200
+            content = b'{"deliveries":[{"cursor":"1","delivery_id":"d-1","kind":"channel_input","payload":{"text":"hello"},"state":"leased","created_at":"2026-03-25T00:00:00+00:00"}],"next_cursor":"1"}'
+            text = content.decode()
+
+            def json(self):
+                return {
+                    "deliveries": [
+                        {
+                            "cursor": "1",
+                            "delivery_id": "d-1",
+                            "kind": "channel_input",
+                            "payload": {"text": "hello"},
+                            "state": "leased",
+                            "created_at": "2026-03-25T00:00:00+00:00",
+                        }
+                    ],
+                    "next_cursor": "1",
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        result = asyncio.run(client.poll())
+
+    assert isinstance(result, DeliveryPollResult)
+    assert result.deliveries[0].delivery_id == "d-1"
+
+
+def test_sdk_client_disconnect_and_fail_delivery_map_to_existing_endpoints():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    calls: list[tuple[str, str, dict]] = []
+
+    async def mock_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+
+        class FakeResp:
+            status_code = 200
+            content = b'{"updated":1,"classification":"rejected"}'
+            text = content.decode()
+
+            def json(self):
+                if url.endswith("/deregister"):
+                    return {"agent_id": "agent-1", "connectivity_state": "offline"}
+                return {"updated": 1, "classification": "rejected"}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        disconnect_result = asyncio.run(client.disconnect_agent("agent-1"))
+        fail_result = asyncio.run(client.fail_delivery("delivery-1", "boom"))
+
+    assert disconnect_result.agent_id == "agent-1"
+    assert fail_result.classification == "rejected"
+    assert calls[0][1].endswith("/v1/agents/deregister")
+    assert calls[1][1].endswith("/v1/agents/ack")
+
+
+def test_sdk_client_renew_enrollment_and_heartbeat_return_typed_models():
+    from unittest.mock import patch
+    from octopus_sdk.registry.client import RegistryClient
+    from octopus_sdk.registry.models import AgentCard
+
+    client = RegistryClient("http://test:8787", "test-token")
+    calls: list[tuple[str, str, dict]] = []
+
+    async def mock_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+
+        class FakeResp:
+            status_code = 200
+            content = (
+                b'{"agent":{"agent_id":"agent-1","slug":"m1","display_name":"M1","connectivity_state":"connected"},'
+                b'"collections_changed":false,"server_time":"2026-03-26T00:00:00+00:00"}'
+            )
+            text = content.decode()
+
+            def json(self):
+                return {
+                    "agent": {
+                        "agent_id": "agent-1",
+                        "slug": "m1",
+                        "display_name": "M1",
+                        "connectivity_state": "connected",
+                    },
+                    "collections_changed": False,
+                    "server_time": "2026-03-26T00:00:00+00:00",
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    card = AgentCard(
+        bot_key="bot:m1",
+        slug="m1",
+        display_name="M1",
+        registry_scope="full",
+        connectivity_state="connected",
+    )
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        renewed = asyncio.run(client.renew_enrollment("agent-1", card))
+        heartbeat = asyncio.run(
+            client.heartbeat(
+                connectivity_state="connected",
+                current_capacity=0,
+                max_capacity=1,
+                runtime_health=RuntimeHealthPayload(summary={"ok": True}),
+            )
+        )
+
+    assert isinstance(renewed, EnrollmentResult)
+    assert isinstance(heartbeat, HealthSummary)
+    assert renewed.agent_id == "agent-1"
+    assert renewed.agent_token == "test-token"
+    assert renewed.slug == "m1"
+    assert heartbeat.agent is not None
+    assert heartbeat.agent.slug == "m1"
+    assert calls[0][1].endswith("/v1/agents/register")
+    assert calls[1][1].endswith("/v1/agents/heartbeat")

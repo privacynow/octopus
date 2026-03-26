@@ -9,7 +9,7 @@ import httpx
 
 from app.credential_validation import validate_credential
 from octopus_sdk.providers import RunResult
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
     load_user_credentials,

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from octopus_sdk.events import ConversationEvent
 from octopus_sdk.registry.models import CoordinationActionEnvelope, CoordinationActionResult
+from octopus_sdk.registry.models import MessageRecord
 
 
 @runtime_checkable
@@ -24,7 +26,7 @@ class ConversationProjectionPort(Protocol):
         self,
         *,
         conversation_id: str,
-        events: list,  # list of ConversationEvent
+        events: list[ConversationEvent],
     ) -> None:
         """Publish events to a registry conversation. Idempotent on event_id."""
         ...
@@ -34,7 +36,7 @@ class ConversationProjectionPort(Protocol):
         *,
         conversation_id: str,
         text: str,
-    ) -> dict:
+    ) -> MessageRecord:
         """Add one operator/channel message to an existing conversation."""
         ...
 
@@ -64,7 +66,7 @@ class NoOpConversationProjection:
         self,
         *,
         conversation_id: str,
-        events: list,
+        events: list[ConversationEvent],
     ) -> None:
         del conversation_id, events
 
@@ -73,9 +75,9 @@ class NoOpConversationProjection:
         *,
         conversation_id: str,
         text: str,
-    ) -> dict:
+    ) -> MessageRecord:
         del conversation_id, text
-        return {"accepted": False}
+        return MessageRecord(accepted=False)
 
     async def submit_action(
         self,

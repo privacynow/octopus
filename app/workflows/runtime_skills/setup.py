@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from app.credential_service import get_credential_service
-from app.credential_types import CredentialValidator
+from octopus_sdk.credential_types import CredentialValidator
 from app.credential_validation import validate_credential
 from octopus_sdk.sessions import SessionState
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     RuntimeSkillSetupState,
     RuntimeSkillSetupCancellationOutcome,
     RuntimeSkillSetupAdvanceOutcome,
@@ -15,8 +15,10 @@ from app.workflows.runtime_skills.contracts import (
     RuntimeSkillSetupPort,
 )
 from app.skill_activation_service import get_skill_activation_service
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
+from collections.abc import Mapping
+
 from app.workflows.runtime_skills.setup_machine import (
     AdvanceSetupAction,
     CancelSetupAction,
@@ -181,7 +183,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                     key=str(req["key"]),
                     prompt=str(req["prompt"]),
                     help_url=str(req.get("help_url")) if req.get("help_url") else None,
-                    validate=validate_spec if isinstance(validate_spec, dict) else None,
+                    validate=validate_spec if isinstance(validate_spec, Mapping) else None,
                 ),
                 value,
                 validator=validator,

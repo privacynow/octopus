@@ -1,4 +1,4 @@
-"""Workflow-local contracts for provider-guidance preview."""
+"""SDK workflow contracts for provider-guidance preview and lifecycle management."""
 
 from __future__ import annotations
 

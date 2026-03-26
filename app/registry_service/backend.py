@@ -6,9 +6,11 @@ import logging
 import os
 from pathlib import Path
 
+from app.registry_service.authority import StoreBackedRegistryAuthority
 from app.registry_service.store_base import AbstractRegistryStore
 
 _store: AbstractRegistryStore | None = None
+_authority: StoreBackedRegistryAuthority | None = None
 log = logging.getLogger(__name__)
 
 
@@ -29,10 +31,19 @@ def get_registry_store() -> AbstractRegistryStore:
     return _store
 
 
+def get_registry_authority() -> StoreBackedRegistryAuthority:
+    """Return the typed registry authority facade for the configured backend."""
+    global _authority
+    if _authority is None:
+        _authority = StoreBackedRegistryAuthority(get_registry_store())
+    return _authority
+
+
 def reset_for_test() -> None:
     """Clear the cached registry store backend for tests."""
-    global _store
+    global _store, _authority
     _store = None
+    _authority = None
     try:
         from app.db.postgres import close_pools
 

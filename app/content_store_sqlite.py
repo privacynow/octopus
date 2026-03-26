@@ -9,7 +9,7 @@ from pathlib import Path
 import threading
 from typing import Literal
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,

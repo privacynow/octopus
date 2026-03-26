@@ -32,7 +32,6 @@ from app.channels.telegram.runtime_skills import (
 from app.channels.telegram.session_io import actor_key as _actor_key, conversation_key, event_key
 from app.channels.telegram.state import TelegramRuntime
 from octopus_sdk.inbound_types import InboundAction, InboundEnvelope
-from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app import work_queue
 
 
@@ -275,13 +274,12 @@ async def _shared_cancel_command(
     chat_lock: ChatLock,
     build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
 ) -> None:
-    if not record_inbound_envelope(
-        runtime.config.data_dir,
+    if not await runtime.submitter.record(
         _build_action_envelope(
             transport="telegram",
             event_id=event_key(update.update_id),
             action=action,
-        ),
+        )
     ):
         return
     await conversation_cancel_chat_operation(
@@ -351,13 +349,12 @@ async def shared_command_dispatch(
         )
         return
 
-    enqueue_inbound_envelope(
-        runtime.config.data_dir,
+    await runtime.submitter.enqueue(
         _build_action_envelope(
             transport="telegram",
             event_id=event_key(update.update_id),
             action=action,
-        ),
+        )
     )
 
 
@@ -395,11 +392,10 @@ async def shared_callback_dispatch(
         return
 
     await query.answer()
-    enqueue_inbound_envelope(
-        runtime.config.data_dir,
+    await runtime.submitter.enqueue(
         _build_action_envelope(
             transport="telegram",
             event_id=event_key(update.update_id),
             action=action,
-        ),
+        )
     )

@@ -17,12 +17,12 @@ from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
 from app.registry_errors import registry_error_summary
 from octopus_sdk.sessions import PendingDelegation
-from app.workflows.delegation.contracts import DelegationTargetPreview
-from app.workflows.provider_guidance.contracts import (
+from octopus_sdk.workflows.delegation import DelegationTargetPreview
+from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidancePreview,
 )
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     RuntimeSkillCatalogItem,
     RuntimeSkillDetail,
     RuntimeSkillLifecycleDetail,

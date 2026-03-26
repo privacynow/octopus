@@ -1,15 +1,20 @@
-"""Workflow-local contracts for runtime-skill flows."""
+"""SDK workflow contracts for runtime-skill catalog, activation, setup, import, and lifecycle flows."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
-from app.content_models import LifecycleApprovalRecord, RuntimeSkillTrackRecord, SkillRevisionRecord
-from app.credential_types import CredentialValidator
+from octopus_sdk.content_models import (
+    LifecycleApprovalRecord,
+    RuntimeSkillTrackRecord,
+    SkillRevisionRecord,
+)
+from octopus_sdk.credential_types import CredentialValidator
+from octopus_sdk.providers import CredentialEnvRecord, ProviderStateRecord
 from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 
 
 @dataclass(frozen=True)
@@ -51,25 +56,17 @@ class RuntimeSkillDraftRecord:
 
 class RuntimeSkillCatalogPort(Protocol):
     def list_skills(self, query: str = "") -> list[RuntimeSkillCatalogItem]: ...
-
     def get_skill(self, skill_name: str) -> RuntimeSkillDetail | None: ...
-
     def has_skill(self, skill_name: str) -> bool: ...
-
     def has_runtime_skill(self, skill_name: str) -> bool: ...
-
     def resolve_runtime_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None: ...
-
     def filter_resolvable(self, names: list[str]) -> list[str]: ...
-
     def requirements(self, skill_name: str) -> tuple[SkillRequirement, ...]: ...
-
     def missing_requirements(
         self,
         skill_name: str,
         credential_values: dict[str, str],
     ) -> tuple[SkillRequirement, ...]: ...
-
     def create_custom_draft(
         self,
         skill_name: str,
@@ -97,7 +94,7 @@ class ConversationSkillListing:
 class ConversationSkillMutationOutcome:
     status: str
     mutated: bool = False
-    first_requirement: dict[str, Any] | None = None
+    first_requirement: SkillRequirement | None = None
     projected_size: int = 0
     prompt_size_threshold: int = 0
     foreign_setup_user: str = ""
@@ -106,7 +103,6 @@ class ConversationSkillMutationOutcome:
 
 class RuntimeSkillActivationPort(Protocol):
     def list_conversation_skills(self, active_skills: list[str]) -> ConversationSkillListing: ...
-
     def begin_activate(
         self,
         session: SessionState,
@@ -115,13 +111,11 @@ class RuntimeSkillActivationPort(Protocol):
         skill_name: str,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome: ...
-
     def confirm_activate(
         self,
         session: SessionState,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome: ...
-
     def begin_setup(
         self,
         session: SessionState,
@@ -129,7 +123,6 @@ class RuntimeSkillActivationPort(Protocol):
         actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome: ...
-
     def deactivate(
         self,
         session: SessionState,
@@ -137,7 +130,6 @@ class RuntimeSkillActivationPort(Protocol):
         actor_key: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome: ...
-
     def clear(
         self,
         session: SessionState,
@@ -150,7 +142,7 @@ class RuntimeSkillActivationPort(Protocol):
 class PromptWarningContext:
     data_dir: Path
     provider_name: str
-    provider_state_factory: Callable[[str], dict[str, Any]]
+    provider_state_factory: Callable[[str], ProviderStateRecord]
     approval_mode: str
 
 
@@ -188,7 +180,6 @@ class RuntimeSkillUpdateStatusItem:
 
 class RuntimeSkillImportPort(Protocol):
     def search(self, query: str, *, registry_url: str = "") -> RuntimeSkillSearchResults: ...
-
     def install_from_registry(
         self,
         skill_name: str,
@@ -196,29 +187,24 @@ class RuntimeSkillImportPort(Protocol):
         *,
         warning_context: PromptWarningContext | None = None,
     ) -> RuntimeSkillMutationOutcome: ...
-
     def uninstall(
         self,
         skill_name: str,
         *,
         default_skills: tuple[str, ...] = (),
     ) -> RuntimeSkillMutationOutcome: ...
-
     def update(
         self,
         skill_name: str,
         *,
         warning_context: PromptWarningContext | None = None,
     ) -> RuntimeSkillMutationOutcome: ...
-
     def update_all(
         self,
         *,
         warning_context: PromptWarningContext | None = None,
     ) -> tuple[RuntimeSkillMutationOutcome, ...]: ...
-
     def diff(self, skill_name: str) -> RuntimeSkillMutationOutcome: ...
-
     def list_updates(self) -> tuple[RuntimeSkillUpdateStatusItem, ...]: ...
 
 
@@ -241,7 +227,7 @@ class RuntimeSkillSetupAdvanceOutcome:
     mutated: bool = False
     validation_key: str = ""
     validation_error: str = ""
-    next_requirement: dict[str, object] | None = None
+    next_requirement: SkillRequirement | None = None
     skill_name: str = ""
 
 
@@ -249,11 +235,11 @@ class RuntimeSkillSetupAdvanceOutcome:
 class RuntimeSkillCredentialSatisfactionOutcome:
     status: str
     mutated: bool = False
-    credential_env: dict[str, str] | None = None
+    credential_env: CredentialEnvRecord | None = None
     foreign_setup: AwaitingSkillSetup | None = None
     setup_state: AwaitingSkillSetup | None = None
     missing_skill: str = ""
-    first_requirement: dict[str, object] | None = None
+    first_requirement: SkillRequirement | None = None
 
 
 @dataclass(frozen=True)
@@ -270,9 +256,8 @@ class RuntimeSkillSetupPort(Protocol):
         *,
         actor_key: str,
         skill_name: str,
-        requirements: list[SkillRequirement | dict[str, object]],
+        requirements: list[SkillRequirement],
     ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
-
     def foreign_setup(
         self,
         session: SessionState,
@@ -280,7 +265,6 @@ class RuntimeSkillSetupPort(Protocol):
         actor_key: str,
         skill_name: str | None = None,
     ) -> RuntimeSkillSetupState: ...
-
     def cancel(
         self,
         session: SessionState,
@@ -288,7 +272,6 @@ class RuntimeSkillSetupPort(Protocol):
         actor_key: str,
         allow_override: bool = False,
     ) -> RuntimeSkillSetupCancellationOutcome: ...
-
     def check_satisfaction(
         self,
         session: SessionState,
@@ -296,7 +279,6 @@ class RuntimeSkillSetupPort(Protocol):
         actor_key: str,
         active_skills: list[str],
     ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
-
     async def submit_credential_value(
         self,
         session: SessionState,
@@ -305,7 +287,6 @@ class RuntimeSkillSetupPort(Protocol):
         raw_value: str,
         validator: CredentialValidator,
     ) -> RuntimeSkillSetupAdvanceOutcome: ...
-
     def apply_cleared_credentials(
         self,
         session: SessionState,
@@ -361,9 +342,7 @@ class RuntimeSkillLifecycleMutation:
 
 class RuntimeSkillAuthoringPort(Protocol):
     def detail(self, skill_name: str) -> RuntimeSkillLifecycleDetail | None: ...
-
     def create_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillLifecycleMutation: ...
-
     def edit_draft(
         self,
         skill_name: str,
@@ -373,15 +352,11 @@ class RuntimeSkillAuthoringPort(Protocol):
         description: str | None = None,
         changelog: str = "",
     ) -> RuntimeSkillLifecycleMutation: ...
-
     def submit(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
-
     def publish(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
-
     def archive(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
 
 
 class RuntimeSkillApprovalPort(Protocol):
     def approve(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
-
     def reject(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...

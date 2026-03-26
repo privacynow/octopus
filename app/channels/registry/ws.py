@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import WebSocket
+from fastapi.encoders import jsonable_encoder
 from octopus_sdk.realtime import (
     RealtimeEventEnvelope,
     RealtimeHeartbeatEnvelope,
@@ -64,27 +66,27 @@ class WebSocketManager:
         for client in disconnected:
             self.disconnect(client)
 
-    async def broadcast_event(self, conversation_id: str, agent_id: str, event_data: dict) -> None:
+    async def broadcast_event(self, conversation_id: str, agent_id: str, event_data: Any) -> None:
         """Push event to clients subscribed to the conversation or agent."""
         topics = {f"conversation:{conversation_id}", f"agent:{agent_id}"}
         await self._broadcast_topics(
             topics,
-            RealtimeEventEnvelope(type="event", data=event_data).model_dump(),
+            RealtimeEventEnvelope(type="event", data=jsonable_encoder(event_data)).model_dump(),
         )
 
-    async def broadcast_heartbeat(self, agent_id: str, status_data: dict) -> None:
+    async def broadcast_heartbeat(self, agent_id: str, status_data: Any) -> None:
         """Push agent status update to subscribers."""
         topic = f"agent:{agent_id}"
         await self._broadcast_topics(
             {topic},
-            RealtimeHeartbeatEnvelope(type="heartbeat", data=status_data).model_dump(),
+            RealtimeHeartbeatEnvelope(type="heartbeat", data=jsonable_encoder(status_data)).model_dump(),
         )
 
-    async def broadcast_progress(self, conversation_id: str, agent_id: str, progress_data: dict) -> None:
+    async def broadcast_progress(self, conversation_id: str, agent_id: str, progress_data: Any) -> None:
         topics = {f"conversation:{conversation_id}", f"agent:{agent_id}"}
         await self._broadcast_topics(
             topics,
-            RealtimeProgressEnvelope(type="progress", data=progress_data).model_dump(),
+            RealtimeProgressEnvelope(type="progress", data=jsonable_encoder(progress_data)).model_dump(),
         )
 
     async def broadcast_invalidation(

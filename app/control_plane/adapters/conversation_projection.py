@@ -14,7 +14,12 @@ from app.control_plane.requests import (
     AddConversationMessagePayload,
     SubmitConversationActionPayload,
 )
-from octopus_sdk.registry.models import CoordinationActionEnvelope, CoordinationActionResult
+from octopus_sdk.events import ConversationEvent
+from octopus_sdk.registry.models import (
+    CoordinationActionEnvelope,
+    CoordinationActionResult,
+    MessageRecord,
+)
 
 log = logging.getLogger(__name__)
 
@@ -183,7 +188,7 @@ class BusConversationProjection:
         self,
         *,
         conversation_id: str,
-        events: list,
+        events: list[ConversationEvent],
     ) -> None:
         authorities = sorted(
             self._directory.authorities_for_capability("conversation_projection")
@@ -307,7 +312,7 @@ class BusConversationProjection:
         *,
         conversation_id: str,
         text: str,
-    ) -> dict:
+    ) -> MessageRecord:
         authorities = sorted(
             self._directory.authorities_for_capability("conversation_projection")
         )
@@ -317,7 +322,7 @@ class BusConversationProjection:
             conversation_id=conversation_id,
             text=text,
         )
-        first_success: dict | None = None
+        first_success: MessageRecord | None = None
         last_error = "add_message failed on all authorities"
         for authority_ref in authorities:
             try:
@@ -338,7 +343,7 @@ class BusConversationProjection:
             if reply.status == "failed":
                 last_error = reply.error or last_error
                 continue
-            result = json.loads(reply.result_json or "{}")
+            result = MessageRecord.model_validate_json(reply.result_json or "{}")
             if first_success is None:
                 first_success = result
         if first_success is None:

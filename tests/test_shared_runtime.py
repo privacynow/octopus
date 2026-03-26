@@ -16,6 +16,8 @@ from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
 from octopus_sdk.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
 from app.runtime.work_admission import record_inbound_envelope
+from octopus_sdk.transport import InboundSubmissionResult
+import app.channels.telegram.ingress as telegram_ingress
 from tests.support.handler_support import (
     current_boot_id,
     current_shared_runtime_builders,
@@ -30,6 +32,7 @@ from tests.support.handler_support import (
     fresh_env,
     load_session_disk,
 )
+from tests.support.service_support import build_test_bot_services
 
 
 _SHARED_OVERRIDES = {
@@ -48,11 +51,36 @@ async def _permissive_chat_lock(_runtime, _chat_id, **_kwargs):
     yield False
 
 
+class _FakeSubmitter:
+    def __init__(self) -> None:
+        self.admitted: list[InboundEnvelope] = []
+        self.enqueued: list[InboundEnvelope] = []
+        self.recorded: list[InboundEnvelope] = []
+
+    async def admit_message(self, envelope: InboundEnvelope) -> InboundSubmissionResult:
+        self.admitted.append(envelope)
+        return InboundSubmissionResult(status="queued", item_id="item-1")
+
+    async def enqueue(
+        self,
+        envelope: InboundEnvelope,
+        *,
+        worker_id: str | None = None,
+    ) -> InboundSubmissionResult:
+        del worker_id
+        self.enqueued.append(envelope)
+        return InboundSubmissionResult(status="queued", item_id="item-2")
+
+    async def record(self, envelope: InboundEnvelope) -> bool:
+        self.recorded.append(envelope)
+        return True
+
+
 async def test_shared_build_application_registers_shared_dispatch_handlers():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
-        app = build_bootstrap(cfg, prov).application
+        app = build_bootstrap(cfg, prov, services=build_test_bot_services()).application
         command_callbacks: dict[str, str] = {}
         callback_patterns: list[tuple[str, str]] = []
         for group_handlers in app.handlers.values():
@@ -96,6 +124,23 @@ async def test_shared_message_path_remains_persist_first():
 
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
+
+
+async def test_shared_message_path_uses_runtime_submitter() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        runtime = current_runtime()
+        fake_submitter = _FakeSubmitter()
+        runtime.submitter = fake_submitter
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        message = FakeMessage(chat=chat, text="hello")
+        update = FakeUpdate(message=message, user=user, chat=chat)
+
+        await telegram_ingress.handle_message(update, FakeContext())
+
+        assert len(fake_submitter.admitted) == 1
+        assert fake_submitter.admitted[0].kind == "message"
+        assert "queued" in message.replies[-1]["text"].lower()
 
 
 async def test_shared_command_dispatch_persists_action_without_inline_execution():
@@ -195,6 +240,29 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         assert event.action == "approve_pending"
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
+
+
+async def test_shared_command_dispatch_uses_runtime_submitter_for_worker_owned_actions() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        runtime = current_runtime()
+        fake_submitter = _FakeSubmitter()
+        runtime.submitter = fake_submitter
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=runtime,
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+        assert len(fake_submitter.enqueued) == 1
+        assert fake_submitter.enqueued[0].kind == "action"
 
 
 async def test_shared_skills_command_routes_through_runtime_skill_owner(monkeypatch):
@@ -310,7 +378,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
 
 async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        telegram_bootstrap = build_bootstrap(cfg, prov)
+        telegram_bootstrap = build_bootstrap(cfg, prov, services=build_test_bot_services())
         parts = telegram_bootstrap.runtime.boot_id.split(":")
         assert len(parts) == 3
         assert parts[1].isdigit()

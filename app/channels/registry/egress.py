@@ -13,14 +13,22 @@ from typing import Any
 
 from app.agents.client import AgentRegistryClient
 from app.agents.state import load_runtime_registry_connection_state
+from app.formatting import summarize_text
+from octopus_sdk.registry.models import DelegationIntent
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.formatting import trim_text
-from octopus_sdk.egress import (
-    ChannelCapabilities,
-    ChannelEgress,
+from octopus_sdk.execution import RequestExecutionOutcome
+from app.runtime.session_runtime import LocalSessionRuntime
+from octopus_sdk.transport import (
     EditableHandle,
+    TransportCapabilities,
+    TransportEgress,
+)
+from octopus_sdk.workflows.delegation import (
+    ParticipantDelegationRuntime,
+    propose_participant_delegation,
 )
 from app.runtime.services import BotServices
 
@@ -41,14 +49,15 @@ class RegistryEditableHandle(EditableHandle):
         del kwargs
         self._conversation.last_status_text = text
         self._conversation._append_output("edit", html.unescape(text))
-        await self._conversation._publish_progress(text, event_id=self._event_id)
+        if not self._conversation._is_task_ref():
+            await self._conversation._publish_progress(text, event_id=self._event_id)
 
     async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
         del reply_markup, kwargs
         return None
 
 
-class RegistryChannelEgress(ChannelEgress):
+class RegistryChannelEgress(TransportEgress):
     def __init__(
         self,
         config: BotConfig,
@@ -92,8 +101,8 @@ class RegistryChannelEgress(ChannelEgress):
         return normalized in {"Working…", "Working...", "Resuming…", "Resuming..."}
 
     @property
-    def capabilities(self) -> ChannelCapabilities:
-        return ChannelCapabilities(
+    def capabilities(self) -> TransportCapabilities:
+        return TransportCapabilities(
             can_edit_message=True,
             can_answer_action=True,
             can_send_photo=False,
@@ -360,6 +369,102 @@ class RegistryChannelEgress(ChannelEgress):
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:
         return await self.send_text(text, **kwargs)
+
+    async def show_foreign_setup(self, foreign_setup) -> None:
+        detail = getattr(foreign_setup, "actor_key", "") or "another operator"
+        await self.send_text(
+            f"Setup must be completed by {detail} before this request can continue."
+        )
+
+    async def show_setup_prompt(self, missing_skill: str, first_requirement: dict[str, object]) -> None:
+        detail = str(first_requirement.get("label") or first_requirement.get("kind") or "required setup").strip()
+        await self.send_text(
+            f"Setup required for {missing_skill or 'this request'}: {detail}."
+        )
+
+    async def send_retry_prompt(
+        self,
+        denials: tuple[dict[str, Any], ...],
+        callback_token: str,
+    ) -> None:
+        del callback_token
+        count = len(denials)
+        await self.send_text(
+            f"Execution needs approval before retrying {count} blocked action(s)."
+        )
+
+    async def send_approval_prompt(self, callback_token: str) -> None:
+        del callback_token
+        await self.send_text("Approval required before this plan can continue.")
+
+    async def send_formatted_reply(self, text: str) -> None:
+        await self.send_text(text)
+
+    async def send_directed_artifacts(
+        self,
+        conversation_key_value: str,
+        directives: list[tuple[str, str]],
+        *,
+        resolved_ctx: Any = None,
+    ) -> None:
+        del conversation_key_value, resolved_ctx
+        for dtype, raw_path in directives:
+            await self.send_text(f"{dtype}: {raw_path}")
+
+    async def send_compact_reply(self, text: str, conversation_key_value: str, slot: int) -> None:
+        del conversation_key_value, slot
+        await self.send_text(text)
+
+    async def propose_delegation_plan(
+        self,
+        conversation_key_value: str,
+        session,
+        *,
+        conversation_ref: str,
+        result,
+    ) -> RequestExecutionOutcome:
+        intent = getattr(result, "coordination_intent", None)
+        if intent is None or not intent.tasks:
+            return RequestExecutionOutcome(status="failed", error_text="No coordination intent was supplied.")
+        title = str(getattr(intent, "title", "") or "").strip() or summarize_text(getattr(result, "text", "") or "") or "Delegation plan"
+        try:
+            plan = await propose_participant_delegation(
+                ParticipantDelegationRuntime(
+                    config=self.config,
+                    provider_name=self.config.provider_name,
+                    provider_state_factory=lambda _conversation_key: {},
+                    coordination=self._services.registry.coordination,
+                    sessions=LocalSessionRuntime(self.config),
+                ),
+                conversation_key_value,
+                session,
+                conversation_ref=conversation_ref,
+                title=title,
+                intent=DelegationIntent(
+                    title=title,
+                    resume_instruction=intent.resume_instruction,
+                    tasks=list(intent.tasks),
+                ),
+                origin_channel="registry",
+                external_ref=self.external_id or conversation_key_value,
+            )
+        except Exception as exc:
+            return RequestExecutionOutcome(status="failed", error_text=str(exc))
+
+        if plan.status == "delegation_submitted":
+            await self.send_text("Delegation approved. Specialist requests were sent.")
+            return RequestExecutionOutcome(status="delegation_submitted")
+
+        lines = [f"Delegation plan: {title}"]
+        for task in plan.pending.tasks if plan.pending is not None else ():
+            label = task.target_agent_id or task.title or task.routed_task_id
+            lines.append(f"- {task.title or 'Task'} -> {label}")
+        for preview in plan.previews:
+            if preview.status != "resolved":
+                detail = preview.detail or preview.status
+                lines.append(f"- Resolution issue: {detail}")
+        await self.send_text("\n".join(lines))
+        return RequestExecutionOutcome(status="delegation_proposed")
 
 
 class _RegistryChatShim:

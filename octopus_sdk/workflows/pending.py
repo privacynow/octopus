@@ -1,11 +1,11 @@
-"""Workflow-local contracts for pending approval and retry flows."""
+"""SDK workflow contracts for pending approval and retry flows."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.config import BotConfig
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.sessions import SessionState
 
 
@@ -31,7 +31,7 @@ class PendingRequestPort(Protocol):
         self,
         session: SessionState,
         *,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         provider_name: str,
     ) -> PendingRequestOutcome: ...
 
@@ -43,6 +43,6 @@ class PendingRequestPort(Protocol):
         self,
         session: SessionState,
         *,
-        cfg: BotConfig,
+        cfg: BotConfigBase,
         provider_name: str,
     ) -> PendingRequestOutcome: ...

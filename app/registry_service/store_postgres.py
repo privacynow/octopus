@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
@@ -62,11 +62,36 @@ from app.registry_service.store_base import (
     validated_registry_scope,
 )
 from octopus_sdk.registry.models import (
+    AckResult,
+    AgentCard,
+    AgentDiscoveryQuery,
+    AgentHeartbeatRequest,
+    AgentRegisterRequest,
+    AgentRecord,
+    AgentStatusRecord,
+    ApprovalRecord,
+    CapabilityRecord,
     CoordinationActionEnvelope,
     CoordinationActionResult,
+    ConversationRecord,
+    ConversationSearchHitRecord,
+    DeliveryPollResult,
+    DeliveryRecord,
     DelegationTaskDraft,
     DirectAssignActionPayload,
+    EnrollmentResult,
+    EventRecord,
+    EventPageRecord,
+    HealthSummary,
+    MessageRecord,
+    MessagePageRecord,
+    PublishEventsResult,
+    RegistryRecordModel,
+    RegistrySummaryRecord,
+    RuntimeHealthDetailRecord,
     TargetSelector,
+    TaskRecord,
+    UsageSummaryRecord,
 )
 from octopus_sdk.task_protocol import (
     RoutedTaskSnapshot,
@@ -75,6 +100,26 @@ from octopus_sdk.task_protocol import (
 )
 
 _SCHEMA = "agent_registry"
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _record(model_cls, payload):
+    return model_cls.model_validate(_json_ready(payload))
+
+
+def _records(model_cls, rows):
+    return [_record(model_cls, row) for row in rows]
 
 
 @contextmanager
@@ -131,10 +176,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             )
             return cur.fetchone()
 
-    def resolve_agent_for_token(self, agent_token: str) -> dict[str, Any] | None:
+    def resolve_agent_for_token(self, agent_token: str) -> AgentRecord | None:
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
-            return dict(row) if row else None
+            return self._row_to_agent(row) if row else None
 
     def _ensure_unique_slug(self, conn, requested: str) -> str:
         slug = requested
@@ -150,11 +195,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 slug = f"{requested}-{suffix}"
                 suffix += 1
 
-    def _row_to_agent(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _row_to_agent(self, row: dict[str, Any]) -> AgentRecord:
         effective_state = row.get("effective_state") or effective_connectivity_state(
             row["connectivity_state"], row["last_heartbeat_at"]
         )
-        return {
+        return _record(AgentRecord, {
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
@@ -174,7 +219,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "updated_at": row["updated_at"],
             "runtime_health_summary": runtime_health_summary(row.get("runtime_health_json")),
             "runtime_health_generated_at": runtime_health_generated_at(row.get("runtime_health_json")),
-        }
+        })
 
     def _replace_runtime_health_workers(
         self,
@@ -250,9 +295,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         ]
 
 
-    def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
+    def enroll(self, requested_card: AgentCard) -> EnrollmentResult:
         now = utcnow_iso()
-        card = validated_agent_card_payload(requested_card, require_registry_scope=True)
+        requested_payload = (
+            requested_card.model_dump(mode="json")
+            if hasattr(requested_card, "model_dump")
+            else requested_card
+        )
+        card = validated_agent_card_payload(requested_payload, require_registry_scope=True)
         bot_key = str(card.get("bot_key", "") or "").strip()
         if not bot_key:
             raise ValueError("bot_key requires non-empty text")
@@ -272,12 +322,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"UPDATE {_SCHEMA}.agents SET agent_token = %s, updated_at = %s WHERE bot_key = %s",
                         (agent_token_hash, now, bot_key),
                     )
-                    return {
+                    return _record(EnrollmentResult, {
                         "agent_id": existing["agent_id"],
                         "slug": existing["slug"],
                         "agent_token": agent_token,
                         "poll_cursor": "0",
-                    }
+                    })
 
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
@@ -318,12 +368,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         now,
                     ),
                 )
-        return {
+        return _record(EnrollmentResult, {
             "agent_id": agent_id,
             "slug": slug,
             "agent_token": agent_token,
             "poll_cursor": "0",
-        }
+        })
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
         with self._connect() as conn:
@@ -332,9 +382,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise PermissionError("Unknown agent token")
             require_registry_scope(row, required_scopes)
 
-    def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def register(self, agent_token: str, payload: AgentRegisterRequest) -> AgentRecord:
         now = utcnow_iso()
-        register_payload = validated_register_payload(payload)
+        register_payload = validated_register_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         card = register_payload["agent_card"]
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
@@ -384,10 +436,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             assert row is not None
             return self._row_to_agent(row)
 
-    def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
-        heartbeat_payload = validated_heartbeat_payload(payload)
+        heartbeat_payload = validated_heartbeat_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -429,11 +483,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             assert row is not None
             current_agent = self._row_to_agent(row)
-            return {
+            return _record(HealthSummary, {
                 "agent": current_agent,
                 "collections_changed": previous_effective_state != current_agent["connectivity_state"],
                 "server_time": now,
-            }
+            })
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         normalized = capability_name.strip().lower()
@@ -464,7 +518,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (normalized, 1 if enabled else 0, set_by, datetime.now(timezone.utc).timestamp()),
                 )
 
-    def list_capabilities(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[CapabilityRecord]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -519,7 +573,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
+        return _records(
+            CapabilityRecord,
+            sorted(merged.values(), key=lambda item: item["capability_name"].lower()),
+        )
 
     def _disabled_capabilities(self, conn) -> set[str]:
         with _cur(conn) as cur:
@@ -529,8 +586,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             rows = cur.fetchall()
         return {str(row["skill_name"]).lower() for row in rows}
 
-    def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
-        validated_query = validated_search_query(query)
+    def search_agents(self, query: AgentDiscoveryQuery) -> list[AgentRecord]:
+        validated_query = validated_search_query(query.model_dump(mode="json"))
         role = validated_query.get("role", "").strip().lower()
         required_state = validated_query.get("required_state", "connected")
         capabilities = query_capabilities(validated_query)
@@ -635,15 +692,26 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 rows = cur.fetchall()
         return [self._row_to_agent(row) for row in rows]
 
-    def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_delivery(
+        self,
+        *,
+        target_agent_id: str,
+        kind: str,
+        payload: RegistryRecordModel,
+    ) -> DeliveryRecord:
         now = utcnow_iso()
         delivery_id = uuid.uuid4().hex
+        delivery_payload = (
+            payload.model_dump(mode="json")
+            if hasattr(payload, "model_dump")
+            else payload
+        )
         with self._connect() as conn, _write_tx(conn):
             return self._create_delivery(
                 conn,
                 target_agent_id=target_agent_id,
                 kind=kind,
-                payload=payload,
+                payload=delivery_payload,
                 now=now,
                 delivery_id=delivery_id,
             )
@@ -657,7 +725,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: dict[str, Any],
         now: str,
         delivery_id: str,
-    ) -> dict[str, Any]:
+    ) -> DeliveryRecord:
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -670,7 +738,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 (delivery_id, target_agent_id, kind, _jsonb(payload), now, now),
             )
             seq = cur.fetchone()["seq"]
-        return {"delivery_id": delivery_id, "seq": seq}
+        return _record(DeliveryRecord, {"delivery_id": delivery_id, "seq": seq})
 
     def _selector_candidates(
         self,
@@ -810,7 +878,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = cur.fetchone()
         if row is None:
             return None
-        return {
+        return _record(EventRecord, {
             "seq": row["seq"],
             "event_id": row["event_id"],
             "conversation_id": row["conversation_id"],
@@ -820,11 +888,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "content": row["content"],
             "metadata": json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else row["metadata_json"],
             "created_at": row["created_at"],
-        }
+        })
 
     @staticmethod
-    def _task_row_to_summary(row: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def _task_row_to_summary(row: dict[str, Any]) -> TaskRecord:
+        return _record(TaskRecord, {
             "routed_task_id": row["routed_task_id"],
             "parent_conversation_id": row["parent_conversation_id"],
             "origin_agent_id": row["origin_agent_id"],
@@ -834,7 +902,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "summary": row["summary"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-        }
+        })
 
     @staticmethod
     def _task_snapshot_from_row(row: dict[str, Any]) -> RoutedTaskSnapshot:
@@ -915,9 +983,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "event": inserted_event,
         }
 
-    def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
+    def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         now = utcnow_iso()
-        validated_request = validated_routed_task_request(request)
+        validated_request = validated_routed_task_request(
+            request.model_dump(mode="json") if hasattr(request, "model_dump") else request
+        )
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
@@ -987,7 +1057,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     ),
                 )
                 inserted = cur.rowcount > 0
-            inserted_events: list[dict[str, Any]] = []
+            inserted_events: list[EventRecord] = []
             if inserted:
                 with _cur(conn) as cur:
                     cur.execute(
@@ -995,7 +1065,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         (mirrored_event["event_id"],),
                     )
                     seq_row = cur.fetchone()
-                inserted_events.append({
+                inserted_events.append(_record(EventRecord, {
                     "seq": int(seq_row["seq"]) if seq_row is not None else 0,
                     "event_id": mirrored_event["event_id"],
                     "conversation_id": mirrored_event["conversation_id"],
@@ -1005,13 +1075,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "content": mirrored_event["content"],
                     "metadata": mirrored_event["metadata"],
                     "created_at": mirrored_event["created_at"],
-                })
+                }))
                 with _cur(conn) as cur:
                     cur.execute(
                         f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                         (mirrored_event["created_at"], mirrored_event["conversation_id"]),
                     )
-        return {
+        return _record(TaskRecord, {
             "routed_task_id": validated_request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
             "events_written": bool(inserted_events),
@@ -1019,9 +1089,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "parent_conversation_id": validated_request["parent_conversation_id"],
             "origin_agent_id": validated_request["origin_agent_id"],
             "target_agent_id": validated_request["target_agent_id"],
-        }
+        })
 
-    def poll(self, agent_token: str, *, cursor: int, limit: int) -> dict[str, Any]:
+    def poll(self, agent_token: str, *, cursor: int, limit: int) -> DeliveryPollResult:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
@@ -1101,20 +1171,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 (decision.new_state, now, routed_task_id),
                             )
         items = [
-            {
+            _record(DeliveryRecord, {
                 "cursor": str(item["seq"]),
                 "delivery_id": item["delivery_id"],
                 "kind": item["kind"],
                 "payload": decode_json_field(item["payload_json"], {}),
                 "state": "leased" if item["delivery_id"] in delivery_ids else item["state"],
                 "created_at": item["created_at"],
-            }
+            })
             for item in deliveries
         ]
         next_cursor = str(max([cursor] + [int(item["cursor"]) for item in items]))
-        return {"deliveries": items, "next_cursor": next_cursor}
+        return _record(DeliveryPollResult, {"deliveries": items, "next_cursor": next_cursor})
 
-    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> dict[str, Any]:
+    def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
         validated_ids, validated_classification = validated_ack_request(
             delivery_ids=delivery_ids,
@@ -1145,11 +1215,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         row["agent_id"],
                     ),
                 )
-        return {"updated": len(validated_ids), "classification": validated_classification}
+        return _record(
+            AckResult,
+            {"updated": len(validated_ids), "classification": validated_classification},
+        )
 
-    def update_routed_task_status(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_routed_task_status(
+        self,
+        agent_token: str,
+        routed_task_id: str,
+        payload: RegistryRecordModel,
+    ) -> TaskRecord:
         now = utcnow_iso()
-        validated_payload = validated_routed_task_status_payload(payload)
+        validated_payload = validated_routed_task_status_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1191,7 +1271,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             )
             if not decision.ok:
                 raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
-            inserted_events: list[dict[str, Any]] = []
+            inserted_events: list[EventRecord] = []
             primary_event_id = f"task-transition:{routed_task_id}:{validated_payload['transition_id']}"
             with _cur(conn) as cur:
                 cur.execute(
@@ -1255,7 +1335,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                             (inserted_events[-1]["created_at"], task_row["parent_conversation_id"]),
                         )
-            return {
+            return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
@@ -1264,11 +1344,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "parent_conversation_id": task_row["parent_conversation_id"],
                 "origin_agent_id": task_row["origin_agent_id"],
                 "target_agent_id": task_row["target_agent_id"],
-            }
+            })
 
-    def update_routed_task_result(self, agent_token: str, routed_task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_routed_task_result(
+        self,
+        agent_token: str,
+        routed_task_id: str,
+        payload: RegistryRecordModel,
+    ) -> TaskRecord:
         now = utcnow_iso()
-        validated_payload = validated_routed_task_result_payload(payload)
+        validated_payload = validated_routed_task_result_payload(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1318,7 +1405,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (task["parent_conversation_id"],),
                 )
                 parent_conversation = cur.fetchone()
-            inserted_events: list[dict[str, Any]] = []
+            inserted_events: list[EventRecord] = []
             if not duplicate:
                 persisted_result = dict(validated_payload)
                 persisted_result["completed_at"] = completed_at
@@ -1390,7 +1477,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                             (completed_at, task["parent_conversation_id"]),
                         )
-            return {
+            return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
@@ -1399,9 +1486,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "parent_conversation_id": task["parent_conversation_id"],
                 "origin_agent_id": task["origin_agent_id"],
                 "target_agent_id": task["target_agent_id"],
-            }
+            })
 
-    def deregister(self, agent_token: str) -> dict[str, Any]:
+    def deregister(self, agent_token: str) -> AgentRecord:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
@@ -1417,7 +1504,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """,
                     (now, now, agent_token_hash),
                 )
-        return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
+        return _record(
+            AgentRecord,
+            {"agent_id": row["agent_id"], "connectivity_state": "offline"},
+        )
 
     def list_agents(
         self,
@@ -1427,7 +1517,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 25,
         q: str = "",
         connectivity_state: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[AgentRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
@@ -1465,7 +1555,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 rows = cur.fetchall()
         return [self._row_to_agent(row) for row in rows]
 
-    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -1475,10 +1565,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 row = cur.fetchone()
             if row is None:
                 return None
-            return runtime_health_detail(
+            detail = runtime_health_detail(
                 row.get("runtime_health_json"),
                 self._runtime_worker_rows(conn, agent_id),
             )
+            return _record(RuntimeHealthDetailRecord, detail) if detail is not None else None
 
     def agent_exists(self, agent_id: str) -> bool:
         with self._connect() as conn:
@@ -1496,7 +1587,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         title: str,
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
-    ) -> dict[str, Any]:
+    ) -> ConversationRecord:
         if not origin_channel or not origin_channel.strip():
             raise ValueError("origin_channel must not be empty")
         if not external_conversation_ref or not external_conversation_ref.strip():
@@ -1535,7 +1626,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 actual_id = cur.fetchone()["conversation_id"]
         return self.get_conversation(actual_id)
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[dict[str, Any]]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
         # When a search query is provided (>= 3 chars), use FTS-based search
         if q and len(q) >= 3:
@@ -1601,7 +1692,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     params_list.extend([fetch_limit, cursor])
                     cur.execute(sql, params_list)
                     rows = cur.fetchall()
-        return [
+        return _records(ConversationRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "target_agent_id": row["target_agent_id"],
@@ -1615,9 +1706,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "event_count": int(row["event_count"] or 0),
             }
             for row in rows
-        ]
+        ])
 
-    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+    def get_conversation(self, conversation_id: str) -> ConversationRecord:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -1665,10 +1756,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
             }
             for task in task_rows
         ]
-        return {
+        return _record(ConversationRecord, {
             "conversation_id": row["conversation_id"],
             "target_agent_id": row["target_agent_id"],
             "target_display_name": row["target_name"] or "",
+            "target_name": row["target_name"] or "",
             "title": row["title"],
             "status": row["status"],
             "created_at": row["created_at"],
@@ -1677,9 +1769,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "external_conversation_ref": row["external_conversation_ref"],
             "event_count": int(row["event_count"] or 0),
             "linked_routed_tasks": tasks,
-        }
+        })
 
-    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[dict[str, Any]]:
+    def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 if until_iso:
@@ -1711,7 +1803,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         (since_iso,),
                     )
                 rows = cur.fetchall()
-        return [
+        return _records(UsageSummaryRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "title": row["title"] or "",
@@ -1719,9 +1811,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "created_at": row["created_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_summary(self, *, now_iso: str) -> dict[str, Any]:
+    def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
         window_start = (
             datetime.fromisoformat(now_iso) - timedelta(hours=24)
         ).isoformat()
@@ -1792,7 +1884,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
             usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
             usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
-        return {
+        return _record(RegistrySummaryRecord, {
             "generated_at": now_iso,
             "agents": {
                 "total": len(agent_rows),
@@ -1811,9 +1903,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "failed_24h": int(task_totals["failed_24h"] or 0),
             },
             "usage_24h": usage_total,
-        }
+        })
 
-    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[dict[str, Any]]:
+    def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
@@ -1849,7 +1941,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 params.extend([fetch_limit, cursor])
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-        return [
+        return _records(ApprovalRecord, [
             {
                 "request_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
@@ -1864,9 +1956,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 **(json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else (row["metadata_json"] or {})),
             }
             for row in rows
-        ]
+        ])
 
-    def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search_conversations(self, q: str, limit: int = 20) -> list[ConversationSearchHitRecord]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -1896,9 +1988,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (q, q, limit),
                 )
                 rows = cur.fetchall()
-        return [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows]
+        return _records(
+            ConversationSearchHitRecord,
+            [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows],
+        )
 
-    def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+    def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
         validated_text = validated_conversation_message_text(text)
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
@@ -1958,7 +2053,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
             inserted_event = None
             if evt_row:
-                inserted_event = {
+                inserted_event = _record(EventRecord, {
                     "seq": evt_row["seq"],
                     "event_id": evt_row["event_id"],
                     "conversation_id": evt_row["conversation_id"],
@@ -1968,14 +2063,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "content": evt_row["content"],
                     "metadata": json.loads(evt_row["metadata_json"]) if isinstance(evt_row["metadata_json"], str) else evt_row["metadata_json"],
                     "created_at": evt_row["created_at"],
-                }
-        return {"conversation_id": conversation_id, "accepted": True, "event": inserted_event}
+                })
+        return _record(
+            MessageRecord,
+            {"conversation_id": conversation_id, "accepted": True, "event": inserted_event},
+        )
 
     def add_conversation_action(
         self,
         conversation_id: str,
-        envelope: CoordinationActionEnvelope | dict[str, Any],
-    ) -> dict[str, Any]:
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
         validated_envelope = validated_conversation_action(envelope)
         action_payload = validated_action_payload(validated_envelope)
         with self._connect() as conn, _write_tx(conn):
@@ -2003,7 +2101,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             routed_tasks: list[dict[str, Any]] = []
             duplicate = False
 
-            def _event_from_row(event_id: str) -> dict[str, Any] | None:
+            def _event_from_row(event_id: str) -> EventRecord | None:
                 with _cur(conn) as cur:
                     cur.execute(
                         f"SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM {_SCHEMA}.events WHERE event_id = %s",
@@ -2012,7 +2110,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     row = cur.fetchone()
                 if row is None:
                     return None
-                return {
+                return _record(EventRecord, {
                     "seq": row["seq"],
                     "event_id": row["event_id"],
                     "conversation_id": row["conversation_id"],
@@ -2022,7 +2120,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "content": row["content"],
                     "metadata": json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else row["metadata_json"],
                     "created_at": row["created_at"],
-                }
+                })
 
             if validated_envelope.action in {"approve", "reject", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
                 self._create_delivery(
@@ -2096,7 +2194,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     accepted=True,
                     duplicate=duplicate,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "delegate_tasks":
                 proposal = action_payload
@@ -2139,7 +2237,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     duplicate=duplicate,
                     proposal_id=validated_envelope.action_id,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "approve_delegation":
                 proposal_id = action_payload.proposal_id
@@ -2243,14 +2341,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     proposal_id=proposal_id,
                     routed_tasks=routed_tasks,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action == "direct_assign":
                 assignment = action_payload
                 operator_message = direct_assignment_message_text(assignment)
                 routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
                 resolved_target = self._resolve_selector(conn, assignment.selector)
-                inserted_events: list[dict[str, Any]] = []
+                inserted_events: list[EventRecord] = []
                 message_event = self._insert_event(
                     conn,
                     event_id=f"message.user:{validated_envelope.action_id}",
@@ -2344,7 +2442,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     routed_tasks=routed_tasks,
                     inserted_events=inserted_events,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             if validated_envelope.action in {"cancel_task", "retry_task", "cancel_delegation"}:
                 if validated_envelope.action == "cancel_delegation":
@@ -2379,7 +2477,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         duplicate=duplicate,
                         proposal_id=action_payload.proposal_id,
                         event=inserted_event,
-                    ).model_dump()
+                    )
 
                 with _cur(conn) as cur:
                     cur.execute(
@@ -2458,7 +2556,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     duplicate=duplicate,
                     routed_tasks=routed_tasks,
                     event=inserted_event,
-                ).model_dump()
+                )
 
             raise ValueError(f"Unsupported action: {validated_envelope.action}")
 
@@ -2470,7 +2568,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> list[TaskRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
             with _cur(conn) as cur:
@@ -2497,7 +2595,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 params.extend([fetch_limit, cursor])
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-        return [
+        return _records(TaskRecord, [
             {
                 "routed_task_id": row["routed_task_id"],
                 "parent_conversation_id": row["parent_conversation_id"],
@@ -2515,9 +2613,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "updated_at": row["updated_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_task(self, routed_task_id: str) -> dict[str, Any]:
+    def get_task(self, routed_task_id: str) -> TaskRecord:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -2533,7 +2631,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 row = cur.fetchone()
         if row is None:
             raise KeyError(routed_task_id)
-        return {
+        return _record(TaskRecord, {
             "routed_task_id": row["routed_task_id"],
             "parent_conversation_id": row["parent_conversation_id"],
             "origin_agent_id": row["origin_agent_id"],
@@ -2547,9 +2645,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "result": decode_json_field(row["result_json"], {}),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-        }
+        })
 
-    def publish_events(self, agent_token: str, conversation_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+    def publish_events(
+        self,
+        agent_token: str,
+        conversation_id: str,
+        events: list[RegistryRecordModel],
+    ) -> PublishEventsResult:
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -2568,8 +2671,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             inserted = 0
             skipped = 0
             inserted_ids: set[str] = set()
-            inserted_events: list[dict[str, Any]] = []
-            for event in events:
+            inserted_events: list[EventRecord] = []
+            for event_model in events:
+                event = (
+                    event_model.model_dump(mode="json")
+                    if hasattr(event_model, "model_dump")
+                    else event_model
+                )
                 serialized = json.dumps(event)
                 if len(serialized) >= 256 * 1024:
                     raise ValueError("Event exceeds 256KB size limit")
@@ -2608,7 +2716,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         ev_row = cur.fetchone()
                         if ev_row:
                             meta = ev_row["metadata_json"]
-                            inserted_events.append({
+                            inserted_events.append(_record(EventRecord, {
                                 "seq": ev_row["seq"],
                                 "event_id": ev_row["event_id"],
                                 "conversation_id": ev_row["conversation_id"],
@@ -2618,10 +2726,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
                                 "content": ev_row["content"],
                                 "metadata": meta if isinstance(meta, dict) else json.loads(meta) if meta else {},
                                 "created_at": str(ev_row["created_at"]),
-                            })
+                            }))
                     else:
                         skipped += 1
-        return {"inserted": inserted, "skipped": skipped, "inserted_ids": list(inserted_ids), "inserted_events": inserted_events}
+        return _record(
+            PublishEventsResult,
+            {
+                "inserted": inserted,
+                "skipped": skipped,
+                "inserted_ids": list(inserted_ids),
+                "inserted_events": inserted_events,
+            },
+        )
 
     def list_events(
         self,
@@ -2631,7 +2747,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         before_seq: int = 0,
         after_seq: int = 0,
         limit: int = 50,
-    ) -> dict[str, Any]:
+    ) -> EventPageRecord:
         if before_seq and after_seq:
             raise ValueError("before_seq and after_seq cannot both be set")
         kinds = [item.strip() for item in kind.split(",") if item.strip()]
@@ -2686,14 +2802,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
             }
             for row in rows
         ]
-        return {
-            "events": events_list,
-            "has_more_before": has_more_before,
-            "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
-            "next_after_seq": events_list[-1]["seq"] if events_list else None,
-        }
+        return _record(
+            EventPageRecord,
+            {
+                "events": _records(EventRecord, events_list),
+                "has_more_before": has_more_before,
+                "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
+                "next_after_seq": events_list[-1]["seq"] if events_list else None,
+            },
+        )
 
-    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> dict[str, Any]:
+    def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -2721,9 +2840,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for row in rows
         ]
         next_cursor = events_list[-1]["seq"] if events_list else 0
-        return {"events": events_list, "next_cursor": next_cursor}
+        return _record(
+            MessagePageRecord,
+            {"events": _records(EventRecord, events_list), "next_cursor": next_cursor},
+        )
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[ConversationRecord]:
         fetch_limit = limit + 1
         effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
@@ -2740,11 +2862,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (effective_agent_id, fetch_limit, cursor),
                 )
                 rows = cur.fetchall()
-        return [
+        return _records(ConversationRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "target_agent_id": row["target_agent_id"],
-                "target_display_name": row["target_name"] or "",
+                "target_name": row["target_name"] or "",
                 "title": row["title"],
                 "origin_channel": row["origin_channel"],
                 "status": row["status"],
@@ -2752,9 +2874,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "updated_at": row["updated_at"],
             }
             for row in rows
-        ]
+        ])
 
-    def get_agent_status(self, agent_id: str) -> dict[str, Any] | None:
+    def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -2789,9 +2911,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
         agent["workers"] = workers
         agent["active_conversations"] = active_conversations
         agent["recent_errors"] = recent_errors
-        return agent
+        return _record(AgentStatusRecord, agent)
 
-    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[dict[str, Any]]:
+    def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
             sql = (
                 f"SELECT e.*, c.title AS conversation_title "
@@ -2816,7 +2938,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             with _cur(conn) as cur:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
-        return [
+        return _records(UsageSummaryRecord, [
             {
                 "event_id": row["event_id"],
                 "conversation_id": row["conversation_id"],
@@ -2826,7 +2948,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "created_at": row["created_at"],
             }
             for row in rows
-        ]
+        ])
 
     def export_conversation(self, conversation_id: str) -> str:
         with self._connect() as conn:

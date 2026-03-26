@@ -12,7 +12,7 @@ from pathlib import Path
 import yaml
 
 from app import registry as registry_client
-from app.content_models import RuntimeSkillTrackRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord
 from app.content_seed import track_from_skill_dir
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import uuid4
 
 from app.control_plane.bus import ControlPlaneBus
@@ -10,9 +11,16 @@ from app.control_plane.models import ControlCommand
 from octopus_sdk.health_publication import AuthorityStatus, ConnectionSummary, HealthReport
 
 class BusHealthPublication:
-    def __init__(self, bus: ControlPlaneBus, directory: ControlPlaneDirectory) -> None:
+    def __init__(
+        self,
+        bus: ControlPlaneBus,
+        directory: ControlPlaneDirectory,
+        *,
+        connectivity_state_for_authority: Callable[[str], str],
+    ) -> None:
         self._bus = bus
         self._directory = directory
+        self._connectivity_state_for_authority = connectivity_state_for_authority
 
     async def publish_health(self, *, report: HealthReport) -> None:
         for authority_ref in sorted(
@@ -32,7 +40,7 @@ class BusHealthPublication:
         authorities = [
             AuthorityStatus(
                 authority_ref=authority_ref,
-                connectivity_state="configured",
+                connectivity_state=self._connectivity_state_for_authority(authority_ref),
                 capabilities=sorted(
                     self._directory.capabilities_for_authority(authority_ref)
                 ),

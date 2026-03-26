@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from app.workflows.recovery.results import TransportDisposition, TransitionResult, TransportStateCorruption
+from octopus_sdk.work_queue import TransportDisposition, TransitionResult, TransportStateCorruption
 
 TRANSPORT_STATES = frozenset(
     {

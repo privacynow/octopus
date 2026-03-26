@@ -14,7 +14,7 @@ from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from app.formatting import summarize_text
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.sessions import SessionState
-from app.workflows.delegation.coordination import finalize_resumed_delegation
+from octopus_sdk.workflows.delegation import finalize_resumed_delegation
 from octopus_sdk.execution import RequestExecutionOutcome
 
 log = logging.getLogger(__name__)

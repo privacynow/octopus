@@ -9,18 +9,14 @@ import logging
 from typing import Any, AsyncIterator
 
 from app import work_queue
-from app.agents.delegation import (
-    handle_delegation_approve as handle_channel_delegation_approve,
-    handle_delegation_cancel as handle_channel_delegation_cancel,
-)
 from app.agents.state import runtime_registry_agent_id
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
     build_conversation_runtime,
-    build_delegation_channel_runtime,
     build_pending_runtime,
     build_runtime_skill_runtime,
+    build_transport_identity,
     build_user_prompt,
 )
 from app.channels.telegram.pending import handle_worker_pending_action
@@ -46,9 +42,14 @@ from octopus_sdk.execution import ExecutionRuntime
 from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from octopus_sdk.execution import dispatch_message_request, load_approval_mode
-from app.workflows.delegation.coordination import expire_stale_delegations
-from app.workflows.recovery.replay import get_recovery_use_cases
+from app.runtime.session_runtime import LocalSessionRuntime
 from app.worker import poll_interval_for_runtime
+from octopus_sdk.workflows.delegation import (
+    ParticipantDelegationRuntime,
+    approve_participant_delegation,
+    cancel_participant_delegation,
+    expire_stale_delegations,
+)
 
 log = logging.getLogger(__name__)
 
@@ -78,11 +79,25 @@ def _normalized_event_text(text: str | None) -> str:
     return "" if text is None else text
 
 
-def _channel_dispatcher(runtime: TelegramRuntime):
-    dispatcher = getattr(runtime, "channel_dispatcher", None)
+def _transport_dispatcher(runtime: TelegramRuntime):
+    dispatcher = getattr(runtime, "transport_dispatcher", None)
     if dispatcher is None:
-        raise RuntimeError("Telegram runtime is missing a channel dispatcher")
+        raise RuntimeError("Telegram runtime is missing a transport dispatcher")
     return dispatcher
+
+
+def _participant_delegation_runtime(runtime: TelegramRuntime) -> ParticipantDelegationRuntime:
+    return ParticipantDelegationRuntime(
+        config=runtime.config,
+        provider_name=runtime.provider.name,
+        provider_state_factory=runtime.provider.new_provider_state,
+        coordination=runtime.services.registry.coordination,
+        sessions=LocalSessionRuntime(runtime.config),
+    )
+
+
+def _recovery_runtime(runtime: TelegramRuntime):
+    return runtime.services.workflows.recovery.replay
 
 
 @contextlib.asynccontextmanager
@@ -208,7 +223,7 @@ def _build_channel_egress(
     item_id: str = "",
 ):
     bot_instance = runtime.bot_instance
-    dispatcher = _channel_dispatcher(runtime)
+    dispatcher = _transport_dispatcher(runtime)
     chat_id = telegram_numeric_id(conversation_key)
     runtime_chat = chat_id if chat_id is not None else conversation_key
     resolved_conversation_ref = conversation_ref
@@ -250,7 +265,7 @@ async def _execute_worker_action(
         conversation_ref,
         event.user,
         config=runtime.config,
-        dispatcher=_channel_dispatcher(runtime),
+        dispatcher=_transport_dispatcher(runtime),
     )
     action = event.action
     params = dict(event.params)
@@ -284,55 +299,25 @@ async def _execute_worker_action(
     action_conversation_key = _item_conversation_key(item)
 
     if action == "delegation_approve":
-        from octopus_sdk.event_sink import build_event_sink_for_context
-        from octopus_sdk.execution import TransportIdentity
-        from app.agents.registry_capabilities import registry_id_from_authority_ref
         target_key = action_conversation_key
         if params.get("target_conversation_key"):
             target_key = str(params["target_conversation_key"])
-        authority = str(item.get("authority_ref", ""))
-        if not authority:
-            authority = getattr(event, "authority_ref", "")
-        try:
-            reg_id = registry_id_from_authority_ref(authority) if authority else ""
-        except ValueError:
-            reg_id = ""
-        transport = TransportIdentity(
-            conversation_key=target_key,
-            origin_channel=source,
-            external_conversation_ref=(
-                str(getattr(channel_egress, "external_id", "") or "")
-                or conversation_ref
-            ),
-            target_agent_id=runtime_registry_agent_id(
-                runtime.config.data_dir,
-                reg_id,
-            ),
-        )
-        sink = build_event_sink_for_context(
-            transport,
-            runtime.services.control_plane.conversation_projection,
-            runtime.config,
-        )
-        await handle_channel_delegation_approve(
+        outcome = await approve_participant_delegation(
+            _participant_delegation_runtime(runtime),
             target_key,
-            conversation_ref,
-            channel_egress,
-            runtime=build_delegation_channel_runtime(runtime),
-            event_sink=sink,
         )
+        await channel_egress.send_text(outcome.message)
         return
 
     if action == "delegation_cancel":
         target_key = action_conversation_key
         if params.get("target_conversation_key"):
             target_key = str(params["target_conversation_key"])
-        await handle_channel_delegation_cancel(
+        outcome = await cancel_participant_delegation(
+            _participant_delegation_runtime(runtime),
             target_key,
-            conversation_ref,
-            channel_egress,
-            runtime=build_delegation_channel_runtime(runtime),
         )
+        await channel_egress.send_text(outcome.message)
         return
 
     if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:
@@ -385,7 +370,7 @@ async def worker_dispatch(
         title = summarize_text(event.text)
         if not title:
             title = "Conversation"
-        dispatcher = _channel_dispatcher(runtime)
+        dispatcher = _transport_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
         admission_conversation_ref = event.conversation_ref
         if not admission_conversation_ref:
@@ -419,7 +404,7 @@ async def worker_dispatch(
             raw_event_id = str(item.get("event_id", ""))
             numeric_event_id = telegram_numeric_id(raw_event_id)
             update_id = 0 if numeric_event_id is None else numeric_event_id
-            recovery_outcome = await get_recovery_use_cases().dispatch_worker_recovery(
+            recovery_outcome = await _recovery_runtime(runtime).dispatch_worker_recovery(
                 data_dir=data_dir,
                 item_id=item["id"],
                 original_text=_normalized_event_text(event.text),
@@ -469,7 +454,8 @@ async def worker_dispatch(
 
                 async def _run_message(cancel_event: asyncio.Event | None):
                     nonlocal outcome
-                    transport = execution_runtime.build_transport_identity(
+                    transport = build_transport_identity(
+                        runtime,
                         channel_egress,
                         runtime_chat,
                         actor_key=user_id,

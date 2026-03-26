@@ -10,7 +10,6 @@ from typing import Any, Awaitable, Callable
 from telegram.error import BadRequest
 
 from app import work_queue
-from app.agents.delegation import build_delegation_runtime
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import TelegramConversationRuntime
 from app.channels.telegram.pending import TelegramPendingRuntime
@@ -24,9 +23,9 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
     telegram_numeric_id,
 )
-from octopus_sdk.runtime_dispatch import RuntimeDispatchRuntime
+from octopus_sdk.bot_runtime import ExecutionServices
+from octopus_sdk.bot_runtime import ProviderDispatchRuntime
 from octopus_sdk.inbound_types import InboundAttachment
-from octopus_sdk.runtime import ExecutionServices, build_execution_runtime as build_sdk_execution_runtime
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skill_activation_service import get_skill_activation_service
 from app.runtime import composition
@@ -34,11 +33,12 @@ from app.runtime.session_runtime import resolve_session_context
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from octopus_sdk.sessions import SessionState
 from app.storage import chat_upload_dir, is_image_path, resolve_allowed_path
-from app.summarize import format_provider_error, save_raw
+from app.summarize import save_raw
 from octopus_sdk.execution import (
     ExecutionRuntime,
     ExecutionChannelMetadata,
     RequestExecutionOutcome,
+    TransportIdentity,
     build_transport_identity_from_metadata,
     check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
     execute_request as execution_execute_request,
@@ -50,31 +50,17 @@ from octopus_sdk.execution import (
 class TelegramExecutionCollaborators:
     """Bound Telegram runtime collaborators for execution runtime builders."""
 
-    progress_factory: type
-    keep_typing: Callable[[Any], Any]
-    heartbeat: Callable[..., Any]
     build_conversation_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
     build_routed_task_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
-    propose_delegation_plan: Callable[
-        [str, Any, SessionState, str, Any],
-        Awaitable[RequestExecutionOutcome],
-    ]
 
 
 def bind_execution_collaborators(
     runtime: TelegramRuntime,
     *,
-    progress_factory: type,
-    keep_typing_fn: Callable[[Any], Any],
-    heartbeat_fn: Callable[..., Any],
     progress_timeline_callback_fn: Callable[..., Awaitable[None]],
     routed_task_progress_callback_fn: Callable[..., Awaitable[None]],
-    propose_delegation_plan_fn: Callable[..., Awaitable[RequestExecutionOutcome]],
 ) -> TelegramExecutionCollaborators:
     return TelegramExecutionCollaborators(
-        progress_factory=progress_factory,
-        keep_typing=lambda chat: keep_typing_fn(chat, runtime=runtime),
-        heartbeat=heartbeat_fn,
         build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: progress_timeline_callback_fn(
                 runtime,
@@ -91,16 +77,6 @@ def bind_execution_collaborators(
                 authority_ref,
                 html_text,
                 force=force,
-            )
-        ),
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: (
-            propose_delegation_plan_fn(
-                runtime,
-                chat_id,
-                message,
-                session,
-                conversation_ref=conversation_ref,
-                result=result,
             )
         ),
     )
@@ -167,8 +143,96 @@ class _TelegramArtifactStore:
         return save_raw(self.state.config.data_dir, conversation_key, prompt, raw_text, kind=kind)
 
 
-def run_result_was_interrupted(returncode: int) -> bool:
-    return returncode < 0
+@dataclass(frozen=True)
+class TelegramExecutionMessage:
+    runtime: TelegramRuntime
+    message: Any
+
+    @property
+    def chat(self):
+        return self.message.chat
+
+    async def send_text(self, text: str, **kwargs: Any):
+        return await self.reply_text(text, **kwargs)
+
+    async def reply_text(self, text: str, **kwargs: Any):
+        return await self.message.reply_text(text, **kwargs)
+
+    async def send_photo(self, photo: Any, **kwargs: Any) -> None:
+        await self.reply_photo(photo, **kwargs)
+
+    async def reply_photo(self, photo: Any, **kwargs: Any) -> None:
+        await self.message.reply_photo(photo=photo, **kwargs)
+
+    async def send_document(self, document: Any, **kwargs: Any) -> None:
+        await self.reply_document(document, **kwargs)
+
+    async def reply_document(self, document: Any, **kwargs: Any) -> None:
+        await self.message.reply_document(document=document, **kwargs)
+
+    async def send_action(self, action: str) -> None:
+        await self.chat.send_action(action)
+
+    def typing_target(self):
+        return self.chat
+
+    async def send_status(self, text: str, **kwargs: Any):
+        return await self.send_text(text, **kwargs)
+
+    async def edit_text(self, text: str, **kwargs: Any) -> None:
+        await self.message.edit_text(text, **kwargs)
+
+    async def show_foreign_setup(self, foreign_setup) -> None:
+        await show_foreign_setup(self, foreign_setup)
+
+    async def show_setup_prompt(self, missing_skill: str, first_requirement: dict[str, object]) -> None:
+        await show_setup_prompt(self, missing_skill, first_requirement)
+
+    async def send_retry_prompt(self, denials: tuple[dict[str, Any], ...], callback_token: str) -> None:
+        await send_retry_prompt(self, denials, callback_token)
+
+    async def send_approval_prompt(self, callback_token: str) -> None:
+        await send_approval_prompt(self, callback_token)
+
+    async def send_formatted_reply(self, text: str) -> None:
+        await send_formatted_reply(self, text)
+
+    async def send_directed_artifacts(
+        self,
+        conversation_key_value: str,
+        directives: list[tuple[str, str]],
+        *,
+        resolved_ctx: ResolvedExecutionContext | None = None,
+    ) -> None:
+        await send_directed_artifacts(
+            conversation_key_value,
+            self,
+            directives,
+            resolved_ctx,
+            runtime=self.runtime,
+        )
+
+    async def send_compact_reply(self, text: str, conversation_key_value: str, slot: int) -> None:
+        await send_compact_reply(self, text, conversation_key_value, slot)
+
+    async def propose_delegation_plan(
+        self,
+        conversation_key_value: str,
+        session: SessionState,
+        *,
+        conversation_ref: str,
+        result,
+    ) -> RequestExecutionOutcome:
+        from app.channels.telegram.delegation_channel import propose_delegation_plan
+
+        return await propose_delegation_plan(
+            self.runtime,
+            conversation_key_value,
+            self,
+            session,
+            conversation_ref=conversation_ref,
+            result=result,
+        )
 
 
 def resolve_project(runtime: TelegramRuntime, session: SessionState):
@@ -352,23 +416,13 @@ def build_dispatch_runtime(
     runtime: TelegramRuntime,
     *,
     collaborators: TelegramExecutionCollaborators,
-) -> RuntimeDispatchRuntime:
-    return RuntimeDispatchRuntime(
+) -> ProviderDispatchRuntime:
+    del collaborators
+    return ProviderDispatchRuntime(
         config=runtime.config,
         provider=runtime.provider,
         boot_id=runtime.boot_id,
         cancellations=runtime.cancellation_registry,
-        progress_factory=collaborators.progress_factory,
-        send_status=lambda message, label: message.reply_text(label),
-        typing_target=lambda message: getattr(message, "chat", message),
-        keep_typing=collaborators.keep_typing,
-        heartbeat=collaborators.heartbeat,
-        format_provider_error=lambda raw_text, returncode: format_provider_error(
-            raw_text,
-            returncode,
-            model=getattr(runtime.config, "provider_error_summary_model", "claude-haiku-4-5-20251001"),
-        ),
-        run_result_was_interrupted=run_result_was_interrupted,
     )
 
 
@@ -380,7 +434,7 @@ def execution_channel_metadata(
     actor_key: str = "",
 ) -> ExecutionChannelMetadata:
     conversation_ref = getattr(message, "conversation_ref", "")
-    dispatcher = getattr(runtime, "channel_dispatcher", None)
+    dispatcher = getattr(runtime, "transport_dispatcher", None)
     descriptor = None
     resolved_ref = conversation_ref
     if not resolved_ref and isinstance(chat_id, int):
@@ -442,7 +496,6 @@ def build_execution_runtime(
     *,
     collaborators: TelegramExecutionCollaborators,
 ) -> ExecutionRuntime:
-    from octopus_sdk.event_sink import build_event_sink_for_context, _NOOP_SINK
     projection = runtime.services.control_plane.conversation_projection
     services = ExecutionServices(
         guidance=get_provider_guidance_service(),
@@ -450,48 +503,43 @@ def build_execution_runtime(
         runtime_skill_setup=composition.workflows().runtime_skills.setup,
         sessions=_TelegramSessionRuntime(runtime),
         artifacts=_TelegramArtifactStore(runtime),
+        agent_directory=runtime.services.control_plane.agent_directory,
+        conversation_projection=projection,
     )
 
-    return build_sdk_execution_runtime(
+    return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
         services=services,
         interrupted_exc=work_queue.LeaveClaimed,
-        build_transport_identity=lambda message, chat_id, *, actor_key="": build_transport_identity_from_metadata(
-            execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
-            conversation_callback_factory=collaborators.build_conversation_progress_callback,
-            routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
-        ),
-        build_event_sink=(
-            (lambda transport: build_event_sink_for_context(transport, projection, runtime.config))
-            if projection
-            else (lambda _transport: _NOOP_SINK)
-        ),
-        render_provider_error=html.escape,
-        show_foreign_setup=show_foreign_setup,
-        show_setup_prompt=show_setup_prompt,
-        send_retry_prompt=send_retry_prompt,
-        send_approval_prompt=send_approval_prompt,
-        send_formatted_reply=send_formatted_reply,
-        send_directed_artifacts=lambda conversation_key_value, message, directives, resolved_ctx=None: send_directed_artifacts(
-            conversation_key_value,
-            message,
-            directives,
-            resolved_ctx,
-            runtime=runtime,
-        ),
-        send_compact_reply=send_compact_reply,
-        propose_delegation_plan=collaborators.propose_delegation_plan,
-        agent_directory=runtime.services.control_plane.agent_directory,
     )
 
 
-def build_delegation_channel_runtime(runtime: TelegramRuntime):
-    return build_delegation_runtime(
-        config=runtime.config,
-        provider_name=runtime.provider.name,
-        provider_state_factory=runtime.provider.new_provider_state,
-        task_routing=runtime.services.control_plane.task_routing,
-        agent_directory=runtime.services.control_plane.agent_directory,
+def build_transport_identity(
+    runtime: TelegramRuntime,
+    message,
+    chat_id: int | str,
+    *,
+    actor_key: str = "",
+    collaborators: TelegramExecutionCollaborators | None = None,
+) -> TransportIdentity:
+    if collaborators is None:
+        from app.channels.telegram.progress import (
+            TelegramProgress,
+            heartbeat,
+            keep_typing,
+            progress_timeline_callback,
+            routed_task_progress_callback,
+        )
+
+        collaborators = bind_execution_collaborators(
+            runtime,
+            progress_timeline_callback_fn=progress_timeline_callback,
+            routed_task_progress_callback_fn=routed_task_progress_callback,
+        )
+    return build_transport_identity_from_metadata(
+        execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
+        conversation_callback_factory=collaborators.build_conversation_progress_callback,
+        routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
     )
 
 
@@ -514,8 +562,10 @@ def build_pending_runtime(
     ):
         raw_actor_key = kwargs.pop("actor_key", "")
         actor_key = "" if raw_actor_key is None else str(raw_actor_key)
-        transport = execution_runtime.build_transport_identity(
-            message,
+        execution_message = TelegramExecutionMessage(runtime, message)
+        transport = build_transport_identity(
+            runtime,
+            execution_message,
             chat_id,
             actor_key=actor_key,
         )
@@ -523,7 +573,7 @@ def build_pending_runtime(
             transport,
             prompt,
             image_paths,
-            message,
+            execution_message,
             runtime=execution_runtime,
             **kwargs,
         )
@@ -538,8 +588,10 @@ def build_pending_runtime(
     ):
         raw_actor_key = kwargs.pop("actor_key", "")
         actor_key = "" if raw_actor_key is None else str(raw_actor_key)
-        transport = execution_runtime.build_transport_identity(
-            message,
+        execution_message = TelegramExecutionMessage(runtime, message)
+        transport = build_transport_identity(
+            runtime,
+            execution_message,
             chat_id,
             actor_key=actor_key,
         )
@@ -548,7 +600,7 @@ def build_pending_runtime(
             prompt,
             image_paths,
             attachments,
-            message,
+            execution_message,
             runtime=execution_runtime,
             **kwargs,
         )

@@ -1061,7 +1061,7 @@ def test_validate_active_skills():
 # =====================================================================
 
 def test_skill_meta_is_custom():
-    from app.skill_types import SkillMeta
+    from octopus_sdk.skill_types import SkillMeta
 
     meta_builtin = SkillMeta(name="test", display_name="Test", description="desc")
     assert meta_builtin.is_custom is False

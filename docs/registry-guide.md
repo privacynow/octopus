@@ -9,7 +9,7 @@ For the full flow inventory, see
 
 ## Contents
 
-1. [When to use registry mode](#when-to-use-registry-mode)
+1. [When to use the registry operator stack](#when-to-use-the-registry-operator-stack)
 2. [Concepts](#concepts)
 3. [CLI lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
 4. [Backup and clean refresh helpers](#backup-and-clean-refresh-helpers)
@@ -19,9 +19,12 @@ For the full flow inventory, see
 8. [Verification and troubleshooting](#verification-and-troubleshooting)
 9. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
-## When to use registry mode
+## When to use the registry operator stack
 
-Use registry mode when you want:
+In this repo's shipped Telegram profile, registry participation is not an
+extra add-on. It is how the local multi-bot product works.
+
+Use the registry stack when you want:
 
 - a browser UI for operators
 - shared visibility across multiple bots
@@ -29,7 +32,9 @@ Use registry mode when you want:
 - approvals, health, task state, and full activity in one place
 - one local operator console instead of following every bot through Telegram
 
-Registry mode is optional. Bots can still run without it.
+The SDK can still model runtimes without registry participation, but the local
+Octopus Telegram deployment, operator CLI flow, and browser UI assume
+registry-connected bots.
 
 ## Concepts
 

@@ -18,7 +18,7 @@ from app.agents.state import (
 )
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.identity import bot_identity
-from octopus_sdk.registry.models import AgentCard, utcnow_iso
+from octopus_sdk.registry.models import AgentCard, DeliveryPollResult, EnrollmentResult, utcnow_iso
 from app.config import BotConfig
 from app.runtime_health import (
     RuntimeHealthJsonProjector,
@@ -182,10 +182,11 @@ class AgentRuntime:
                     self.requested_card(),
                     enroll_token,
                 )
-                self._state.agent_id = str(enroll.get("agent_id", ""))
-                self._state.agent_token = str(enroll.get("agent_token", ""))
-                self._state.registered_slug = str(enroll.get("slug", self.config.agent_slug))
-                self._state.poll_cursor = str(enroll.get("poll_cursor", "0"))
+                enroll = EnrollmentResult.model_validate(enroll)
+                self._state.agent_id = enroll.agent_id
+                self._state.agent_token = enroll.agent_token
+                self._state.registered_slug = enroll.slug or self.config.agent_slug
+                self._state.poll_cursor = enroll.poll_cursor or "0"
                 self._save_state()
 
             card = self.requested_card().model_copy(
@@ -256,9 +257,10 @@ class AgentRuntime:
         result = await client.poll(
             **poll_kwargs,
         )
-        deliveries = list(result.get("deliveries", []))
+        result = DeliveryPollResult.model_validate(result)
+        deliveries = list(result.deliveries)
         if not deliveries:
-            self._state.poll_cursor = str(result.get("next_cursor", self._state.poll_cursor or "0"))
+            self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
             self._save_state()
             return 0
 
@@ -294,7 +296,7 @@ class AgentRuntime:
         if retry_later:
             await client.ack(retry_later, classification="retry_later")
 
-        self._state.poll_cursor = str(result.get("next_cursor", self._state.poll_cursor or "0"))
+        self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
         self._save_state()
         return len(deliveries)
 
@@ -344,24 +346,3 @@ class AgentRuntime:
                 await asyncio.wait_for(stop_event.wait(), timeout=sleep_time)
             except asyncio.TimeoutError:
                 continue
-
-
-def start_agent_runtime_task(
-    config: BotConfig,
-    *,
-    delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
-    runtime_health_provider: RuntimeHealthProvider | None = None,
-    runtime_health_projector: RuntimeHealthProjector[dict[str, Any]] | None = None,
-    provider=None,
-    kind_filter: Sequence[str] | None = None,
-) -> tuple[asyncio.Task[None], asyncio.Event]:
-    stop_event = asyncio.Event()
-    runtime = AgentRuntime(
-        config,
-        delivery_handler=delivery_handler,
-        runtime_health_provider=runtime_health_provider,
-        runtime_health_projector=runtime_health_projector,
-        provider=provider,
-    )
-    task = asyncio.create_task(runtime.run_forever(stop_event, kind_filter=kind_filter))
-    return task, stop_event

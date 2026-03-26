@@ -53,6 +53,7 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
 )
+from tests.support.service_support import build_test_bot_services
 
 
 def _conv(value):
@@ -377,18 +378,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                 responding_authorities=["registry:prod"],
             )
 
-        current_runtime().services.control_plane.health_publication.connection_summary = (
-            lambda: ConnectionSummary(
-                authorities=[
-                    AuthorityStatus(
-                        authority_ref="registry:prod",
-                        connectivity_state="configured",
-                        capabilities=["agent_directory", "task_routing"],
-                    )
-                ]
-            )
-        )
-        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
+        current_runtime().services.registry.discovery.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -447,23 +437,11 @@ async def test_discover_degraded_reports_registry_connectivity():
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
 
-        current_runtime().services.control_plane.health_publication.connection_summary = (
-            lambda: ConnectionSummary(
-                authorities=[
-                    AuthorityStatus(
-                        authority_ref="registry:default",
-                        connectivity_state="configured",
-                        capabilities=["agent_directory", "task_routing"],
-                    )
-                ]
-            )
-        )
-
         async def fake_search_agents(*, query):
             del query
             return AgentSearchResult(status="unavailable")
 
-        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
+        current_runtime().services.registry.discovery.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -492,23 +470,11 @@ async def test_discover_registry_failure_omits_backend_response_details():
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
 
-        current_runtime().services.control_plane.health_publication.connection_summary = (
-            lambda: ConnectionSummary(
-                authorities=[
-                    AuthorityStatus(
-                        authority_ref="registry:default",
-                        connectivity_state="configured",
-                        capabilities=["agent_directory", "task_routing"],
-                    )
-                ]
-            )
-        )
-
         async def fake_search_agents(*, query):
             del query
             raise RuntimeError("search failed")
 
-        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
+        current_runtime().services.registry.discovery.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -575,24 +541,26 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
     ) as (data_dir, cfg, prov):
         submitted = []
 
-        async def fake_resolve_target_authority(*, target_agent_id):
-            assert target_agent_id == "developer-1"
-            return AuthorityResolution(status="resolved", authority_ref="registry:default")
-
-        async def fake_submit_routed_task(*, request, authority_ref):
-            assert authority_ref == "registry:default"
-            submitted.append(request)
-            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
+        async def fake_submit_action(*, conversation_id, envelope):
+            submitted.append((conversation_id, envelope))
+            return CoordinationActionResult(
+                conversation_id=conversation_id,
+                action_id=envelope.action_id,
+                action=envelope.action,
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-1",
+                        "target_agent_id": "developer-1",
+                        "authority_ref": "registry:default",
+                    }
+                ],
+            )
 
         monkeypatch.setattr(
-            current_runtime().services.control_plane.agent_directory,
-            "resolve_target_authority",
-            fake_resolve_target_authority,
-        )
-        monkeypatch.setattr(
-            current_runtime().services.control_plane.task_routing,
-            "submit_routed_task",
-            fake_submit_routed_task,
+            current_runtime().services.control_plane.conversation_projection,
+            "submit_action",
+            fake_submit_action,
         )
         save_session(
             data_dir,
@@ -601,6 +569,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 **default_session(prov.name, prov.new_provider_state("tg:test"), "off"),
                 "pending_delegation": {
                     "conversation_ref": _reg_ref("conv-approve"),
+                    "proposal_id": "proposal-1",
                     "title": "Registry delegation",
                     "tasks": [
                         {
@@ -635,6 +604,8 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         pending = session_after.get("pending_delegation")
         assert outcome == "accepted"
         assert len(submitted) == 1
+        assert submitted[0][0] == "conv-approve"
+        assert submitted[0][1].action == "approve_delegation"
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["status"] == "submitted"
@@ -2135,7 +2106,7 @@ def test_bucket_b_command_registration_parity():
         import app.channels.telegram.ingress as th
         from telegram.ext import CommandHandler
 
-        app = build_bootstrap(cfg, prov).application
+        app = build_bootstrap(cfg, prov, services=build_test_bot_services()).application
         registered = set()
         for group_handlers in app.handlers.values():
             for h in group_handlers:
@@ -2156,7 +2127,7 @@ def test_build_application_registers_unknown_command_handler():
         import app.channels.telegram.bootstrap as telegram_bootstrap
         from telegram.ext import MessageHandler
 
-        app = build_bootstrap(cfg, prov).application
+        app = build_bootstrap(cfg, prov, services=build_test_bot_services()).application
 
         assert any(
             isinstance(handler, MessageHandler) and handler.callback == telegram_bootstrap.handle_unknown_command
@@ -2193,7 +2164,7 @@ def test_build_application_sequential_updates():
     with fresh_env() as (_, cfg, prov):
         import app.channels.telegram.ingress as th
 
-        app = build_bootstrap(cfg, prov).application
+        app = build_bootstrap(cfg, prov, services=build_test_bot_services()).application
         # Default sequential processing (no custom update processor)
         assert app.update_processor is None or "CancelPriority" not in type(app.update_processor).__name__
 

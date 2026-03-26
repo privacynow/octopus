@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from app.channels.telegram.channel import TelegramTransport
+from app.channels.registry.channel import RegistryConversationChannel
 from app.channels.telegram.normalization import (
     TelegramAttachmentTooLarge,
     normalize_callback,
@@ -36,6 +38,8 @@ from tests.support.handler_support import (
     fresh_data_dir,
     last_reply,
 )
+from tests.support.service_support import build_test_bot_services
+from tests.support.config_support import make_registry_connection
 
 
 class _FakeDownloadedFile:
@@ -284,6 +288,38 @@ async def test_normalize_message_no_user():
 
         result = await normalize_message(upd, FakeContext(), data_dir)
         assert result is None
+
+
+def test_telegram_transport_exposes_identity_resolver() -> None:
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir=data_dir)
+        services = build_test_bot_services(config=cfg)
+        transport = TelegramTransport(cfg, FakeProvider(), services)
+
+        assert transport.identity is not None
+        assert transport.identity.conversation_key("12345") == telegram_conversation_key(12345)
+        assert transport.identity.actor_key("42") == telegram_actor_key(42)
+        assert transport.identity.external_conversation_ref(12345) == "12345"
+
+
+def test_registry_transport_exposes_identity_resolver() -> None:
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir=data_dir,
+            agent_mode="registry",
+            agent_registries=(make_registry_connection(),),
+        )
+        services = build_test_bot_services(config=cfg)
+        transport = RegistryConversationChannel(
+            cfg,
+            cfg.agent_registries[0],
+            services=services,
+        )
+
+        assert transport.identity is not None
+        assert transport.identity.conversation_key("registry:default:conversation:conv-1") == "registry:conversation:conv-1"
+        assert transport.identity.actor_key("agent-1") == "agent-1"
+        assert transport.identity.external_conversation_ref("registry:default:conversation:conv-1") == "conv-1"
 
 
 # ---------------------------------------------------------------------------

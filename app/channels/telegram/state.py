@@ -13,9 +13,11 @@ from typing import Any
 
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
+from octopus_sdk.transport import BotRuntimeHandle
 from octopus_sdk.providers import Provider
 from app.ratelimit import RateLimiter
-from app.runtime.services import BotServices, build_noop_bot_services
+from app.runtime.work_admission import build_local_inbound_submitter
+from app.runtime.services import BotServices
 
 
 def make_boot_id() -> str:
@@ -42,7 +44,8 @@ class TelegramRuntime:
     provider: Provider
     boot_id: str
     rate_limiter: RateLimiter | None
-    services: BotServices = field(default_factory=build_noop_bot_services)
+    submitter: BotRuntimeHandle
+    services: BotServices
     bot_instance: Any = None
     cancellation_registry: TelegramCancellationRegistry = field(
         default_factory=TelegramCancellationRegistry
@@ -51,7 +54,7 @@ class TelegramRuntime:
         default_factory=lambda: defaultdict(asyncio.Lock)
     )
     pending_work_items: dict[int, str] = field(default_factory=dict)
-    channel_dispatcher: Any = None
+    transport_dispatcher: Any = None
     current_update_id: contextvars.ContextVar[int | None] = field(
         default_factory=lambda: contextvars.ContextVar(
             "telegram_current_update_id",
@@ -66,7 +69,7 @@ def build_telegram_runtime(
     *,
     boot_id: str | None = None,
     bot_instance: Any = None,
-    services: BotServices | None = None,
+    services: BotServices,
 ) -> TelegramRuntime:
     """Construct an explicit Telegram runtime instance."""
 
@@ -75,6 +78,7 @@ def build_telegram_runtime(
         provider=provider,
         boot_id=boot_id or make_boot_id(),
         rate_limiter=_build_rate_limiter(config),
-        services=services or build_noop_bot_services(),
+        submitter=build_local_inbound_submitter(config.data_dir),
+        services=services,
         bot_instance=bot_instance,
     )

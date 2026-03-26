@@ -9,7 +9,7 @@ from app.provider_guidance_service import (
 )
 from octopus_sdk.sessions import SessionState
 from app.skill_activation_service import get_skill_activation_service
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     ConversationSkillItem,
     ConversationSkillListing,
     ConversationSkillMutationOutcome,

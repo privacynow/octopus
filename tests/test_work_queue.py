@@ -11,7 +11,7 @@ import pytest
 
 import app.work_queue_sqlite_impl as work_queue_sqlite_impl
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.workflows.recovery.results import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption
 from app.work_queue import (
     DiscardResult,
     LeaveClaimed,
@@ -138,7 +138,7 @@ def test_claim_blocks_second_claim_same_chat(data_dir):
 def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
     """Preclaim (create as claimed) only when machine allows claim_inline; impossible rejection raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     # When machine rejects claim_inline in preclaim path, repository raises (no silent fallback to queued).
     record_update(data_dir, _event(8888), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
@@ -1069,7 +1069,7 @@ def test_write_tx_rejects_nested_use(data_dir):
 def test_mark_pending_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for move_to_pending_recovery, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3001), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3001), worker_id="w1")
@@ -1092,7 +1092,7 @@ def test_mark_pending_recovery_raises_on_invalid_transition(data_dir):
 def test_discard_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for discard_recovery, repository raises (not already_handled)."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3002), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3002), worker_id="w1")
@@ -1116,7 +1116,7 @@ def test_discard_recovery_raises_on_invalid_transition(data_dir):
 def test_supersede_pending_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for supersede_recovery, repository raises (not return 0)."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3003), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3003), worker_id="w1")
@@ -1140,7 +1140,7 @@ def test_supersede_pending_recovery_raises_on_invalid_transition(data_dir):
 def test_reclaim_for_replay_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition (not blocked_replay) for reclaim_for_replay, repository raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3004), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3004), worker_id="w1")
@@ -1206,7 +1206,7 @@ def test_supersede_pending_recovery_raises_when_chat_invalid(data_dir):
 def test_claim_queued_item_returns_none_only_for_other_claimed_for_chat(data_dir):
     """_claim_queued_item returns None only when disposition is other_claimed_for_chat; invalid_transition raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3005), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3005))  # queued
@@ -1229,7 +1229,7 @@ def test_claim_queued_item_returns_none_only_for_other_claimed_for_chat(data_dir
 def test_complete_work_item_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for complete, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3010), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3010), worker_id="w1")
@@ -1252,7 +1252,7 @@ def test_complete_work_item_raises_on_invalid_transition(data_dir):
 def test_fail_work_item_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for fail, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3011), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3011), worker_id="w1")

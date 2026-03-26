@@ -11,14 +11,14 @@ from typing import Any, Callable
 
 from psycopg.rows import dict_row
 
-from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
+from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
 from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,
     run_transport_event,
 )
-from app.workflows.recovery.transport_contract import (
+from octopus_sdk.work_queue import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,

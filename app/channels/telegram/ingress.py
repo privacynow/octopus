@@ -38,7 +38,6 @@ from app.channels.telegram.execution import (
     allowed_roots,
     bind_execution_collaborators,
     build_conversation_runtime,
-    build_delegation_channel_runtime,
     build_execution_runtime,
     build_runtime_skill_runtime,
     build_pending_runtime,
@@ -96,9 +95,6 @@ from octopus_sdk.inbound_types import (
     InboundEnvelope,
     serialize_inbound,
 )
-from app.runtime.work_admission import (
-    admit_fresh_message,
-)
 from app.storage import (
     resolve_allowed_path,
     session_exists,
@@ -106,7 +102,7 @@ from app.storage import (
 )
 from app.summarize import export_chat_history, load_raw
 from app import work_queue
-from app.workflows.recovery.results import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 class ClaimBlocked(Exception):
@@ -237,12 +233,8 @@ def _chat_lock_adapter(runtime: TelegramRuntime):
 def _bound_execution_runtime(runtime: TelegramRuntime):
     collaborators = bind_execution_collaborators(
         runtime,
-        progress_factory=TelegramProgress,
-        keep_typing_fn=keep_typing,
-        heartbeat_fn=heartbeat,
         progress_timeline_callback_fn=progress_timeline_callback,
         routed_task_progress_callback_fn=routed_task_progress_callback,
-        propose_delegation_plan_fn=propose_delegation_plan,
     )
     return build_execution_runtime(runtime, collaborators=collaborators)
 
@@ -504,7 +496,7 @@ async def cmd_session(
     cfg = runtime.config
     trust = event_trust_tier(
         config=runtime.config,
-        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        dispatcher=getattr(runtime, "transport_dispatcher", None),
         event=event,
     )
     resolved = resolve_context(runtime, session, trust_tier=trust)
@@ -641,7 +633,7 @@ async def cmd_send(runtime: TelegramRuntime, event, update: Update, context: Con
         session,
         trust_tier=event_trust_tier(
             config=runtime.config,
-            dispatcher=getattr(runtime, "channel_dispatcher", None),
+            dispatcher=getattr(runtime, "transport_dispatcher", None),
             event=event,
         ),
     )
@@ -685,7 +677,7 @@ async def cmd_doctor(
             session,
             trust_tier=event_trust_tier(
                 config=runtime.config,
-                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                dispatcher=getattr(runtime, "transport_dispatcher", None),
                 event=event,
             ),
         )
@@ -707,7 +699,7 @@ async def cmd_doctor(
             session,
             trust_tier=event_trust_tier(
                 config=runtime.config,
-                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                dispatcher=getattr(runtime, "transport_dispatcher", None),
                 event=event,
             ),
         )
@@ -782,13 +774,8 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
         rendered = telegram_presenters.discover_unavailable_standalone_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    summary = runtime.services.control_plane.health_publication.connection_summary()
-    coordination_authorities = [
-        authority
-        for authority in summary.authorities
-        if "agent_directory" in authority.capabilities
-    ]
-    if not coordination_authorities:
+    participant = runtime.services.registry
+    if not participant.health.live_local_agent_ids():
         rendered = telegram_presenters.discover_not_enrolled_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
@@ -798,7 +785,7 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
         await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
     try:
-        search = await runtime.services.control_plane.agent_directory.search_agents(query=query)
+        search = await participant.discovery.search_agents(query=query)
     except Exception:
         rendered = telegram_presenters.discover_failed_message("registry_request_failed")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -891,7 +878,7 @@ async def cmd_export(
     session = telegram_session_io.load(runtime, chat_id)
     trust = event_trust_tier(
         config=runtime.config,
-        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        dispatcher=getattr(runtime, "transport_dispatcher", None),
         event=event,
     )
     resolved = resolve_context(runtime, session, trust_tier=trust)
@@ -1244,7 +1231,8 @@ async def handle_message(
         received_at=datetime.now(timezone.utc),
         event=msg,
     )
-    status, item_id = admit_fresh_message(data_dir, envelope)
+    submission = await runtime.submitter.admit_message(envelope)
+    status, item_id = submission.status, submission.item_id
     if status == "duplicate":
         return
     if status == "admitted" and needs_welcome:

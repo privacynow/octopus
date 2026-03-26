@@ -1,4 +1,4 @@
-"""Telegram channel bootstrap and ingress lifecycle."""
+"""Telegram transport implementation and lifecycle."""
 
 from __future__ import annotations
 
@@ -7,46 +7,96 @@ from typing import Any
 
 from telegram.error import TelegramError
 
-from app.channels.telegram.bootstrap import TelegramBootstrap, build_bootstrap
+from app.channels.telegram.bootstrap import TelegramBootstrap
+from app.channels.telegram.bootstrap import build_bootstrap
 from app.channels.telegram.egress import TelegramChannelEgress
-from app.config import BotMode, BotConfig, ProcessRole
-from octopus_sdk.identity import telegram_numeric_id
-from octopus_sdk.channels import ChannelBootstrap, ChannelDescriptor, ChannelIngress
-from octopus_sdk.egress import ChannelEgress
+from app.config import BotConfig
+from app.config import BotMode
+from app.config import ProcessRole
+from app.runtime.transport_dispatcher import TransportDispatcher
+from app.runtime.services import BotServices
+from app.worker import poll_interval_for_runtime
+from app.worker import start_worker_task
+from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
 from octopus_sdk.providers import Provider
-from app.runtime.services import BotServices, build_noop_bot_services
+from octopus_sdk.transport import TransportDescriptor
+from octopus_sdk.transport import TransportEgress
+from octopus_sdk.transport import TransportIdentityResolver
+from octopus_sdk.transport import TransportImplementation
 
 
-class TelegramChannelBootstrap(ChannelBootstrap):
-    """Channel bootstrap for the Telegram runtime."""
+class _TelegramIdentityResolver(TransportIdentityResolver):
+    def conversation_key(self, raw_conversation_id: object) -> str:
+        return telegram_conversation_key(str(raw_conversation_id).strip())
+
+    def actor_key(self, raw_actor_id: object) -> str:
+        return telegram_actor_key(str(raw_actor_id).strip())
+
+    def external_conversation_ref(self, raw_conversation_id: object) -> str:
+        return str(raw_conversation_id).strip()
+
+
+class TelegramTransport(TransportImplementation):
+    """PTB-backed Telegram transport with integrated ingress lifecycle."""
 
     def __init__(
         self,
         config: BotConfig,
         provider: Provider,
-        services: BotServices | None = None,
+        services: BotServices,
+        *,
+        dispatcher: TransportDispatcher | None = None,
     ) -> None:
         self._config = config
         self._provider = provider
-        self._services = services or build_noop_bot_services()
+        self._services = services
+        self._bootstrap: TelegramBootstrap = build_bootstrap(
+            self._config,
+            self._provider,
+            services=self._services,
+        )
+        if dispatcher is not None:
+            self._bootstrap.runtime.transport_dispatcher = dispatcher
+        self._stop_requested = asyncio.Event()
+        self._cleanup_lock = asyncio.Lock()
+        self._bootstrapped = False
+        self._app_started = False
+        self._updater_started = False
+        self._worker_task: asyncio.Task[None] | None = None
+        self._worker_stop: asyncio.Event | None = None
 
     @property
-    def channel_id(self) -> str:
+    def transport_id(self) -> str:
         return "telegram"
 
     @property
-    def descriptor(self) -> ChannelDescriptor:
-        return ChannelDescriptor(
-            channel_type="telegram",
+    def descriptor(self) -> TransportDescriptor:
+        return TransportDescriptor(
+            transport_type="telegram",
             display_name="Telegram",
             supports_multiple=False,
-            requires_polling=(self._config.bot_mode != BotMode.WEBHOOK.value),
+            inbound_model=(
+                "webhook"
+                if self._config.bot_mode == BotMode.WEBHOOK.value
+                else "poll"
+            ),
             trust_tier="untrusted",
-            contributes_channel_capability=True,
-            accepts_channel_input=True,
+            contributes_transport_capability=True,
+            accepts_transport_input=True,
             supports_conversation_binding=True,
             supports_timeline=True,
+            supports_editing=True,
+            supports_inline_actions=True,
+            supports_recovery=True,
         )
+
+    @property
+    def identity(self) -> TransportIdentityResolver:
+        return _TelegramIdentityResolver()
+
+    @property
+    def boot_id(self) -> str:
+        return self._bootstrap.runtime.boot_id
 
     def ref_prefix(self) -> str:
         return "telegram:"
@@ -79,10 +129,10 @@ class TelegramChannelBootstrap(ChannelBootstrap):
             chat_id=chat_id,
         ) is not None
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
+    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
         bot = kw.get("bot")
         if bot is None:
-            raise RuntimeError("Telegram channel requires a bot instance")
+            raise RuntimeError("Telegram transport requires a bot instance")
 
         conversation_key = str(kw.get("conversation_key", ""))
         chat_id = self._resolve_chat_id(
@@ -92,7 +142,7 @@ class TelegramChannelBootstrap(ChannelBootstrap):
         )
         if chat_id is None:
             raise RuntimeError(
-                f"Telegram channel requires a Telegram conversation key, got {conversation_ref!r}"
+                f"Telegram transport requires a Telegram conversation key, got {conversation_ref!r}"
             )
 
         return TelegramChannelEgress(
@@ -105,62 +155,24 @@ class TelegramChannelBootstrap(ChannelBootstrap):
             target_message_id=kw.get("target_message_id"),
         )
 
-    def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
-        del config, delivery_handler
-        return TelegramChannelIngress(
-            build_bootstrap(self._config, self._provider, services=self._services),
-            descriptor=self.descriptor,
-        )
-
-
-class TelegramChannelIngress(ChannelIngress):
-    """PTB-backed Telegram ingress runner."""
-
-    def __init__(self, bootstrap: TelegramBootstrap, *, descriptor: ChannelDescriptor) -> None:
-        self._bootstrap = bootstrap
-        self._descriptor = descriptor
-        self._stop_requested = asyncio.Event()
-        self._cleanup_lock = asyncio.Lock()
-        self._bootstrapped = False
-        self._app_started = False
-        self._updater_started = False
-
-    @property
-    def channel_id(self) -> str:
-        return "telegram"
-
-    @property
-    def descriptor(self) -> ChannelDescriptor:
-        return self._descriptor
-
-    @property
-    def application(self):
-        return self._bootstrap.application
-
-    @property
-    def runtime(self):
-        return self._bootstrap.runtime
-
-    @property
-    def worker_dispatch(self):
-        return self._bootstrap.worker_dispatch
-
-    @property
-    def worker_deserialize_failure_notifier(self):
-        return self._bootstrap.worker_deserialize_failure_notifier
-
-    async def start(self, *, stop_event: asyncio.Event) -> None:
+    async def start(self, *, runtime, stop_event: asyncio.Event) -> None:
+        telegram_runtime = self._bootstrap.runtime
+        application = self._bootstrap.application
+        telegram_runtime.submitter = runtime
         self._stop_requested.clear()
         try:
-            if not hasattr(self.application, "bot_data"):
-                self.application.bot_data = {}
-            self.application.bot_data["dispatcher_stop_event"] = stop_event
-            await self.application._bootstrap_initialize(max_retries=0)
+            if telegram_runtime.transport_dispatcher is None:
+                raise RuntimeError("Telegram transport requires a transport dispatcher")
+            if not hasattr(application, "bot_data"):
+                application.bot_data = {}
+            application.bot_data["dispatcher_stop_event"] = stop_event
+            await application._bootstrap_initialize(max_retries=0)
             self._bootstrapped = True
-            if self.application.post_init:
-                await self.application.post_init(self.application)
+            if application.post_init:
+                await application.post_init(application)
+            await self._start_worker_task()
 
-            if self.runtime.config.process_role != ProcessRole.WORKER.value:
+            if telegram_runtime.config.process_role != ProcessRole.WORKER.value:
                 await self._start_live_updates()
 
             await self._wait_for_stop(stop_event)
@@ -176,29 +188,32 @@ class TelegramChannelIngress(ChannelIngress):
         self._stop_requested.set()
 
     async def health_check(self) -> dict[str, Any]:
+        telegram_runtime = self._bootstrap.runtime
         return {
-            "channel_id": self.channel_id,
-            "channel_type": self.descriptor.channel_type,
-            "boot_id": self.runtime.boot_id,
-            "bot_mode": self.runtime.config.bot_mode,
-            "process_role": self.runtime.config.process_role,
-            "requires_polling": self.descriptor.requires_polling,
-            "accepts_channel_input": self.descriptor.accepts_channel_input,
+            "transport_id": self.transport_id,
+            "transport_type": self.descriptor.transport_type,
+            "boot_id": telegram_runtime.boot_id,
+            "bot_mode": telegram_runtime.config.bot_mode,
+            "process_role": telegram_runtime.config.process_role,
+            "inbound_model": self.descriptor.inbound_model,
+            "accepts_transport_input": self.descriptor.accepts_transport_input,
             "app_started": self._app_started,
             "updater_started": self._updater_started,
         }
 
     async def _start_live_updates(self) -> None:
-        updater = self.application.updater
+        application = self._bootstrap.application
+        telegram_runtime = self._bootstrap.runtime
+        updater = application.updater
         if updater is None:
             raise RuntimeError("Telegram application updater is unavailable")
 
-        if self.runtime.config.bot_mode == BotMode.WEBHOOK.value:
+        if telegram_runtime.config.bot_mode == BotMode.WEBHOOK.value:
             await updater.start_webhook(
-                listen=self.runtime.config.webhook_listen,
-                port=self.runtime.config.webhook_port,
-                webhook_url=self.runtime.config.webhook_url,
-                secret_token=self.runtime.config.webhook_secret or None,
+                listen=telegram_runtime.config.webhook_listen,
+                port=telegram_runtime.config.webhook_port,
+                webhook_url=telegram_runtime.config.webhook_url,
+                secret_token=telegram_runtime.config.webhook_secret or None,
                 url_path="/webhook",
             )
         else:
@@ -206,8 +221,38 @@ class TelegramChannelIngress(ChannelIngress):
                 error_callback=self._poll_error_callback,
             )
         self._updater_started = True
-        await self.application.start()
+        await application.start()
         self._app_started = True
+
+    async def _start_worker_task(self) -> None:
+        if self._worker_task is not None:
+            return
+        process_role = self._bootstrap.runtime.config.process_role
+        if process_role not in {ProcessRole.ALL.value, ProcessRole.WORKER.value}:
+            return
+        self._worker_task, self._worker_stop = start_worker_task(
+            self._bootstrap.runtime.config.data_dir,
+            self._bootstrap.runtime.boot_id,
+            self._bootstrap.worker_dispatch,
+            deserialize_failure_notifier=self._bootstrap.worker_deserialize_failure_notifier,
+            poll_interval=poll_interval_for_runtime(self._bootstrap.runtime.config.runtime_mode),
+            lease_ttl=self._bootstrap.runtime.config.claim_lease_ttl_seconds,
+            sweep_interval=self._bootstrap.runtime.config.claim_sweep_interval_seconds,
+            process_role=process_role,
+            heartbeat_enabled=(self._bootstrap.runtime.config.runtime_mode == "shared"),
+        )
+
+    async def _stop_worker_task(self) -> None:
+        if self._worker_stop is not None:
+            self._worker_stop.set()
+        if self._worker_task is not None:
+            try:
+                await asyncio.wait_for(self._worker_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self._worker_task.cancel()
+            finally:
+                self._worker_task = None
+                self._worker_stop = None
 
     async def _wait_for_stop(self, stop_event: asyncio.Event) -> None:
         external_wait = asyncio.create_task(stop_event.wait())
@@ -223,22 +268,24 @@ class TelegramChannelIngress(ChannelIngress):
             await asyncio.gather(external_wait, local_wait, return_exceptions=True)
 
     async def _shutdown_application(self) -> None:
+        application = self._bootstrap.application
         async with self._cleanup_lock:
             try:
-                if self._updater_started and self.application.updater is not None:
-                    await self.application.updater.stop()
+                await self._stop_worker_task()
+                if self._updater_started and application.updater is not None:
+                    await application.updater.stop()
                 if self._app_started:
-                    await self.application.stop()
-                    if self.application.post_stop:
-                        await self.application.post_stop(self.application)
+                    await application.stop()
+                    if application.post_stop:
+                        await application.post_stop(application)
             finally:
                 try:
                     if self._bootstrapped:
-                        await self.application.shutdown()
+                        await application.shutdown()
                 finally:
-                    if self._bootstrapped and self.application.post_shutdown:
-                        await self.application.post_shutdown(self.application)
-                    bot_data = getattr(self.application, "bot_data", None)
+                    if self._bootstrapped and application.post_shutdown:
+                        await application.post_shutdown(application)
+                    bot_data = getattr(application, "bot_data", None)
                     if isinstance(bot_data, dict):
                         bot_data.pop("dispatcher_stop_event", None)
                     self._updater_started = False
@@ -246,4 +293,5 @@ class TelegramChannelIngress(ChannelIngress):
                     self._bootstrapped = False
 
     def _poll_error_callback(self, exc: TelegramError) -> None:
-        self.application.create_task(self.application.process_error(error=exc, update=None))
+        application = self._bootstrap.application
+        application.create_task(application.process_error(error=exc, update=None))

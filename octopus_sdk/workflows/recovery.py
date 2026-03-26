@@ -1,4 +1,4 @@
-"""Workflow-local contracts for recovery replay, discard, and recovery notice flows."""
+"""SDK workflow contracts for recovery replay and recovery notices."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
-from app.runtime.channel_dispatcher import ChannelDispatcher
 from octopus_sdk.inbound_types import InboundMessage
 
 
@@ -51,8 +50,8 @@ class RecoveryPort(Protocol):
         action: str,
         worker_id: str,
         ignore_claimed_item_id: str = "",
-        config: Any,
-        dispatcher: ChannelDispatcher | None = None,
+        config: Any = None,
+        dispatcher: Any = None,
     ) -> RecoveryActionOutcome: ...
 
     def complete_replay(self, *, data_dir: Path, item_id: str) -> None: ...

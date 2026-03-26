@@ -10,11 +10,19 @@ Inline button callbacks include `retry_*`, `approval_*`, `delegation_*`, `recove
 
 ## Runtime modes
 
-Telegram behavior is shaped by three different config axes:
+The SDK still models Telegram behavior across three config axes:
 
 - **`BOT_AGENT_MODE`** — `standalone` vs `registry`
 - **`BOT_RUNTIME_MODE`** — `local` vs `shared`
 - **`BOT_PROCESS_ROLE`** — `all`, `webhook`, or `worker`
+
+For the shipped Telegram runtime in this repo, the product profile is stricter
+than the generic SDK:
+
+- Telegram runs in `BOT_AGENT_MODE=registry`
+- startup requires configured registry connections
+- those connections must collectively provide full participant coverage across
+  `channel` and `coordination`
 
 Command registration specifically depends on **`BOT_RUNTIME_MODE`**:
 

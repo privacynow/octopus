@@ -6,8 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.access import get_authorization
 import app.channels.telegram.progress as telegram_progress
 import app.user_messages as _msg
+from app.runtime import composition
+from app.runtime.registry_participant import build_noop_registry_participant
+import app.runtime_backend as runtime_backend
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.health_publication import NoOpHealthPublication
@@ -29,7 +33,11 @@ def _services(*, task_routing=None) -> BotServices:
             task_routing=task_routing or NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
             health_publication=NoOpHealthPublication(),
-        )
+        ),
+        registry=build_noop_registry_participant(),
+        workflows=composition.workflows(),
+        authorization=get_authorization(),
+        work_queue=runtime_backend.transport_store(),
     )
 
 
@@ -45,6 +53,7 @@ async def test_keep_typing_uses_explicit_runtime_until_cancelled():
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-progress"), typing_interval_seconds=0.01),
         FakeProvider("codex"),
+        services=_services(),
     )
     chat = _Chat()
 

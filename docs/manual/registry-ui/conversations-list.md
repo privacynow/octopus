@@ -1,6 +1,6 @@
 # Registry UI: Conversations list
 
-[← Manual home](../README.md) · [Prev: Agent conversation deep link](agent-conversations.md) · [Next: Conversation search →](conversations-search.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Agent conversation deep link](agent-conversations.md) · Next: [Conversation search](conversations-search.md)
 
 **Route:** `/ui/conversations`
 
@@ -24,4 +24,4 @@ There is no separate popup-first “new conversation” flow anymore. Starting o
 reopening work happens directly from the quick-start chips or from the Agents
 page.
 
-![All conversations](../../assets/registry/ui/05-conversations-annotated.png)
+![All conversations](../../assets/registry/ui/05-conversations.png)

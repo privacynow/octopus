@@ -47,14 +47,13 @@ npm run capture:all
 - signs into `/ui`
 - captures the current desktop routes
 - captures the mobile dashboard, approvals, and conversation workspace
-- writes `*.meta.json` overlays for annotated desktop images and mobile images
+- writes refreshed raw PNGs plus sibling `*.meta.json` overlay files
 
 ## What `annotate.py` does
 
 `annotate.py` reads the sibling `*.meta.json` files and writes
-`*-annotated.png`. Desktop docs pages use those annotated images. The mobile
-manual page keeps the raw PNGs in the markdown because the narrow layouts stay
-clearer without the overlay footer.
+`*-annotated.png`. Those annotated variants are kept as optional review assets;
+the published docs pages now use the raw PNG captures directly.
 
 ## Notes
 

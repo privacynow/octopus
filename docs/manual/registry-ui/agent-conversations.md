@@ -1,6 +1,6 @@
 # Registry UI: Agent conversation deep link
 
-[← Manual home](../README.md) · [Prev: Agent detail](agent-detail.md) · [Next: Conversations list →](conversations-list.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Agent detail](agent-detail.md) · Next: [Conversations list](conversations-list.md)
 
 **Route:** `/ui/agents/{agent_id}/conversations`
 
@@ -12,4 +12,4 @@ that agent.
 Use it when a log, bookmark, or API response sends you to the older
 agent-conversations URL.
 
-![Agent conversations](../../assets/registry/ui/04-agent-conversations-annotated.png)
+![Agent conversations](../../assets/registry/ui/04-agent-conversations.png)

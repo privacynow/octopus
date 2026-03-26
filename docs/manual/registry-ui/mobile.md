@@ -1,6 +1,6 @@
 # Registry UI: Mobile quick look
 
-[← Manual home](../README.md) · [Prev: Deep links](deep-links.md) · [Next: Telegram →](../04-product-telegram.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Deep links](deep-links.md) · Next: [Telegram](../04-product-telegram.md)
 
 The mobile UI is the same SPA, not a separate product. The shell changes in
 these ways:

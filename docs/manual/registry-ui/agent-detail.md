@@ -1,6 +1,6 @@
 # Registry UI: Agent detail
 
-[← Manual home](../README.md) · [Prev: Agents list](agents-list.md) · [Next: Agent conversation deep link →](agent-conversations.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Agents list](agents-list.md) · Next: [Agent conversation deep link](agent-conversations.md)
 
 **Route:** `/ui/agents/{agent_id}`
 
@@ -15,4 +15,4 @@ Agent detail is a compact workspace for one enrolled agent. It includes:
 This is the best route when you need to answer “is this agent healthy?” and
 then jump straight into the right thread.
 
-![Agent detail](../../assets/registry/ui/03-agent-detail-annotated.png)
+![Agent detail](../../assets/registry/ui/03-agent-detail.png)

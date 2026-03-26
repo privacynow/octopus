@@ -1,6 +1,6 @@
 # Operator: Registry web UI
 
-[← Manual home](README.md) · [Prev: Octopus](02-operator-octopus.md) · [Next: Sign in →](registry-ui/sign-in.md)
+Manual: [Home](README.md) · Previous: [Octopus CLI](02-operator-octopus.md) · Next: [Registry sign in](registry-ui/sign-in.md)
 
 The Registry operator UI is the browser console under `/ui`. It is the main
 surface for:
@@ -54,8 +54,9 @@ have enrolled the bots you want to see.
 
 ## Screenshots
 
-Desktop screenshots on the feature pages use the annotated assets under
+The feature pages use the raw desktop and mobile captures under
 [`docs/assets/registry/ui/`](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui).
-The mobile page uses the raw mobile captures from the same harness so the
-layouts stay legible. Regeneration steps live in
+Annotated variants remain available in the screenshot pipeline for internal
+review, but the published manual now shows the interface directly. Regeneration
+steps live in
 [registry-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-guide.md).

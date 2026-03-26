@@ -1,6 +1,6 @@
 # Registry UI: Usage
 
-[← Manual home](../README.md) · [Prev: Skills catalog](skills-catalog.md) · [Next: Provider guidance →](guidance.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Skills catalog](skills-catalog.md) · Next: [Provider guidance](guidance.md)
 
 **Route:** `/ui/usage`
 
@@ -15,4 +15,4 @@ routed work reports usage data back through the task/result flow. A zero row is
 still valid for conversations that produced events but no usage-bearing provider
 response.
 
-![Usage](../../assets/registry/ui/10-usage-annotated.png)
+![Usage](../../assets/registry/ui/10-usage.png)

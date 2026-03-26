@@ -1,6 +1,6 @@
 # Overview & terminology
 
-[← Manual home](README.md) · [Next: Setup →](01-setup.md)
+Manual: [Home](README.md) · Next: [Setup](01-setup.md)
 
 The platform runs **AI agents** (Claude or Codex) behind a **Telegram bot**, with an optional **Registry** for operator visibility, coordination, and a browser UI.
 

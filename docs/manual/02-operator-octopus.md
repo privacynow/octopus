@@ -1,6 +1,6 @@
 # Operator: Octopus CLI
 
-[← Manual home](README.md) · [Prev: Setup](01-setup.md) · [Next: Registry UI →](03-operator-registry.md)
+Manual: [Home](README.md) · Previous: [Setup](01-setup.md) · Next: [Registry web UI](03-operator-registry.md)
 
 Running **`./octopus`** with no arguments opens the new state-driven operator menu: **Recommended Actions**, **Lifecycle**, **Bots**, **Registry**, **Workspaces**, **Diagnose**, and **Status**. Non-interactive commands are verb-first (`status`, `start`, `stop`, `restart`, `redeploy`, `connect`, `disconnect`, `logs`, `shell`, `doctor`, `clean`, `help`) and are listed in **`./octopus help`**:
 

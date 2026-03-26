@@ -6,8 +6,9 @@ current operator console, not the older dashboard-first/card-heavy UI.
 
 Registry screenshots under
 [`docs/assets/registry/ui/`](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui)
-represent both desktop and mobile. Desktop pages use the annotated images;
-mobile pages embed the raw captures so the narrow layouts stay readable.
+represent both desktop and mobile. The published manual now embeds the raw
+captures directly for both layouts; annotated variants remain optional review
+artifacts in the screenshot pipeline, not the default docs presentation.
 
 ## Read in Order
 

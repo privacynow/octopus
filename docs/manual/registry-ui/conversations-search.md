@@ -1,6 +1,6 @@
 # Registry UI: Conversation search
 
-[← Manual home](../README.md) · [Prev: Conversations list](conversations-list.md) · [Next: Conversation detail →](conversation-detail.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversations list](conversations-list.md) · Next: [Conversation detail](conversation-detail.md)
 
 **Route:** `/ui/conversations`
 
@@ -11,4 +11,4 @@ rather than only the conversations already rendered in the browser.
 The screenshot below uses `Release` from the seeded docs dataset so you can see
 the list narrow without leaving the page.
 
-![Conversations filtered](../../assets/registry/ui/05b-conversations-filtered-annotated.png)
+![Conversations filtered](../../assets/registry/ui/05b-conversations-filtered.png)

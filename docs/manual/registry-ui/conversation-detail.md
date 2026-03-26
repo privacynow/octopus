@@ -1,6 +1,6 @@
 # Registry UI: Conversation detail
 
-[← Manual home](../README.md) · [Prev: Conversation search](conversations-search.md) · [Next: Tasks →](tasks.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation search](conversations-search.md) · Next: [Tasks](tasks.md)
 
 **Route:** `/ui/conversations/{conversation_id}`
 
@@ -51,4 +51,4 @@ Older history loads automatically when you scroll to the top sentinel. With a
 working websocket upgrade on `/v1/ws`, new conversation events and task updates
 append live.
 
-![Conversation detail](../../assets/registry/ui/06-conversation-detail-annotated.png)
+![Conversation detail](../../assets/registry/ui/06-conversation-detail.png)

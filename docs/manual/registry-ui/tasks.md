@@ -1,6 +1,6 @@
 # Registry UI: Tasks
 
-[← Manual home](../README.md) · [Prev: Conversation detail](conversation-detail.md) · [Next: Capabilities →](capabilities.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation detail](conversation-detail.md) · Next: [Capabilities](capabilities.md)
 
 **Route:** `/ui/tasks`
 
@@ -17,4 +17,4 @@ Expand a row to inspect its summary, origin/target facts, open the parent
 conversation, or retry/cancel the task when that action is valid for the
 current state.
 
-![Tasks](../../assets/registry/ui/07-tasks-annotated.png)
+![Tasks](../../assets/registry/ui/07-tasks.png)

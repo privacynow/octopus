@@ -1,6 +1,6 @@
 # Product: Telegram
 
-[← Manual home](README.md) · [Prev: Registry UI — deep links](registry-ui/deep-links.md) · [Next: Integration →](05-integration-api.md)
+Manual: [Home](README.md) · Previous: [Registry UI deep links](registry-ui/deep-links.md) · Next: [Registry HTTP API](05-integration-api.md)
 
 Chat handling lives under [`app/channels/telegram/`](../../app/channels/telegram/). **`/help`** and **`/start`** list commands; **plain text** (not starting with `/`) is the main conversation with the agent. **`/settings`** uses inline buttons (`setting_*` callbacks). **`/skills`** lists and activates skills; **`/approval`**, **`/approve`**, **`/reject`**, **`/cancel`** apply when approval gates are on.
 

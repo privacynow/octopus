@@ -1,6 +1,6 @@
 # Registry UI: Dashboard
 
-[← Manual home](../README.md) · [Prev: Sign in](sign-in.md) · [Next: Approvals →](approvals.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Sign in](sign-in.md) · Next: [Approvals](approvals.md)
 
 **Route:** `/ui` or `/ui/`
 
@@ -18,4 +18,4 @@ The numbers still come from `GET /v1/summary`, but the dashboard combines that
 aggregate payload with the approvals, conversations, tasks, and agent lists so
 the page answers “what needs action now?” instead of only reporting totals.
 
-![Dashboard](../../assets/registry/ui/01-dashboard-annotated.png)
+![Dashboard](../../assets/registry/ui/01-dashboard.png)

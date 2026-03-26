@@ -1,6 +1,6 @@
 # Registry UI: Approvals
 
-[← Manual home](../README.md) · [Prev: Dashboard](dashboard.md) · [Next: Agents list →](agents-list.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Dashboard](dashboard.md) · Next: [Agents list](agents-list.md)
 
 **Route:** `/ui/approvals` — the operator queue for **pending approval requests**.
 
@@ -14,4 +14,4 @@ Use this screen when work is blocked and you need to make a decision quickly. Ea
 
 This is the fastest way to clear blocked work without hunting through conversation timelines.
 
-![Approvals](../../assets/registry/ui/01b-approvals-annotated.png)
+![Approvals](../../assets/registry/ui/01b-approvals.png)

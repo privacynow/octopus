@@ -1,6 +1,6 @@
 # Registry UI: Agents list
 
-[← Manual home](../README.md) · [Prev: Approvals](approvals.md) · [Next: Agent detail →](agent-detail.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Approvals](approvals.md) · Next: [Agent detail](agent-detail.md)
 
 **Route:** `/ui/agents`
 
@@ -16,4 +16,4 @@ action-first:
 Use this page when you already know which agent you want, or when the
 Conversations quick-start row overflows and you need the full roster.
 
-![Agents home](../../assets/registry/ui/02-agents-annotated.png)
+![Agents home](../../assets/registry/ui/02-agents.png)

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-[← Manual home](README.md) · [Prev: Integration](05-integration-api.md)
+Manual: [Home](README.md) · Previous: [Registry HTTP API](05-integration-api.md)
 
 ## Escalation order
 

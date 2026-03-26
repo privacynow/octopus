@@ -109,8 +109,7 @@ function _initTheme() {
             return '';
         }
     })();
-    const preferredDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    _setTheme(stored || (preferredDark ? 'dark' : 'light'));
+    _setTheme(stored || 'dark');
     if (!toggle) return;
     toggle.addEventListener('click', () => {
         const current = document.documentElement.getAttribute('data-theme') || 'light';

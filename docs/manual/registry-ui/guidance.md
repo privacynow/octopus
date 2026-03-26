@@ -1,6 +1,6 @@
 # Registry UI: Provider guidance
 
-[← Manual home](../README.md) · [Prev: Usage](usage.md) · [Next: Deep links →](deep-links.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Usage](usage.md) · Next: [Deep links](deep-links.md)
 
 **Route:** `/ui/guidance` — provider-scoped operator guidance editor.
 
@@ -8,4 +8,4 @@ Use the provider selector to switch between guidance surfaces such as **Claude**
 
 This screen is the browser view over the same provider-guidance resources exposed under **`/v1/provider-guidance/{provider}/...`**.
 
-![Provider guidance](../../assets/registry/ui/11-guidance-annotated.png)
+![Provider guidance](../../assets/registry/ui/11-guidance.png)

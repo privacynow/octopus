@@ -118,7 +118,7 @@ the captured `.deploy` later.
 1. Open the local `/ui` URL.
 2. Sign in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`.
 
-![Login](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/00-login-annotated.png)
+![Login](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/00-login.png)
 
 ## Browser screens
 
@@ -147,7 +147,7 @@ The dashboard is an operator overview, not a metrics wall.
 - `Needs attention` for approvals, failed work, and unhealthy agents
 - `Open conversations`, `Running tasks`, and `Agents` as direct jump targets
 
-![Dashboard](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01-dashboard-annotated.png)
+![Dashboard](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01-dashboard.png)
 
 ### Approvals
 
@@ -157,7 +157,7 @@ Approvals is the fastest screen for clearing blocked work.
 - requester/trust/expiry facts
 - direct `Open`, `Approve`, and `Reject`
 
-![Approvals](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01b-approvals-annotated.png)
+![Approvals](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01b-approvals.png)
 
 ### Agents
 
@@ -168,7 +168,7 @@ The agent roster is action-first.
 - one row per agent with heartbeat context
 - direct `Open` conversation action
 
-![Agents](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/02-agents-annotated.png)
+![Agents](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/02-agents.png)
 
 ### Agent detail
 
@@ -180,12 +180,12 @@ Agent detail is the compact health-and-entry workspace for one agent.
 - workers snapshot when published
 - inline conversations for that agent
 
-![Agent detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/03-agent-detail-annotated.png)
+![Agent detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/03-agent-detail.png)
 
 The compatibility route `/ui/agents/{agent_id}/conversations` still exists, but
 it renders the same workspace:
 
-![Agent conversation deep link](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/04-agent-conversations-annotated.png)
+![Agent conversation deep link](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/04-agent-conversations.png)
 
 ### Conversations
 
@@ -203,11 +203,11 @@ Main list:
 - segmented status filter
 - paginated rows into conversation detail
 
-![Conversations](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05-conversations-annotated.png)
+![Conversations](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05-conversations.png)
 
 Search stays on the same route and sends `q` to the server:
 
-![Conversations filtered](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05b-conversations-filtered-annotated.png)
+![Conversations filtered](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05b-conversations-filtered.png)
 
 ### Conversation detail
 
@@ -244,7 +244,7 @@ Conversation milestones are rendered as human events, not raw task payloads:
 - `Task completed`
 - terminal task summaries where available
 
-![Conversation detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/06-conversation-detail-annotated.png)
+![Conversation detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/06-conversation-detail.png)
 
 ### Tasks
 
@@ -255,13 +255,13 @@ Tasks is the routed-work queue across all conversations.
 - expandable task rows
 - parent-conversation link plus retry/cancel actions when valid
 
-![Tasks](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/07-tasks-annotated.png)
+![Tasks](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/07-tasks.png)
 
 ### Capabilities
 
 Capabilities shows global capability toggles exposed by the registry service.
 
-![Capabilities](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/08-capabilities-annotated.png)
+![Capabilities](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/08-capabilities.png)
 
 ### Skills
 
@@ -270,7 +270,7 @@ Skills is the runtime catalog surface.
 - client-side search
 - install/uninstall actions
 
-![Skills](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/09-skills-annotated.png)
+![Skills](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/09-skills.png)
 
 ### Usage
 
@@ -282,13 +282,13 @@ Usage rolls provider-response usage into per-conversation totals.
 - delegated child work can roll into the parent conversation when usage is
   reported back through routed-task results
 
-![Usage](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/10-usage-annotated.png)
+![Usage](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/10-usage.png)
 
 ### Provider guidance
 
 Guidance is the provider-specific prompt/editor surface.
 
-![Guidance](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/11-guidance-annotated.png)
+![Guidance](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/11-guidance.png)
 
 ### Deep links
 
@@ -297,9 +297,9 @@ These routes load the same views as in-app navigation:
 - `/ui/agents/{agent_id}`
 - `/ui/conversations/{conversation_id}`
 
-![Agent detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/12-agent-detail-deep-link-annotated.png)
+![Agent detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/12-agent-detail-deep-link.png)
 
-![Conversation detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/13-conversation-deep-link-annotated.png)
+![Conversation detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/13-conversation-deep-link.png)
 
 ## Mobile quick look
 

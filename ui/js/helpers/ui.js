@@ -275,6 +275,24 @@ window.UI = (() => {
         return el;
     }
 
+    function isOpaqueIdentifier(value) {
+        const text = String(value || '').trim();
+        if (!text) return false;
+        if (/^[0-9a-f]{24,}$/i.test(text)) return true;
+        if (/^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)) return true;
+        if (text.length >= 24 && !/[A-Z]/.test(text) && /^[a-z0-9._:-]+$/i.test(text)) return true;
+        return false;
+    }
+
+    function visibleLabel(...candidates) {
+        for (const candidate of candidates) {
+            const text = String(candidate || '').trim();
+            if (!text || isOpaqueIdentifier(text)) continue;
+            return text;
+        }
+        return '';
+    }
+
     function renderStatCard({ value, label, detail = '', href = '' }) {
         const card = document.createElement(href ? 'a' : 'div');
         card.className = 'stat-card';
@@ -528,6 +546,8 @@ window.UI = (() => {
         renderSettingsRow,
         renderEmptyState,
         renderStatCard,
+        isOpaqueIdentifier,
+        visibleLabel,
         createSkeletonNodes,
         renderSkeletons,
         renderPagination,

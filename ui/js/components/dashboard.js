@@ -28,7 +28,7 @@ function renderDashboard(container) {
         const titleEl = document.createElement('strong');
         titleEl.textContent = title;
         head.appendChild(titleEl);
-        if (href) {
+        if (href && rows.length) {
             const link = document.createElement('a');
             link.href = href;
             link.className = 'section-link';
@@ -39,11 +39,7 @@ function renderDashboard(container) {
 
         const body = document.createElement('div');
         body.className = 'list-container';
-        if (!rows.length) {
-            UI.reconcileChildren(body, [UI.renderEmptyState(emptyText, true)]);
-        } else {
-            UI.reconcileChildren(body, rows);
-        }
+        UI.reconcileChildren(body, rows.length ? rows : [UI.renderEmptyState(emptyText, true)]);
         section.appendChild(body);
         return section;
     }
@@ -65,9 +61,9 @@ function renderDashboard(container) {
         (approvalsData.approvals || []).slice(0, 3).forEach((item) => {
             rows.push(createRow({
                 key: `approval:${item.request_id || item.conversation_id}`,
-                title: item.conversation_title || item.conversation_id,
+                title: item.conversation_title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Approval waiting',
                 subtitle: [
-                    item.target_display_name || item.target_agent_id || 'agent',
+                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                     item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
                 ].filter(Boolean).join(' · '),
                 badge: 'Approval',
@@ -78,9 +74,9 @@ function renderDashboard(container) {
         (tasksData.tasks || []).slice(0, 3).forEach((item) => {
             rows.push(createRow({
                 key: `task:${item.routed_task_id}`,
-                title: item.title || item.routed_task_id,
+                title: item.title || 'Task needs follow-up',
                 subtitle: [
-                    item.target_display_name || item.target_agent_id || 'agent',
+                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                     UI.relativeTime(item.updated_at || item.created_at),
                 ].filter(Boolean).join(' · '),
                 badge: item.status || 'failed',
@@ -92,7 +88,7 @@ function renderDashboard(container) {
         riskyAgents.slice(0, 2).forEach((item) => {
             rows.push(createRow({
                 key: `agent:${item.agent_id}`,
-                title: item.display_name || item.slug || item.agent_id,
+                title: item.display_name || item.slug || 'Agent',
                 subtitle: [
                     item.role || 'agent',
                     item.provider || '',
@@ -103,17 +99,6 @@ function renderDashboard(container) {
                 href: '/ui/agents/' + item.agent_id,
             }));
         });
-
-        if (!rows.length && (summary.tasks?.running || 0) > 0) {
-            rows.push(createRow({
-                key: 'running-work',
-                title: 'Running work looks healthy',
-                subtitle: `${summary.tasks?.running || 0} routed task(s) currently running`,
-                badge: 'Running',
-                badgeClass: 'badge-running',
-                href: '/ui/tasks?status=running',
-            }));
-        }
 
         return rows.slice(0, 6);
     }
@@ -166,55 +151,62 @@ function renderDashboard(container) {
         workGrid.className = 'dashboard-work-grid';
         workGrid.dataset.key = 'work-grid';
 
-        workGrid.appendChild(createSection(
-            'needs-attention',
-            'Needs attention',
-            '/ui/approvals',
-            buildNeedsAttention(summary, approvalsData, tasksData, agentsData),
-            'Nothing urgent right now.',
-        ));
+        const needsAttentionRows = buildNeedsAttention(summary, approvalsData, tasksData, agentsData);
+        if (needsAttentionRows.length) {
+            workGrid.appendChild(createSection(
+                'needs-attention',
+                'Needs attention',
+                '/ui/approvals',
+                needsAttentionRows,
+                'Nothing urgent right now.',
+            ));
+        }
 
         const conversationRows = (conversationsData.conversations || []).slice(0, 6).map((item) => createRow({
             key: item.conversation_id,
-            title: item.title || item.conversation_id,
+            title: item.title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Conversation',
             subtitle: [
-                item.target_display_name || item.target_agent_id || 'agent',
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].join(' · '),
             badge: item.status || 'open',
             badgeClass: 'badge-' + (item.status || 'open'),
             href: '/ui/conversations/' + item.conversation_id,
         }));
-        workGrid.appendChild(createSection(
-            'open-conversations',
-            'Open conversations',
-            '/ui/conversations?status=open',
-            conversationRows,
-            'No open conversations.',
-        ));
+        if (conversationRows.length) {
+            workGrid.appendChild(createSection(
+                'open-conversations',
+                'Open conversations',
+                '/ui/conversations?status=open',
+                conversationRows,
+                'No open conversations.',
+            ));
+        }
 
         const runningRows = (tasksData.running_tasks || tasksData.tasks || []).slice(0, 6).map((item) => createRow({
             key: item.routed_task_id,
-            title: item.title || item.routed_task_id,
+            title: item.title || 'Running task',
             subtitle: [
-                item.target_display_name || item.target_agent_id || 'agent',
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].filter(Boolean).join(' · '),
             badge: item.status || 'running',
             badgeClass: 'badge-' + (item.status || 'running'),
             href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
         }));
-        workGrid.appendChild(createSection(
-            'running-tasks',
-            'Running tasks',
-            '/ui/tasks?status=running',
-            runningRows,
-            'No running tasks.',
-        ));
+        if (runningRows.length) {
+            workGrid.appendChild(createSection(
+                'running-tasks',
+                'Running tasks',
+                '/ui/tasks?status=running',
+                runningRows,
+                'No running tasks.',
+            ));
+        }
 
         const agentRows = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => createRow({
             key: item.agent_id,
-            title: item.display_name || item.slug || item.agent_id,
+            title: item.display_name || item.slug || 'Agent',
             subtitle: [
                 item.role || 'agent',
                 item.provider || '',
@@ -224,13 +216,15 @@ function renderDashboard(container) {
             badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
             href: '/ui/agents/' + item.agent_id,
         }));
-        workGrid.appendChild(createSection(
-            'agents',
-            'Agents',
-            '/ui/agents',
-            agentRows,
-            'No agents available.',
-        ));
+        if (agentRows.length) {
+            workGrid.appendChild(createSection(
+                'agents',
+                'Agents',
+                '/ui/agents',
+                agentRows,
+                'No agents available.',
+            ));
+        }
 
         shell.appendChild(workGrid);
         UI.reconcileChildren(content, [shell]);

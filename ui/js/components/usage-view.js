@@ -11,9 +11,13 @@ function renderUsageView(container) {
     header.innerHTML = '<h2>Usage</h2>';
     container.appendChild(header);
 
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
     const controls = document.createElement('div');
     controls.className = 'route-controls';
-    container.appendChild(controls);
+    shell.appendChild(controls);
 
     const rangeBar = document.createElement('div');
     rangeBar.className = 'segmented-control';
@@ -49,11 +53,11 @@ function renderUsageView(container) {
 
     const summaryEl = document.createElement('section');
     summaryEl.className = 'summary-rail';
-    container.appendChild(summaryEl);
+    shell.appendChild(summaryEl);
 
     const tableShell = document.createElement('section');
     tableShell.className = 'list-shell';
-    container.appendChild(tableShell);
+    shell.appendChild(tableShell);
 
     const tableEl = document.createElement('div');
     tableEl.id = 'usage-table';
@@ -125,7 +129,7 @@ function renderUsageView(container) {
             linkTd.setAttribute('data-label', 'Conversation');
             const link = document.createElement('a');
             link.href = '/ui/conversations/' + encodeURIComponent(item.conversation_id || '');
-            link.textContent = item.title || item.conversation_id || '';
+            link.textContent = item.title || 'Conversation';
             linkTd.appendChild(link);
             tr.appendChild(linkTd);
 

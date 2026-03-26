@@ -13,9 +13,13 @@ function renderApprovalList(container) {
     header.innerHTML = '<h2>Approvals</h2>';
     container.appendChild(header);
 
+    const shellWrap = document.createElement('section');
+    shellWrap.className = 'admin-shell';
+    container.appendChild(shellWrap);
+
     const shell = document.createElement('section');
     shell.className = 'list-shell';
-    container.appendChild(shell);
+    shellWrap.appendChild(shell);
 
     const listEl = document.createElement('div');
     listEl.className = 'approval-list';
@@ -63,7 +67,7 @@ function renderApprovalList(container) {
 
             const title = document.createElement('strong');
             title.className = 'approval-card-title';
-            title.textContent = item.conversation_title || item.conversation_id;
+            title.textContent = item.conversation_title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Conversation awaiting review';
             titleWrap.appendChild(title);
 
             const subtitle = document.createElement('span');

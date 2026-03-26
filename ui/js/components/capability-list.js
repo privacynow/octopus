@@ -3,29 +3,34 @@
  */
 function renderCapabilityList(container) {
     const cleanups = UI.beginCleanupScope();
-    // Header
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Capabilities</h2><p>Global capability overrides</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Capabilities</h2>';
     container.appendChild(header);
+
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
+    const listWrap = document.createElement('div');
+    listWrap.className = 'list-shell';
+    shell.appendChild(listWrap);
 
     const listEl = document.createElement('div');
     listEl.id = 'cap-list';
-    listEl.className = 'list-container list-container-loose';
-    container.appendChild(listEl);
+    listEl.className = 'list-container';
+    listWrap.appendChild(listEl);
 
     function loadCapabilities() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 4, 'row');
+        UI.reconcileChildren(listEl, UI.createSkeletonNodes(4, 'row'));
 
         API.listCapabilities().then(caps => {
-            listEl.textContent = '';
             if (!caps || caps.length === 0) {
-                listEl.appendChild(UI.renderEmptyState('No capabilities declared'));
+                UI.reconcileChildren(listEl, [UI.renderEmptyState('No capabilities declared.', true)]);
                 return;
             }
 
-            caps.forEach(c => {
+            const rows = caps.map((c, index) => {
                 // Toggle switch
                 const enabled = c.enabled !== false;
                 const capName = c.name || c.capability_name;
@@ -51,7 +56,7 @@ function renderCapabilityList(container) {
                         : '',
                     control: toggle,
                 });
-                listEl.appendChild(row);
+                row.dataset.key = capName || `capability-${index}`;
 
                 // Toggle handler with confirmation
                 checkbox.addEventListener('change', () => {
@@ -79,10 +84,11 @@ function renderCapabilityList(container) {
                         }
                     );
                 });
+                return row;
             });
+            UI.reconcileChildren(listEl, rows);
         }).catch(err => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed: ' + err.message, loadCapabilities);
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadCapabilities)]);
         });
     }
 

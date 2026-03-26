@@ -44,9 +44,13 @@ function renderTaskList(container) {
     summaryRail.className = 'summary-rail';
     container.appendChild(summaryRail);
 
+    const workbench = document.createElement('section');
+    workbench.className = 'workbench-panel';
+    container.appendChild(workbench);
+
     const controls = document.createElement('div');
     controls.className = 'route-controls';
-    container.appendChild(controls);
+    workbench.appendChild(controls);
 
     const statusBar = document.createElement('div');
     statusBar.className = 'segmented-control';
@@ -90,7 +94,7 @@ function renderTaskList(container) {
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
-    container.appendChild(listShell);
+    workbench.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.className = 'list-container list-container-loose';
@@ -143,6 +147,10 @@ function renderTaskList(container) {
 
     function _taskSummary(task) {
         return task.result_summary || task.result_text || task.summary || task.instructions || '';
+    }
+
+    function _taskLabel(task) {
+        return task.title || (task.instructions ? String(task.instructions).trim().slice(0, 72) : '') || 'Untitled task';
     }
 
     function _attachTaskActions(actions, task, statusText) {
@@ -210,7 +218,7 @@ function renderTaskList(container) {
 
         const title = document.createElement('strong');
         title.className = 'task-item-title';
-        title.textContent = task.title || task.routed_task_id;
+        title.textContent = _taskLabel(task);
         primary.appendChild(title);
 
         const meta = document.createElement('span');

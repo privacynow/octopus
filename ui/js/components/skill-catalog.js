@@ -1,115 +1,88 @@
 /**
- * Skill catalog — runtime skills list with install/uninstall actions.
+ * Skill catalog — dense installable runtime skill roster.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
     let currentQ = '';
+    let allSkills = [];
 
-    // Header
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Skills</h2><p>Runtime skill catalog</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Skills</h2>';
     container.appendChild(header);
 
-    // Search
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
+    const workbench = document.createElement('section');
+    workbench.className = 'workbench-panel';
+    shell.appendChild(workbench);
+
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    workbench.appendChild(controls);
+
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
     searchInput.placeholder = 'Search skills';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search skills');
-    searchInput.setAttribute('title', 'Press / to focus search');
-    container.appendChild(searchInput);
+    controls.appendChild(searchInput);
 
-    const searchHint = document.createElement('div');
-    searchHint.className = 'search-shortcut-hint search-shortcut-inline';
-    searchHint.textContent = 'Shortcut: /';
-    container.appendChild(searchHint);
+    const listWrap = document.createElement('section');
+    listWrap.className = 'list-shell';
+    shell.appendChild(listWrap);
 
     const listEl = document.createElement('div');
-    listEl.style.marginTop = '16px';
-    container.appendChild(listEl);
-
-    searchInput.addEventListener('input', () => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-            currentQ = searchInput.value.trim().toLowerCase();
-            renderList();
-        }, 300);
-    });
-
-    let allSkills = [];
-
-    function loadSkills() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 4, 'card');
-
-        API.listSkills().then(data => {
-            const skills = Array.isArray(data) ? data : (data.skills || []);
-            allSkills = skills;
-            renderList();
-        }).catch(err => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed: ' + err.message, loadSkills);
-        });
-    }
+    listEl.className = 'list-container';
+    listWrap.appendChild(listEl);
 
     function renderList() {
-        listEl.textContent = '';
-
         let filtered = allSkills;
         if (currentQ) {
-            filtered = allSkills.filter(s => {
-                const name = (s.slug || s.name || '').toLowerCase();
-                const desc = (s.description || s.display_name || '').toLowerCase();
-                return name.includes(currentQ) || desc.includes(currentQ);
+            filtered = allSkills.filter((skill) => {
+                const haystack = [
+                    skill.slug || skill.name || '',
+                    skill.description || skill.display_name || '',
+                ].join(' ').toLowerCase();
+                return haystack.includes(currentQ);
             });
         }
 
-        if (filtered.length === 0) {
-            listEl.appendChild(UI.renderEmptyState(allSkills.length === 0 ? 'No skills available' : 'No skills match search'));
+        if (!filtered.length) {
+            UI.reconcileChildren(listEl, [
+                UI.renderEmptyState(allSkills.length ? 'No skills match this search.' : 'No runtime skills available.', true),
+            ]);
             return;
         }
 
-        filtered.forEach(s => {
-            const card = document.createElement('div');
-            card.className = 'card';
+        const rows = filtered.map((skill) => {
+            const shellRow = document.createElement('div');
+            shellRow.className = 'list-row-shell';
+            shellRow.dataset.key = skill.slug || skill.name || skill.display_name || '';
 
-            const row = document.createElement('div');
-            row.className = 'card-row';
+            const sub = document.createElement('span');
+            sub.textContent = skill.description || skill.display_name || 'Runtime skill';
 
-            const info = document.createElement('div');
-            const title = document.createElement('div');
-            title.className = 'card-title';
-            title.textContent = s.slug || s.name || '';
-            info.appendChild(title);
+            const row = UI.renderListRow({
+                label: skill.slug || skill.name || '',
+                sublabelNode: sub,
+                badgeText: (skill.status || '').trim() || '',
+                badgeClass: skill.status ? 'badge-' + skill.status : '',
+            });
+            shellRow.appendChild(row);
 
-            const sub = document.createElement('div');
-            sub.className = 'card-subtitle';
-            sub.textContent = s.description || s.display_name || '';
-            info.appendChild(sub);
-
-            row.appendChild(info);
-
-            const actions = document.createElement('div');
-            actions.className = 'card-actions';
-
-            if (s.status) {
-                const badge = document.createElement('span');
-                badge.className = 'badge badge-' + s.status;
-                badge.textContent = s.status;
-                actions.appendChild(badge);
-            }
-
-            const skillName = s.slug || s.name || '';
-            const isInstalled = s.status === 'installed' || s.status === 'published' || s.status === 'active';
-
+            const skillName = skill.slug || skill.name || '';
+            const isInstalled = ['installed', 'published', 'active'].includes(String(skill.status || '').trim());
             const actionBtn = document.createElement('button');
-            actionBtn.className = 'btn btn-sm' + (isInstalled ? ' btn-danger' : ' btn-primary');
+            actionBtn.type = 'button';
+            actionBtn.className = `btn btn-sm list-row-action${isInstalled ? ' btn-danger' : ' btn-primary'}`;
             actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
             actionBtn.addEventListener('click', async () => {
                 actionBtn.disabled = true;
-                actionBtn.textContent = isInstalled ? 'Uninstalling...' : 'Installing...';
+                actionBtn.textContent = isInstalled ? 'Uninstalling…' : 'Installing…';
                 try {
                     if (isInstalled) {
                         await API.uninstallSkill(skillName);
@@ -123,20 +96,40 @@ function renderSkillCatalog(container) {
                     UI.reportError('Failed to update the skill', err, { context: 'Skill action failed' });
                 }
             });
-            actions.appendChild(actionBtn);
+            shellRow.appendChild(actionBtn);
+            return shellRow;
+        });
 
-            row.appendChild(actions);
-            card.appendChild(row);
-            listEl.appendChild(card);
+        UI.reconcileChildren(listEl, rows);
+    }
+
+    function loadSkills({ soft = false } = {}) {
+        if (!soft || !allSkills.length) {
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
+        }
+
+        API.listSkills().then((data) => {
+            allSkills = Array.isArray(data) ? data : (data.skills || []);
+            renderList();
+        }).catch((err) => {
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
         });
     }
+
+    searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            currentQ = searchInput.value.trim().toLowerCase();
+            renderList();
+        }, 250);
+    });
 
     loadSkills();
 
     let reloadDebounce = null;
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadSkills, 600);
+        reloadDebounce = setTimeout(() => loadSkills({ soft: true }), 600);
     });
 
     cleanups.add(() => clearTimeout(searchTimeout));

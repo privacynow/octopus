@@ -24,13 +24,17 @@ function renderConversationList(container) {
     header.innerHTML = '<h2>Conversations</h2>';
     container.appendChild(header);
 
+    const workbench = document.createElement('section');
+    workbench.className = 'workbench-panel';
+    container.appendChild(workbench);
+
     const quickStart = document.createElement('section');
     quickStart.className = 'quickstart-strip';
-    container.appendChild(quickStart);
+    workbench.appendChild(quickStart);
 
     const controls = document.createElement('div');
     controls.className = 'route-controls';
-    container.appendChild(controls);
+    workbench.appendChild(controls);
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
@@ -132,7 +136,7 @@ function renderConversationList(container) {
         shell.dataset.key = 'quickstart-shell';
 
         const head = document.createElement('div');
-        head.className = 'quickstart-header';
+        head.className = 'workbench-row';
 
         const links = document.createElement('div');
         links.className = 'quickstart-links';
@@ -191,7 +195,7 @@ function renderConversationList(container) {
                 moreLink.href = '/ui/agents?state=connected';
                 moreLink.className = 'quickstart-chip';
                 moreLink.dataset.key = 'quickstart-overflow';
-                moreLink.textContent = 'All agents';
+                moreLink.textContent = 'More agents';
                 row.appendChild(moreLink);
             }
         }
@@ -230,15 +234,15 @@ function renderConversationList(container) {
         const rows = conversations.map((item) => {
             const sub = document.createElement('span');
             const parts = [];
-            if (item.target_display_name || item.target_agent_id) parts.push(item.target_display_name || item.target_agent_id);
+            const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
+            if (targetLabel) parts.push(targetLabel);
             if (item.origin_channel) parts.push(item.origin_channel);
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
-            if (item.event_count !== undefined) parts.push(`${item.event_count} ${item.event_count === 1 ? 'event' : 'events'}`);
             sub.textContent = parts.join(' · ');
 
             const row = UI.renderListRow({
                 href: '/ui/conversations/' + item.conversation_id,
-                label: item.title || item.conversation_id,
+                label: item.title || targetLabel || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),

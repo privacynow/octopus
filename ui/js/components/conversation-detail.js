@@ -49,7 +49,7 @@ function renderConversationDetail(container, params) {
 
     const toolbar = document.createElement('div');
     toolbar.className = 'conversation-toolbar conversation-toolbar-shell';
-    shell.appendChild(toolbar);
+    metaCard.appendChild(toolbar);
 
     const filterGroup = document.createElement('div');
     filterGroup.className = 'segmented-control';
@@ -618,8 +618,11 @@ function renderConversationDetail(container, params) {
         titleRow.appendChild(actionGroup);
 
         const metaRow = document.createElement('div');
-        metaRow.className = 'meta-inline meta-inline-quiet';
+        metaRow.className = 'conversation-meta-row';
         metaRow.dataset.key = 'meta-inline';
+
+        const statements = document.createElement('div');
+        statements.className = 'meta-inline meta-inline-quiet';
 
         const metaParts = [];
         const conversationWith = _visibleOperatorLabel(data.target_display_name, data.target_agent_id);
@@ -642,19 +645,24 @@ function renderConversationDetail(container, params) {
             const item = document.createElement('span');
             item.className = 'meta-inline-item meta-inline-statement';
             item.textContent = value;
-            metaRow.appendChild(item);
+            statements.appendChild(item);
             if (index < metaParts.length - 1) {
                 const sep = document.createElement('span');
                 sep.className = 'meta-inline-separator';
                 sep.textContent = '·';
-                metaRow.appendChild(sep);
+                statements.appendChild(sep);
             }
         });
+
+        metaRow.appendChild(statements);
+
+        const actions = document.createElement('div');
+        actions.className = 'meta-inline-actions';
 
         const status = document.createElement('span');
         status.className = `badge badge-${data.status || 'open'}`;
         status.textContent = _formatConversationStatusLabel(data.status || 'open');
-        metaRow.appendChild(status);
+        actions.appendChild(status);
 
         if (data.event_count !== undefined) {
             const activityBtn = document.createElement('button');
@@ -662,7 +670,7 @@ function renderConversationDetail(container, params) {
             activityBtn.className = 'meta-inline-action';
             activityBtn.textContent = `Activity (${String(data.event_count)})`;
             activityBtn.addEventListener('click', () => applyFilter('activity'));
-            metaRow.appendChild(activityBtn);
+            actions.appendChild(activityBtn);
         }
         if (data.external_conversation_ref) {
             const copyRefBtn = document.createElement('button');
@@ -688,10 +696,14 @@ function renderConversationDetail(container, params) {
                     }, 2400);
                 }
             });
-            metaRow.appendChild(copyRefBtn);
+            actions.appendChild(copyRefBtn);
         }
 
-        UI.reconcileChildren(metaCard, [titleRow, metaRow]);
+        if (actions.childElementCount) {
+            metaRow.appendChild(actions);
+        }
+
+        UI.reconcileChildren(metaCard, [titleRow, metaRow, toolbar]);
     }
 
     function renderTaskSummaryStrip(tasks) {
@@ -998,7 +1010,7 @@ function renderConversationDetail(container, params) {
     }
 
     function syncConversationDensityForCurrentView() {
-        const compact = activeView !== 'tasks' && eventList.childElementCount <= 3;
+        const compact = activeView !== 'tasks' && eventList.childElementCount <= 4;
         syncConversationDensity(compact);
     }
 }
@@ -1154,6 +1166,14 @@ function _createConversationEventElement(event, convoId, taskContext = []) {
         default:
             _renderGenericEventCard(body, event);
             break;
+    }
+
+    const leadText = _eventLeadText(kind, event, taskContext);
+    if (leadText) {
+        const lead = document.createElement('div');
+        lead.className = 'event-card-lead';
+        lead.textContent = leadText;
+        card.appendChild(lead);
     }
 
     const startExpanded = kind === 'approval.requested' || _shouldStartExpanded(kind, event);
@@ -1379,6 +1399,7 @@ function _renderDelegationCard(body, kind, metadata, taskContext = []) {
 
 function _renderTaskStatusCard(body, event, metadata, convoId) {
     const status = String(metadata.status || '').trim();
+    const terminalWithOutcome = ['completed', 'failed', 'cancelled', 'timed_out'].includes(status) && Boolean(String(event.content || '').trim());
     const progressValue = metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '';
     const facts = [];
     if (progressValue) facts.push(['Progress', progressValue]);
@@ -1397,7 +1418,7 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
         progress.appendChild(fill);
         body.appendChild(progress);
     }
-    if (event.content) {
+    if (event.content && !terminalWithOutcome) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
         content.innerHTML = `<p>${UI.esc(event.content)}</p>`;
@@ -1655,7 +1676,7 @@ function _eventSummary(kind, event, taskContext = []) {
         }
         case 'task.status':
             return [
-                _taskStatusSummary(event),
+                _taskStatusPhrase(metadata.status || 'update'),
                 metadata.progress !== null && metadata.progress !== undefined ? `${metadata.progress}%` : '',
             ].filter(Boolean).join(' · ');
         case 'error':
@@ -1816,6 +1837,32 @@ function _taskStatusSummary(event) {
         return content.slice(0, 96);
     }
     return _taskStatusPhrase(status || 'update');
+}
+
+function _eventLeadText(kind, event, taskContext = []) {
+    const metadata = event.metadata || {};
+    if (kind === 'task.status') {
+        const status = String(metadata.status || '').trim().toLowerCase();
+        const content = String(event.content || '').trim();
+        if (content && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status)) {
+            return content;
+        }
+        return '';
+    }
+    if (kind === 'delegation.submitted' || kind === 'delegation.completed') {
+        const tasks = Array.isArray(metadata.tasks) ? metadata.tasks : [];
+        if (!tasks.length) return '';
+        if (tasks.length === 1) {
+            const task = tasks[0];
+            const target = _delegationTaskTargetLabel(task, taskContext);
+            const title = String(task.title || '').trim();
+            if (title && target) {
+                return `${kind === 'delegation.completed' ? 'Handled by' : 'Assigned to'} ${target}: ${title}`;
+            }
+            if (title) return title;
+        }
+    }
+    return '';
 }
 
 function _originChannelLabel(originChannel) {

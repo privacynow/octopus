@@ -17,9 +17,17 @@ function renderAgentList(container) {
     header.innerHTML = '<h2>Agents</h2>';
     container.appendChild(header);
 
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
+    const workbench = document.createElement('section');
+    workbench.className = 'workbench-panel';
+    shell.appendChild(workbench);
+
     const controls = document.createElement('div');
     controls.className = 'route-controls';
-    container.appendChild(controls);
+    workbench.appendChild(controls);
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
@@ -70,7 +78,7 @@ function renderAgentList(container) {
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
-    container.appendChild(listShell);
+    shell.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.id = 'agent-list-content';
@@ -134,7 +142,6 @@ function renderAgentList(container) {
             sub.textContent = [
                 agent.role || 'agent',
                 agent.provider || '',
-                agent.slug || '',
                 agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
             ].filter(Boolean).join(' · ');
 

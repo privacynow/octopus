@@ -47,9 +47,9 @@ async function fetchCsrf(page) {
 test("live registry ui smoke", async ({ page }) => {
   await signIn(page);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-  await expect(page.getByText("Needs attention").first()).toBeVisible();
   await expect(page.getByText("Open conversations").first()).toBeVisible();
   await expect(page.getByText("Agents").first()).toBeVisible();
+  await expect(page.getByText("Nothing urgent right now.")).toHaveCount(0);
 
   await page.goto("/ui/agents");
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();

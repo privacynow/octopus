@@ -28,7 +28,7 @@ function renderAgentDetail(container, params) {
         const titleWrap = document.createElement('div');
         titleWrap.className = 'workspace-title-group';
         const title = document.createElement('h2');
-        title.textContent = agent.display_name || agent.slug || agent.agent_id;
+        title.textContent = agent.display_name || agent.slug || 'Agent';
         titleWrap.appendChild(title);
 
         const meta = document.createElement('div');
@@ -205,7 +205,7 @@ function renderAgentDetail(container, params) {
             ].filter(Boolean).join(' · ');
             const row = UI.renderListRow({
                 href: '/ui/conversations/' + item.conversation_id,
-                label: item.title || item.conversation_id,
+                label: item.title || 'Conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
@@ -265,7 +265,7 @@ function renderAgentDetail(container, params) {
             }
             const agent = status.agent || status;
             const workers = status.workers || [];
-            agentDisplayName = agent.display_name || agent.slug || agent.agent_id || agentId;
+            agentDisplayName = agent.display_name || agent.slug || 'Agent';
             openConversationBusy = false;
 
             buildHeader(agent);

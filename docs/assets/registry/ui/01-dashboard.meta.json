@@ -9,26 +9,26 @@
       "color": "#ff9800"
     },
     {
-      "x": 256,
-      "y": 70.234375,
-      "width": 1080,
+      "x": 248,
+      "y": 58.234375,
+      "width": 1096,
       "height": 123,
       "label": "Summary rail for open conversations, running work, follow-up, and agent health",
       "color": "#2196f3"
     },
     {
-      "x": 256,
-      "y": 209.234375,
-      "width": 540,
-      "height": 505.78125,
+      "x": 248,
+      "y": 193.234375,
+      "width": 368,
+      "height": 488.25,
       "label": "Needs-attention queue for approvals, failed work, and unhealthy agents",
       "color": "#4caf50"
     },
     {
-      "x": 256,
-      "y": 209.234375,
-      "width": 1080,
-      "height": 1173.15625,
+      "x": 248,
+      "y": 193.234375,
+      "width": 1096,
+      "height": 1130.28125,
       "label": "Direct jump lists for conversations, tasks, and agents",
       "color": "#9c27b0"
     }

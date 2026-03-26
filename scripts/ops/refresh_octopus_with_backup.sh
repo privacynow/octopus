@@ -1,11 +1,56 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: refresh_octopus_with_backup.sh [source-repo-dir] [backup-root]
+
+Cleanly refreshes an Octopus checkout while preserving the existing .deploy
+state:
+
+1. copies <source-repo-dir>/.deploy into <backup-root>/<timestamp>/.deploy
+2. pulls the latest code in <source-repo-dir>
+3. runs ./octopus clean
+4. restores the saved .deploy snapshot
+5. starts the registry and reconnects the saved bots
+6. verifies registry health, bot connectivity, and rebuilt images
+
+Defaults:
+  source-repo-dir  /Users/tinker/octopus
+  backup-root      /Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups
+
+Environment:
+  RUN_PYTHON       Python runtime used to invoke app.octopus_cli
+EOF
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_REPO="${1:-/Users/tinker/octopus}"
-BACKUP_ROOT="${2:-/Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups}"
+SOURCE_REPO="/Users/tinker/octopus"
+BACKUP_ROOT="/Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups"
 RUN_PYTHON="${RUN_PYTHON:-/Users/tinker/output/bots/telegram-agent-bot/.venv/bin/python}"
 RUN_ID="$(date +%s)"
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+if [ "$#" -gt 0 ]; then
+  SOURCE_REPO="$1"
+fi
+
+if [ "$#" -gt 1 ]; then
+  BACKUP_ROOT="$2"
+fi
+
+if [ "$#" -gt 2 ]; then
+  echo "Too many arguments" >&2
+  usage >&2
+  exit 1
+fi
+
 BACKUP_DIR="${BACKUP_ROOT}/${RUN_ID}"
 DEPLOY_BACKUP_DIR="${BACKUP_DIR}/.deploy"
 

@@ -1,34 +1,34 @@
 {
   "rects": [
     {
-      "x": 258,
-      "y": 26,
-      "width": 1076,
-      "height": 100.53125,
+      "x": 250,
+      "y": 18,
+      "width": 1092,
+      "height": 147.28125,
       "label": "Compact operator-facing header with With / Assigned to / Started in, status, activity shortcut, and Copy ref action",
       "color": "#ff9800"
     },
     {
-      "x": 258,
-      "y": 126.53125,
-      "width": 1076,
-      "height": 62.21875,
+      "x": 250,
+      "y": 107.59375,
+      "width": 299,
+      "height": 57.6875,
       "label": "Conversation, Tasks, and Full activity views",
       "color": "#4caf50"
     },
     {
-      "x": 281,
-      "y": 211.75,
-      "width": 1030,
-      "height": 846.234375,
+      "x": 269,
+      "y": 180.28125,
+      "width": 1054,
+      "height": 889.8125,
       "label": "Conversation view with messages, approvals, delegation milestones, and task status updates",
       "color": "#2196f3"
     },
     {
-      "x": 283,
-      "y": 1043.984375,
-      "width": 1026,
-      "height": 108.1875,
+      "x": 271,
+      "y": 1056.09375,
+      "width": 1050,
+      "height": 88.1875,
       "label": "Shared composer for normal replies and leading-@ direct routing",
       "color": "#9c27b0"
     }

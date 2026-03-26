@@ -2,17 +2,17 @@
   "rects": [
     {
       "x": 8,
-      "y": 106.03125,
+      "y": 102.03125,
       "width": 374,
-      "height": 508.9375,
+      "height": 498.6875,
       "label": "Approval cards remain action-first on small screens",
       "color": "#2196f3"
     },
     {
-      "x": 25,
-      "y": 543,
-      "width": 340,
-      "height": 54.96875,
+      "x": 21,
+      "y": 535,
+      "width": 348,
+      "height": 52.71875,
       "label": "Open, approve, and reject stay reachable without extra drill-in",
       "color": "#4caf50"
     }

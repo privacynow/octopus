@@ -12,7 +12,10 @@ The capture run now treats desktop and mobile as one docs pipeline:
 
 This harness is for **documentation captures**, not runtime validation. For
 live runtime validation, use the disposable smoke harness under
-`scripts/e2e/run_live_registry_smoke.sh`.
+`scripts/e2e/run_live_registry_smoke.sh`. The `--snapshot-deploy` input to that
+live harness is the same `.deploy` snapshot shape produced by
+`scripts/ops/backup_octopus_deploy.sh` and
+`scripts/ops/refresh_octopus_with_backup.sh`.
 
 ## Prerequisites
 

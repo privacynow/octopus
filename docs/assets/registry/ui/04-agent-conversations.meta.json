@@ -1,10 +1,10 @@
 {
   "rects": [
     {
-      "x": 256,
-      "y": 547.359375,
-      "width": 1080,
-      "height": 302.359375,
+      "x": 248,
+      "y": 508.171875,
+      "width": 1096,
+      "height": 251.578125,
       "label": "Compatibility route that lands on the same inline conversations workspace",
       "color": "#2196f3"
     }

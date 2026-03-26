@@ -81,6 +81,19 @@ Important state boundaries:
 | `BOT_DATA_DIR/agent/bot_identity.json` | runtime | stable local bot identity |
 | `BOT_DATA_DIR/agent/registries/<registry_id>.json` | runtime | live per-registry connection state |
 
+For local operations against a persistent `~/octopus` checkout, the repo also
+ships two helper scripts under `scripts/ops/`:
+
+- `backup_octopus_deploy.sh` copies `~/octopus/.deploy` into a timestamped
+  backup directory
+- `refresh_octopus_with_backup.sh` wraps the live refresh flow:
+  backup `.deploy`, `git pull --ff-only`, run `./octopus clean`, restore the
+  saved `.deploy`, start the registry/bots again, reconnect them, and verify
+  registry health plus image freshness
+
+These helpers are intentionally deployment-state tools; they do not replace the
+`./octopus` CLI itself.
+
 The bot runtime supports multiple registries in config, but the current CLI is
 local-registry-first: local registry lifecycle and connect/disconnect are
 first-class, while remote registry records are supported by runtime/config

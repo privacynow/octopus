@@ -70,6 +70,42 @@ Notes:
 - `redeploy` rebuilds/recreates managed targets while preserving state by
   default
 
+## Ops Helper Scripts
+
+For a live `~/octopus` checkout, the repo also includes two non-interactive ops
+helpers under [`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops):
+
+```bash
+bash scripts/ops/backup_octopus_deploy.sh --help
+bash scripts/ops/refresh_octopus_with_backup.sh --help
+```
+
+Use them like this:
+
+```bash
+# copy ~/octopus/.deploy into a timestamped backup directory
+bash scripts/ops/backup_octopus_deploy.sh \
+  --source /Users/tinker/octopus \
+  --target /tmp/octopus-backup
+
+# pull the latest code into ~/octopus, run a destructive clean,
+# restore the saved .deploy snapshot, rebuild fresh images, and reconnect
+bash scripts/ops/refresh_octopus_with_backup.sh \
+  /Users/tinker/octopus \
+  /Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups
+```
+
+`refresh_octopus_with_backup.sh` is the “clean deploy” path we use for the
+live local registry stack:
+
+1. backup `~/octopus/.deploy`
+2. `git pull --ff-only`
+3. `./octopus clean`
+4. restore the saved `.deploy`
+5. `./octopus start --yes`
+6. `./octopus connect --yes`
+7. verify registry health, connected bots, and rebuilt images
+
 ## Registry Model
 
 Registry mode is optional.

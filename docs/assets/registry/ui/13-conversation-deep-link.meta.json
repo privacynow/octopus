@@ -1,10 +1,10 @@
 {
   "rects": [
     {
-      "x": 258,
-      "y": 26,
-      "width": 1076,
-      "height": 1151.171875,
+      "x": 250,
+      "y": 18,
+      "width": 1092,
+      "height": 1147.28125,
       "label": "Direct deep link to /ui/conversations/{conversation_id}",
       "color": "#4caf50"
     }

@@ -828,11 +828,11 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/skills");
-  await waitForViewReady(page, ".card, .empty-state");
+  await waitForViewReady(page, ".list-row-shell, .empty-state");
   await page.screenshot({ path: path.join(OUT, "09-skills.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "09-skills.png"), [
     { selector: ".search-input", label: "Client-side search across the skill catalog", color: "#ff9800", pad: 6 },
-    { selector: ".card:nth-of-type(1)", label: "Catalog row with install or uninstall action", color: "#2196f3", pad: 6 },
+    { selector: ".list-row-shell:nth-of-type(1)", label: "Catalog row with install or uninstall action", color: "#2196f3", pad: 6 },
   ]);
 
   await page.goto("/ui/usage");
@@ -849,10 +849,10 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await waitForViewReady(page, ".guidance-textarea");
   await page.screenshot({ path: path.join(OUT, "11-guidance.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "11-guidance.png"), [
-    { selector: ".filter-bar", label: "Provider selector", color: "#ff9800", pad: 6 },
-    { selector: ".card:first-of-type", label: "Lifecycle status for the selected provider guidance", color: "#2196f3", pad: 8 },
+    { selector: ".segmented-control", label: "Provider selector", color: "#ff9800", pad: 6 },
+    { selector: ".editor-panel:first-of-type", label: "Lifecycle status for the selected provider guidance", color: "#2196f3", pad: 8 },
     { selector: ".guidance-textarea", label: "Draft system prompt body", color: "#4caf50", pad: 8 },
-    { selector: ".card-actions", label: "Preview and lifecycle actions", color: "#9c27b0", pad: 8 },
+    { selector: ".editor-actions", label: "Preview and lifecycle actions", color: "#9c27b0", pad: 8 },
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);

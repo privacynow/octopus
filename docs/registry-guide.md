@@ -12,11 +12,12 @@ For the full flow inventory, see
 1. [When to use registry mode](#when-to-use-registry-mode)
 2. [Concepts](#concepts)
 3. [CLI lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
-4. [Browser sign in](#browser-sign-in)
-5. [Browser screens](#browser-screens)
-6. [Mobile quick look](#mobile-quick-look)
-7. [Verification and troubleshooting](#verification-and-troubleshooting)
-8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
+4. [Backup and clean refresh helpers](#backup-and-clean-refresh-helpers)
+5. [Browser sign in](#browser-sign-in)
+6. [Browser screens](#browser-screens)
+7. [Mobile quick look](#mobile-quick-look)
+8. [Verification and troubleshooting](#verification-and-troubleshooting)
+9. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
 ## When to use registry mode
 
@@ -68,6 +69,49 @@ After startup, note:
 The CLI lifecycle SVGs in
 [`docs/assets/registry/`](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry)
 still map to the current local-registry deployment model.
+
+## Backup and clean refresh helpers
+
+When you need to refresh a live local checkout like `~/octopus` without losing
+its configured bots and registry state, use the ops helpers in
+[`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops).
+
+### Backup only
+
+```bash
+bash scripts/ops/backup_octopus_deploy.sh --help
+
+bash scripts/ops/backup_octopus_deploy.sh \
+  --source /Users/tinker/octopus \
+  --target /tmp/octopus-backup
+```
+
+This copies `/Users/tinker/octopus/.deploy` into `/tmp/octopus-backup/.deploy`
+with the same exclusions the refresh helper uses for transient provider-auth
+scratch directories.
+
+### Clean refresh with restore
+
+```bash
+bash scripts/ops/refresh_octopus_with_backup.sh --help
+
+bash scripts/ops/refresh_octopus_with_backup.sh \
+  /Users/tinker/octopus \
+  /Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups
+```
+
+This is the consistent “deploy clean” workflow:
+
+1. back up `~/octopus/.deploy`
+2. pull the latest code into `~/octopus`
+3. run `./octopus clean`
+4. restore the saved `.deploy`
+5. start the registry and bots again
+6. reconnect the saved bots
+7. verify registry health, bot connectivity, and rebuilt images
+
+At the end it prints the saved deploy snapshot path so you can inspect or reuse
+the captured `.deploy` later.
 
 ## Browser sign in
 

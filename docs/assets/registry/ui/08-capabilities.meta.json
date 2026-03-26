@@ -1,10 +1,10 @@
 {
   "rects": [
     {
-      "x": 256,
-      "y": 109.484375,
-      "width": 1080,
-      "height": 972.9375,
+      "x": 248,
+      "y": 58.234375,
+      "width": 1096,
+      "height": 974.9375,
       "label": "Global capability overrides declared by active agents",
       "color": "#2196f3"
     }

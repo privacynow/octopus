@@ -3,15 +3,24 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: backup_octopus_deploy.sh --source <octopus-repo-dir> --target <backup-dir>
+Usage:
+  backup_octopus_deploy.sh --source <octopus-repo-dir> --target <backup-dir>
+  backup_octopus_deploy.sh [source-repo-dir] [backup-dir]
 
 Copies <source>/.deploy into <target>/.deploy.
-Both --source and --target are required.
+
+Defaults:
+  source-repo-dir  /Users/tinker/octopus
+
+Notes:
+  - backup-dir is required
+  - provider-auth temporary scratch directories are excluded
 EOF
 }
 
-SOURCE_REPO=""
+SOURCE_REPO="/Users/tinker/octopus"
 TARGET_DIR=""
+POSITIONAL=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -24,6 +33,10 @@ while [ "$#" -gt 0 ]; do
       SOURCE_REPO="$2"
       shift 2
       ;;
+    --source=*)
+      SOURCE_REPO="${1#*=}"
+      shift
+      ;;
     --target)
       if [ "$#" -lt 2 ]; then
         echo "Missing value for --target" >&2
@@ -33,19 +46,36 @@ while [ "$#" -gt 0 ]; do
       TARGET_DIR="$2"
       shift 2
       ;;
+    --target=*)
+      TARGET_DIR="${1#*=}"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
       ;;
     *)
-      echo "Unknown argument: $1" >&2
-      usage >&2
-      exit 1
+      POSITIONAL+=("$1")
+      shift
       ;;
   esac
 done
 
-if [ -z "${SOURCE_REPO}" ] || [ -z "${TARGET_DIR}" ]; then
+if [ "${#POSITIONAL[@]}" -gt 0 ]; then
+  SOURCE_REPO="${POSITIONAL[0]}"
+fi
+
+if [ "${#POSITIONAL[@]}" -gt 1 ]; then
+  TARGET_DIR="${POSITIONAL[1]}"
+fi
+
+if [ "${#POSITIONAL[@]}" -gt 2 ]; then
+  echo "Too many arguments" >&2
+  usage >&2
+  exit 1
+fi
+
+if [ -z "${TARGET_DIR}" ]; then
   usage >&2
   exit 1
 fi

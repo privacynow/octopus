@@ -23,3 +23,18 @@
 ## Nuclear reset
 
 **`./octopus clean`** — local dev only; destroys `.deploy/` and volumes. Described in [Octopus CLI](02-operator-octopus.md) (clean flow).
+
+If you need the same clean reset against a persistent live checkout but want to
+preserve the configured deploy state, use the ops helpers instead of running
+`clean` by hand:
+
+```bash
+bash scripts/ops/backup_octopus_deploy.sh \
+  --source /Users/tinker/octopus \
+  --target /tmp/octopus-backup
+
+bash scripts/ops/refresh_octopus_with_backup.sh /Users/tinker/octopus
+```
+
+The refresh helper restores the saved `.deploy`, rebuilds fresh images, and
+verifies that the registry plus saved bots come back connected.

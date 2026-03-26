@@ -1,18 +1,18 @@
 {
   "rects": [
     {
-      "x": 258,
-      "y": 196.71875,
-      "width": 643.046875,
+      "x": 267,
+      "y": 174.984375,
+      "width": 643.859375,
       "height": 61.25,
       "label": "Debounced server-side conversation search",
       "color": "#ff9800"
     },
     {
-      "x": 259,
-      "y": 263.453125,
-      "width": 1074,
-      "height": 92.796875,
+      "x": 251,
+      "y": 250.234375,
+      "width": 1090,
+      "height": 90.890625,
       "label": "Filtered results from the registry conversation index",
       "color": "#2196f3"
     }

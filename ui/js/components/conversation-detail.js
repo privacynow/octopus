@@ -31,6 +31,7 @@ function renderConversationDetail(container, params) {
     ];
     let relatedTasks = [];
     let tasksLoaded = false;
+    let lastRelatedTaskSignature = '';
     let suggestionMatches = [];
     let suggestionIndex = -1;
     let suggestionEngine = null;
@@ -735,9 +736,23 @@ function renderConversationDetail(container, params) {
     }
 
     function renderRelatedTasks(tasks) {
+        const nextSignature = JSON.stringify((tasks || []).map((task) => ({
+            id: String(task.routed_task_id || ''),
+            status: String(task.status || ''),
+            updatedAt: String(task.updated_at || ''),
+            createdAt: String(task.created_at || ''),
+            title: String(task.title || ''),
+            summary: String(task.summary || task.result_summary || task.result_text || task.instructions || ''),
+            target: String(task.target_display_name || task.target_agent_id || ''),
+        })));
         renderTaskSummaryStrip(tasks);
         if (!tasks.length) {
-            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated work yet.', true)]);
+            taskBoard.replaceChildren(UI.renderEmptyState('No delegated work yet.', true));
+            delete taskBoard.dataset.laneCount;
+            lastRelatedTaskSignature = nextSignature;
+            return;
+        }
+        if (tasksLoaded && nextSignature === lastRelatedTaskSignature) {
             return;
         }
         const lanes = [
@@ -746,25 +761,48 @@ function renderConversationDetail(container, params) {
             ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
             ['done', 'Done', ['completed']],
         ];
+        const existingLanes = new Map(
+            Array.from(taskBoard.querySelectorAll(':scope > .task-lane')).map((lane) => [lane.dataset.key || '', lane]),
+        );
         const laneNodes = lanes.flatMap(([key, title, statuses]) => {
             const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
             if (!laneTasks.length) return [];
-            const lane = document.createElement('section');
-            lane.className = 'task-lane';
-            lane.dataset.key = key;
-            lane.dataset.lane = key;
-            const laneHeader = document.createElement('div');
-            laneHeader.className = 'task-lane-header';
-            laneHeader.innerHTML = `<strong>${UI.esc(title)}</strong><span>${laneTasks.length}</span>`;
-            lane.appendChild(laneHeader);
-            const laneBody = document.createElement('div');
-            laneBody.className = 'task-lane-body';
-            laneTasks.forEach((task) => laneBody.appendChild(_createConversationTaskCard(task, convoId)));
-            lane.appendChild(laneBody);
+            let lane = existingLanes.get(key);
+            let laneHeader;
+            let laneBody;
+            if (!lane) {
+                lane = document.createElement('section');
+                lane.className = 'task-lane';
+                lane.dataset.key = key;
+                lane.dataset.lane = key;
+
+                laneHeader = document.createElement('div');
+                laneHeader.className = 'task-lane-header';
+                laneHeader.appendChild(document.createElement('strong'));
+                laneHeader.appendChild(document.createElement('span'));
+                lane.appendChild(laneHeader);
+
+                laneBody = document.createElement('div');
+                laneBody.className = 'task-lane-body';
+                lane.appendChild(laneBody);
+            } else {
+                laneHeader = lane.querySelector(':scope > .task-lane-header');
+                laneBody = lane.querySelector(':scope > .task-lane-body');
+            }
+            if (laneHeader) {
+                const titleEl = laneHeader.querySelector('strong');
+                const countEl = laneHeader.querySelector('span');
+                if (titleEl) titleEl.textContent = title;
+                if (countEl) countEl.textContent = String(laneTasks.length);
+            }
+            if (laneBody) {
+                UI.reconcileChildren(laneBody, laneTasks.map((task) => _createConversationTaskCard(task, convoId)));
+            }
             return [lane];
         });
         taskBoard.dataset.laneCount = String(laneNodes.length);
-        UI.reconcileChildren(taskBoard, laneNodes);
+        taskBoard.replaceChildren(...laneNodes);
+        lastRelatedTaskSignature = nextSignature;
     }
 
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {

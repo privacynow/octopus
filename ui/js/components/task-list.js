@@ -15,6 +15,8 @@ function renderTaskList(container) {
     let currentStatus = UI.readQueryParam('status', '');
     let summaryLoaded = false;
     let listLoaded = false;
+    let lastTaskListSignature = '';
+    const expandedTaskIds = new Set();
 
     function isOpaqueIdentifier(value) {
         const text = String(value || '').trim();
@@ -153,6 +155,26 @@ function renderTaskList(container) {
         return task.title || (task.instructions ? String(task.instructions).trim().slice(0, 72) : '') || 'Untitled task';
     }
 
+    function _taskListSignature(tasks, data) {
+        return JSON.stringify({
+            status: currentStatus,
+            cursor,
+            hasMore: !!(data && data.has_more),
+            nextCursor: data && data.next_cursor ? String(data.next_cursor) : '',
+            tasks: (tasks || []).map((task) => ({
+                id: String(task.routed_task_id || ''),
+                status: String(task.status || ''),
+                updatedAt: String(task.updated_at || ''),
+                createdAt: String(task.created_at || ''),
+                summary: String(_taskSummary(task) || ''),
+                title: String(_taskLabel(task) || ''),
+                origin: String(task.origin_display_name || task.origin_agent_id || ''),
+                target: String(task.target_display_name || task.target_agent_id || ''),
+                conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
+            })),
+        });
+    }
+
     function _attachTaskActions(actions, task, statusText) {
         if (['queued', 'submitted', 'leased', 'running'].includes(task.status || '')) {
             const cancelBtn = document.createElement('button');
@@ -211,7 +233,9 @@ function renderTaskList(container) {
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'task-item-row';
-        row.setAttribute('aria-expanded', 'false');
+        const taskId = String(task.routed_task_id || '');
+        const isExpanded = expandedTaskIds.has(taskId);
+        row.setAttribute('aria-expanded', String(isExpanded));
 
         const primary = document.createElement('div');
         primary.className = 'task-item-main';
@@ -252,7 +276,7 @@ function renderTaskList(container) {
 
         const detail = document.createElement('div');
         detail.className = 'task-item-detail';
-        detail.hidden = true;
+        detail.hidden = !isExpanded;
 
         if (summary) {
             const summaryBlock = document.createElement('div');
@@ -298,6 +322,11 @@ function renderTaskList(container) {
             const nextExpanded = detail.hidden;
             detail.hidden = !nextExpanded;
             row.setAttribute('aria-expanded', String(nextExpanded));
+            if (nextExpanded) {
+                expandedTaskIds.add(taskId);
+            } else {
+                expandedTaskIds.delete(taskId);
+            }
         });
 
         return item;
@@ -316,11 +345,36 @@ function renderTaskList(container) {
     }
 
     function renderList(tasks, data) {
-        if (!tasks.length) {
-            UI.reconcileChildren(listEl, [UI.renderEmptyState(currentStatus ? 'No tasks in this state.' : 'No tasks yet.', true)]);
-            UI.reconcileChildren(pagEl, []);
+        const nextSignature = _taskListSignature(tasks, data);
+        if (listLoaded && nextSignature === lastTaskListSignature) {
+            renderPaginationState({
+                hasPrev: cursorStack.length > 0,
+                hasNext: !!data.has_more,
+                onPrev: () => {
+                    cursor = cursorStack.pop() || 0;
+                    loadList();
+                },
+                onNext: () => {
+                    cursorStack.push(cursor);
+                    cursor = data.next_cursor;
+                    loadList();
+                },
+            });
             return;
         }
+
+        if (!tasks.length) {
+            expandedTaskIds.clear();
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(currentStatus ? 'No tasks in this state.' : 'No tasks yet.', true)]);
+            UI.reconcileChildren(pagEl, []);
+            lastTaskListSignature = nextSignature;
+            return;
+        }
+
+        const visibleTaskIds = new Set(tasks.map((task) => String(task.routed_task_id || '')));
+        Array.from(expandedTaskIds).forEach((taskId) => {
+            if (!visibleTaskIds.has(taskId)) expandedTaskIds.delete(taskId);
+        });
 
         UI.reconcileChildren(listEl, tasks.map(createTaskItem));
         renderPaginationState({
@@ -337,6 +391,7 @@ function renderTaskList(container) {
             },
         });
         listLoaded = true;
+        lastTaskListSignature = nextSignature;
     }
 
     function loadSummary({ soft = false } = {}) {

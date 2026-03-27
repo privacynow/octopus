@@ -747,7 +747,7 @@ function renderConversationDetail(container, params) {
         })));
         renderTaskSummaryStrip(tasks);
         if (!tasks.length) {
-            taskBoard.replaceChildren(UI.renderEmptyState('No delegated work yet.', true));
+            UI.reconcileChildren(taskBoard, [UI.renderEmptyState('No delegated work yet.', true)]);
             delete taskBoard.dataset.laneCount;
             lastRelatedTaskSignature = nextSignature;
             return;
@@ -761,47 +761,32 @@ function renderConversationDetail(container, params) {
             ['attention', 'Needs follow-up', ['failed', 'cancelled', 'timed_out']],
             ['done', 'Done', ['completed']],
         ];
-        const existingLanes = new Map(
-            Array.from(taskBoard.querySelectorAll(':scope > .task-lane')).map((lane) => [lane.dataset.key || '', lane]),
-        );
         const laneNodes = lanes.flatMap(([key, title, statuses]) => {
             const laneTasks = tasks.filter((task) => statuses.includes(task.status || ''));
             if (!laneTasks.length) return [];
-            let lane = existingLanes.get(key);
-            let laneHeader;
-            let laneBody;
-            if (!lane) {
-                lane = document.createElement('section');
-                lane.className = 'task-lane';
-                lane.dataset.key = key;
-                lane.dataset.lane = key;
+            const lane = document.createElement('section');
+            lane.className = 'task-lane';
+            lane.dataset.key = key;
+            lane.dataset.lane = key;
 
-                laneHeader = document.createElement('div');
-                laneHeader.className = 'task-lane-header';
-                laneHeader.appendChild(document.createElement('strong'));
-                laneHeader.appendChild(document.createElement('span'));
-                lane.appendChild(laneHeader);
+            const laneHeader = document.createElement('div');
+            laneHeader.className = 'task-lane-header';
+            const titleEl = document.createElement('strong');
+            titleEl.textContent = title;
+            laneHeader.appendChild(titleEl);
+            const countEl = document.createElement('span');
+            countEl.textContent = String(laneTasks.length);
+            laneHeader.appendChild(countEl);
+            lane.appendChild(laneHeader);
 
-                laneBody = document.createElement('div');
-                laneBody.className = 'task-lane-body';
-                lane.appendChild(laneBody);
-            } else {
-                laneHeader = lane.querySelector(':scope > .task-lane-header');
-                laneBody = lane.querySelector(':scope > .task-lane-body');
-            }
-            if (laneHeader) {
-                const titleEl = laneHeader.querySelector('strong');
-                const countEl = laneHeader.querySelector('span');
-                if (titleEl) titleEl.textContent = title;
-                if (countEl) countEl.textContent = String(laneTasks.length);
-            }
-            if (laneBody) {
-                UI.reconcileChildren(laneBody, laneTasks.map((task) => _createConversationTaskCard(task, convoId)));
-            }
+            const laneBody = document.createElement('div');
+            laneBody.className = 'task-lane-body';
+            lane.appendChild(laneBody);
+            UI.reconcileChildren(laneBody, laneTasks.map((task) => _createConversationTaskCard(task, convoId)));
             return [lane];
         });
         taskBoard.dataset.laneCount = String(laneNodes.length);
-        taskBoard.replaceChildren(...laneNodes);
+        UI.reconcileChildren(taskBoard, laneNodes);
         lastRelatedTaskSignature = nextSignature;
     }
 

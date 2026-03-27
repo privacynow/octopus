@@ -18,16 +18,18 @@ Octopus is four cooperating systems:
 ```mermaid
 flowchart LR
     Operator["Operator"] --> CLI["./octopus"]
-    Browser["Operator Browser"] --> UI["Registry SPA /ui"]
+    Operator --> Browser["Operator browser"]
     Telegram["Telegram"] --> Bot["Bot application<br/>python -m app.main"]
 
-    CLI --> Deploy[".deploy/ + Docker/Compose"]
+    CLI --> Deploy[".deploy state<br/>Docker Compose"]
     Deploy --> Bot
-    Deploy --> Registry["Registry service<br/>FastAPI + websocket + SPA"]
+    Deploy --> Registry["Registry service<br/>HTTP API + websocket + UI"]
 
+    Browser --> Registry
     Bot --> Provider["Claude / Codex"]
     Bot <--> Registry
-    UI --> Registry
+    Bot --> SDK["octopus_sdk"]
+    Registry --> SDK
 ```
 
 ### Layering
@@ -39,30 +41,54 @@ it shows code ownership boundaries and the main dependency direction between
 ```mermaid
 flowchart TB
     CLI["./octopus"]
-    UI["Registry SPA"]
-    Main["app/main"]
-    Telegram["Telegram transport"]
-    Slack["Slack transport (later)"]
-    Providers["Providers"]
-    Workflows["Workflows / adapters"]
-    SDK["octopus_sdk"]
-    Api["Registry API"]
-    Store["Registry store"]
+
+    subgraph App["app/"]
+        Main["main.py"]
+        Startup["runtime/startup.py"]
+        Services["runtime/services.py"]
+        Builders["runtime/transport_builders.py"]
+        BotServices["runtime/bot_services.py"]
+        Telegram["channels/telegram/*"]
+        RegistryTransport["channels/registry/channel.py<br/>channels/registry/delivery_transport.py"]
+        Workflows["workflows/*"]
+        ControlPlane["control_plane/*<br/>runtime/registry_participant.py"]
+        Providers["providers/*"]
+    end
+
+    subgraph SDK["octopus_sdk/"]
+        Runtime["bot_runtime.py"]
+        Transport["transport.py"]
+        Participant["registry_participant.py"]
+        Models["registry.models<br/>events<br/>realtime"]
+        Ports["workflow + support ports"]
+        ProviderSdk["providers.py"]
+    end
+
+    subgraph Registry["registry service"]
+        Api["channels/registry/http.py<br/>channels/registry/ws.py"]
+        Store["registry_service/*"]
+    end
 
     CLI --> Main
-    UI --> Api
-    Main --> Api
+    Main --> Startup
+    Main --> Services
+    Services --> BotServices
+    Services --> Builders
+    Services --> Runtime
+    Builders --> Telegram
+    Builders --> RegistryTransport
+    Builders --> Transport
+    BotServices --> Workflows
+    BotServices --> ControlPlane
+    BotServices --> Providers
+    Workflows --> Ports
+    ControlPlane --> Participant
+    Providers --> ProviderSdk
+    Telegram --> Transport
+    RegistryTransport --> Transport
     Api --> Store
-
-    Main --> Telegram
-    Main --> Slack
-    Main --> Providers
-    Main --> Workflows
-
-    Telegram --> Api
-    Slack --> Api
-    Providers --> SDK
-    Workflows --> SDK
+    Api --> Models
+    Store --> Models
 ```
 
 ## Deployment And Process Model
@@ -266,13 +292,14 @@ flowchart TB
     subgraph Bot["Slack bot process"]
         direction TB
         Bolt["Bolt for Python"]
-        Transport["Slack transport<br/>octopus_sdk.transport"]
-        Runtime["Bot runtime<br/>octopus_sdk.bot_runtime"]
-        Participant["Registry participant<br/>octopus_sdk.registry_participant"]
+        Transport["Slack transport"]
+        Runtime["BotRuntime"]
+        Participant["Registry participant"]
     end
 
     Provider["Claude / Codex"]
     Registry["Registry service"]
+    SDK["octopus_sdk contracts"]
 
     Slack <--> Bolt
     Bolt <--> Transport
@@ -280,6 +307,9 @@ flowchart TB
     Runtime <--> Provider
     Runtime <--> Participant
     Participant <--> Registry
+    Transport --> SDK
+    Runtime --> SDK
+    Participant --> SDK
 ```
 
 The transport split would look like this:
@@ -305,21 +335,21 @@ sequenceDiagram
     participant S as Slack
     participant Bolt as Bolt
     participant Transport as Slack transport
-    participant Runtime as SDK runtime
+    participant Runtime as BotRuntime
     participant Participant as Registry participant
     participant Provider as Provider
     participant Registry as Registry service
 
     Note over Bolt,Participant: Slack bot process
     S->>Bolt: events / commands
-    Bolt->>Transport: normalize inbound
-    Transport->>Runtime: identity + input
+    Bolt->>Transport: incoming Slack event
+    Transport->>Runtime: submit inbound envelope
     Runtime->>Provider: run / preflight
-    Runtime->>Transport: reply / actions / artifacts
+    Runtime->>Transport: reply / progress / actions
     Transport->>Bolt: outbound requests
     Bolt->>S: messages / files / updates
-    Runtime->>Participant: publish, search, route
-    Participant->>Registry: authority client calls
+    Runtime->>Participant: publish / search / route
+    Participant->>Registry: authority client requests
 ```
 
 That keeps Slack-specific code in `app/channels/slack/` while reusing the SDK
@@ -496,16 +526,21 @@ This is the normal inbound execution path for a Telegram-originated request.
 sequenceDiagram
     participant U as User
     participant T as Telegram
-    participant X as Runtime
+    participant TT as Telegram transport
+    participant BR as BotRuntime
+    participant WQ as Work queue
+    participant WD as Worker dispatch
     participant P as Provider
-    participant S as Event sink
-    participant O as Outbound
+    participant RP as Registry participant
 
     U->>T: message
-    T->>X: normalized work
-    X->>P: run / preflight
-    X->>S: publish events
-    X->>O: reply / actions / progress
+    T->>TT: update
+    TT->>BR: submit inbound envelope
+    BR->>WQ: record and admit
+    WQ->>WD: claim queued work
+    WD->>P: run / preflight
+    WD->>RP: publish events / task updates
+    WD->>TT: reply / actions / progress
 ```
 
 ### Registry Projection
@@ -514,16 +549,20 @@ This is how execution events become stored registry conversation activity.
 
 ```mermaid
 sequenceDiagram
-    participant X as Runtime
-    participant S as Registry sink
-    participant P as Projection port
+    participant WD as Worker dispatch
+    participant RP as Registry participant
+    participant CP as Control-plane adapters
     participant B as Bus
-    participant R as Registry
+    participant PR as Processor runner
+    participant C as Registry client
+    participant R as Registry service
 
-    X->>S: publish lifecycle
-    S->>P: create / publish
-    P->>B: control command
-    B->>R: apply projection
+    WD->>RP: create conversation / publish events
+    RP->>CP: projection / routing / health ports
+    CP->>B: control command
+    B->>PR: leased bus work
+    PR->>C: registry authority request
+    C->>R: HTTP API call
 ```
 
 ### Delegation And Routed Tasks
@@ -532,18 +571,18 @@ This is how one bot delegates work to another through the registry now.
 
 ```mermaid
 sequenceDiagram
-    participant O as Origin bot
-    participant X as SDK execution
-    participant P as Projection
-    participant R as Registry
-    participant G as Target bot
+    participant O as Origin runtime or UI
+    participant RP as Registry participant
+    participant R as Registry service
+    participant DT as Registry delivery transport
+    participant G as Target runtime
 
-    O->>X: provider result with coordination_intent
-    X->>P: submit typed action
-    P->>R: direct_assign / delegate_tasks / approve_delegation
-    R->>G: deliver task
-    G->>R: status / result
-    R->>O: deliver result
+    O->>RP: direct_assign / delegate_tasks
+    RP->>R: typed action + routed task request
+    R->>DT: delivery available
+    DT->>G: submit routed task envelope
+    G->>R: task status / result
+    R->>O: mirrored task.status + routed result
 ```
 
 Parent conversations also receive mirrored `task.status` events so delegated

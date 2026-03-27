@@ -1,79 +1,95 @@
-"""Runtime-owned shared service containers."""
+"""Runtime composition builders."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
 from dataclasses import dataclass
 
+from app.agents.registry_capabilities import (
+    registry_authority_capabilities,
+    registry_id_from_authority_ref,
+)
+from app.agents.state import runtime_registry_agent_id
 from app.control_plane.bus import ControlPlaneBus
-from app.control_plane.directory import ControlPlaneDirectory
-from octopus_sdk.agent_directory import AgentDirectoryPort
-from octopus_sdk.agent_directory import NoOpAgentDirectory
-from octopus_sdk.conversation_projection import ConversationProjectionPort
-from octopus_sdk.conversation_projection import NoOpConversationProjection
-from octopus_sdk.health_publication import HealthPublicationPort
-from octopus_sdk.health_publication import NoOpHealthPublication
-from octopus_sdk.task_routing import TaskRoutingPort
-from octopus_sdk.task_routing import NoOpTaskRouting
+from app.control_plane.directory import build_control_plane_directory
+from app.config import BotConfig
+from app.runtime.bot_services import BotServices, ControlPlaneServices, build_bus_bot_services
+from app.runtime.startup import runs_registry_transport
+from app.runtime.session_runtime import LocalSessionRuntime
+from octopus_sdk.bot_runtime import BotRuntime
+from octopus_sdk.providers import Provider
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ControlPlaneServices:
-    conversation_projection: ConversationProjectionPort
-    task_routing: TaskRoutingPort
-    agent_directory: AgentDirectoryPort
-    health_publication: HealthPublicationPort
+class RuntimeBuild:
+    boot_id: str
+    services: BotServices
+    bot_runtime: BotRuntime
 
 
-@dataclass(frozen=True)
-class BotServices:
-    control_plane: ControlPlaneServices
+def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
+    from app.runtime.transport_builders import build_runtime_transport_stack
 
+    bus = ControlPlaneBus(config.data_dir)
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
+    )
+    directory = build_control_plane_directory(authority_capabilities)
 
-def build_noop_control_plane_services() -> ControlPlaneServices:
-    return ControlPlaneServices(
-        conversation_projection=NoOpConversationProjection(),
-        task_routing=NoOpTaskRouting(),
-        agent_directory=NoOpAgentDirectory(),
-        health_publication=NoOpHealthPublication(),
+    def _agent_id_for_authority(authority_ref: str) -> str:
+        try:
+            registry_id = registry_id_from_authority_ref(authority_ref)
+        except ValueError:
+            return ""
+        registry = next(
+            (item for item in config.agent_registries if item.registry_id == registry_id),
+            None,
+        )
+        return runtime_registry_agent_id(
+            config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope if registry is not None else "full",
+        )
+
+    services = build_bus_bot_services(
+        bus,
+        directory,
+        config=config,
+        agent_id_for_authority=_agent_id_for_authority,
+    )
+    if authority_capabilities and not services.registry.health.live_local_agent_ids():
+        log.warning(
+            "Registry capabilities configured but no agent enrollment found. "
+            "Event publishing and delegation will not work until bots enroll."
+        )
+
+    transport_build = build_runtime_transport_stack(
+        config,
+        provider,
+        services=services,
+        bus=bus,
+        directory=directory,
     )
 
-
-def build_bus_control_plane_services(
-    bus: ControlPlaneBus,
-    directory: ControlPlaneDirectory,
-    *,
-    agent_id_for_authority: Callable[[str], str] | None = None,
-) -> ControlPlaneServices:
-    from app.control_plane.adapters import (
-        BusAgentDirectory,
-        BusConversationProjection,
-        BusHealthPublication,
-        BusTaskRouting,
+    bot_runtime = BotRuntime(
+        config=config,
+        transport=transport_build.dispatcher,
+        registry=services.registry,
+        provider=provider,
+        sessions=LocalSessionRuntime(config),
+        workflows=services.workflows,
+        authorization=services.authorization,
+        work_queue=services.work_queue,
+        boot_id=transport_build.boot_id,
+        worker_processor=transport_build.worker_processor,
     )
 
-    return ControlPlaneServices(
-        conversation_projection=BusConversationProjection(
-            bus, directory, agent_id_for_authority=agent_id_for_authority,
-        ),
-        task_routing=BusTaskRouting(bus, directory),
-        agent_directory=BusAgentDirectory(bus, directory),
-        health_publication=BusHealthPublication(bus, directory),
-    )
-
-
-def build_noop_bot_services() -> BotServices:
-    return BotServices(control_plane=build_noop_control_plane_services())
-
-
-def build_bus_bot_services(
-    bus: ControlPlaneBus,
-    directory: ControlPlaneDirectory,
-    *,
-    agent_id_for_authority: Callable[[str], str] | None = None,
-) -> BotServices:
-    return BotServices(
-        control_plane=build_bus_control_plane_services(
-            bus, directory, agent_id_for_authority=agent_id_for_authority,
-        ),
+    return RuntimeBuild(
+        boot_id=transport_build.boot_id,
+        services=services,
+        bot_runtime=bot_runtime,
     )

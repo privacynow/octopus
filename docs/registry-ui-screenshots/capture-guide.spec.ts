@@ -232,9 +232,20 @@ function eventId(conversationId: string, suffix: string): string {
 }
 
 function buildTimeline(conversationId: string, actor: string, focus = false, pendingApproval = false) {
+  const proposalId = eventId(conversationId, "delegation-proposal");
   const tasks = [
-    { title: "Check rollout checklist", target: "risk-reviewer", status: pendingApproval ? "proposed" : "submitted" },
-    { title: "Validate change window", target: "audit-lead", status: pendingApproval ? "proposed" : "submitted" },
+    {
+      draft_id: `${conversationId}-draft-1`,
+      title: "Check rollout checklist",
+      target: "risk-reviewer",
+      status: pendingApproval ? "proposed" : "submitted",
+    },
+    {
+      draft_id: `${conversationId}-draft-2`,
+      title: "Validate change window",
+      target: "audit-lead",
+      status: pendingApproval ? "proposed" : "submitted",
+    },
   ];
 
   const events: Array<Record<string, unknown>> = [
@@ -323,7 +334,7 @@ function buildTimeline(conversationId: string, actor: string, focus = false, pen
       actor: "",
       content: "",
       created_at: iso(-49),
-      metadata: { tasks },
+      metadata: { proposal_id: proposalId, tasks },
     });
   } else {
     events.push(
@@ -358,7 +369,7 @@ function buildTimeline(conversationId: string, actor: string, focus = false, pen
         actor: "",
         content: "",
         created_at: iso(-47),
-        metadata: { tasks },
+        metadata: { proposal_id: proposalId, tasks },
       },
       {
         event_id: eventId(conversationId, "delegation-completed"),
@@ -367,6 +378,7 @@ function buildTimeline(conversationId: string, actor: string, focus = false, pen
         content: "",
         created_at: iso(-39),
         metadata: {
+          proposal_id: proposalId,
           tasks: tasks.map((task) => ({ ...task, status: "completed" })),
         },
       },
@@ -383,6 +395,7 @@ function buildTimeline(conversationId: string, actor: string, focus = false, pen
         : "Checklist verification is still running.",
       created_at: iso(-28),
       metadata: {
+        routed_task_id: `${conversationId}-task-status`,
         status: pendingApproval ? "queued" : "running",
         progress: pendingApproval ? 12 : 68,
       },
@@ -466,6 +479,18 @@ async function createRoutedTask(
 
 async function updateTaskStatus(agentToken: string, routedTaskId: string, payload: Record<string, unknown>) {
   const resp = await fetch(`${BASE}/v1/agents/routed-tasks/${routedTaskId}/status`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${agentToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  expect(resp.ok, await resp.text()).toBeTruthy();
+}
+
+async function reportTaskResult(agentToken: string, routedTaskId: string, payload: Record<string, unknown>) {
+  const resp = await fetch(`${BASE}/v1/agents/routed-tasks/${routedTaskId}/result`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${agentToken}`,
@@ -659,21 +684,41 @@ test.beforeAll(async () => {
     ["support", "python"],
   );
 
-  await updateTaskStatus(seed.agents[1]!.token, "docs-risk-review", {
+  await reportTaskResult(seed.agents[1]!.token, "docs-risk-review", {
     status: "completed",
+    transition_id: "docs-risk-review-complete",
     summary: "No blocking risks. One deployment note added to the runbook.",
+    full_text: "No blocking risks. One deployment note added to the runbook.",
+    prompt_tokens: 241,
+    completion_tokens: 88,
+    cost_usd: 0.0061,
+    provider: "claude",
+  });
+  await updateTaskStatus(seed.agents[3]!.token, "docs-release-window", {
+    status: "leased",
+    transition_id: "docs-release-window-leased",
+    summary: "Picked up for execution.",
     timeline_events: [],
   });
   await updateTaskStatus(seed.agents[3]!.token, "docs-release-window", {
     status: "running",
+    transition_id: "docs-release-window-running",
     summary: "Validating regional overlap and pager coverage.",
     progress: 54,
     timeline_events: [],
   });
   await updateTaskStatus(seed.agents[5]!.token, "docs-audit-pass", {
-    status: "failed",
-    summary: "One evidence attachment is still missing from the package.",
+    status: "leased",
+    transition_id: "docs-audit-pass-leased",
+    summary: "Picked up for evidence review.",
     timeline_events: [],
+  });
+  await reportTaskResult(seed.agents[5]!.token, "docs-audit-pass", {
+    status: "failed",
+    transition_id: "docs-audit-pass-failed",
+    summary: "One evidence attachment is still missing from the package.",
+    full_text: "One evidence attachment is still missing from the package.",
+    provider: "codex",
   });
 });
 
@@ -690,15 +735,15 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.getByLabel("Password").fill(UI_TOKEN);
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL("**/ui");
-  await expect(page.getByRole("heading", { name: "Registry" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await waitForViewReady(page, ".dashboard-shell");
 
   await page.screenshot({ path: path.join(OUT, "01-dashboard.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "01-dashboard.png"), [
     { selector: "#sidebar", label: "Primary navigation", color: "#ff9800", pad: 6 },
-    { selector: ".dashboard-lead", label: "Start with the next decision, not the raw telemetry", color: "#2196f3", pad: 8 },
-    { selector: ".attention-grid", label: "Action-first panels for approvals, health, and failed work", color: "#4caf50", pad: 8 },
-    { selector: ".dashboard-grid-wide", label: "Preview lists for review work, conversations, and failures", color: "#9c27b0", pad: 8 },
+    { selector: ".summary-rail", label: "Summary rail for open conversations, running work, follow-up, and agent health", color: "#2196f3", pad: 8 },
+    { selector: '[data-key="needs-attention"]', label: "Needs-attention queue for approvals, failed work, and unhealthy agents", color: "#4caf50", pad: 8 },
+    { selector: ".dashboard-work-grid", label: "Direct jump lists for conversations, tasks, and agents", color: "#9c27b0", pad: 8 },
   ]);
 
   await page.goto("/ui/approvals");
@@ -715,35 +760,35 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await waitForViewReady(page, "#agent-list-content .list-row");
   await page.screenshot({ path: path.join(OUT, "02-agents.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "02-agents.png"), [
-    { selector: ".filter-bar", label: "Server-side search and state filters", color: "#ff9800", pad: 6 },
-    { selector: "#agent-list-content .list-row:nth-child(1)", label: "Agent row → detail", color: "#2196f3", pad: 6 },
-    { selector: "#agent-list-content .list-row:nth-child(2)", label: "Additional enrolled registry member", color: "#4caf50", pad: 6 },
+    { selector: ".route-controls", label: "Server-side search plus segmented connectivity filters", color: "#ff9800", pad: 6 },
+    { selector: "#agent-list-content .list-row-shell:nth-child(1)", label: "Agent row with connectivity context", color: "#2196f3", pad: 6 },
+    { selector: "#agent-list-content .list-row-action", label: "Direct Open action to reuse or start a conversation", color: "#4caf50", pad: 6 },
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);
-  await waitForViewReady(page, "#agent-detail-content .card");
+  await waitForViewReady(page, '.agent-detail-grid [data-key="overview"]');
   await page.screenshot({ path: path.join(OUT, "03-agent-detail.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "03-agent-detail.png"), [
-    { selector: ".page-header", label: "Identity, role, provider, and connectivity", color: "#ff9800", pad: 6 },
-    { selector: "#agent-detail-content .card:first-of-type", label: "Registry identity, scope, heartbeat, capabilities, and tags", color: "#2196f3", pad: 8 },
-    { selector: "#agent-detail-content .card:nth-of-type(2)", label: "Worker state from runtime heartbeat", color: "#9c27b0", pad: 8 },
-    { selector: "#agent-convos-section", label: "Inline conversations for this agent", color: "#4caf50", pad: 8 },
+    { selector: ".workspace-header", label: "Compact header with direct Open conversation action", color: "#ff9800", pad: 6 },
+    { selector: '.agent-detail-grid [data-key="overview"]', label: "Registry identity, scope, version, and heartbeat", color: "#2196f3", pad: 8 },
+    { selector: '.agent-detail-grid [data-key="workers"]', label: "Worker state published by runtime heartbeat", color: "#9c27b0", pad: 8 },
+    { selector: '.agent-detail-grid [data-key="conversations"]', label: "Inline conversations for this agent", color: "#4caf50", pad: 8 },
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}/conversations`);
-  await waitForViewReady(page, "#agent-convos .list-row, #agent-convos .empty-state");
+  await waitForViewReady(page, '.agent-detail-grid [data-key="conversations"]');
   await page.screenshot({ path: path.join(OUT, "04-agent-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "04-agent-conversations.png"), [
-    { selector: "#agent-convos", label: "All conversations scoped to the selected agent", color: "#2196f3", pad: 8 },
+    { selector: '.agent-detail-grid [data-key="conversations"]', label: "Compatibility route that lands on the same inline conversations workspace", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/conversations");
-  await waitForViewReady(page, ".list-container .list-row");
+  await waitForViewReady(page, ".quickstart-shell");
   await page.screenshot({ path: path.join(OUT, "05-conversations.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05-conversations.png"), [
-    { selector: ".action-bar", label: "Start a conversation or jump to the approvals queue", color: "#4caf50", pad: 6 },
-    { selector: ".filter-bar", label: "Server-backed search and status filter", color: "#ff9800", pad: 6 },
-    { selector: ".list-container .list-row:nth-of-type(1)", label: "Conversation row → timeline detail", color: "#2196f3", pad: 6 },
+    { selector: ".quickstart-shell", label: "Connected-agent quick start plus overflow path to the full agent roster", color: "#4caf50", pad: 6 },
+    { selector: ".route-controls", label: "Server-backed search and segmented status filter", color: "#ff9800", pad: 6 },
+    { selector: ".list-container .list-row:nth-of-type(1)", label: "Conversation row → conversation workspace", color: "#2196f3", pad: 6 },
   ]);
 
   await page.locator(".search-input").first().fill("Release");
@@ -751,26 +796,28 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await waitForViewReady(page, ".list-container .list-row");
   await page.screenshot({ path: path.join(OUT, "05b-conversations-filtered.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "05b-conversations-filtered.png"), [
-    { selector: ".search-input", label: "Search activates after 3+ characters", color: "#ff9800", pad: 6 },
-    { selector: ".list-container .list-row:nth-of-type(1)", label: "Filtered results from registry search", color: "#2196f3", pad: 6 },
+    { selector: ".search-input", label: "Debounced server-side conversation search", color: "#ff9800", pad: 6 },
+    { selector: ".list-container .list-row:nth-of-type(1)", label: "Filtered results from the registry conversation index", color: "#2196f3", pad: 6 },
   ]);
 
   await page.goto(`/ui/conversations/${seed.focusConversationId}`);
-  await waitForViewReady(page, ".timeline-events .event-card, .timeline-events .chat-bubble");
+  await waitForViewReady(page, ".conversation-shell");
   await page.screenshot({ path: path.join(OUT, "06-conversation-detail.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "06-conversation-detail.png"), [
-    { selector: ".conversation-meta", label: "Readable summary: who this is with, source, status, and reference", color: "#ff9800", pad: 6 },
-    { selector: ".conversation-toolbar", label: "Default conversation view plus optional full activity log", color: "#4caf50", pad: 6 },
-    { selector: ".chat-timeline", label: "Human-first conversation flow with approvals and progress updates", color: "#2196f3", pad: 8 },
-    { selector: ".compose-box", label: "Operator compose box for /messages", color: "#9c27b0", pad: 6 },
+    { selector: ".conversation-meta", label: "Compact operator-facing header with With / Assigned to / Started in, status, activity shortcut, and Copy ref action", color: "#ff9800", pad: 6 },
+    { selector: ".conversation-toolbar", label: "Conversation, Tasks, and Full activity views", color: "#4caf50", pad: 6 },
+    { selector: ".chat-timeline", label: "Conversation view with messages, approvals, delegation milestones, and task status updates", color: "#2196f3", pad: 8 },
+    { selector: ".compose-box", label: "Shared composer for normal replies and leading-@ direct routing", color: "#9c27b0", pad: 6 },
   ]);
 
   await page.goto("/ui/tasks");
-  await waitForViewReady(page, ".task-list-item");
+  await waitForViewReady(page, ".task-item");
+  await page.locator(".task-item-row").first().click();
   await page.screenshot({ path: path.join(OUT, "07-tasks.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "07-tasks.png"), [
-    { selector: ".filter-bar", label: "Status filter for routed work", color: "#ff9800", pad: 6 },
-    { selector: ".task-list-item:nth-of-type(1)", label: "Task rows expand inline and link to parent conversation", color: "#2196f3", pad: 8 },
+    { selector: ".summary-rail", label: "Summary rail for pending, running, and follow-up work", color: "#ff9800", pad: 6 },
+    { selector: ".segmented-control", label: "Segmented task status filter", color: "#4caf50", pad: 6 },
+    { selector: ".task-item:nth-of-type(1)", label: "Expandable task row with origin, target, and parent conversation actions", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/capabilities");
@@ -781,20 +828,20 @@ test("capture all registry UI surfaces", async ({ page }) => {
   ]);
 
   await page.goto("/ui/skills");
-  await waitForViewReady(page, ".card, .empty-state");
+  await waitForViewReady(page, ".list-row-shell, .empty-state");
   await page.screenshot({ path: path.join(OUT, "09-skills.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "09-skills.png"), [
     { selector: ".search-input", label: "Client-side search across the skill catalog", color: "#ff9800", pad: 6 },
-    { selector: ".card:nth-of-type(1)", label: "Catalog row with install or uninstall action", color: "#2196f3", pad: 6 },
+    { selector: ".list-row-shell:nth-of-type(1)", label: "Catalog row with install or uninstall action", color: "#2196f3", pad: 6 },
   ]);
 
   await page.goto("/ui/usage");
   await waitForViewReady(page, "#usage-table table, #usage-table .empty-state");
   await page.screenshot({ path: path.join(OUT, "10-usage.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "10-usage.png"), [
-    { selector: ".date-range-bar", label: "Date-range shortcuts map to /v1/usage", color: "#ff9800", pad: 6 },
-    { selector: "#usage-summary", label: "Prompt, completion, and cost summary", color: "#2196f3", pad: 6 },
-    { selector: "#usage-table", label: "Per-conversation usage rollups from provider.response events", color: "#4caf50", pad: 6 },
+    { selector: ".segmented-control", label: "Date-range shortcuts map to /v1/usage", color: "#ff9800", pad: 6 },
+    { selector: ".summary-rail", label: "Prompt, completion, and cost summary", color: "#2196f3", pad: 6 },
+    { selector: "#usage-table", label: "Per-conversation usage rollups, including delegated child usage when reported", color: "#4caf50", pad: 6 },
   ]);
 
   await seedGuidanceDraft(page);
@@ -802,14 +849,14 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await waitForViewReady(page, ".guidance-textarea");
   await page.screenshot({ path: path.join(OUT, "11-guidance.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "11-guidance.png"), [
-    { selector: ".filter-bar", label: "Provider selector", color: "#ff9800", pad: 6 },
-    { selector: ".card:first-of-type", label: "Lifecycle status for the selected provider guidance", color: "#2196f3", pad: 8 },
+    { selector: ".segmented-control", label: "Provider selector", color: "#ff9800", pad: 6 },
+    { selector: ".editor-panel:first-of-type", label: "Lifecycle status for the selected provider guidance", color: "#2196f3", pad: 8 },
     { selector: ".guidance-textarea", label: "Draft system prompt body", color: "#4caf50", pad: 8 },
-    { selector: ".card-actions", label: "Preview and lifecycle actions", color: "#9c27b0", pad: 8 },
+    { selector: ".editor-actions", label: "Preview and lifecycle actions", color: "#9c27b0", pad: 8 },
   ]);
 
   await page.goto(`/ui/agents/${seed.focusAgentId}`);
-  await waitForViewReady(page, "#agent-detail-content");
+  await waitForViewReady(page, ".agent-detail-grid");
   await page.screenshot({ path: path.join(OUT, "12-agent-detail-deep-link.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "12-agent-detail-deep-link.png"), [
     { selector: "#content", label: "Direct deep link to /ui/agents/{agent_id}", color: "#4caf50", pad: 6 },
@@ -820,5 +867,38 @@ test("capture all registry UI surfaces", async ({ page }) => {
   await page.screenshot({ path: path.join(OUT, "13-conversation-deep-link.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "13-conversation-deep-link.png"), [
     { selector: ".conversation-page", label: "Direct deep link to /ui/conversations/{conversation_id}", color: "#4caf50", pad: 6 },
+  ]);
+});
+
+test("capture mobile registry docs views", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/ui/login");
+  await page.getByLabel("Password").fill(UI_TOKEN);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL("**/ui");
+  await waitForViewReady(page, ".dashboard-shell");
+
+  await page.screenshot({ path: path.join(OUT, "14-mobile-dashboard.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "14-mobile-dashboard.png"), [
+    { selector: "#hamburger", label: "Sidebar drawer trigger on mobile", color: "#ff9800", pad: 6 },
+    { selector: ".summary-rail", label: "Summary cards collapse into a single vertical rail", color: "#2196f3", pad: 8 },
+    { selector: ".dashboard-work-grid", label: "Attention sections stack into one reading column", color: "#4caf50", pad: 8 },
+  ]);
+
+  await page.goto("/ui/approvals");
+  await waitForViewReady(page, ".approval-card");
+  await page.screenshot({ path: path.join(OUT, "15-mobile-approvals.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "15-mobile-approvals.png"), [
+    { selector: ".approval-card:nth-of-type(1)", label: "Approval cards remain action-first on small screens", color: "#2196f3", pad: 8 },
+    { selector: ".approval-actions", label: "Open, approve, and reject stay reachable without extra drill-in", color: "#4caf50", pad: 8 },
+  ]);
+
+  await page.goto(`/ui/conversations/${seed.focusConversationId}`);
+  await waitForViewReady(page, ".conversation-shell");
+  await page.screenshot({ path: path.join(OUT, "16-mobile-conversation.png"), fullPage: true });
+  await writeOverlayMeta(page, path.join(OUT, "16-mobile-conversation.png"), [
+    { selector: ".conversation-meta", label: "Header metadata stacks into one readable mobile block with action shortcuts preserved", color: "#ff9800", pad: 6 },
+    { selector: ".conversation-toolbar", label: "Conversation, Tasks, and Full activity remain in one segmented control", color: "#4caf50", pad: 6 },
+    { selector: ".compose-box", label: "Composer stays inside the conversation workspace", color: "#2196f3", pad: 8 },
   ]);
 });

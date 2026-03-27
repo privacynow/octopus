@@ -9,27 +9,27 @@ Worker-owned test model (authoritative):
 import asyncio
 import contextlib
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
-from app.agents.delivery import build_registry_delivery_runtime
+from app.channels.registry.delivery_transport import build_registry_delivery_runtime
 from app.agents.registry_capabilities import registry_authority_capabilities, registry_id_from_authority_ref
-import app.channels.telegram.execution as _telegram_execution
-import app.channels.telegram.ingress as _th
-import app.channels.telegram.progress as _telegram_progress
-import app.channels.telegram.worker as _telegram_worker
+import app.runtime.telegram_execution as _telegram_execution
+import app.runtime.telegram_ingress as _th
+import app.runtime.telegram_worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
 from app.channels.registry.channel import register_registry_channels
-from app.channels.telegram.channel import TelegramChannelBootstrap
-from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
+from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
-from octopus_sdk.providers import RunResult
-from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.runtime.services import build_bus_bot_services, build_noop_bot_services
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunResult
+from octopus_sdk.sessions import PendingApproval, PendingRetry
+from app.runtime.transport_dispatcher import TransportDispatcher
+from app.runtime.services import build_bus_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
@@ -37,6 +37,72 @@ from tests.support.config_support import make_config as _make_config
 
 _TEST_RUNTIME: TelegramRuntime | None = None
 _TEST_APPLICATION = None
+
+
+def pending_approval_dict(
+    *,
+    actor_key: str = "tg:42",
+    prompt: str = "test",
+    image_paths: list[str] | None = None,
+    attachment_dicts: list[dict[str, object]] | None = None,
+    context_hash: str = "",
+    callback_token: str = "",
+    trust_tier: str = "trusted",
+    created_at: float | str | None = None,
+) -> dict[str, object]:
+    pending = PendingApproval(
+        actor_key=actor_key,
+        prompt=prompt,
+        image_paths=list(image_paths or []),
+        attachment_dicts=list(attachment_dicts or []),
+        context_hash=context_hash,
+        callback_token=callback_token,
+        trust_tier=trust_tier,
+        created_at=time.time() if created_at is None else created_at,
+    )
+    return {
+        "actor_key": pending.actor_key,
+        "prompt": pending.prompt,
+        "image_paths": list(pending.image_paths),
+        "attachment_dicts": [attachment.to_dict() for attachment in pending.attachment_dicts],
+        "context_hash": pending.context_hash,
+        "callback_token": pending.callback_token,
+        "trust_tier": pending.trust_tier,
+        "created_at": pending.created_at,
+    }
+
+
+def pending_retry_dict(
+    *,
+    actor_key: str = "tg:42",
+    prompt: str = "test",
+    image_paths: list[str] | None = None,
+    context_hash: str = "",
+    denials: list[DenialRecord] | list[dict[str, object]] | None = None,
+    callback_token: str = "",
+    trust_tier: str = "trusted",
+    created_at: float | str | None = None,
+) -> dict[str, object]:
+    pending = PendingRetry(
+        actor_key=actor_key,
+        prompt=prompt,
+        image_paths=list(image_paths or []),
+        context_hash=context_hash,
+        denials=list(denials or []),
+        callback_token=callback_token,
+        trust_tier=trust_tier,
+        created_at=time.time() if created_at is None else created_at,
+    )
+    return {
+        "actor_key": pending.actor_key,
+        "prompt": pending.prompt,
+        "image_paths": list(pending.image_paths),
+        "context_hash": pending.context_hash,
+        "denials": [denial.to_dict() for denial in pending.denials],
+        "callback_token": pending.callback_token,
+        "trust_tier": pending.trust_tier,
+        "created_at": pending.created_at,
+    }
 
 
 def current_runtime() -> TelegramRuntime:
@@ -47,16 +113,20 @@ def current_runtime() -> TelegramRuntime:
 
 def current_execution_runtime():
     runtime = current_runtime()
-    collaborators = _telegram_execution.bind_execution_collaborators(
-        runtime,
-        progress_factory=_telegram_progress.TelegramProgress,
-        keep_typing_fn=_telegram_progress.keep_typing,
-        heartbeat_fn=_telegram_progress.heartbeat,
-        progress_timeline_callback_fn=_telegram_progress.progress_timeline_callback,
-        routed_task_progress_callback_fn=_telegram_progress.routed_task_progress_callback,
-        propose_delegation_plan_fn=_propose_delegation_plan,
+    return _telegram_execution.build_execution_runtime(runtime)
+
+
+def current_transport_identity(message, chat_id: int | str, *, actor_key: str = ""):
+    return _telegram_execution.build_transport_identity(
+        current_runtime(),
+        message,
+        chat_id,
+        actor_key=actor_key,
     )
-    return _telegram_execution.build_execution_runtime(runtime, collaborators=collaborators)
+
+
+def current_execution_message(message):
+    return _telegram_execution.TelegramExecutionMessage(current_runtime(), message)
 
 
 def current_shared_runtime_builders():
@@ -144,7 +214,8 @@ def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-bo
             item.registry_id: item.registry_scope
             for item in getattr(cfg, "agent_registries", ())
         }
-        for registry_id, agent_id in getattr(cfg, "registry_agent_ids", {}).items():
+        seeded_agent_ids = getattr(cfg, "_test_registry_agent_ids", {})
+        for registry_id, agent_id in seeded_agent_ids.items():
             if not str(agent_id or "").strip():
                 continue
             save_registry_connection_state(
@@ -230,7 +301,7 @@ class FakeMessage:
         self.replies = []
         self.deleted = False
         self._user = user
-        self.from_user = user
+        self._user = user
 
     async def reply_text(self, text, **kwargs):
         self.replies.append({"text": text, **kwargs})
@@ -342,10 +413,10 @@ class FakeProvider:
     def new_provider_state(self, conversation_key: str):
         if self.name == "codex":
             del conversation_key
-            return {"thread_id": None}
+            return ProviderStateRecord({"thread_id": None})
         import uuid
         sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
-        return {"session_id": sid, "started": False}
+        return ProviderStateRecord({"session_id": sid, "started": False})
 
     async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
         self.run_calls.append({
@@ -422,8 +493,9 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         services=current_runtime().services,
+        submitter=current_runtime().submitter,
         bot=bot,
-        dispatcher=current_runtime().channel_dispatcher,
+        dispatcher=current_runtime().transport_dispatcher,
     )
 
 
@@ -563,13 +635,11 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
-    services = (
-        build_bus_bot_services(
-            ControlPlaneBus(config.data_dir), directory,
-            agent_id_for_authority=_agent_id_for_authority,
-        )
-        if authority_capabilities
-        else build_noop_bot_services()
+    services = build_bus_bot_services(
+        ControlPlaneBus(config.data_dir),
+        directory,
+        config=config,
+        agent_id_for_authority=_agent_id_for_authority,
     )
     _TEST_RUNTIME = build_telegram_runtime(
         config,
@@ -578,11 +648,16 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         bot_instance=test_bot,
         services=services,
     )
-    dispatcher = ChannelDispatcher()
-    dispatcher.register(TelegramChannelBootstrap(config, provider, services))
+    dispatcher = TransportDispatcher()
+    dispatcher.register(TelegramTransport(config, provider, services))
     if config.agent_mode == "registry" and config.agent_registries:
-        register_registry_channels(config, config.agent_registries, dispatcher)
-    _TEST_RUNTIME.channel_dispatcher = dispatcher
+        register_registry_channels(
+            config,
+            config.agent_registries,
+            dispatcher,
+            services=services,
+        )
+    _TEST_RUNTIME.transport_dispatcher = dispatcher
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 
@@ -621,16 +696,16 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     an item was drained, False if queue was empty.
     """
     from octopus_sdk.inbound_types import deserialize_inbound
-    from app.workflows.recovery.results import TransportStateCorruption
+    from octopus_sdk.work_queue import TransportStateCorruption
 
     runtime = current_runtime()
     boot_id = runtime.boot_id
     item = _work_queue.claim_next_any(data_dir, boot_id)
     if item is None:
         return False
-    item_id = item["id"]
-    kind = item.get("kind", "message")
-    payload = item.get("payload", "{}")
+    item_id = item.id
+    kind = item.kind or "message"
+    payload = item.payload or "{}"
     try:
         event = deserialize_inbound(kind, payload)
     except Exception:
@@ -699,7 +774,7 @@ async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
 
 
 def bot_texts(bot) -> list[str]:
-    """All text from bot.sent_messages: send text and edit_text in order."""
+    """All text bot.sent_messages: send text and edit_text in order."""
     out = []
     for m in getattr(bot, "sent_messages", []):
         t = m.get("text") or m.get("edit_text")
@@ -728,7 +803,7 @@ def has_markup_removal(msg_or_replies):
 
 
 def get_callback_data_values(reply):
-    """Extract callback_data strings from a reply_markup InlineKeyboardMarkup."""
+    """Extract callback_data strings a reply_markup InlineKeyboardMarkup."""
     markup = reply.get("reply_markup")
     if markup is None:
         return []

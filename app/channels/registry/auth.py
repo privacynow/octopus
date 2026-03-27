@@ -206,7 +206,7 @@ def clear_ui_session(request: Request) -> None:
 # ---------------------------------------------------------------------------
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
-    """Extract bearer token from Authorization header, or None."""
+    """Extract bearer token Authorization header, or None."""
     if authorization and authorization.startswith("Bearer "):
         return authorization.removeprefix("Bearer ").strip() or None
     return None

@@ -2,16 +2,47 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from octopus_sdk.identity import telegram_numeric_id
+from octopus_sdk.providers import JsonValue
 
 
 _SOURCE_MISSING = object()
+
+
+@dataclass(frozen=True)
+class InboundActionParamsRecord(Mapping[str, JsonValue]):
+    values: dict[str, JsonValue] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> JsonValue:
+        return self.values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def get(self, key: str, default: JsonValue = None) -> JsonValue:
+        return self.values.get(key, default)
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return dict(self.values)
+
+
+def coerce_inbound_action_params(
+    value: InboundActionParamsRecord | Mapping[str, JsonValue] | None,
+) -> InboundActionParamsRecord:
+    if isinstance(value, InboundActionParamsRecord):
+        return value
+    if value is None:
+        return InboundActionParamsRecord()
+    return InboundActionParamsRecord(dict(value))
 
 
 def _validated_source(source: object) -> str:
@@ -114,7 +145,7 @@ class InboundAction:
     user: InboundUser
     conversation_key: str
     action: str
-    params: dict[str, Any] = field(default_factory=dict)
+    params: InboundActionParamsRecord = field(default_factory=InboundActionParamsRecord)
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     external_conversation_ref: str = ""
@@ -123,6 +154,7 @@ class InboundAction:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
+        object.__setattr__(self, "params", coerce_inbound_action_params(self.params))
 
     @property
     def chat_id(self) -> int | str:
@@ -220,7 +252,7 @@ def serialize_inbound(
                 "username": event.user.username,
                 "conversation_key": event.conversation_key,
                 "action": event.action,
-                "params": event.params,
+                "params": event.params.to_dict(),
                 "source": event.source,
                 "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
@@ -308,7 +340,7 @@ def deserialize_inbound(
             user=user,
             conversation_key=conversation_key,
             action=data.get("action", ""),
-            params=dict(params),
+            params=coerce_inbound_action_params(params),
             source=source,
             transport=transport,
             conversation_ref=conversation_ref,

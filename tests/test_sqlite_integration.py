@@ -3,8 +3,8 @@
 Exercises real production code paths end-to-end:
 - Message handler → save_session → load_session round-trip through SQLite
 - JSON-to-SQLite migration under handler load
-- cmd_doctor stale session scan reading from SQLite
-- _check_prompt_size_cross_chat reading from SQLite
+- cmd_doctor stale session scan reading SQLite
+- _check_prompt_size_cross_chat reading SQLite
 - close_db / connection lifecycle
 - delete_session
 - Concurrent chat saves
@@ -15,7 +15,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from octopus_sdk.providers import RunResult
+from octopus_sdk.providers import ProviderStateRecord, RunResult
 from app import runtime_backend
 from app.storage import (
     close_db,
@@ -29,6 +29,10 @@ from app.storage import (
     save_session,
     session_exists,
 )
+
+
+def _state(**kwargs) -> ProviderStateRecord:
+    return ProviderStateRecord(kwargs)
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
@@ -39,6 +43,7 @@ from tests.support.handler_support import (
     last_reply,
     load_session_disk,
     make_config,
+    pending_approval_dict,
     send_command,
     drain_one_worker_item,
     send_text,
@@ -105,7 +110,7 @@ async def test_migration_then_handler_message():
         # Create legacy JSON session file
         sessions_dir = data_dir / "sessions"
         sessions_dir.mkdir()
-        legacy = default_session("claude", {"session_id": "legacy-abc", "started": False}, "on")
+        legacy = default_session("claude", _state(session_id="legacy-abc", started=False), "on")
         legacy["role"] = "You are helpful."
         (sessions_dir / "8001.json").write_text(json.dumps(legacy))
 
@@ -131,7 +136,7 @@ async def test_migration_then_handler_message():
             await send_text(chat, user, "after migration")
             await drain_one_worker_item(data_dir)
 
-            # Verify merged state: role from migration, session_id preserved
+            # Verify merged state: role migration, session_id preserved
             session = load_session_disk(data_dir, telegram_conversation_key(8001), prov)
             assert session["role"] == "You are helpful."
             assert session["provider_state"]["session_id"] == "legacy-abc"
@@ -146,24 +151,29 @@ async def test_migration_then_handler_message():
 
 
 # ---------------------------------------------------------------------------
-# 3. cmd_doctor reads stale sessions from SQLite (DB state verification)
+# 3. cmd_doctor reads stale sessions SQLite (DB state verification)
 # ---------------------------------------------------------------------------
 
 async def test_doctor_reads_sqlite_not_json():
-    """Verify cmd_doctor's stale session scan actually reads from SQLite.
+    """Verify cmd_doctor's stale session scan actually reads SQLite.
     Create sessions directly in SQLite (no JSON files), run /doctor,
     and verify the scan finds them."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         # Create stale pending session directly via storage API
         s1 = default_session("claude", prov.new_provider_state("tg:test"), "off")
-        s1["pending_approval"] = {"prompt": "do something", "created_at": 0}
+        s1["pending_approval"] = pending_approval_dict(prompt="do something", created_at=0)
         save_session(data_dir, telegram_conversation_key(9001), s1)
 
         # Create stale setup session
         s2 = default_session("claude", prov.new_provider_state("tg:test"), "off")
-        s2["awaiting_skill_setup"] = {"actor_key": "tg:42", "skill": "test", "started_at": 0}
+        s2["awaiting_skill_setup"] = {
+            "actor_key": "tg:42",
+            "skill": "test",
+            "remaining": [],
+            "started_at": 0,
+        }
         save_session(data_dir, telegram_conversation_key(9002), s2)
 
         # Create clean session (should not trigger warnings)
@@ -187,7 +197,7 @@ async def test_doctor_reads_sqlite_not_json():
         msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
         reply = last_reply(msg)
 
-        # Doctor found stale sessions from SQLite
+        # Doctor found stale sessions SQLite
         assert "pending approval" in reply
         assert "credential setup" in reply
         assert "1 session(s) with stale pending" in reply
@@ -195,7 +205,7 @@ async def test_doctor_reads_sqlite_not_json():
 
 
 # ---------------------------------------------------------------------------
-# 4. delete_session removes session from SQLite
+# 4. delete_session removes session SQLite
 # ---------------------------------------------------------------------------
 
 async def test_delete_session():
@@ -235,7 +245,7 @@ async def test_close_db_and_reopen():
     """close_db closes the connection; subsequent operations transparently
     reopen it and data is still there."""
     with fresh_data_dir() as data_dir:
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         s["role"] = "persistent role"
         save_session(data_dir, telegram_conversation_key(6001), s)
 
@@ -246,7 +256,7 @@ async def test_close_db_and_reopen():
         assert session_exists(data_dir, telegram_conversation_key(6001)) is True
 
         loaded = load_session(data_dir, telegram_conversation_key(6001), "claude",
-                              lambda _ck="": {"session_id": "abc", "started": False}, "on")
+                              lambda _ck="": _state(session_id="abc", started=False), "on")
         assert loaded["role"] == "persistent role"
 
         # Save new data after reopen
@@ -256,7 +266,7 @@ async def test_close_db_and_reopen():
 
         # Verify again
         loaded2 = load_session(data_dir, telegram_conversation_key(6001), "claude",
-                               lambda _ck="": {"session_id": "abc", "started": False}, "on")
+                               lambda _ck="": _state(session_id="abc", started=False), "on")
         assert loaded2["role"] == "updated role"
 
 
@@ -274,7 +284,7 @@ async def test_multiple_chats_save_independently():
         # Send a message to each chat
         for chat, user in zip(chats, users):
             prov.run_results = [RunResult(text=f"reply to chat {chat.id}")]
-            await send_text(chat, user, f"hello from {chat.id}")
+            await send_text(chat, user, f"hello {chat.id}")
             await drain_one_worker_item(data_dir)
 
         # All three sessions exist
@@ -296,13 +306,13 @@ async def test_multiple_chats_save_independently():
 
 
 # ---------------------------------------------------------------------------
-# 7. _check_prompt_size_cross_chat reads from SQLite
+# 7. _check_prompt_size_cross_chat reads SQLite
 # ---------------------------------------------------------------------------
 
 async def test_prompt_size_cross_chat_reads_sqlite():
-    """Verify telegram execution prompt-size warnings iterate sessions from SQLite,
-    not from JSON files."""
-    import app.channels.telegram.execution as telegram_execution
+    """Verify telegram execution prompt-size warnings iterate sessions SQLite,
+    not JSON files."""
+    import app.runtime.telegram_execution as telegram_execution
     from octopus_sdk.execution import check_prompt_size_cross_chat
 
     with fresh_env(config_overrides={
@@ -387,7 +397,7 @@ async def test_db_no_fd_leak_on_schema_error():
     """Regression: _db() must close the SQLite connection when it raises
     due to schema version mismatch. Previously the connection was opened
     but never cached or closed on error paths, leaking a file descriptor
-    per call (fds grew from 4 to 45 after 20 calls)."""
+    per call (fds grew 4 to 45 after 20 calls)."""
     import pytest
 
     from app import runtime_backend

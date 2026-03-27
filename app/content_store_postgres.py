@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import json
 from typing import Literal
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS {_SCHEMA}.provider_guidance_revisions (
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _json_ready(value):
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return _json_ready(value.to_dict())
+    if isinstance(value, list | tuple):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    return value
 
 
 def _parse_json(raw, default):
@@ -323,8 +333,8 @@ class PostgresContentStore(AbstractContentStore):
                         record.revision.version_label,
                         record.revision.digest,
                         record.revision.instruction_body,
-                        json.dumps(record.revision.requirements, sort_keys=True),
-                        json.dumps(record.revision.provider_config, sort_keys=True),
+                        json.dumps(_json_ready(record.revision.requirements), sort_keys=True),
+                        json.dumps(_json_ready(record.revision.provider_config), sort_keys=True),
                         record.revision.changelog,
                         record.revision.created_by,
                         record.revision.created_at or now,
@@ -455,7 +465,7 @@ class PostgresContentStore(AbstractContentStore):
             for row in rows
         )
 
-    def _record_from_row(self, row) -> RuntimeSkillTrackRecord:
+    def _record__row(self, row) -> RuntimeSkillTrackRecord:
         revision = SkillRevisionRecord(
             instruction_body=row["instruction_body"],
             requirements=_parse_json(row["requirements_json"], []),
@@ -484,7 +494,7 @@ class PostgresContentStore(AbstractContentStore):
         )
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=False)]
+        records = [self._record__row(row) for row in self._rows_for_slug(slug, runtime_only=False)]
         return sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
@@ -492,7 +502,7 @@ class PostgresContentStore(AbstractContentStore):
         return tracks[0] if tracks else None
 
     def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=True)]
+        records = [self._record__row(row) for row in self._rows_for_slug(slug, runtime_only=True)]
         records = sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
         return records[0] if records else None
 

@@ -84,6 +84,7 @@ class BusTaskRouting:
         payload = ReportTaskResultPayload(
             routed_task_id=routed_task_id,
             status=result.status,
+            transition_id=result.transition_id,
             summary=result.summary,
             full_text=result.full_text,
             artifacts=list(result.artifacts),
@@ -116,6 +117,7 @@ class BusTaskRouting:
         payload = UpdateRoutedTaskStatusPayload(
             routed_task_id=update.routed_task_id,
             status=update.status,
+            transition_id=update.transition_id,
             summary=update.summary,
             timeline_events=[_timeline_payload(event) for event in update.timeline_events],
             progress=update.progress,
@@ -128,6 +130,6 @@ class BusTaskRouting:
                 operation="update_routed_task_status",
                 payload_json=payload.model_dump_json(),
                 authority_ref=authority_ref,
-                idempotency_key=f"{update.routed_task_id}:{update.updated_at}",
+                idempotency_key=update.transition_id,
             )
         )

@@ -1,8 +1,7 @@
 """Machine tests for delegation progression."""
 
-from octopus_sdk.registry.models import RoutedTaskResult
-from app.workflows.delegation.contracts import DelegationTaskDraft
-from app.workflows.delegation.machine import (
+from octopus_sdk.registry.models import DelegationTaskDraft, RoutedTaskResult, TargetSelector
+from octopus_sdk.workflows.delegation import (
     CancelDelegationAction,
     DelegationSnapshot,
     FinalizeResumeAction,
@@ -15,9 +14,9 @@ from app.workflows.delegation.machine import (
 
 def _draft(routed_task_id: str, *, title: str = "Task") -> DelegationTaskDraft:
     return DelegationTaskDraft(
-        routed_task_id=routed_task_id,
+        draft_id=routed_task_id,
+        selector=TargetSelector(kind="agent", value="worker-1", preferred_agent_id="worker-1"),
         title=title,
-        target_agent_id="worker-1",
         instructions="Do the work.",
     )
 
@@ -74,6 +73,32 @@ def test_delegation_machine_tracks_task_progression_to_completion() -> None:
         assert pending.tasks[0].status == status
 
     assert pending.status == "completed"
+
+
+def test_delegation_machine_rejects_child_transition_that_store_would_reject() -> None:
+    pending = decide_delegation_action(
+        DelegationSnapshot(pending=None),
+        ProposeDelegationAction(
+            conversation_ref="registry:conv-strict",
+            title="Feature delegation",
+            resume_instruction="Resume after children finish.",
+            tasks=(_draft("task-1"),),
+        ),
+    ).pending
+    assert pending is not None
+
+    queued = decide_delegation_action(
+        DelegationSnapshot(pending=pending),
+        UpdateTaskStatusAction(routed_task_id="task-1", status="queued"),
+    )
+    assert queued.pending is not None
+    unchanged = decide_delegation_action(
+        DelegationSnapshot(pending=queued.pending),
+        UpdateTaskStatusAction(routed_task_id="task-1", status="running"),
+    )
+    assert unchanged.pending is not None
+    assert unchanged.pending.tasks[0].status == "queued"
+    assert unchanged.pending.status == "submitted"
 
 
 def test_delegation_machine_cancel_before_send_clears_plan() -> None:

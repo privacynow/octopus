@@ -1,16 +1,21 @@
 # Registry UI: Dashboard
 
-[← Manual home](../README.md) · [Prev: Sign in](sign-in.md) · [Next: Approvals →](approvals.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Sign in](sign-in.md) · Next: [Approvals](approvals.md)
 
-**Route:** `/ui` or `/ui/` — the dashboard is the default landing page after sign-in.
+**Route:** `/ui` or `/ui/`
 
-This screen starts with the operator’s next decision instead of a wall of telemetry. The top section highlights:
+The dashboard is a compact operator overview, not a telemetry wall. It is built
+around four surfaces:
 
-- the **primary action** to take next
-- an **attention grid** for approvals, agent health, and failed work
-- a calmer **health summary** for agents, conversations, tasks, and 24h cost
-- preview lists for **ready for review**, **ongoing conversations**, and **recent failures**
+- a **summary rail** for open conversations, running tasks, follow-up work, and
+  connected agents
+- **Needs attention** for approvals, failing work, or unhealthy agents
+- **Open conversations** for the threads that still need operator visibility
+- **Running tasks** and **Agents** so you can jump directly into active work or
+  a specific agent
 
-The dashboard still draws its totals from the canonical **`GET /v1/summary`** payload, but it now combines those aggregates with the approvals, conversations, and tasks resources so the home screen answers “what should I do now?” instead of only “what numbers exist?”
+The numbers still come from `GET /v1/summary`, but the dashboard combines that
+aggregate payload with the approvals, conversations, tasks, and agent lists so
+the page answers “what needs action now?” instead of only reporting totals.
 
-![Dashboard](../../assets/registry/ui/01-dashboard-annotated.png)
+![Dashboard](../../assets/registry/ui/01-dashboard.png)

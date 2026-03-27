@@ -11,7 +11,7 @@ Owner suite for:
 - Model profile resolution and hash impact
 - Project + model/policy cross-invalidation
 
-Migrated from tests/test_invariants.py invariants 1–12 and related
+Migrated tests/test_invariants.py invariants 1–12 and related
 cross-feature checks.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app.channels.telegram.session_io import (
+from app.runtime.telegram_session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
@@ -33,6 +33,10 @@ from octopus_sdk.execution_context import (
     resolve_execution_context,
 )
 from octopus_sdk.providers import (
+    CredentialEnvRecord,
+    DenialRecord,
+    ProviderConfigRecord,
+    ProviderStateRecord,
     RunContext,
     RunResult,
 )
@@ -105,7 +109,7 @@ async def test_approval_hash_round_trip(combo):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -165,13 +169,13 @@ async def test_retry_hash_round_trip(combo):
         prov.run_results = [
             RunResult(
                 text="partial",
-                denials=[{"tool_name": "Write", "tool_input": {"file_path": "/opt/x"}}],
+                denials=[DenialRecord({"tool_name": "Write", "tool_input": {"file_path": "/opt/x"}})],
             ),
             RunResult(text="Success"),
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -247,7 +251,7 @@ async def test_approval_detects_stale_context(change):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -290,7 +294,7 @@ async def test_approval_detects_stale_context(change):
 def test_default_working_dir_affects_hash():
     """Different config.working_dir without project must produce different hashes."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg_a = _make_config(working_dir=Path("/home/alice"))
     cfg_b = _make_config(working_dir=Path("/home/bob"))
@@ -306,7 +310,7 @@ def test_default_working_dir_affects_hash():
 def test_default_working_dir_in_resolved_context():
     """Resolved context must carry config.working_dir when no project is bound."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(working_dir=Path("/opt/myproject"))
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -343,16 +347,17 @@ async def test_inspect_mode_always_readonly(provider_config):
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append(cmd)
-        return RunResult(text="ok", provider_state_updates={"thread_id": "t-1"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "t-1"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
 
     context = RunContext(
         extra_dirs=[], system_prompt="", capability_summary="",
-        provider_config=provider_config, credential_env={},
+        provider_config=ProviderConfigRecord(provider_config),
+        credential_env=CredentialEnvRecord(),
         file_policy="inspect",
     )
-    await provider.run({"thread_id": None}, "analyze", [], FakeProgress(), context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "analyze", [], FakeProgress(), context=context)
 
     cmd = calls[-1]
     sandbox_idx = cmd.index("--sandbox")
@@ -380,8 +385,8 @@ async def test_resolve_context_matches_all_paths():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.execution as telegram_execution
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_execution as telegram_execution
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -414,10 +419,10 @@ async def test_resolve_context_matches_all_paths():
         helper_hash = current_context_hash(session, cfg, prov.name)
 
         assert handler_hash == direct_hash, (
-            "Handler adapter diverged from direct resolve_execution_context"
+            "Handler adapter diverged direct resolve_execution_context"
         )
         assert handler_hash == helper_hash, (
-            "Handler adapter diverged from current_context_hash()"
+            "Handler adapter diverged current_context_hash()"
         )
 
 
@@ -479,7 +484,7 @@ def test_session_round_trip_approval():
     """PendingApproval survives dict serialization round-trip."""
     original = SessionState(
         provider="claude",
-        provider_state={"thread_id": "t1"},
+        provider_state=ProviderStateRecord({"thread_id": "t1"}),
         approval_mode="on",
         active_skills=["deploy"],
         role="engineer",
@@ -512,14 +517,14 @@ def test_session_round_trip_retry():
     """PendingRetry survives dict serialization round-trip."""
     original = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="off",
         pending_retry=PendingRetry(
             actor_key=telegram_actor_key(99),
             prompt="edit config",
             image_paths=[],
             context_hash="def456",
-            denials=[{"tool_name": "Write", "tool_input": {"file_path": "/etc/x"}}],
+            denials=[DenialRecord({"tool_name": "Write", "tool_input": {"file_path": "/etc/x"}})],
             created_at=1700000001.0,
         ),
     )
@@ -537,7 +542,7 @@ def test_session_round_trip_no_pending():
     """Session with no pending request round-trips cleanly."""
     original = SessionState(
         provider="codex",
-        provider_state={"thread_id": None},
+        provider_state=ProviderStateRecord({"thread_id": None}),
         approval_mode="on",
         approval_mode_explicit=True,
         active_skills=["lint", "deploy"],
@@ -566,7 +571,7 @@ async def test_resolve_execution_context_matches_handler_adapter():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -588,7 +593,7 @@ async def test_resolve_execution_context_matches_handler_adapter():
         # Get hash via handler adapter
         session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         typed = session_from_dict(session_dict)
-        import app.channels.telegram.execution as telegram_execution
+        import app.runtime.telegram_execution as telegram_execution
 
         handler_hash = telegram_execution.resolve_context(current_runtime(), typed).context_hash
 
@@ -635,7 +640,7 @@ def test_execution_config_digest_sensitive_to_field(field_name, val_a, val_b):
 # =====================================================================
 
 async def test_configured_extra_dirs_forwarded_to_provider():
-    """extra_dirs from BotConfig must reach prov.run_calls[0]['context'].extra_dirs."""
+    """extra_dirs BotConfig must reach prov.run_calls[0]['context'].extra_dirs."""
     with fresh_data_dir() as data_dir:
         extra = Path(data_dir / "configured-extra")
         extra.mkdir()
@@ -647,7 +652,7 @@ async def test_configured_extra_dirs_forwarded_to_provider():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -674,7 +679,7 @@ def test_model_profile_session_override():
     from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         model_profile="fast",
     )
     cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="balanced")
@@ -686,7 +691,7 @@ def test_model_profile_config_default():
     from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="best")
     assert resolve_effective_model(session, cfg) == "opus"
@@ -697,7 +702,7 @@ def test_model_profile_fallback_to_raw_model():
     from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(model="claude-sonnet-4-6")
     assert resolve_effective_model(session, cfg) == "claude-sonnet-4-6"
@@ -708,11 +713,11 @@ def test_model_profile_changes_context_hash():
     cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="balanced")
 
     session_a = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         model_profile="fast",
     )
     session_b = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         model_profile="best",
     )
     hash_a = resolve_execution_context(session_a, cfg, "claude").context_hash
@@ -723,7 +728,7 @@ def test_model_profile_changes_context_hash():
 def test_model_profile_session_round_trip():
     """model_profile survives session dict serialization."""
     original = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         model_profile="fast",
     )
     d = session_to_dict(original)
@@ -743,12 +748,12 @@ def test_project_plus_model_change_invalidates_context_hash():
         projects=(("proj-a", "/opt/a", []),),
     )
 
-    session1 = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session1 = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
     session1.model_profile = "fast"
     session1.project_id = "proj-a"
     ctx1 = resolve_execution_context(session1, cfg, "claude")
 
-    session2 = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session2 = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
     session2.model_profile = "best"
     session2.project_id = ""  # no project
     ctx2 = resolve_execution_context(session2, cfg, "claude")
@@ -771,7 +776,7 @@ def test_project_file_policy_approval_model_change_invalidates():
     )
 
     # Create session with project + file_policy + model=fast
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
     session.project_id = "proj-a"
     session.file_policy = "inspect"
     session.model_profile = "fast"
@@ -812,7 +817,7 @@ def test_project_extra_dirs_folded_into_resolved_context():
     with fresh_env(config_overrides={
         "projects": (("myproj", "/tmp/myproj", ("/tmp/proj-extra",)),),
     }) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         session = telegram_load_session(current_runtime(), 8006)
         session.project_id = "myproj"
         telegram_save_session(current_runtime(), 8006, session)
@@ -832,14 +837,14 @@ def test_project_extra_dirs_folded_into_resolved_context():
 # =====================================================================
 
 
-def test_file_policy_inherits_from_project():
+def test_file_policy_inherits__project():
     """Empty session file_policy inherits project default."""
     from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(projects=(
         ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
     ))
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -853,7 +858,7 @@ def test_file_policy_session_overrides_project():
         ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
     ))
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe", file_policy="edit",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -864,7 +869,7 @@ def test_file_policy_no_project_no_session():
     """No project, no session file_policy → empty string."""
     cfg = _make_config()
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
     assert ctx.file_policy == ""
@@ -877,14 +882,14 @@ def test_file_policy_project_default_empty_falls_through():
         ProjectBinding(name="fe", root_dir="/tmp", file_policy=""),
     ))
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
     assert ctx.file_policy == ""
 
 
-def test_model_profile_inherits_from_project():
+def test_model_profile_inherits__project():
     """Empty session model_profile inherits project default."""
     from octopus_sdk.sessions import ProjectBinding
     cfg = _make_config(
@@ -892,7 +897,7 @@ def test_model_profile_inherits_from_project():
         model_profiles=_MODEL_PROFILES,
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -907,7 +912,7 @@ def test_model_profile_session_overrides_project():
         model_profiles=_MODEL_PROFILES,
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe", model_profile="best",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -923,7 +928,7 @@ def test_model_profile_project_falls_through_to_global_default():
         default_model_profile="balanced",
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude")
@@ -941,11 +946,11 @@ def test_project_defaults_change_context_hash():
         model_profiles=_MODEL_PROFILES,
     )
     session_a = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     session_b = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="be",
     )
     hash_a = resolve_execution_context(session_a, cfg, "claude").context_hash
@@ -961,7 +966,7 @@ def test_public_trust_ignores_project_file_policy():
         public_working_dir="/tmp",
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -979,7 +984,7 @@ def test_public_trust_ignores_project_model_profile():
         public_working_dir="/tmp",
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -1002,7 +1007,7 @@ def test_phantom_profile_not_displayed_when_no_profiles_configured():
         model_profiles={},  # no profiles
     )
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="fe",
     )
 

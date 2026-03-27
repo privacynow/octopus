@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from octopus_sdk.events import ConversationEvent
+from octopus_sdk.registry.models import CoordinationActionEnvelope, CoordinationActionResult
+from octopus_sdk.registry.models import MessageRecord
+
 
 @runtime_checkable
 class ConversationProjectionPort(Protocol):
@@ -22,9 +26,27 @@ class ConversationProjectionPort(Protocol):
         self,
         *,
         conversation_id: str,
-        events: list,  # list of ConversationEvent
+        events: list[ConversationEvent],
     ) -> None:
         """Publish events to a registry conversation. Idempotent on event_id."""
+        ...
+
+    async def add_message(
+        self,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> MessageRecord:
+        """Add one operator/channel message to an existing conversation."""
+        ...
+
+    async def submit_action(
+        self,
+        *,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        """Submit one typed coordination action for an existing conversation."""
         ...
 
 
@@ -44,6 +66,30 @@ class NoOpConversationProjection:
         self,
         *,
         conversation_id: str,
-        events: list,
+        events: list[ConversationEvent],
     ) -> None:
         del conversation_id, events
+
+    async def add_message(
+        self,
+        *,
+        conversation_id: str,
+        text: str,
+    ) -> MessageRecord:
+        del conversation_id, text
+        return MessageRecord(accepted=False)
+
+    async def submit_action(
+        self,
+        *,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        del conversation_id, envelope
+        return CoordinationActionResult(
+            conversation_id="",
+            action_id="",
+            action="",
+            accepted=False,
+            status="unavailable",
+        )

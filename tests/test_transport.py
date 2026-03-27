@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from app.channels.telegram.normalization import (
+from app.channels.telegram.channel import TelegramTransport
+from app.channels.registry.channel import RegistryConversationChannel
+from app.runtime.telegram_normalization import (
     TelegramAttachmentTooLarge,
     normalize_callback,
     normalize_command,
@@ -35,7 +37,10 @@ from tests.support.handler_support import (
     setup_globals,
     fresh_data_dir,
     last_reply,
+    pending_approval_dict,
 )
+from tests.support.service_support import build_test_bot_services
+from tests.support.config_support import make_registry_connection
 
 
 class _FakeDownloadedFile:
@@ -286,6 +291,38 @@ async def test_normalize_message_no_user():
         assert result is None
 
 
+def test_telegram_transport_exposes_identity_resolver() -> None:
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir=data_dir)
+        services = build_test_bot_services(config=cfg)
+        transport = TelegramTransport(cfg, FakeProvider(), services)
+
+        assert transport.identity is not None
+        assert transport.identity.conversation_key("12345") == telegram_conversation_key(12345)
+        assert transport.identity.actor_key("42") == telegram_actor_key(42)
+        assert transport.identity.external_conversation_ref(12345) == "12345"
+
+
+def test_registry_transport_exposes_identity_resolver() -> None:
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir=data_dir,
+            agent_mode="registry",
+            agent_registries=(make_registry_connection(),),
+        )
+        services = build_test_bot_services(config=cfg)
+        transport = RegistryConversationChannel(
+            cfg,
+            cfg.agent_registries[0],
+            services=services,
+        )
+
+        assert transport.identity is not None
+        assert transport.identity.conversation_key("registry:default:conversation:conv-1") == "registry:conversation:conv-1"
+        assert transport.identity.actor_key("agent-1") == "agent-1"
+        assert transport.identity.external_conversation_ref("registry:default:conversation:conv-1") == "conv-1"
+
+
 # ---------------------------------------------------------------------------
 # Frozen dataclass enforcement
 # ---------------------------------------------------------------------------
@@ -429,7 +466,7 @@ def test_message_default_attachments_are_tuple():
 
 async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
     from app import access
 
     with fresh_data_dir() as data_dir:
@@ -462,7 +499,7 @@ async def test_handlers_receive_normalized_user():
 async def test_callback_handler_uses_normalized_data():
     """Verify callback handlers use event.data not query.data for routing."""
     from app.storage import save_session, default_session
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
     import time
 
     with fresh_data_dir() as data_dir:
@@ -471,14 +508,11 @@ async def test_callback_handler_uses_normalized_data():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state("tg:test"), "on")
-        session["pending_approval"] = {
-            "actor_key": telegram_actor_key(42),
-            "prompt": "test prompt",
-            "image_paths": [],
-            "attachment_dicts": [],
-            "context_hash": "",
-            "created_at": time.time(),
-        }
+        session["pending_approval"] = pending_approval_dict(
+            actor_key=telegram_actor_key(42),
+            prompt="test prompt",
+            created_at=time.time(),
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
@@ -496,7 +530,7 @@ async def test_callback_handler_uses_normalized_data():
 
 async def test_command_normalization_strips_bot_mention():
     """Verify /command@botname still works through normalization."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -520,7 +554,7 @@ async def test_command_normalization_strips_bot_mention():
 
 async def test_command_handler_no_user_no_crash():
     """A command handler receiving an update with no user returns silently."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -538,7 +572,7 @@ async def test_command_handler_no_user_no_crash():
 
 async def test_message_handler_no_user_no_crash():
     """The message handler receiving an update with no user returns silently."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -556,7 +590,7 @@ async def test_message_handler_no_user_no_crash():
 
 async def test_callback_handler_no_user_no_crash():
     """A callback handler receiving an update with no user returns silently."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -580,10 +614,10 @@ async def test_callback_handler_no_user_no_crash():
 async def test_handle_message_empty_content_skipped():
     """handle_message silently returns when the message has no text and no attachments.
 
-    This proves the empty-content decision from normalize_message() is the one
+    This proves the empty-content decision normalize_message() is the one
     that governs the runtime path (normalize_message returns None, handler exits).
     """
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -607,7 +641,7 @@ async def test_handle_message_caption_reaches_provider():
     This proves the caption fallback in normalize_message() governs the runtime path.
     """
     from octopus_sdk.providers import RunResult
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -629,7 +663,7 @@ async def test_handle_message_caption_reaches_provider():
 
 
 async def test_handle_message_rejects_oversized_document_with_user_feedback():
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

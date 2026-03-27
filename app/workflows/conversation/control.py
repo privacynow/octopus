@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app import user_messages as _msg
 from app import work_queue
-from app.workflows.conversation.contracts import (
+from octopus_sdk.workflows.conversation import (
     ConversationCancelOutcome,
     ConversationResetOutcome,
     ConversationControlPort,

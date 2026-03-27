@@ -1,4 +1,4 @@
-"""Tests verifying WebSocket broadcasts from registry HTTP endpoints."""
+"""Tests verifying WebSocket broadcasts registry HTTP endpoints."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 from app.channels.registry.auth import reset_auth_attempt_limits_for_test
 from app.channels.registry import http as registry_http
 from app.channels.registry.http import app
+from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskUpdate, TimelineEventPayload, RegistryJsonRecord
 
 
 def _configure(monkeypatch, tmp_path: Path) -> None:
@@ -99,6 +100,44 @@ def _create_conversation(client: TestClient, token: str, agent_id: str) -> str:
     )
     assert resp.status_code == 201
     return resp.json()["conversation_id"]
+
+
+def _advance_task_lifecycle(store, *, agent_token: str, routed_task_id: str, conversation_id: str, to_running: bool = False) -> None:
+    store.update_routed_task_status(
+        agent_token,
+        routed_task_id,
+        RoutedTaskUpdate(
+            routed_task_id=routed_task_id,
+            status="leased",
+            transition_id=f"{routed_task_id}-lease",
+            updated_at="2026-03-22T00:00:00+00:00",
+        ),
+    )
+    if to_running:
+        store.update_routed_task_status(
+            agent_token,
+            routed_task_id,
+            RoutedTaskUpdate(
+                routed_task_id=routed_task_id,
+                status="running",
+                transition_id=f"{routed_task_id}-start",
+                summary="started",
+                timeline_events=[
+                    TimelineEventPayload(
+                        event_id=f"evt-{routed_task_id}-start",
+                        conversation_id=conversation_id,
+                        kind="task.status",
+                        title="Running",
+                        body="started",
+                        status="running",
+                        progress=1,
+                        metadata=RegistryJsonRecord(),
+                        created_at="2026-03-22T00:00:00+00:00",
+                    )
+                ],
+                updated_at="2026-03-22T00:00:01+00:00",
+            ),
+        )
 
 
 @pytest.fixture()
@@ -197,7 +236,7 @@ def test_publish_events_broadcasts_via_websocket(
                         "event_id": "evt-ws-1",
                         "kind": "message.bot",
                         "actor": "ws-pub-bot",
-                        "content": "Hello from bot",
+                        "content": "Hello bot",
                         "created_at": "2026-03-22T00:00:00+00:00",
                         "metadata": {},
                     }
@@ -215,7 +254,7 @@ def test_publish_events_broadcasts_via_websocket(
         assert ev["conversation_id"] == conv_id
         assert ev["agent_id"] == agent_id
         assert ev["actor"] == "ws-pub-bot"
-        assert ev["content"] == "Hello from bot"
+        assert ev["content"] == "Hello bot"
         assert "seq" in ev
         assert "created_at" in ev
         assert "metadata" in ev
@@ -309,7 +348,7 @@ def test_add_action_broadcasts_approval_decided_event(
         resp = client.post(
             f"/v1/conversations/{conv_id}/actions",
             headers={"X-CSRF-Token": csrf},
-            json={"action": "approve", "payload": {}},
+            json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "approval-1"}},
         )
 
         assert resp.status_code == 200
@@ -344,26 +383,35 @@ def test_routed_task_status_broadcasts_task_status_event(
             origin_channel="registry",
             external_conversation_ref="ws-parent-conv-1",
         )
-        store.create_routed_task({
-            "routed_task_id": "ws-task-1",
-            "parent_conversation_id": conversation["conversation_id"],
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "WebSocket task",
-            "instructions": "Test WS broadcast",
-            "created_at": "2026-03-22T00:00:00+00:00",
-        })
+        store.create_routed_task(
+            RoutedTaskRequest(
+                routed_task_id="ws-task-1",
+                parent_conversation_id=conversation.conversation_id,
+                origin_agent_id=origin_id,
+                target_agent_id=target_id,
+                title="WebSocket task",
+                instructions="Test WS broadcast",
+                created_at="2026-03-22T00:00:00+00:00",
+            )
+        )
+        _advance_task_lifecycle(
+            store,
+            agent_token=target_token,
+            routed_task_id="ws-task-1",
+            conversation_id=conversation.conversation_id,
+        )
 
         resp = client.post(
             "/v1/agents/routed-tasks/ws-task-1/status",
             headers={"Authorization": f"Bearer {target_token}"},
             json={
                 "status": "running",
+                "transition_id": "ws-task-1-start-http",
                 "summary": "halfway",
                 "timeline_events": [
                     {
                         "event_id": "evt-ws-task-1",
-                        "conversation_id": conversation["conversation_id"],
+                        "conversation_id": conversation.conversation_id,
                         "kind": "task.status",
                         "title": "Running",
                         "body": "halfway there",
@@ -377,13 +425,16 @@ def test_routed_task_status_broadcasts_task_status_event(
         )
 
         assert resp.status_code == 200
-        assert len(_ws_recorder) == 1
-        ev = _ws_recorder[0]["event_data"]
-        assert ev["kind"] == "task.status"
-        assert _ws_recorder[0]["conversation_id"] == conversation["conversation_id"]
-        assert ev["event_id"] == "evt-ws-task-1"
-        assert ev["metadata"] == {"status": "running", "progress": 50}
-        assert "created_at" in ev
+        assert len(_ws_recorder) == 2
+        timeline_event = next(item["event_data"] for item in _ws_recorder if item["event_data"]["event_id"] == "evt-ws-task-1")
+        assert timeline_event["kind"] == "task.status"
+        assert timeline_event["metadata"] == {
+            "status": "running",
+            "progress": 50,
+            "routed_task_id": "ws-task-1",
+            "transition_id": "ws-task-1-start-http",
+        }
+        assert "created_at" in timeline_event
 
 
 def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
@@ -413,14 +464,25 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
         assert create_resp.status_code == 200
         assert len(_ws_recorder) == 1
         assert _ws_recorder[0]["event_data"]["kind"] == "task.status"
-        assert _ws_recorder[0]["event_data"]["metadata"] == {"status": "queued"}
+        assert _ws_recorder[0]["event_data"]["metadata"] == {"status": "queued", "routed_task_id": "ws-task-2"}
         assert _ws_recorder[0]["event_data"]["seq"] > 0
+
+        from app.channels.registry.http import get_store
+        store = get_store()
+        _advance_task_lifecycle(
+            store,
+            agent_token=target_token,
+            routed_task_id="ws-task-2",
+            conversation_id=conv_id,
+            to_running=True,
+        )
 
         result_resp = client.post(
             "/v1/agents/routed-tasks/ws-task-2/result",
             headers={"Authorization": f"Bearer {target_token}"},
             json={
                 "status": "completed",
+                "transition_id": "ws-task-2-complete",
                 "summary": "Done",
                 "full_text": "All done",
                 "completed_at": "2026-03-22T00:01:00+00:00",
@@ -430,7 +492,11 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
         assert result_resp.status_code == 200
         assert len(_ws_recorder) == 2
         assert _ws_recorder[1]["event_data"]["kind"] == "task.status"
-        assert _ws_recorder[1]["event_data"]["metadata"] == {"status": "completed"}
+        assert _ws_recorder[1]["event_data"]["metadata"] == {
+            "status": "completed",
+            "routed_task_id": "ws-task-2",
+            "transition_id": "ws-task-2-complete",
+        }
         assert _ws_recorder[1]["event_data"]["seq"] > 0
         topics = {item["topic"] for item in _ws_invalidation_recorder}
         assert {"tasks", "conversations", "summary"} <= topics
@@ -531,18 +597,33 @@ def test_routed_task_running_status_without_timeline_events_does_not_broadcast_p
         _ws_recorder.clear()
         _ws_invalidation_recorder.clear()
 
+        from app.channels.registry.http import get_store
+        store = get_store()
+        _advance_task_lifecycle(
+            store,
+            agent_token=target_token,
+            routed_task_id="ws-task-running",
+            conversation_id=conv_id,
+        )
+
         status_resp = client.post(
             "/v1/agents/routed-tasks/ws-task-running/status",
             headers={"Authorization": f"Bearer {target_token}"},
             json={
                 "status": "running",
+                "transition_id": "ws-task-running-start-http",
                 "summary": "Working…",
                 "updated_at": "2026-03-24T00:00:10+00:00",
             },
         )
 
         assert status_resp.status_code == 200
-        assert status_resp.json()["events_written"] is False
-        assert _ws_recorder == []
+        assert status_resp.json()["events_written"] is True
+        assert len(_ws_recorder) == 1
+        assert _ws_recorder[0]["event_data"]["metadata"] == {
+            "status": "running",
+            "routed_task_id": "ws-task-running",
+            "transition_id": "ws-task-running-start-http",
+        }
         topics = {item["topic"] for item in _ws_invalidation_recorder}
         assert {"tasks", "conversations", "summary"} <= topics

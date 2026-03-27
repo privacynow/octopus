@@ -8,8 +8,9 @@ from typing import Any
 
 from app.access import is_allowed_user_with_override, trust_tier
 from app import work_queue
-from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.transport_dispatcher import TransportDispatcher
 from octopus_sdk.inbound_types import InboundEnvelope, serialize_inbound
+from octopus_sdk.transport import BotRuntimeHandle, InboundSubmissionResult
 
 
 def trust_tier_for_ref(
@@ -17,7 +18,7 @@ def trust_tier_for_ref(
     user: Any,
     *,
     config,
-    dispatcher: ChannelDispatcher | None,
+    dispatcher: TransportDispatcher | None,
 ) -> str:
     """Resolve trust at the inbound admission boundary."""
     if dispatcher is not None:
@@ -34,6 +35,38 @@ class WorkerMessageAdmission:
     trust_tier: str
 
 
+class LocalInboundSubmitter(BotRuntimeHandle):
+    def __init__(self, data_dir: Path) -> None:
+        self._data_dir = data_dir
+
+    async def admit_message(self, envelope: InboundEnvelope) -> InboundSubmissionResult:
+        status, item_id = admit_fresh_message(self._data_dir, envelope)
+        return InboundSubmissionResult(status=status, item_id=item_id)
+
+    async def enqueue(
+        self,
+        envelope: InboundEnvelope,
+        *,
+        worker_id: str | None = None,
+    ) -> InboundSubmissionResult:
+        is_new, item_id = enqueue_inbound_envelope(
+            self._data_dir,
+            envelope,
+            worker_id=worker_id,
+        )
+        return InboundSubmissionResult(
+            status="queued" if is_new else "duplicate",
+            item_id=item_id,
+        )
+
+    async def record(self, envelope: InboundEnvelope) -> bool:
+        return record_inbound_envelope(self._data_dir, envelope)
+
+
+def build_local_inbound_submitter(data_dir: Path) -> BotRuntimeHandle:
+    return LocalInboundSubmitter(data_dir)
+
+
 def admit_worker_message(
     *,
     data_dir: Path,
@@ -41,7 +74,7 @@ def admit_worker_message(
     conversation_ref: str,
     user: Any,
     config,
-    dispatcher: ChannelDispatcher | None,
+    dispatcher: TransportDispatcher | None,
 ) -> WorkerMessageAdmission:
     resolved_trust = trust_tier_for_ref(
         conversation_ref,
@@ -73,7 +106,7 @@ def admit_worker_message(
 
 
 def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str, str | None]:
-    """Admit a fresh message from the transport boundary. Returns (status, item_id).
+    """Admit a fresh message the transport boundary. Returns (status, item_id).
 
     status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
     This is the authoritative request seam: all fresh plain-message admission

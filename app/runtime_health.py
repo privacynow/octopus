@@ -12,7 +12,9 @@ import httpx
 
 from app.config import ProcessRole, RuntimeMode, validate_config
 from app.registry_errors import registry_error_detail
+from octopus_sdk.registry.models import RuntimeHealthPayload
 from octopus_sdk.sessions import session_from_dict
+from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
 from app.storage import list_sessions, load_session
 from app.time_utils import age_seconds, utc_now
 
@@ -27,37 +29,6 @@ _STALE_PENDING_SECONDS = 3600
 _STALE_SETUP_SECONDS = 600
 _STALE_DELEGATION_SECONDS = 3600
 _STALE_WORKER_HEARTBEAT_SECONDS = 90.0
-
-
-@dataclass(frozen=True)
-class QueueSnapshot:
-    """Backend-neutral queue summary for Shared Runtime observability."""
-
-    fresh_queued_count: int = 0
-    recovery_queued_count: int = 0
-    claimed_count: int = 0
-    pending_recovery_count: int = 0
-    cancel_requested_claimed_count: int = 0
-    oldest_fresh_queued_at: str | None = None
-    oldest_recovery_queued_at: str | None = None
-    oldest_claimed_at: str | None = None
-    oldest_pending_recovery_at: str | None = None
-
-
-@dataclass(frozen=True)
-class WorkerHeartbeat:
-    """Durable liveness snapshot for a worker process."""
-
-    worker_id: str
-    process_role: str
-    started_at: str
-    last_seen_at: str
-    current_item_id: str = ""
-    current_conversation_key: str = ""
-    current_kind: str = ""
-    items_processed: int = 0
-    stale_recoveries_seen: int = 0
-    last_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -81,7 +52,7 @@ class RuntimeDiagnostic:
 
 @dataclass(frozen=True)
 class RuntimeHealthSummary:
-    """Compact health summary derived once from the canonical report."""
+    """Compact health summary derived once the canonical report."""
 
     status: str = "healthy"
     healthy_worker_count: int = 0
@@ -219,7 +190,7 @@ def report_to_dict(report: RuntimeHealthReport) -> dict[str, Any]:
 
 
 def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | None:
-    """Rehydrate a canonical health report from a stored mapping."""
+    """Rehydrate a canonical health report a stored mapping."""
     if not payload:
         return None
     summary = payload.get("summary") or {}
@@ -297,6 +268,13 @@ class RuntimeHealthJsonProjector(RuntimeHealthProjector[dict[str, Any]]):
 
     def project(self, report: RuntimeHealthReport) -> dict[str, Any]:
         return report_to_dict(report)
+
+
+class RuntimeHealthRegistryProjector(RuntimeHealthProjector[RuntimeHealthPayload]):
+    """Project canonical runtime health into the typed registry wire model."""
+
+    def project(self, report: RuntimeHealthReport) -> RuntimeHealthPayload:
+        return RuntimeHealthPayload.model_validate(report_to_dict(report))
 
 
 class DoctorTextFormatter(RuntimeHealthFormatter):

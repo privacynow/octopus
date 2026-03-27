@@ -4,20 +4,20 @@ import re
 
 FORBIDDEN_APP_REFERENCES = (
     "app.session_defaults",
-    "from app.session_defaults",
+    "app.session_defaults",
     "import app.session_defaults",
     "app.transports.",
-    "from app.transports",
+    "app.transports",
     "import app.transports",
     "app.request_runtime",
-    "from app.request_runtime",
+    "app.request_runtime",
     "import app.request_runtime",
     "app.telegram_handlers",
     "app.skill_commands",
     "app.telegram_runtime_skill_surface",
     "app.telegram_conversation_surface",
     "app.telegram_pending_request_surface",
-    "from app.transport import",
+    "app.transport import",
     "import app.transport",
     "app.runtime_skill_catalog_use_cases",
     "app.runtime_skill_activation_use_cases",
@@ -32,16 +32,16 @@ FORBIDDEN_APP_REFERENCES = (
     "app.skill_lifecycle_service",
     "app.agents.orchestration",
     "app.workflows.pending_request",
-    "from app.workflows.pending_request",
+    "app.workflows.pending_request",
     "import app.workflows.pending_request",
     "app.workflows.transport_recovery",
-    "from app.workflows.transport_recovery",
+    "app.workflows.transport_recovery",
     "import app.workflows.transport_recovery",
     "app.workflows.results",
-    "from app.workflows.results",
+    "app.workflows.results",
     "import app.workflows.results",
     "app.transport_contract",
-    "from app.transport_contract",
+    "app.transport_contract",
     "import app.transport_contract",
 )
 
@@ -54,8 +54,25 @@ FORBIDDEN_TELEGRAM_SINGLETON_HELPERS = (
     "reset_cancellation_registry(",
 )
 
+FORBIDDEN_RELOCATED_PROVIDER_DISPATCH_KWARGS = (
+    "progress_factory=",
+    "send_status=",
+    "typing_target=",
+    "keep_typing=",
+    "heartbeat=",
+    "format_provider_error=",
+    "run_result_was_interrupted=",
+)
 
-def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
+FORBIDDEN_OLD_WORLD_TEST_TOKENS = (
+    "DelegationRuntime",
+    "build_noop_control_plane_services",
+    "_DynamicWorkQueue",
+    "_default_registry_participant",
+)
+
+
+def test_deleted_legacy_module_references_are_gone__app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"
     python_files = sorted(path for path in app_root.rglob("*.py") if "__pycache__" not in path.parts)
@@ -65,7 +82,7 @@ def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
-def test_deleted_telegram_singleton_helpers_are_gone_from_app_code() -> None:
+def test_deleted_telegram_singleton_helpers_are_gone__app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"
     python_files = sorted(path for path in app_root.rglob("*.py") if "__pycache__" not in path.parts)
@@ -75,7 +92,7 @@ def test_deleted_telegram_singleton_helpers_are_gone_from_app_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
-def test_deleted_telegram_singleton_helpers_are_gone_from_test_code() -> None:
+def test_deleted_telegram_singleton_helpers_are_gone__test_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tests_root = repo_root / "tests"
     gate_path = Path(__file__).resolve()
@@ -88,7 +105,7 @@ def test_deleted_telegram_singleton_helpers_are_gone_from_test_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
-def test_deleted_legacy_module_references_are_gone_from_test_code() -> None:
+def test_deleted_legacy_module_references_are_gone__test_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tests_root = repo_root / "tests"
     gate_path = Path(__file__).resolve()
@@ -98,6 +115,34 @@ def test_deleted_legacy_module_references_are_gone_from_test_code() -> None:
     for path in python_files:
         text = path.read_text()
         for forbidden in FORBIDDEN_APP_REFERENCES:
+            assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
+def test_relocated_provider_dispatch_callback_kwargs_are_gone__app_and_sdk_code() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app", repo_root / "octopus_sdk")
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        for forbidden in FORBIDDEN_RELOCATED_PROVIDER_DISPATCH_KWARGS:
+            assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
+def test_tests_do_not_guard_old_world_callback_or_fallback_paths() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        for forbidden in FORBIDDEN_RELOCATED_PROVIDER_DISPATCH_KWARGS + FORBIDDEN_OLD_WORLD_TEST_TOKENS:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
@@ -186,179 +231,151 @@ def test_access_module_has_no_channel_imports() -> None:
     assert "app.channels" not in text, f"channel import still referenced in {access_path}"
 
 
-def test_telegram_conversation_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    conversation_path = repo_root / "app" / "channels" / "telegram" / "conversation.py"
-    text = conversation_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {conversation_path}"
-    )
+_DELETED_TELEGRAM_CHANNEL_FILES = (
+    "cancellation.py",
+    "conversation.py",
+    "delegation_channel.py",
+    "execution.py",
+    "guidance.py",
+    "inbound_context.py",
+    "ingress.py",
+    "normalization.py",
+    "pending.py",
+    "presenters.py",
+    "progress.py",
+    "runtime_skills.py",
+    "session_io.py",
+    "shared_mode_dispatch.py",
+    "worker.py",
+)
 
 
-def test_telegram_runtime_skills_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    runtime_skills_path = repo_root / "app" / "channels" / "telegram" / "runtime_skills.py"
-    text = runtime_skills_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {runtime_skills_path}"
-    )
+_REHOMED_TELEGRAM_MODULES = {
+    "ingress": "app/runtime/telegram_ingress.py",
+    "execution": "app/runtime/telegram_execution.py",
+    "worker": "app/runtime/telegram_worker.py",
+    "shared_dispatch": "app/runtime/telegram_shared_dispatch.py",
+    "normalization": "app/runtime/telegram_normalization.py",
+    "session_io": "app/runtime/telegram_session_io.py",
+    "progress": "app/runtime/telegram_progress.py",
+    "presenters": "app/presentation/telegram.py",
+    "conversation": "app/workflows/conversation/telegram.py",
+    "pending": "app/workflows/pending/telegram.py",
+    "runtime_skills": "app/workflows/runtime_skills/telegram.py",
+    "delegation": "app/workflows/delegation/telegram.py",
+}
 
 
-def test_telegram_pending_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    pending_path = repo_root / "app" / "channels" / "telegram" / "pending.py"
-    text = pending_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {pending_path}"
-    )
-
-
-def test_telegram_session_io_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    session_io_path = repo_root / "app" / "channels" / "telegram" / "session_io.py"
-    text = session_io_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {session_io_path}"
-    )
-
-
-def test_telegram_progress_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    progress_path = repo_root / "app" / "channels" / "telegram" / "progress.py"
-    text = progress_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {progress_path}"
-    )
-
-
-def test_telegram_delegation_channel_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    delegation_path = repo_root / "app" / "channels" / "telegram" / "delegation_channel.py"
-    text = delegation_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {delegation_path}"
-    )
-
-
-def test_telegram_execution_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    execution_path = repo_root / "app" / "channels" / "telegram" / "execution.py"
-    text = execution_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {execution_path}"
-    )
-
-
-def test_telegram_execution_module_does_not_own_workflow_context_or_error_formatting() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    execution_path = repo_root / "app" / "channels" / "telegram" / "execution.py"
-    text = execution_path.read_text()
-    forbidden = (
-        "def execution_channel_context(",
-        "async def format_provider_error(",
-        "async def execute_request(",
-        "async def request_approval(",
-        "def check_prompt_size_cross_chat(",
-        "async def approve_pending(",
-        "async def reject_pending(",
-        "async def retry_skip_pending(",
-        "async def retry_allow_pending(",
-    )
-    for token in forbidden:
-        assert token not in text, f"{token} still referenced in {execution_path}"
-
-
-def test_telegram_worker_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
-    text = worker_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {worker_path}"
-    )
-
-
-def test_telegram_shared_mode_dispatch_module_has_no_ingress_import() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
-    text = shared_mode_dispatch_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
-        f"telegram ingress import still referenced in {shared_mode_dispatch_path}"
-    )
-
-
-def test_telegram_shared_mode_dispatch_does_not_define_duplicated_inline_dispatch_helpers() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
-    text = shared_mode_dispatch_path.read_text()
-    forbidden = (
-        "def _shared_skills_inline_handler(",
-        "def _shared_inline_command_handler(",
-    )
-    for token in forbidden:
-        assert token not in text, f"{token} still referenced in {shared_mode_dispatch_path}"
-
-
-def test_h1_extracted_telegram_modules_have_no_ingress_back_imports() -> None:
+def test_deleted_telegram_channel_modules_are_gone() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     telegram_root = repo_root / "app" / "channels" / "telegram"
-    extracted_modules = (
-        "session_io.py",
-        "progress.py",
-        "delegation_channel.py",
-        "execution.py",
-        "worker.py",
-        "shared_mode_dispatch.py",
-    )
-    for filename in extracted_modules:
+    for filename in _DELETED_TELEGRAM_CHANNEL_FILES:
         path = telegram_root / filename
+        assert not path.exists(), f"deleted telegram module survived at {path}"
+
+
+def test_rehomed_telegram_owner_modules_exist() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for relative in _REHOMED_TELEGRAM_MODULES.values():
+        path = repo_root / relative
+        assert path.exists(), f"rehomed telegram owner missing at {path}"
+
+
+def test_tests_do_not_import_deleted_telegram_modules() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    deleted_names = tuple(path.removesuffix(".py") for path in _DELETED_TELEGRAM_CHANNEL_FILES)
+    dotted_pattern = re.compile(
+        r"app\.channels\.telegram\.(?P<name>%s)\b" % "|".join(map(re.escape, deleted_names))
+    )
+    from_import_pattern = re.compile(
+        r"from\s+app\.channels\.telegram\s+import\s+(?P<name>%s)\b"
+        % "|".join(map(re.escape, deleted_names))
+    )
+    for path in sorted(tests_root.rglob("*.py")):
+        if "__pycache__" in path.parts or path == gate_path:
+            continue
         text = path.read_text()
-        assert "app.channels.telegram.ingress" not in text, (
-            f"telegram ingress import still referenced in {path}"
+        assert dotted_pattern.search(text) is None, (
+            f"deleted telegram module import still referenced in {path}"
+        )
+        assert from_import_pattern.search(text) is None, (
+            f"deleted telegram from-import still referenced in {path}"
         )
 
 
-def test_extracted_telegram_modules_import_only_shared_types_and_routing_targets() -> None:
+def test_rehomed_telegram_modules_do_not_back_import_deleted_channel_modules() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    forbidden = tuple(
+        f"app.channels.telegram.{path.removesuffix('.py')}"
+        for path in _DELETED_TELEGRAM_CHANNEL_FILES
+    )
+    for relative in _REHOMED_TELEGRAM_MODULES.values():
+        path = repo_root / relative
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_rehomed_telegram_modules_only_depend_on_telegram_state_from_transport_dir() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    allowed = {
+        "from app.channels.telegram.state import TelegramRuntime",
+        "from app.channels.telegram.state import TelegramCancellationRegistry, TelegramRuntime",
+    }
+    for relative in _REHOMED_TELEGRAM_MODULES.values():
+        path = repo_root / relative
+        imports = {
+            line.strip()
+            for line in path.read_text().splitlines()
+            if "app.channels.telegram" in line
+        }
+        unexpected = imports - allowed
+        assert not unexpected, f"{path} has unexpected channel imports: {sorted(unexpected)}"
+
+
+def test_telegram_transport_directory_stays_collapsed() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     telegram_root = repo_root / "app" / "channels" / "telegram"
-    allowed_imports = {
-        "session_io.py": {"state"},
-        "progress.py": {"state"},
-        "delegation_channel.py": {"presenters", "session_io", "state"},
-        "execution.py": {"presenters", "conversation", "pending", "runtime_skills", "session_io", "state"},
-        "worker.py": {"presenters", "conversation", "execution", "pending", "runtime_skills", "session_io", "state"},
-        "shared_mode_dispatch.py": {
-            "presenters",
-            "conversation",
-            "delegation_channel",
-            "normalization",
-            "runtime_skills",
-            "session_io",
-            "state",
-        },
-    }
-    sibling_import_pattern = re.compile(
-        r"^\s*from app\.channels\.telegram(?:\.(?P<submodule>[a-z_]+)|\s+import\s+(?P<pkgmodule>[a-z_]+))",
-        re.MULTILINE,
-    )
+    python_files = sorted(path for path in telegram_root.glob("*.py"))
+    assert [path.name for path in python_files] == [
+        "__init__.py",
+        "bootstrap.py",
+        "channel.py",
+        "egress.py",
+        "state.py",
+    ]
+    assert sum(1 for path in python_files for _ in path.open()) <= 1500
 
-    for filename, allowed in allowed_imports.items():
-        path = telegram_root / filename
+
+def test_telegram_execution_callback_builder_scaffolding_is_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for path in repo_root.rglob("*.py")
+        if "__pycache__" not in path.parts
+        and path != gate_path
+    )
+    forbidden = (
+        "TelegramExecutionCollaborators",
+        "bind_execution_collaborators(",
+        "build_conversation_progress_callback",
+        "build_routed_task_progress_callback",
+    )
+    for path in python_files:
         text = path.read_text()
-        imports = {
-            match.group("submodule") or match.group("pkgmodule")
-            for match in sibling_import_pattern.finditer(text)
-        }
-        imports.discard(None)
-        unexpected = imports - allowed
-        assert not unexpected, f"{path} has unexpected sibling imports: {sorted(unexpected)}"
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
 
 
 def test_no_channel_module_constructs_transport_identity_outside_approved_sites() -> None:
     """Channel modules may construct TransportIdentity for event sink wiring.
-    Only delegation_channel.py and worker.py are allowed; other channel files should not."""
+    Only registry delivery transport is allowed in channel code."""
     repo_root = Path(__file__).resolve().parents[1]
     channels_root = repo_root / "app" / "channels"
-    approved = {"delegation_channel.py", "worker.py"}
+    approved = {"delivery_transport.py"}
     for path in sorted(channels_root.rglob("*.py")):
         if "__pycache__" in path.parts or path.name in approved:
             continue
@@ -370,7 +387,7 @@ def test_no_channel_module_constructs_transport_identity_outside_approved_sites(
 
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "def _conversation_key(",
@@ -386,7 +403,7 @@ def test_ingress_no_longer_defines_session_io_helpers() -> None:
 
 def test_ingress_no_longer_defines_progress_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "class TelegramProgress:",
@@ -400,7 +417,7 @@ def test_ingress_no_longer_defines_progress_helpers() -> None:
 
 def test_ingress_no_longer_defines_delegation_channel_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "def _delegation_keyboard(",
@@ -418,7 +435,7 @@ def test_ingress_no_longer_defines_delegation_channel_helpers() -> None:
 
 def test_ingress_no_longer_defines_execution_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "def _conversation_runtime(",
@@ -447,7 +464,7 @@ def test_ingress_no_longer_defines_execution_helpers() -> None:
 
 def test_ingress_no_longer_defines_worker_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "async def _poll_cancel_requested(",
@@ -464,7 +481,7 @@ def test_ingress_no_longer_defines_worker_helpers() -> None:
 
 def test_ingress_no_longer_defines_shared_mode_dispatch_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_defs = (
         "def _callback_message_id(",
@@ -486,7 +503,7 @@ def test_ingress_no_longer_defines_shared_mode_dispatch_helpers() -> None:
 
 def test_ingress_no_longer_contains_inline_skills_or_guidance_command_routing() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden_tokens = (
         "skills_show(",
@@ -528,14 +545,11 @@ def test_ingress_no_longer_contains_inline_skills_or_guidance_command_routing() 
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"
-    cancellation_path = repo_root / "app" / "channels" / "telegram" / "cancellation.py"
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     state_text = state_path.read_text()
-    cancellation_text = cancellation_path.read_text()
     ingress_text = ingress_path.read_text()
 
     assert "_CURRENT_STATE" not in state_text, f"singleton runtime still referenced in {state_path}"
-    assert "_REGISTRY" not in cancellation_text, f"singleton cancel registry still referenced in {cancellation_path}"
     assert "CHAT_LOCKS =" not in ingress_text, f"ingress global lock registry still referenced in {ingress_path}"
     assert "_pending_work_items" not in ingress_text, f"ingress pending-item global still referenced in {ingress_path}"
     assert "_current_update_id" not in ingress_text, f"ingress update-id contextvar global still referenced in {ingress_path}"
@@ -553,18 +567,14 @@ def test_telegram_delegation_surface_path_is_gone() -> None:
     assert not deleted_path.exists(), f"incorrect telegram delegation surface path still exists at {deleted_path}"
 
 
-def test_only_telegram_bootstrap_imports_the_live_ingress_owner_from_app_code() -> None:
+def test_only_telegram_bootstrap_imports_the_live_ingress_owner__app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"
     bootstrap_path = app_root / "channels" / "telegram" / "bootstrap.py"
-    ingress_path = app_root / "channels" / "telegram" / "ingress.py"
     python_files = sorted(path for path in app_root.rglob("*.py") if "__pycache__" not in path.parts)
-    forbidden_tokens = (
-        "app.channels.telegram.ingress",
-        "from app.channels.telegram import ingress",
-    )
+    forbidden_tokens = ("app.runtime.telegram_ingress",)
     for path in python_files:
-        if path in {bootstrap_path, ingress_path}:
+        if path == bootstrap_path:
             continue
         text = path.read_text()
         for token in forbidden_tokens:
@@ -580,22 +590,23 @@ def test_telegram_bootstrap_owns_application_construction_and_handler_registrati
         "Application.builder().token(",
         "app.add_handler(",
         "def build_bootstrap(",
-        "from app.channels.telegram import ingress",
-        "from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch",
-        "from app.channels.telegram import worker as telegram_worker",
+        "from app.runtime import telegram_ingress as ingress",
+        "from app.runtime import telegram_shared_dispatch as telegram_shared_mode_dispatch",
+        "from app.runtime import telegram_worker",
         "shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(",
         "shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(",
         "def _execution_runtime(runtime: TelegramRuntime):",
         "execution_runtime=execution_runtime",
-        "worker_dispatch=functools.partial(",
+        "class TelegramWorkerProcessor(WorkerDispatchPort):",
+        "worker_processor=TelegramWorkerProcessor(",
     )
     for token in required:
-        assert token in text, f"{token} missing from {bootstrap_path}"
+        assert token in text, f"{token} missing {bootstrap_path}"
 
 
 def test_telegram_ingress_does_not_build_ptb_applications_or_register_handlers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden = (
         "def build_application(",
@@ -609,7 +620,7 @@ def test_telegram_ingress_does_not_build_ptb_applications_or_register_handlers()
 
 def test_runtime_dispatch_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "bot_runtime.py"
     text = dispatch_path.read_text()
     assert "app.channels" not in text, (
         f"channel import still referenced in {dispatch_path}"
@@ -627,10 +638,10 @@ def test_runtime_composition_has_no_channel_imports() -> None:
 
 def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    dispatch_path = repo_root / "octopus_sdk" / "runtime_dispatch.py"
+    dispatch_path = repo_root / "octopus_sdk" / "bot_runtime.py"
     text = dispatch_path.read_text()
     forbidden = (
-        "from telegram",
+        "telegram",
         "import telegram",
         "InlineKeyboardButton",
         "InlineKeyboardMarkup",
@@ -658,7 +669,7 @@ def test_execution_finalization_workflow_has_no_channel_imports() -> None:
 
 def test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    worker_path = repo_root / "app" / "runtime" / "telegram_worker.py"
     text = worker_path.read_text()
     forbidden = (
         "session.approval_mode",
@@ -675,10 +686,10 @@ def test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic() ->
 
 def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    worker_path = repo_root / "app" / "runtime" / "telegram_worker.py"
     text = worker_path.read_text()
     import_block_match = re.search(
-        r"from app\.agents\.bridge import \((?P<body>[\s\S]*?)\n\)",
+        r"app\.agents\.bridge import \((?P<body>[\s\S]*?)\n\)",
         text,
     )
     if import_block_match is None:
@@ -691,16 +702,16 @@ def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> N
         "_bind_conversation",
     )
     for token in forbidden_tokens:
-        assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
+        assert token not in import_block, f"{token} still imported bridge in {worker_path}"
 
 
 def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     inbound_types_path = repo_root / "octopus_sdk" / "inbound_types.py"
     session_state_path = repo_root / "octopus_sdk" / "sessions.py"
-    coordination_path = repo_root / "app" / "workflows" / "delegation" / "coordination.py"
-    presenters_path = repo_root / "app" / "channels" / "telegram" / "presenters.py"
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    coordination_path = repo_root / "octopus_sdk" / "workflows" / "delegation.py"
+    presenters_path = repo_root / "app" / "presentation" / "telegram.py"
+    worker_path = repo_root / "app" / "runtime" / "telegram_worker.py"
 
     inbound_text = inbound_types_path.read_text()
     assert '"user_id" in data' not in inbound_text
@@ -726,14 +737,10 @@ def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes
 
 def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_selection() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    bridge_path = repo_root / "app" / "agents" / "bridge.py"
-    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    delivery_path = repo_root / "app" / "channels" / "registry" / "delivery_transport.py"
     registry_egress_path = repo_root / "app" / "channels" / "registry" / "egress.py"
-    runtime_path = repo_root / "app" / "agents" / "runtime.py"
+    runtime_path = repo_root / "app" / "runtime" / "registry_participant.py"
     state_path = repo_root / "app" / "agents" / "state.py"
-
-    bridge_text = bridge_path.read_text()
-    assert 'or "default"' not in bridge_text
 
     delivery_text = delivery_path.read_text()
     assert 'or "default"' not in delivery_text
@@ -752,13 +759,9 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
 def test_dead_registry_runtime_api_is_deleted() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     registry_runtime_path = repo_root / "app" / "agents" / "registry_runtime.py"
-    registry_runtime_text = registry_runtime_path.read_text()
-    assert "def runtime_for_registry(" not in registry_runtime_text
-    assert "def resolve_target_registry_id(" not in registry_runtime_text
+    assert not registry_runtime_path.exists(), f"dead registry runtime survived at {registry_runtime_path}"
 
     for path in repo_root.joinpath("app").rglob("*.py"):
-        if path == registry_runtime_path:
-            continue
         text = path.read_text()
         assert "runtime_for_registry(" not in text, f"runtime_for_registry survived in {path}"
         assert "resolve_target_registry_id(" not in text, (
@@ -768,7 +771,7 @@ def test_dead_registry_runtime_api_is_deleted() -> None:
 
 def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_names() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    delivery_path = repo_root / "app" / "channels" / "registry" / "delivery_transport.py"
     work_admission_path = repo_root / "app" / "runtime" / "work_admission.py"
 
     delivery_text = delivery_path.read_text()
@@ -779,28 +782,70 @@ def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_nam
     assert 'channel_type == "telegram"' not in work_admission_text
 
 
+def test_telegram_ingress_submission_flows_do_not_reach_into_work_admission_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        ("app", "runtime", "telegram_ingress.py"),
+        ("app", "runtime", "telegram_shared_dispatch.py"),
+    ):
+        path = repo_root.joinpath(*relative)
+        text = path.read_text()
+        forbidden = (
+            "admit_fresh_message(",
+            "enqueue_inbound_envelope(",
+            "record_inbound_envelope(",
+        )
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_runtime_startup_and_builders_do_not_branch_on_config_registry_agent_ids_for_live_enrollment() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate_paths = (
+        repo_root / "app" / "main.py",
+        repo_root / "app" / "runtime" / "startup.py",
+        repo_root / "app" / "runtime" / "services.py",
+    )
+    for path in candidate_paths:
+        assert "config.registry_agent_ids" not in path.read_text()
+
+
+def test_telegram_discover_command_stays_on_registry_participant_surface() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
+    text = ingress_path.read_text()
+    assert "services.control_plane.agent_directory.search_agents" not in text
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    worker_path = repo_root / "app" / "runtime" / "telegram_worker.py"
     text = worker_path.read_text()
-    assert "Completion ownership:" in text, f"completion ownership note missing from {worker_path}"
+    assert "Completion ownership:" in text, f"completion ownership note missing {worker_path}"
 
 
 def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    telegram_root = repo_root / "app" / "channels" / "telegram"
+    candidate_paths = (
+        *sorted((repo_root / "app" / "channels" / "telegram").glob("*.py")),
+        *sorted((repo_root / "app" / "runtime").glob("telegram_*.py")),
+        repo_root / "app" / "workflows" / "conversation" / "telegram.py",
+        repo_root / "app" / "workflows" / "pending" / "telegram.py",
+        repo_root / "app" / "workflows" / "runtime_skills" / "telegram.py",
+        repo_root / "app" / "workflows" / "delegation" / "telegram.py",
+    )
     forbidden = ("InlineKeyboardButton", "InlineKeyboardMarkup")
-    for path in sorted(telegram_root.glob("*.py")):
-        if path.name == "presenters.py":
+    for path in candidate_paths:
+        if path == repo_root / "app" / "presentation" / "telegram.py":
             continue
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
 
 
-def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:
+def test_telegram_guidance_dispatch_has_no_inline_html_formatting() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    guidance_path = repo_root / "app" / "channels" / "telegram" / "guidance.py"
+    guidance_path = repo_root / "app" / "runtime" / "telegram_shared_dispatch.py"
     text = guidance_path.read_text()
     forbidden = (
         "html.escape(",
@@ -815,12 +860,12 @@ def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:
 
 def test_telegram_runtime_skills_channel_has_no_inline_html_or_credential_formatting() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    runtime_skills_path = repo_root / "app" / "channels" / "telegram" / "runtime_skills.py"
+    runtime_skills_path = repo_root / "app" / "workflows" / "runtime_skills" / "telegram.py"
     text = runtime_skills_path.read_text()
     forbidden = (
         "html.escape(",
         "ParseMode.HTML",
-        "from app.credential_flow",
+        "app.credential_flow",
         "format_credential_prompt(",
         "<b>",
         "<pre>",
@@ -832,12 +877,12 @@ def test_telegram_runtime_skills_channel_has_no_inline_html_or_credential_format
 
 def test_telegram_conversation_channel_has_no_inline_html_or_legacy_formatting_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    conversation_path = repo_root / "app" / "channels" / "telegram" / "conversation.py"
+    conversation_path = repo_root / "app" / "workflows" / "conversation" / "telegram.py"
     text = conversation_path.read_text()
     forbidden = (
         "html.escape(",
         "ParseMode.HTML",
-        "from app.credential_flow",
+        "app.credential_flow",
         "<b>",
         "<pre>",
         "<code>",
@@ -848,7 +893,7 @@ def test_telegram_conversation_channel_has_no_inline_html_or_legacy_formatting_h
 
 def test_telegram_pending_channel_has_no_inline_html_formatting() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    pending_path = repo_root / "app" / "channels" / "telegram" / "pending.py"
+    pending_path = repo_root / "app" / "workflows" / "pending" / "telegram.py"
     text = pending_path.read_text()
     forbidden = (
         "ParseMode.HTML",
@@ -920,10 +965,10 @@ def test_test_suite_does_not_override_telegram_ingress_module_attributes() -> No
 
 def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden = (
-        "from app.credential_flow import",
+        "app.credential_flow import",
         "format_credential_prompt(",
         "md_to_telegram_html(",
         "split_html(",
@@ -940,7 +985,7 @@ def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> 
 
 def test_telegram_ingress_does_not_duplicate_command_normalization_for_start_or_help() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     assert "@_command_handler(show_not_allowed_message=True)\nasync def cmd_start(" in text
     assert "@_command_handler(show_not_allowed_message=True)\nasync def cmd_help(" in text
@@ -949,7 +994,7 @@ def test_telegram_ingress_does_not_duplicate_command_normalization_for_start_or_
 
 def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    ingress_path = repo_root / "app" / "runtime" / "telegram_ingress.py"
     text = ingress_path.read_text()
     forbidden = (
         "_help_command_lines(",
@@ -976,19 +1021,13 @@ def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"
-    text = delivery_path.read_text()
-    assert "app.channels" not in text, (
-        f"channel import still referenced in {delivery_path}"
-    )
+    assert not delivery_path.exists(), f"legacy delivery owner still exists at {delivery_path}"
 
 
 def test_agents_delegation_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delegation_path = repo_root / "app" / "agents" / "delegation.py"
-    text = delegation_path.read_text()
-    assert "app.channels" not in text, (
-        f"channel import still referenced in {delegation_path}"
-    )
+    assert not delegation_path.exists(), f"legacy delegation owner still exists at {delegation_path}"
 
 
 def test_handler_support_does_not_mutate_legacy_ingress_globals() -> None:
@@ -1059,9 +1098,9 @@ def test_workflows_package_root_has_no_transitional_reexports() -> None:
     assert "import " not in text, f"transitional re-export still present in {workflows_init}"
 
 
-def test_recovery_transport_contract_owner_exists_under_concern_package() -> None:
+def test_recovery_transport_contract_owner_lives_in_sdk() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    owner_path = repo_root / "app" / "workflows" / "recovery" / "transport_contract.py"
+    owner_path = repo_root / "octopus_sdk" / "work_queue.py"
     assert owner_path.exists(), f"recovery transport contract owner missing at {owner_path}"
 
 
@@ -1077,10 +1116,9 @@ def test_stale_transport_era_test_files_are_gone() -> None:
 
 def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    agent_paths = (
-        repo_root / "app" / "agents" / "delegation.py",
-        repo_root / "app" / "agents" / "delivery.py",
-    )
+    delegation_path = repo_root / "app" / "agents" / "delegation.py"
+    assert not delegation_path.exists(), f"legacy delegation owner still exists at {delegation_path}"
+    agent_paths = (repo_root / "app" / "channels" / "registry" / "delivery_transport.py",)
     forbidden = (
         "task.status =",
         "delegation.status =",
@@ -1093,22 +1131,21 @@ def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
             assert token not in text, f"{token} still referenced in {path}"
 
 
-def test_bridge_module_has_no_fake_bot_helper() -> None:
+def test_legacy_bridge_and_delivery_modules_are_deleted() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     bridge_path = repo_root / "app" / "agents" / "bridge.py"
-    text = bridge_path.read_text()
-
-    assert "_egress_bot(" not in text, f"_egress_bot helper still referenced in {bridge_path}"
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    assert not bridge_path.exists(), f"legacy bridge owner still exists at {bridge_path}"
+    assert not delivery_path.exists(), f"legacy delivery owner still exists at {delivery_path}"
 
 
 def test_selected_telegram_and_workflow_modules_no_longer_import_bridge_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     guarded_paths = (
-        repo_root / "app" / "channels" / "telegram" / "execution.py",
-        repo_root / "app" / "channels" / "telegram" / "inbound_context.py",
-        repo_root / "app" / "channels" / "telegram" / "normalization.py",
-        repo_root / "app" / "channels" / "telegram" / "worker.py",
-        repo_root / "app" / "channels" / "telegram" / "delegation_channel.py",
+        repo_root / "app" / "runtime" / "telegram_execution.py",
+        repo_root / "app" / "runtime" / "telegram_normalization.py",
+        repo_root / "app" / "runtime" / "telegram_worker.py",
+        repo_root / "app" / "workflows" / "delegation" / "telegram.py",
         repo_root / "app" / "workflows" / "execution" / "finalization.py",
         repo_root / "app" / "workflows" / "recovery" / "replay.py",
     )
@@ -1124,7 +1161,6 @@ def _non_registry_orchestration_paths() -> list[Path]:
     app_root = repo_root / "app"
     excluded_files = {
         app_root / "main.py",
-        app_root / "agents" / "bridge.py",
         app_root / "agents" / "registry_runtime.py",
         app_root / "agents" / "registry_control_processor.py",
     }
@@ -1215,8 +1251,158 @@ def test_generic_health_and_discover_paths_do_not_reference_registry_scope() -> 
     candidate_paths = (
         repo_root / "octopus_sdk" / "health_publication.py",
         repo_root / "app" / "control_plane" / "adapters" / "health_publication.py",
-        repo_root / "app" / "channels" / "telegram" / "ingress.py",
+        repo_root / "app" / "runtime" / "telegram_ingress.py",
     )
     for path in candidate_paths:
         text = path.read_text()
         assert "registry_scope" not in text, f"registry_scope still referenced in {path}"
+
+
+def test_octopus_sdk_never_imports_app_modules() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sdk_root = repo_root / "octopus_sdk"
+    python_files = sorted(path for path in sdk_root.rglob("*.py") if "__pycache__" not in path.parts)
+    pattern = re.compile(r"^\s*(|import)\s+app(\.|$)", re.MULTILINE)
+    for path in python_files:
+        text = path.read_text()
+        assert pattern.search(text) is None, f"octopus_sdk imports app code in {path}"
+
+
+def test_runtime_composition_does_not_reach_into_telegram_transport_internals() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    services_path = repo_root / "app" / "runtime" / "services.py"
+    text = services_path.read_text()
+    forbidden = (
+        "telegram_transport.application",
+        "telegram_transport.runtime",
+        "telegram_transport.worker_dispatch",
+        "telegram_transport.worker_deserialize_failure_notifier",
+        "telegram_transport._start_worker_task",
+        "telegram_transport._stop_worker_task",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in runtime composition"
+
+
+def test_runtime_startup_does_not_use_deleted_noop_bot_services_builder() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate_paths = (
+        repo_root / "app" / "main.py",
+        repo_root / "app" / "runtime" / "startup.py",
+        repo_root / "app" / "runtime" / "services.py",
+        repo_root / "app" / "channels" / "telegram" / "channel.py",
+        repo_root / "app" / "channels" / "telegram" / "bootstrap.py",
+        repo_root / "app" / "channels" / "telegram" / "state.py",
+        repo_root / "app" / "channels" / "telegram" / "egress.py",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        assert "build_noop_bot_services" not in text, f"deleted noop builder still referenced in {path}"
+
+
+def test_main_entrypoint_uses_startup_and_builder_seams_only() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    main_path = repo_root / "app" / "main.py"
+    text = main_path.read_text()
+
+    assert "initialize_runtime_startup(" in text
+    assert "build_runtime(" in text
+    forbidden = (
+        "ensure_data_dirs(",
+        "init_content_store_for_config(",
+        "init_credential_store_for_config(",
+        "recover_stale_claims(",
+        "purge_old(",
+        "ControlPlaneBus(",
+        "TransportDispatcher(",
+        "register_registry_channels(",
+        "build_registry_delivery_transport(",
+        "TelegramTransport(",
+        "build_worker_bundle(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in thin entrypoint {main_path}"
+
+
+def test_entrypoint_and_runtime_builder_stay_thin() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    main_path = repo_root / "app" / "main.py"
+    services_path = repo_root / "app" / "runtime" / "services.py"
+
+    assert sum(1 for _ in main_path.open()) <= 100, f"{main_path} exceeded thin-entrypoint target"
+    assert sum(1 for _ in services_path.open()) <= 120, f"{services_path} exceeded thin-composition target"
+
+
+def test_runtime_builder_does_not_inline_low_level_service_or_transport_wiring() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    services_path = repo_root / "app" / "runtime" / "services.py"
+    text = services_path.read_text()
+    forbidden = (
+        "BusConversationProjection(",
+        "BusTaskRouting(",
+        "BusAgentDirectory(",
+        "BusHealthPublication(",
+        "TelegramTransport(",
+        "build_bootstrap(",
+        "build_worker_bundle(",
+        "register_registry_channels(",
+        "build_registry_delivery_transport(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in thin runtime builder {services_path}"
+
+
+def test_registry_delivery_transport_is_the_only_live_owner_of_agent_runtime_lifecycle() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed = {
+        app_root / "runtime" / "registry_participant.py",
+        app_root / "channels" / "registry" / "delivery_transport.py",
+    }
+    for path in sorted(app_root.rglob("*.py")):
+        if path in allowed or "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        assert "AgentRuntime" not in text, f"live AgentRuntime ownership leaked into {path}"
+
+
+def test_registry_delivery_helpers_are_confined_to_registry_delivery_path() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed = {
+        app_root / "channels" / "registry" / "delivery_transport.py",
+    }
+    forbidden = (
+        "app.agents.bridge",
+        "app.agents.delivery",
+        "handle_registry_delivery(",
+        "build_registry_delivery_runtime(",
+        "admit_registry_delivery(",
+        "build_registry_message_envelope(",
+        "build_registry_action_envelope(",
+    )
+    for path in sorted(app_root.rglob("*.py")):
+        if path in allowed or "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still leaked outside registry delivery path in {path}"
+
+
+def test_test_suite_does_not_patch_deleted_main_runtime_setup_hooks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    forbidden = (
+        'patch("app.main.ensure_data_dirs"',
+        'patch("app.main.init_content_store_for_config"',
+        'patch("app.main.init_credential_store_for_config"',
+        'patch("app.main.recover_stale_claims"',
+        'patch("app.main.purge_old"',
+    )
+    for path in sorted(
+        candidate for candidate in tests_root.rglob("*.py") if "__pycache__" not in candidate.parts and candidate != gate_path
+    ):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from octopus_sdk.identity import telegram_conversation_key
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import default_session
 from app.storage import (
     ensure_data_dirs,
@@ -18,7 +19,8 @@ from app.storage import (
 
 
 def _provider_state_factory(conversation_key: str):
-    return {}
+    del conversation_key
+    return ProviderStateRecord()
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -101,7 +103,7 @@ def test_load_merge_provider_state_factory_defaults(backend_and_data_dir):
     save_session(data_dir, telegram_conversation_key(666), session)
     loaded = load_session(
         data_dir, telegram_conversation_key(666), "claude",
-        lambda _ck="": {"session_id": "default", "new_key": "default_val"},
+        lambda _ck="": ProviderStateRecord({"session_id": "default", "new_key": "default_val"}),
         "on",
     )
     assert loaded["provider_state"]["session_id"] == "s1"

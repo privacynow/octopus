@@ -8,12 +8,13 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from app.formatting import summarize_text
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.sessions import SessionState
-from app.workflows.delegation.coordination import finalize_resumed_delegation
+from octopus_sdk.workflows.delegation import finalize_resumed_delegation
 from octopus_sdk.execution import RequestExecutionOutcome
 
 log = logging.getLogger(__name__)
@@ -75,7 +76,8 @@ async def _publish_routed_result_delivery_failure(
         await context.task_routing.update_routed_task_status(
             update=RoutedTaskUpdate(
                 routed_task_id=context.routed_task_id,
-                status="partialfailed",
+                status="failed",
+                transition_id=uuid4().hex,
                 summary=_routed_result_delivery_failure_summary(result_status),
             ),
             authority_ref=authority_ref,
@@ -129,10 +131,15 @@ async def finalize_execution(
                 result=RoutedTaskResult(
                     routed_task_id=context.routed_task_id,
                     status=result_status,
+                    transition_id=uuid4().hex,
                     summary=summarize_text(full_text or outcome.error_text or result_status),
                     full_text=full_text or outcome.error_text,
                     artifacts=(),
                     follow_up_questions=(),
+                    prompt_tokens=outcome.prompt_tokens,
+                    completion_tokens=outcome.completion_tokens,
+                    cost_usd=outcome.cost_usd,
+                    provider=context.config.provider_name,
                 ),
             )
             if report.status == "reported":

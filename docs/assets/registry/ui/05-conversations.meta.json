@@ -1,27 +1,27 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 145.796875,
-      "width": 1060,
-      "height": 49.5,
-      "label": "Start a conversation or jump to the approvals queue",
+      "x": 267,
+      "y": 77.234375,
+      "width": 1058,
+      "height": 89.75,
+      "label": "Connected-agent quick start plus overflow path to the full agent roster",
       "color": "#4caf50"
     },
     {
-      "x": 274,
-      "y": 199.296875,
-      "width": 1060,
-      "height": 58,
-      "label": "Server-backed search and status filter",
+      "x": 267,
+      "y": 174.984375,
+      "width": 1058,
+      "height": 61.25,
+      "label": "Server-backed search and segmented status filter",
       "color": "#ff9800"
     },
     {
-      "x": 275,
-      "y": 264.296875,
-      "width": 1058,
-      "height": 93.296875,
-      "label": "Conversation row → timeline detail",
+      "x": 251,
+      "y": 250.234375,
+      "width": 1090,
+      "height": 90.890625,
+      "label": "Conversation row → conversation workspace",
       "color": "#2196f3"
     }
   ],

@@ -10,7 +10,7 @@ from app.workflows.lifecycle_machine import (
     decide_lifecycle_action,
 )
 from app.workflows.runtime_skills.authoring import get_runtime_skill_authoring_use_cases
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     RuntimeSkillApprovalPort,
     RuntimeSkillLifecycleMutation,
 )

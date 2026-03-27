@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.provider_guidance_service import get_provider_guidance_service
-from app.workflows.provider_guidance.contracts import ProviderGuidancePreview, ProviderGuidancePort
+from octopus_sdk.workflows.provider_guidance import ProviderGuidancePreview, ProviderGuidancePort
 
 
 class ProviderGuidanceUseCases(ProviderGuidancePort):

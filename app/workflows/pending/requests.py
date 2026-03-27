@@ -5,7 +5,7 @@ from __future__ import annotations
 from app import user_messages as _msg
 from app.config import BotConfig
 from app.runtime import composition
-from app.workflows.pending.contracts import (
+from octopus_sdk.workflows.pending import (
     PendingExecutionPlan,
     PendingRequestOutcome,
     PendingRequestPort,

@@ -7,7 +7,7 @@ from pathlib import Path
 import frontmatter
 import yaml
 
-from app.content_models import (
+from octopus_sdk.content_models import (
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
     RuntimeSkillTrackRecord,
@@ -21,13 +21,13 @@ _SKILL_RESERVED_FILES = {"skill.md", "requires.yaml", "claude.yaml", "codex.yaml
 _DEFAULT_PROVIDER_GUIDANCE = {
     "claude": (
         "# Claude Runtime Guidance\n\n"
-        "The runtime composes the final Claude system prompt from the session role, "
+        "The runtime composes the final Claude system prompt the session role, "
         "active runtime skills, and provider-specific capability settings."
     ),
     "codex": (
         "# Codex Runtime Guidance\n\n"
         "The runtime composes the final Codex prompt and helper-script staging plan "
-        "from the session role, active runtime skills, and provider-specific capability settings."
+        "the session role, active runtime skills, and provider-specific capability settings."
     ),
 }
 

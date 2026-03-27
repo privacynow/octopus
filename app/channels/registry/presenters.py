@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.workflows.provider_guidance.contracts import ProviderGuidancePreview
-from app.workflows.provider_guidance.contracts import (
+from octopus_sdk.workflows.provider_guidance import ProviderGuidancePreview
+from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleMutation,
 )
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     ConversationSkillItem,
     ConversationSkillListing,
     ConversationSkillMutationOutcome,

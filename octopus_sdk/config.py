@@ -73,14 +73,10 @@ class BotConfigBase:
     db_pool_max_size: int
     db_connect_timeout_seconds: int
     registry_publish_level: str
-    registry_agent_ids: dict[str, str]
 
     @property
     def provider(self) -> str:
         return self.provider_name
-
-    def agent_id_for_registry(self, registry_id: str) -> str:
-        return self.registry_agent_ids.get(registry_id, "")
 
 
 PUBLISH_LEVEL_KINDS: dict[str, set[str]] = {

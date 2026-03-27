@@ -7,7 +7,13 @@ import textwrap
 from pathlib import Path
 
 from app.progress import render as render_progress
-from octopus_sdk.providers import RunContext, RunResult
+from octopus_sdk.providers import (
+    CredentialEnvRecord,
+    ProviderConfigRecord,
+    ProviderStateRecord,
+    RunContext,
+    RunResult,
+)
 from app.providers.codex import CodexProvider
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProgress
@@ -183,14 +189,20 @@ async def test_file_policy_inspect_sets_sandbox_readonly():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={}, credential_env={}, file_policy="inspect")
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        file_policy="inspect",
+    )
 
-    await provider.run({"thread_id": None}, "analyze code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "analyze code", [], progress, context=context)
     cmd, _ = calls[-1]
     # Should have read-only sandbox
     sandbox_idx = cmd.index("--sandbox")
@@ -198,20 +210,26 @@ async def test_file_policy_inspect_sets_sandbox_readonly():
 
 
 async def test_file_policy_edit_uses_default_sandbox():
-    """file_policy=edit (or empty) should use default sandbox from config."""
+    """file_policy=edit (or empty) should use default sandbox config."""
     provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
     calls: list[tuple[list[str], bool]] = []
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={}, credential_env={}, file_policy="edit")
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        file_policy="edit",
+    )
 
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
     cmd, _ = calls[-1]
     sandbox_idx = cmd.index("--sandbox")
     assert cmd[sandbox_idx + 1] == "workspace-write"
@@ -224,16 +242,21 @@ async def test_file_policy_inspect_overrides_provider_config_sandbox():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
     # Skill config says workspace-write, but inspect mode must win
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={"sandbox": "workspace-write"},
-                         credential_env={}, file_policy="inspect")
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord({"sandbox": "workspace-write"}),
+        credential_env=CredentialEnvRecord(),
+        file_policy="inspect",
+    )
 
-    await provider.run({"thread_id": None}, "analyze code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "analyze code", [], progress, context=context)
     cmd, _ = calls[-1]
     sandbox_idx = cmd.index("--sandbox")
     assert cmd[sandbox_idx + 1] == "read-only", (
@@ -248,15 +271,20 @@ async def test_provider_config_sandbox_applies_without_inspect():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={"sandbox": "read-only"},
-                         credential_env={}, file_policy="edit")
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord({"sandbox": "read-only"}),
+        credential_env=CredentialEnvRecord(),
+        file_policy="edit",
+    )
 
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
     cmd, _ = calls[-1]
     sandbox_idx = cmd.index("--sandbox")
     assert cmd[sandbox_idx + 1] == "read-only", (
@@ -270,7 +298,7 @@ async def test_provider_config_invalid_sandbox_is_rejected(caplog):
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -278,13 +306,13 @@ async def test_provider_config_invalid_sandbox_is_rejected(caplog):
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={"sandbox": "off"},
-        credential_env={},
+        provider_config=ProviderConfigRecord({"sandbox": "off"}),
+        credential_env=CredentialEnvRecord(),
         file_policy="edit",
     )
 
     caplog.set_level(logging.WARNING)
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
 
     cmd, _ = calls[-1]
     sandbox_idx = cmd.index("--sandbox")
@@ -298,7 +326,7 @@ async def test_provider_config_allowlisted_override_is_passed_through():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -307,12 +335,12 @@ async def test_provider_config_allowlisted_override_is_passed_through():
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={"config_overrides": [override]},
-        credential_env={},
+        provider_config=ProviderConfigRecord({"config_overrides": [override]}),
+        credential_env=CredentialEnvRecord(),
         file_policy="edit",
     )
 
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
 
     cmd, _ = calls[-1]
     assert "-c" in cmd
@@ -325,7 +353,7 @@ async def test_provider_config_non_allowlisted_override_is_rejected(caplog):
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -334,13 +362,13 @@ async def test_provider_config_non_allowlisted_override_is_rejected(caplog):
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={"config_overrides": [override]},
-        credential_env={},
+        provider_config=ProviderConfigRecord({"config_overrides": [override]}),
+        credential_env=CredentialEnvRecord(),
         file_policy="edit",
     )
 
     caplog.set_level(logging.WARNING)
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
 
     cmd, _ = calls[-1]
     assert override not in cmd
@@ -353,7 +381,7 @@ async def test_provider_config_flag_like_override_value_is_rejected(caplog):
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -362,13 +390,13 @@ async def test_provider_config_flag_like_override_value_is_rejected(caplog):
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={"config_overrides": [override]},
-        credential_env={},
+        provider_config=ProviderConfigRecord({"config_overrides": [override]}),
+        credential_env=CredentialEnvRecord(),
         file_policy="edit",
     )
 
     caplog.set_level(logging.WARNING)
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
 
     cmd, _ = calls[-1]
     assert override not in cmd
@@ -381,7 +409,7 @@ async def test_provider_config_flag_entry_is_rejected(caplog):
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -390,13 +418,13 @@ async def test_provider_config_flag_entry_is_rejected(caplog):
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={"config_overrides": [override]},
-        credential_env={},
+        provider_config=ProviderConfigRecord({"config_overrides": [override]}),
+        credential_env=CredentialEnvRecord(),
         file_policy="edit",
     )
 
     caplog.set_level(logging.WARNING)
-    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "write code", [], progress, context=context)
 
     cmd, _ = calls[-1]
     assert override not in cmd
@@ -411,14 +439,20 @@ async def test_skip_permissions_fresh_exec_preserves_full_auto():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={}, credential_env={}, skip_permissions=True)
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        skip_permissions=True,
+    )
 
-    await provider.run({"thread_id": None}, "start", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "start", [], progress, context=context)
     cmd_new, is_resume_new = calls[-1]
     assert is_resume_new is False
     assert "--full-auto" in cmd_new
@@ -431,14 +465,20 @@ async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={}, credential_env={}, skip_permissions=True)
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        skip_permissions=True,
+    )
 
-    await provider.run({"thread_id": None}, "start", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "start", [], progress, context=context)
     cmd_new, is_resume_new = calls[-1]
     assert is_resume_new is False
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd_new
@@ -450,14 +490,20 @@ async def test_skip_permissions_resume():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
-    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
-                         provider_config={}, credential_env={}, skip_permissions=True)
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        skip_permissions=True,
+    )
 
-    await provider.run({"thread_id": "thread-123"}, "continue", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": "thread-123"}), "continue", [], progress, context=context)
     cmd_resume, is_resume_resume = calls[-1]
     assert is_resume_resume is True
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd_resume
@@ -630,7 +676,7 @@ def _modern_codex_script() -> str:
                 "type": "event_msg",
                 "payload": {
                     "type": "agent_message",
-                    "message": "draft from event message",
+                    "message": "draft event message",
                     "phase": "commentary",
                 },
             },
@@ -639,7 +685,7 @@ def _modern_codex_script() -> str:
                 "payload": {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "draft from response item"}],
+                    "content": [{"type": "output_text", "text": "draft response item"}],
                     "phase": "commentary",
                 },
             },
@@ -648,7 +694,7 @@ def _modern_codex_script() -> str:
                 "payload": {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "final from response item"}],
+                    "content": [{"type": "output_text", "text": "final response item"}],
                     "phase": "final_answer",
                 },
             },
@@ -796,7 +842,7 @@ async def test_modern_schema_new():
     assert any("Thinking" in u for u in progress1.updates)
     assert any(("Running command" in u or "Running a command" in u) and "git status" in u for u in progress1.updates)
     assert any("Command finished" in u and "M app/providers/codex.py" in u for u in progress1.updates)
-    assert any("draft from response item" in u for u in progress1.updates)
+    assert any("draft response item" in u for u in progress1.updates)
 
 
 async def test_modern_schema_resume():
@@ -817,7 +863,7 @@ async def test_modern_schema_resume():
     assert any("resume final reply" in u for u in progress2.updates)
 
 
-# -- Codex preflight safety (from test_high_risk.py) --
+# -- Codex preflight safety (test_high_risk.py) --
 
 
 def test_codex_preflight_no_full_auto():
@@ -878,7 +924,7 @@ async def test_run_uses_context_working_dir_for_new_and_resume():
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume, working_dir))
-        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+        return RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "thread-123"}))
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
     progress = FakeProgress()
@@ -886,19 +932,19 @@ async def test_run_uses_context_working_dir_for_new_and_resume():
         extra_dirs=[],
         system_prompt="",
         capability_summary="",
-        provider_config={},
-        credential_env={},
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
         working_dir="/workspace/workspace",
     )
 
-    await provider.run({"thread_id": None}, "start", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": None}), "start", [], progress, context=context)
     cmd_new, is_resume_new, working_dir_new = calls[-1]
     assert is_resume_new is False
     assert "-C" in cmd_new
     assert "/workspace/workspace" in cmd_new
     assert working_dir_new == "/workspace/workspace"
 
-    await provider.run({"thread_id": "thread-123"}, "continue", [], progress, context=context)
+    await provider.run(ProviderStateRecord({"thread_id": "thread-123"}), "continue", [], progress, context=context)
     cmd_resume, is_resume_resume, working_dir_resume = calls[-1]
     assert is_resume_resume is True
     assert "-C" in cmd_resume

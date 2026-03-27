@@ -9,14 +9,14 @@ import httpx
 
 from app.credential_validation import validate_credential
 from octopus_sdk.providers import RunResult
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
     load_user_credentials,
     save_user_credential,
 )
 from app.storage import default_session, ensure_data_dirs, save_session
-import app.channels.telegram.ingress as _th
+import app.runtime.telegram_ingress as _th
 from app import work_queue
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (

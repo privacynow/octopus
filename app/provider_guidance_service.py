@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 
-from app.content_models import ProviderGuidanceTrackRecord, RuntimeSkillTrackRecord
+from octopus_sdk.content_models import ProviderGuidanceTrackRecord, RuntimeSkillTrackRecord
 from app.content_seed import default_provider_guidance_tracks
 from octopus_sdk.identity import filesystem_component_for_key
-from octopus_sdk.providers import PreflightContext, RunContext
+from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, ProviderConfigRecord, RunContext
+from octopus_sdk.registry.models import DiscoveredAgentRef
 from app.skill_catalog_service import get_skill_catalog_service
 
 _COMPACT_RESPONSE_SUFFIX = (
@@ -21,7 +23,7 @@ _PROMPT_SIZE_WARNING_THRESHOLD = 8000
 PROMPT_SIZE_WARNING_THRESHOLD = _PROMPT_SIZE_WARNING_THRESHOLD
 
 
-def _resolve_placeholders(obj, env: dict[str, str]):
+def _resolve_placeholders(obj, env: Mapping[str, str]):
     if isinstance(obj, str):
         def replacer(match):
             return env.get(match.group(1), match.group(0))
@@ -51,7 +53,7 @@ class ProviderGuidanceService:
         self,
         role: str,
         active_skills: list[str],
-        available_agents: list[dict[str, str]] | None = None,
+        available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str:
         parts: list[str] = []
         if role:
@@ -69,23 +71,21 @@ class ProviderGuidanceService:
         return "\n".join(parts) if parts else ""
 
     @staticmethod
-    def _format_agent_discovery_section(agents: list[dict[str, str]]) -> str:
+    def _format_agent_discovery_section(agents: list[DiscoveredAgentRef]) -> str:
         lines = [
             "## Available Agents\n",
-            "You can delegate work to these agents. When a task should be handled by a specialist,",
-            "include a delegation block in your response:\n",
-            "<delegation>",
-            '{"tasks": [{"target": "agent-slug", "title": "task title", "instructions": "what to do"}]}',
-            "</delegation>\n",
+            "These specialists are currently reachable through the coordination layer.",
+            "Reference them naturally if needed, but do not emit coordination protocol text.",
+            "",
             "| Agent | Slug | Role | Capabilities | Status |",
             "|-------|------|------|--------------|--------|",
         ]
         for agent in agents:
-            name = agent.get("display_name", "")
-            slug = agent.get("slug", "")
-            a_role = agent.get("role", "")
-            caps = agent.get("capabilities", "")
-            state = agent.get("connectivity_state", "connected")
+            name = agent.display_name
+            slug = agent.slug
+            a_role = agent.role
+            caps = ", ".join(agent.capabilities)
+            state = agent.connectivity_state or "connected"
             lines.append(f"| {name} | {slug} | {a_role} | {caps} | {state} |")
         lines.append("")
         return "\n".join(lines)
@@ -110,7 +110,7 @@ class ProviderGuidanceService:
         self,
         role: str,
         active_skills: list[str],
-        available_agents: list[dict[str, str]] | None = None,
+        available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int:
         return len(self.system_prompt(role, active_skills, available_agents=available_agents))
 
@@ -118,9 +118,9 @@ class ProviderGuidanceService:
         self,
         provider_name: str,
         active_skills: list[str],
-        credential_env: dict[str, str] | None = None,
-    ) -> dict:
-        credential_env = credential_env or {}
+        credential_env: CredentialEnvRecord | None = None,
+    ) -> ProviderConfigRecord:
+        credential_env = credential_env or CredentialEnvRecord()
         if provider_name == "claude":
             mcp_servers: dict = {}
             allowed_tools: list[str] = []
@@ -142,7 +142,7 @@ class ProviderGuidanceService:
                 config["allowed_tools"] = allowed_tools
             if disallowed_tools:
                 config["disallowed_tools"] = disallowed_tools
-            return _resolve_placeholders(config, credential_env) if config else {}
+            return ProviderConfigRecord(_resolve_placeholders(config, credential_env)) if config else ProviderConfigRecord()
 
         if provider_name == "codex":
             sandbox = ""
@@ -165,9 +165,9 @@ class ProviderGuidanceService:
                 config["scripts"] = scripts
             if config_overrides:
                 config["config_overrides"] = config_overrides
-            return _resolve_placeholders(config, credential_env) if config else {}
+            return ProviderConfigRecord(_resolve_placeholders(config, credential_env)) if config else ProviderConfigRecord()
 
-        return {}
+        return ProviderConfigRecord()
 
     def capability_summary(self, provider_name: str, active_skills: list[str]) -> str:
         lines: list[str] = []
@@ -179,7 +179,7 @@ class ProviderGuidanceService:
                 servers = raw.get("mcp_servers")
                 if isinstance(servers, dict):
                     for server_name in servers:
-                        lines.append(f"MCP server: {server_name} (from {record.slug})")
+                        lines.append(f"MCP server: {server_name} ({record.slug})")
                 tools = raw.get("allowed_tools")
                 if isinstance(tools, list):
                     for tool_name in tools:
@@ -192,7 +192,7 @@ class ProviderGuidanceService:
                             script_name = str(item.get("name", item.get("source", "?")))
                         else:
                             script_name = str(item)
-                        lines.append(f"Script: {script_name} (from {record.slug})")
+                        lines.append(f"Script: {script_name} ({record.slug})")
         return "\n".join(lines)
 
     def prompt_size_warning(self, role: str, active_skills: list[str]) -> str | None:
@@ -250,13 +250,13 @@ class ProviderGuidanceService:
         extra_dirs: list[str],
         *,
         provider_name: str = "",
-        credential_env: dict[str, str] | None = None,
+        credential_env: CredentialEnvRecord | None = None,
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
-        available_agents: list[dict[str, str]] | None = None,
+        available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
-        credential_env = credential_env or {}
+        credential_env = credential_env or CredentialEnvRecord()
         provider_config = self.provider_config(provider_name, active_skills, credential_env) if provider_name else {}
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return RunContext(

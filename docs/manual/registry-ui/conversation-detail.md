@@ -1,20 +1,54 @@
 # Registry UI: Conversation detail
 
-[← Manual home](../README.md) · [Prev: Conversation search](conversations-search.md) · [Next: Routed tasks →](tasks.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation search](conversations-search.md) · Next: [Tasks](tasks.md)
 
-**Route:** `/ui/conversations/{conversation_id}` — also reached from lists or task rows.
+**Route:** `/ui/conversations/{conversation_id}`
 
-**Operator actions**
+Conversation detail is the main operator workspace. The same page handles human
+conversation, routed work, and raw event inspection.
 
-| Action | Notes |
-|--------|--------|
-| **Compose** | Operator message; **Enter** to send; session + CSRF. |
-| **Cancel** | Conversation cancel via actions API. |
-| **Export** | Markdown export download. |
-| **Conversation** | Default view: replies, approvals, delegation progress, task updates, and problems. |
-| **Full activity** | Shows every stored event, including provider and tool activity. |
-| **Scroll up for older history** | Older activity loads automatically when the top sentinel enters view. |
+## Header
 
-**Timeline:** user/bot lines render as **bubbles**. The default view is now human-first: approvals, delegation updates, task progress, and errors stay visible, while lower-level provider/tool activity moves behind the **Full activity** toggle. With **WebSocket** upgrade on `/v1/ws`, new events append live; older history comes from sequence-based `/events` pagination.
+The compact header shows:
 
-![Conversation detail](../../assets/registry/ui/06-conversation-detail-annotated.png)
+- the conversation title
+- operator-facing metadata about:
+  - who the conversation is with
+  - where it started
+  - who current routed work is assigned to
+- current status
+- last update time
+- `Activity (n)` and `Copy ref` actions
+
+Current metadata meanings:
+
+| Field | Meaning |
+|---|---|
+| **With** | the primary conversation target |
+| **Assigned to** | the current routed-work target when delegation exists |
+| **Started in** | the origin channel, usually `registry` for operator-started threads |
+| **Updated** | most recent activity timestamp |
+| **Activity (n)** | shortcut into the `Full activity` tab |
+| **Copy ref** | copy the external conversation reference / correlation id |
+
+## Tabs
+
+| Tab | Purpose |
+|---|---|
+| **Conversation** | operator and bot messages, approval requests, delegation milestones, errors, and task status milestones rendered in human-facing language |
+| **Tasks** | conversation-scoped routed tasks with retry/cancel actions |
+| **Full activity** | the full stored event stream, including provider and tool events |
+
+## Composer
+
+The same composer handles both normal replies and structured routing:
+
+- plain text sends a normal operator message
+- a leading selector such as `@m2`, `@cap:review`, or `@role:reviewer`
+  submits a structured `direct_assign` action from the same input
+
+Older history loads automatically when you scroll to the top sentinel. With a
+working websocket upgrade on `/v1/ws`, new conversation events and task updates
+append live.
+
+![Conversation detail](../../assets/registry/ui/06-conversation-detail.png)

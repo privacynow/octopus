@@ -56,7 +56,7 @@ class CommandFinish:
 
 @dataclass(frozen=True, slots=True)
 class ContentDelta:
-    """Visible reply text arriving from the model.
+    """Visible reply text arriving the model.
 
     The provider should set ``content_started`` on the first instance.
     ``tool_activity`` carries recent tool names for display context.
@@ -99,7 +99,7 @@ def render(event: ProgressEvent) -> str | None:
     """Render a progress event to Telegram HTML.
 
     Returns None if the event should not produce a visible update
-    (e.g. suppressed internal detail). Wording from user_messages (Milestone D).
+    (e.g. suppressed internal detail). Wording user_messages (Milestone D).
     """
     if isinstance(event, Thinking):
         return f"<i>{_msg.progress_thinking()}</i>"

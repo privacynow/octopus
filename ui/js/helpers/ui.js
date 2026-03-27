@@ -275,6 +275,24 @@ window.UI = (() => {
         return el;
     }
 
+    function isOpaqueIdentifier(value) {
+        const text = String(value || '').trim();
+        if (!text) return false;
+        if (/^[0-9a-f]{24,}$/i.test(text)) return true;
+        if (/^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)) return true;
+        if (text.length >= 24 && !/[A-Z]/.test(text) && /^[a-z0-9._:-]+$/i.test(text)) return true;
+        return false;
+    }
+
+    function visibleLabel(...candidates) {
+        for (const candidate of candidates) {
+            const text = String(candidate || '').trim();
+            if (!text || isOpaqueIdentifier(text)) continue;
+            return text;
+        }
+        return '';
+    }
+
     function renderStatCard({ value, label, detail = '', href = '' }) {
         const card = document.createElement(href ? 'a' : 'div');
         card.className = 'stat-card';
@@ -302,16 +320,42 @@ window.UI = (() => {
         return card;
     }
 
-    function renderSkeletons(container, count, type) {
+    function createSkeletonNodes(count, type) {
         const cls = type === 'row' ? 'skeleton skeleton-row' : 'skeleton skeleton-card';
-        for (let i = 0; i < count; i++) {
+        return Array.from({ length: count }, (_, index) => {
             const div = document.createElement('div');
             div.className = cls;
-            container.appendChild(div);
+            div.dataset.key = `skeleton-${type}-${index}`;
+            return div;
+        });
+    }
+
+    function renderSkeletons(container, count, type) {
+        createSkeletonNodes(count, type).forEach((node) => container.appendChild(node));
+    }
+
+    function createErrorCard(message, retryFn) {
+        const card = document.createElement('div');
+        card.className = 'error-card';
+        card.dataset.key = `error-${safeFilename(message || 'error')}`;
+        const p = document.createElement('p');
+        p.textContent = message;
+        card.appendChild(p);
+        if (retryFn) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-primary';
+            btn.textContent = 'Retry';
+            btn.addEventListener('click', retryFn);
+            card.appendChild(btn);
         }
+        return card;
     }
 
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
+        if (!hasPrev && !hasNext && !String(info || '').trim()) {
+            return;
+        }
         const nav = document.createElement('nav');
         nav.className = 'pagination';
         nav.setAttribute('aria-label', 'Pagination');
@@ -340,21 +384,62 @@ window.UI = (() => {
         container.appendChild(nav);
     }
 
-    function renderError(container, message, retryFn) {
-        const card = document.createElement('div');
-        card.className = 'error-card';
-        const p = document.createElement('p');
-        p.textContent = message;
-        card.appendChild(p);
-        if (retryFn) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'btn btn-primary';
-            btn.textContent = 'Retry';
-            btn.addEventListener('click', retryFn);
-            card.appendChild(btn);
+    function reconcileChildren(container, nextNodes) {
+        const target = container.cloneNode(false);
+        Array.from(nextNodes || []).forEach((node) => {
+            target.appendChild(node);
+        });
+        if (typeof morphdom !== 'function') {
+            container.replaceChildren(...Array.from(target.childNodes));
+            return;
         }
-        container.appendChild(card);
+        morphdom(container, target, {
+            childrenOnly: true,
+            getNodeKey(node) {
+                if (!(node instanceof Element)) return undefined;
+                return (node.dataset && node.dataset.key) || node.id || undefined;
+            },
+        });
+    }
+
+    function bindSegmentedControlKeyboard(group, onActivate) {
+        if (!(group instanceof Element)) return;
+        group.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+            const tabs = Array.from(group.querySelectorAll('[role="tab"]'));
+            if (!tabs.length) return;
+            const currentIndex = tabs.indexOf(document.activeElement);
+            if (currentIndex < 0) return;
+            e.preventDefault();
+
+            let nextIndex = currentIndex;
+            if (e.key === 'Home') {
+                nextIndex = 0;
+            } else if (e.key === 'End') {
+                nextIndex = tabs.length - 1;
+            } else {
+                const delta = e.key === 'ArrowRight' ? 1 : -1;
+                nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+            }
+
+            const target = tabs[nextIndex];
+            if (!target) return;
+            target.focus();
+            if (typeof onActivate === 'function') {
+                onActivate(target);
+            } else {
+                target.click();
+            }
+            requestAnimationFrame(() => {
+                if (target.isConnected && typeof target.focus === 'function') {
+                    target.focus();
+                }
+            });
+        });
+    }
+
+    function renderError(container, message, retryFn) {
+        container.appendChild(createErrorCard(message, retryFn));
     }
 
     function showConfirm(title, message, onConfirm) {
@@ -461,8 +546,14 @@ window.UI = (() => {
         renderSettingsRow,
         renderEmptyState,
         renderStatCard,
+        isOpaqueIdentifier,
+        visibleLabel,
+        createSkeletonNodes,
         renderSkeletons,
         renderPagination,
+        reconcileChildren,
+        bindSegmentedControlKeyboard,
+        createErrorCard,
         renderError,
         showConfirm,
     };

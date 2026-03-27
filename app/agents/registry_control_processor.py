@@ -4,22 +4,23 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Any, Protocol
 
 from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_id_from_authority_ref,
 )
-from app.agents.registry_runtime import RegistryRuntime
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
 from app.control_plane.requests import (
+    AddConversationMessagePayload,
     PublishHealthRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
     SearchAgentsRequest,
     SubmitRoutedTaskPayload,
+    SubmitConversationActionPayload,
     TimelineEventPayload,
     UpdateRoutedTaskStatusPayload,
 )
@@ -27,26 +28,37 @@ from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     DiscoveredAgentRef,
+    CoordinationActionEnvelope,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
 )
 from octopus_sdk.task_routing import TaskResultReport, TaskSubmissionResult
+from octopus_sdk.config import RegistryConnectionConfig
+
+
+class RegistryControlAccess(Protocol):
+    @property
+    def registries(self) -> tuple[RegistryConnectionConfig, ...]: ...
+
+    def client_for_registry(self, registry_id: str): ...
+
+    def origin_agent_id(self, registry_id: str) -> str: ...
 
 
 class RegistryControlProcessor(ControlProcessor):
-    def __init__(self, registry_runtime: RegistryRuntime) -> None:
-        self._runtime = registry_runtime
+    def __init__(self, registry_access: RegistryControlAccess) -> None:
+        self._access = registry_access
 
     def authority_capabilities(self) -> dict[str, set[str]]:
-        return registry_authority_capabilities(self._runtime.registries)
+        return registry_authority_capabilities(self._access.registries)
 
     async def process(self, command: ControlCommand) -> ControlReply:
         try:
             registry_id = registry_id_from_authority_ref(command.authority_ref)
         except ValueError as exc:
             return ControlReply(command_id=command.command_id, status="failed", error=str(exc))
-        client = self._runtime.client_for_registry(registry_id)
+        client = self._access.client_for_registry(registry_id)
         if client is None:
             return ControlReply(
                 command_id=command.command_id,
@@ -89,7 +101,7 @@ class RegistryControlProcessor(ControlProcessor):
             return ControlReply(
                 command_id=command.command_id,
                 status="completed",
-                result_json=json.dumps(response),
+                result_json=response.model_dump_json(),
             )
         if command.operation == "get_conversation":
             payload = json.loads(command.payload_json)
@@ -97,7 +109,7 @@ class RegistryControlProcessor(ControlProcessor):
             return ControlReply(
                 command_id=command.command_id,
                 status="completed",
-                result_json=json.dumps(response),
+                result_json=response.model_dump_json(),
             )
         if command.operation == "publish_events":
             payload = json.loads(command.payload_json)
@@ -106,6 +118,25 @@ class RegistryControlProcessor(ControlProcessor):
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
+        if command.operation == "add_message":
+            payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
+            response = await client.add_message(payload.conversation_id, payload.text)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=response.model_dump_json(),
+            )
+        if command.operation == "submit_action":
+            payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
+            response = await client.submit_action(
+                payload.conversation_id,
+                payload.envelope,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=response.model_dump_json(),
+            )
         return ControlReply(
             command_id=command.command_id,
             status="failed",
@@ -124,7 +155,7 @@ class RegistryControlProcessor(ControlProcessor):
             return ControlReply(
                 command_id=command.command_id,
                 status="completed",
-                result_json=json.dumps(response),
+                result_json=response.model_dump_json(),
             )
         if command.operation == "publish_events":
             payload = json.loads(command.payload_json)
@@ -133,6 +164,25 @@ class RegistryControlProcessor(ControlProcessor):
             events = [SdkConversationEvent.model_validate(e) for e in payload["events"]]
             await client.publish_events(conversation_id, events)
             return ControlReply(command_id=command.command_id, status="completed")
+        if command.operation == "add_message":
+            payload = AddConversationMessagePayload.model_validate_json(command.payload_json)
+            response = await client.add_message(payload.conversation_id, payload.text)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=response.model_dump_json(),
+            )
+        if command.operation == "submit_action":
+            payload = SubmitConversationActionPayload.model_validate_json(command.payload_json)
+            response = await client.submit_action(
+                payload.conversation_id,
+                payload.envelope,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=response.model_dump_json(),
+            )
         return ControlReply(
             command_id=command.command_id,
             status="failed",
@@ -161,8 +211,8 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=TaskSubmissionResult(
                     status="accepted",
-                    routed_task_id=str(response.get("routed_task_id", payload.routed_task_id)),
-                    delivery_id=str(response.get("delivery_id", "")),
+                    routed_task_id=response.routed_task_id or payload.routed_task_id,
+                    delivery_id=response.delivery_id,
                 ).model_dump_json(),
             )
         if command.operation == "report_routed_task_result":
@@ -170,6 +220,7 @@ class RegistryControlProcessor(ControlProcessor):
             result = RoutedTaskResult(
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
+                transition_id=payload.transition_id,
                 summary=payload.summary,
                 full_text=payload.full_text,
                 artifacts=[dict(item) for item in payload.artifacts],
@@ -182,7 +233,7 @@ class RegistryControlProcessor(ControlProcessor):
                 status="completed",
                 result_json=TaskResultReport(
                     status="reported",
-                    routed_task_id=str(response.get("routed_task_id", payload.routed_task_id)),
+                    routed_task_id=response.routed_task_id or payload.routed_task_id,
                 ).model_dump_json(),
             )
         if command.operation == "update_routed_task_status":
@@ -190,6 +241,7 @@ class RegistryControlProcessor(ControlProcessor):
             update = RoutedTaskUpdate(
                 routed_task_id=payload.routed_task_id,
                 status=payload.status,
+                transition_id=payload.transition_id,
                 summary=payload.summary,
                 timeline_events=[event.model_dump() for event in payload.timeline_events],
                 progress=payload.progress,
@@ -218,20 +270,16 @@ class RegistryControlProcessor(ControlProcessor):
             agents = [
                 DiscoveredAgentRef(
                     authority_ref=command.authority_ref,
-                    agent_id=str(row.get("agent_id", "")),
-                    display_name=str(row.get("display_name", "")),
-                    slug=str(row.get("slug", "")),
-                    role=str(row.get("role", "")),
-                    capabilities=[
-                        str(item)
-                        for item in row.get("capabilities", [])
-                        if item
-                    ],
-                    tags=[str(item) for item in row.get("tags", []) if item],
-                    description=str(row.get("description", "")),
-                    connectivity_state=str(row.get("connectivity_state", "")),
-                    current_capacity=int(row.get("current_capacity", 0) or 0),
-                    max_capacity=int(row.get("max_capacity", 1) or 1),
+                    agent_id=row.agent_id,
+                    display_name=row.display_name,
+                    slug=row.slug,
+                    role=row.role,
+                    capabilities=[str(item) for item in row.capabilities if item],
+                    tags=[str(item) for item in row.tags if item],
+                    description=row.description,
+                    connectivity_state=row.connectivity_state,
+                    current_capacity=int(row.current_capacity or 0),
+                    max_capacity=int(row.max_capacity or 1),
                 )
                 for row in rows
             ]
@@ -242,14 +290,14 @@ class RegistryControlProcessor(ControlProcessor):
             )
         if command.operation == "resolve_target_authority":
             request = ResolveTargetAuthorityRequest.model_validate_json(command.payload_json)
-            local_agent_id = self._runtime.origin_agent_id(registry_id)
+            local_agent_id = self._access.origin_agent_id(registry_id)
             query = AgentDiscoveryQuery(
                 required_state="connected",
                 exclude_agent_ids=[local_agent_id] if local_agent_id else [],
             )
             rows = await client.search(query)
             for row in rows:
-                if str(row.get("agent_id", "")) == request.target_agent_id:
+                if row.agent_id == request.target_agent_id:
                     return ControlReply(
                         command_id=command.command_id,
                         status="completed",

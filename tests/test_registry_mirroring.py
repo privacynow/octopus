@@ -24,6 +24,7 @@ from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand, ControlReply
 from octopus_sdk.identity import conversation_key_for_ref
 from app.registry_service.store import RegistrySQLiteStore
+from octopus_sdk.registry.models import AgentCard
 
 
 # ---------------------------------------------------------------------------
@@ -42,13 +43,15 @@ def _enroll_agent(
     display_name: str = "Alpha",
     slug: str = "alpha",
     registry_scope: str = "full",
-) -> dict:
-    return store.enroll({
-        "bot_key": bot_key,
-        "display_name": display_name,
-        "slug": slug,
-        "registry_scope": registry_scope,
-    })
+):
+    return store.enroll(
+        AgentCard(
+            bot_key=bot_key,
+            display_name=display_name,
+            slug=slug,
+            registry_scope=registry_scope,
+        )
+    )
 
 
 class _FakeBus:
@@ -111,7 +114,7 @@ class TestStoreContracts:
     def test_create_conversation_deterministic_id(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         agent = _enroll_agent(store, bot_key="bot-x", slug="agentx")
-        agent_id = agent["agent_id"]
+        agent_id = agent.agent_id
 
         conv1 = store.create_conversation(
             target_agent_id=agent_id,
@@ -126,8 +129,8 @@ class TestStoreContracts:
             title="Second",
         )
 
-        assert conv1["conversation_id"] == conv2["conversation_id"]
-        cid = conv1["conversation_id"]
+        assert conv1.conversation_id == conv2.conversation_id
+        cid = conv1.conversation_id
         assert len(cid) == 32
         assert all(c in "0123456789abcdef" for c in cid)
 
@@ -139,7 +142,7 @@ class TestStoreContracts:
     def test_create_conversation_concurrent_idempotency(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         agent = _enroll_agent(store, bot_key="bot-idem", slug="idem")
-        agent_id = agent["agent_id"]
+        agent_id = agent.agent_id
 
         conv_a = store.create_conversation(
             target_agent_id=agent_id,
@@ -154,7 +157,7 @@ class TestStoreContracts:
             title="Second call",
         )
 
-        assert conv_a["conversation_id"] == conv_b["conversation_id"]
+        assert conv_a.conversation_id == conv_b.conversation_id
 
     def test_create_conversation_different_agents_same_canonical_key(self, tmp_path: Path) -> None:
         """Two agents sharing the same bot_key produce the same conversation_id."""
@@ -166,19 +169,19 @@ class TestStoreContracts:
         # so agent_a and agent_b are actually the same agent row.
         # The contract is: same bot_key -> same deterministic conversation_id.
         conv_a = store.create_conversation(
-            target_agent_id=agent_a["agent_id"],
+            target_agent_id=agent_a.agent_id,
             origin_channel="telegram",
             external_conversation_ref="tg:42",
             title="From A",
         )
         conv_b = store.create_conversation(
-            target_agent_id=agent_b["agent_id"],
+            target_agent_id=agent_b.agent_id,
             origin_channel="telegram",
             external_conversation_ref="tg:42",
             title="From B",
         )
 
-        assert conv_a["conversation_id"] == conv_b["conversation_id"]
+        assert conv_a.conversation_id == conv_b.conversation_id
 
     def test_create_conversation_rejects_empty_origin_channel(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -186,7 +189,7 @@ class TestStoreContracts:
 
         with pytest.raises(ValueError, match="origin_channel"):
             store.create_conversation(
-                target_agent_id=agent["agent_id"],
+                target_agent_id=agent.agent_id,
                 origin_channel="",
                 external_conversation_ref="ref-1",
                 title="Bad",
@@ -198,7 +201,7 @@ class TestStoreContracts:
 
         with pytest.raises(ValueError, match="external_conversation_ref"):
             store.create_conversation(
-                target_agent_id=agent["agent_id"],
+                target_agent_id=agent.agent_id,
                 origin_channel="telegram",
                 external_conversation_ref="",
                 title="Bad",
@@ -224,9 +227,9 @@ class TestStoreContracts:
         first = _enroll_agent(store, bot_key="rekey-bot", slug="rekey")
         second = _enroll_agent(store, bot_key="rekey-bot", slug="rekey")
 
-        assert first["agent_id"] == second["agent_id"]
+        assert first.agent_id == second.agent_id
         # Token is refreshed on re-enroll, but agent_id stays the same
-        assert first["agent_token"] != second["agent_token"]
+        assert first.agent_token != second.agent_token
 
 
 # ===================================================================
@@ -369,7 +372,7 @@ class TestDeliveryCanonicalIdentity:
     def test_delivery_payload_carries_canonical_identity(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         agent = _enroll_agent(store, bot_key="delivery-bot", slug="delivery")
-        agent_id = agent["agent_id"]
+        agent_id = agent.agent_id
 
         conv = store.create_conversation(
             target_agent_id=agent_id,
@@ -377,10 +380,10 @@ class TestDeliveryCanonicalIdentity:
             external_conversation_ref="telegram:delivery-bot:99",
             title="Delivery test",
         )
-        cid = conv["conversation_id"]
+        cid = conv.conversation_id
 
-        result = store.add_conversation_message(cid, "Hello from operator")
-        assert result["accepted"] is True
+        result = store.add_conversation_message(cid, "Hello operator")
+        assert result.accepted is True
 
         # Check the delivery was created with canonical identity fields
         import sqlite3

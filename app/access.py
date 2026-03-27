@@ -9,6 +9,8 @@ handler layer.
 from __future__ import annotations
 
 from app.config import BotConfig
+from octopus_sdk.authorization import AuthorizationPort
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.inbound_types import InboundUser
 
 
@@ -82,5 +84,69 @@ def is_public_user(config: BotConfig, user: InboundUser | None) -> bool:
 
 
 def trust_tier(config: BotConfig, user: InboundUser | None) -> str:
-    """Resolve the user trust tier from config and identity."""
+    """Resolve the user trust tier config and identity."""
     return "public" if is_public_user(config, user) else "trusted"
+
+
+def access_policy(
+    config: BotConfig,
+    user: InboundUser | None,
+    *,
+    override: str | None = None,
+) -> str:
+    """Return the resolved access policy for the inbound user."""
+    inbound = _validated_user(user)
+    if inbound is None:
+        return "blocked"
+    if override == "blocked":
+        return "blocked"
+    if override == "allowed":
+        return "allowed"
+    if is_admin_user(config, inbound):
+        return "admin"
+    if is_allowed_user(config, inbound):
+        return "allowed"
+    if is_public_user(config, inbound):
+        return "public"
+    return "blocked"
+
+
+class ConfigAuthorization(AuthorizationPort):
+    def is_allowed(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+        *,
+        override: str | None = None,
+    ) -> bool:
+        return is_allowed_user_with_override(config, user, override)
+
+    def is_admin(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+    ) -> bool:
+        return is_admin_user(config, user)
+
+    def trust_tier(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+    ) -> str:
+        return trust_tier(config, user)
+
+    def access_policy(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+        *,
+        override: str | None = None,
+    ) -> str:
+        return access_policy(config, user, override=override)
+
+
+_AUTHORIZATION = ConfigAuthorization()
+
+
+def get_authorization() -> ConfigAuthorization:
+    return _AUTHORIZATION

@@ -40,7 +40,7 @@ _POSTGRES_RUN_ID_FILE_ENV = "TELEGRAM_BOT_TEST_RUN_ID_FILE"
 
 
 def _read_run_id() -> str | None:
-    """Read run id from the file path in TELEGRAM_BOT_TEST_RUN_ID_FILE, if set. Returns None otherwise."""
+    """Read run id the file path in TELEGRAM_BOT_TEST_RUN_ID_FILE, if set. Returns None otherwise."""
     path = os.environ.get(_POSTGRES_RUN_ID_FILE_ENV)
     if not path:
         return None
@@ -119,7 +119,7 @@ def start_test_postgres_container(worker_id: str = "master", run_id: str | None 
     rid = run_id or get_run_id()
     container_name = _container_name(worker_id, rid)
     port = _worker_port(worker_id, rid)
-    # Remove any leftover container from a previous crash (same run only)
+    # Remove any leftover container a previous crash (same run only)
     subprocess.run(
         ["docker", "rm", "-f", container_name],
         capture_output=True,

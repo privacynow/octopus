@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from octopus_sdk.providers import RunResult
+from octopus_sdk.providers import ProviderStateRecord, RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
 from app.work_queue import debug_transport_connection, get_work_items_for_chat
@@ -26,6 +26,7 @@ from tests.support.handler_support import (
     last_reply,
     load_session_disk,
     make_config,
+    pending_approval_dict,
     running_worker,
     send_command,
     set_bot_instance,
@@ -83,7 +84,7 @@ class TestProviderCancelContract:
             provider._run_process = fake_run_process  # type: ignore[method-assign]
 
             result = await provider.run(
-                {"session_id": "s1", "started": True},
+                ProviderStateRecord({"session_id": "s1", "started": True}),
                 "test prompt", [], FakeProgress(), cancel=cancel,
             )
             assert result.cancelled is True
@@ -108,7 +109,7 @@ class TestProviderCancelContract:
             provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
 
             result = await provider.run(
-                {"thread_id": None}, "test", [], FakeProgress(), cancel=cancel,
+                ProviderStateRecord({"thread_id": None}), "test", [], FakeProgress(), cancel=cancel,
             )
             assert result.cancelled is True
 
@@ -135,7 +136,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -162,7 +163,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -181,19 +182,16 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
-            session["pending_approval"] = {
-                "actor_key": "tg:42",
-                "prompt": "test",
-                "image_paths": [],
-                "attachment_dicts": [],
-                "context_hash": "abc",
-                "created_at": time.time(),
-            }
+            session["pending_approval"] = pending_approval_dict(
+                prompt="test",
+                context_hash="abc",
+                created_at=time.time(),
+            )
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
@@ -207,7 +205,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -226,8 +224,8 @@ class TestCancelLiveExecution:
 
             # Durable state: the admitted item must be terminal failed with error='cancelled'
             items = get_work_items_for_chat(data_dir, telegram_conversation_key(12345))
-            cancelled = [i for i in items if i.get("state") == "failed" and i.get("error") == "cancelled"]
-            runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
+            cancelled = [i for i in items if i.state == "failed" and i.error == "cancelled"]
+            runnable = [i for i in items if i.state in ("queued", "claimed")]
             assert len(cancelled) == 1, f"Exactly one work item must be failed/cancelled, got: {items}"
             assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
 
@@ -247,7 +245,7 @@ class TestCancelledOutcome:
             prov.run_results = [RunResult(text="partial output", cancelled=True)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
             from app.user_messages import cancel_live_completed
 
             chat = FakeChat(12345)
@@ -279,7 +277,7 @@ class TestCancelledOutcome:
             prov.preflight_results = [RunResult(text="", cancelled=True)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
             # load_session_disk already imported at module level
 
             chat = FakeChat(12345)
@@ -310,7 +308,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -332,7 +330,7 @@ class TestCancelRegressions:
             prov.run_results = [RunResult(text="error", returncode=1)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -352,7 +350,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -386,7 +384,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -416,12 +414,12 @@ class TestCancelRegressions:
                 RunResult(
                     text="partial",
                     cancelled=True,
-                    provider_state_updates={"started": True},
+                    provider_state_updates=ProviderStateRecord({"started": True}),
                 ),
             ]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -448,13 +446,13 @@ class TestCancelRegressions:
                 RunResult(
                     text="",
                     cancelled=True,
-                    provider_state_updates={"started": True},
+                    provider_state_updates=ProviderStateRecord({"started": True}),
                 ),
                 RunResult(text="success response"),
             ]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -475,7 +473,7 @@ class TestCancelRegressions:
 
             # Provider should have received both calls
             assert len(prov.run_calls) == 2
-            # Second call should have seen started=True from the first cancelled run
+            # Second call should have seen started=True the first cancelled run
             assert prov.run_calls[1]["provider_state"]["started"] is True, \
                 f"Second call should see persisted state. Got: {prov.run_calls[1]['provider_state']}"
 
@@ -658,7 +656,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -694,7 +692,7 @@ class TestCancelConcurrency:
             assert prov.saw_cancel, "Provider should have observed cancel"
 
     async def test_two_stage_ux_ordering(self):
-        """User sees 'Cancellation requested.' before 'Cancelled.' from worker-owned execution.
+        """User sees 'Cancellation requested.' before 'Cancelled.' worker-owned execution.
         Oracle: bot event log (send + edit) in order."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
@@ -702,7 +700,7 @@ class TestCancelConcurrency:
             bot = _OrderedFakeBot()
             setup_globals(cfg, prov, bot_instance=bot)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
             from app.user_messages import cancel_live_completed, cancel_live_requested
 
             chat = FakeChat(12345)
@@ -739,7 +737,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
             from app.user_messages import cancel_live_completed
 
             chat = FakeChat(12345)
@@ -776,7 +774,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -820,7 +818,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
@@ -857,7 +855,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, FakeProvider("claude"))
 
-            import app.channels.telegram.ingress as th
+            import app.runtime.telegram_ingress as th
 
             chat_id = 12345
             cancel_event = asyncio.Event()
@@ -887,7 +885,7 @@ class _OrderedMessage(FakeMessage):
     """Message whose reply_text and edit_text append to a shared event log.
 
     Every visible action records (source, text) so tests can assert
-    cross-message ordering from a single timeline.
+    cross-message ordering a single timeline.
     """
 
     def __init__(self, event_log, source, **kwargs):

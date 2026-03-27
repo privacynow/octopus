@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from octopus_sdk.providers import RunResult
 from app.skill_catalog_service import get_skill_catalog_service
@@ -113,7 +113,7 @@ def _delete_imported_track(name: str) -> None:
 
 
 async def test_install_add_message_prompt(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -134,7 +134,7 @@ async def test_install_add_message_prompt(monkeypatch, tmp_path: Path):
 
 
 async def test_update_propagates_to_prompt(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -164,8 +164,8 @@ async def test_update_propagates_to_prompt(monkeypatch, tmp_path: Path):
         _cleanup_runtime(data_dir)
 
 
-async def test_uninstall_prunes_from_skills_output_and_list(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+async def test_uninstall_prunes__skills_output_and_list(monkeypatch, tmp_path: Path):
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -193,7 +193,7 @@ async def test_uninstall_prunes_from_skills_output_and_list(monkeypatch, tmp_pat
 
 
 async def test_skills_info_shows_imported_content_not_registry_drift(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -214,7 +214,7 @@ async def test_skills_info_shows_imported_content_not_registry_drift(monkeypatch
 
 
 async def test_skills_info_custom_only(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -231,7 +231,7 @@ async def test_skills_info_custom_only(monkeypatch, tmp_path: Path):
 
 
 async def test_skills_info_builtin(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -248,7 +248,7 @@ async def test_skills_info_builtin(monkeypatch, tmp_path: Path):
 
 
 async def test_skills_info_custom_override(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -269,7 +269,7 @@ async def test_skills_info_custom_override(monkeypatch, tmp_path: Path):
 
 
 async def test_custom_override_shadows_imported_in_prompt(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -292,7 +292,7 @@ async def test_custom_override_shadows_imported_in_prompt(monkeypatch, tmp_path:
 
 
 async def test_cross_user_imported_skill(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -314,7 +314,7 @@ async def test_cross_user_imported_skill(monkeypatch, tmp_path: Path):
 
 
 async def test_three_tier_resolution_in_prompt(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -347,7 +347,7 @@ async def test_three_tier_resolution_in_prompt(monkeypatch, tmp_path: Path):
 
 
 async def test_skills_list_shows_imported_and_override_tags(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -368,7 +368,7 @@ async def test_skills_list_shows_imported_and_override_tags(monkeypatch, tmp_pat
 
 
 async def test_skills_updates_and_diff_reflect_registry_drift(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -394,7 +394,7 @@ async def test_skills_updates_and_diff_reflect_registry_drift(monkeypatch, tmp_p
 
 
 async def test_normalization_on_add_path_persists_to_disk(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -427,7 +427,7 @@ async def test_normalization_on_add_path_persists_to_disk(monkeypatch, tmp_path:
 
 
 async def test_admin_sessions_filters_stale_skills(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -448,7 +448,7 @@ async def test_admin_sessions_filters_stale_skills(monkeypatch, tmp_path: Path):
 
 
 async def test_skills_info_shows_provider_compatibility(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:
@@ -472,7 +472,7 @@ async def test_skills_info_shows_provider_compatibility(monkeypatch, tmp_path: P
 
 
 async def test_skills_info_nonexistent(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_runtime_env(tmp_path, monkeypatch)
     try:

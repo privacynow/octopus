@@ -1,12 +1,20 @@
-# Registry UI: Routed tasks
+# Registry UI: Tasks
 
-[← Manual home](../README.md) · [Prev: Conversation detail](conversation-detail.md) · [Next: Capabilities →](capabilities.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation detail](conversation-detail.md) · Next: [Capabilities](capabilities.md)
 
-**Route:** `/ui/tasks` — **routed tasks** across agents as lighter row
-summaries with inline expandable detail. Each row shows title, origin, target,
-status, and updated time. Use the **status** filter to narrow the list.
+**Route:** `/ui/tasks`
 
-Expand a task row to inspect instructions, result summary, and the link back to
-the **parent conversation**.
+This page is the routed-task queue across all agents.
 
-![Tasks](../../assets/registry/ui/07-tasks-annotated.png)
+It is organized around:
+
+- a **summary rail** for pending, running, and follow-up work
+- segmented status filters
+- expandable task rows with current state, target, parent conversation, and
+  task actions
+
+Expand a row to inspect its summary, origin/target facts, open the parent
+conversation, or retry/cancel the task when that action is valid for the
+current state.
+
+![Tasks](../../assets/registry/ui/07-tasks.png)

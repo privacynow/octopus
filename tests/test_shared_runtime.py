@@ -10,12 +10,14 @@ from unittest.mock import patch
 
 from app import work_queue
 from app.channels.telegram.bootstrap import build_bootstrap
-from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
-from app.channels.telegram.session_io import event_key
+from app.runtime import telegram_shared_dispatch as telegram_shared_mode_dispatch
+from app.runtime.telegram_session_io import event_key
 from octopus_sdk.providers import RunResult
 from app.storage import default_session, save_session
 from octopus_sdk.inbound_types import InboundAction, InboundEnvelope, InboundUser, deserialize_inbound
 from app.runtime.work_admission import record_inbound_envelope
+from octopus_sdk.transport import InboundSubmissionResult
+import app.runtime.telegram_ingress as telegram_ingress
 from tests.support.handler_support import (
     current_boot_id,
     current_shared_runtime_builders,
@@ -29,7 +31,9 @@ from tests.support.handler_support import (
     drain_one_worker_item,
     fresh_env,
     load_session_disk,
+    pending_approval_dict,
 )
+from tests.support.service_support import build_test_bot_services
 
 
 _SHARED_OVERRIDES = {
@@ -48,11 +52,36 @@ async def _permissive_chat_lock(_runtime, _chat_id, **_kwargs):
     yield False
 
 
+class _FakeSubmitter:
+    def __init__(self) -> None:
+        self.admitted: list[InboundEnvelope] = []
+        self.enqueued: list[InboundEnvelope] = []
+        self.recorded: list[InboundEnvelope] = []
+
+    async def admit_message(self, envelope: InboundEnvelope) -> InboundSubmissionResult:
+        self.admitted.append(envelope)
+        return InboundSubmissionResult(status="queued", item_id="item-1")
+
+    async def enqueue(
+        self,
+        envelope: InboundEnvelope,
+        *,
+        worker_id: str | None = None,
+    ) -> InboundSubmissionResult:
+        del worker_id
+        self.enqueued.append(envelope)
+        return InboundSubmissionResult(status="queued", item_id="item-2")
+
+    async def record(self, envelope: InboundEnvelope) -> bool:
+        self.recorded.append(envelope)
+        return True
+
+
 async def test_shared_build_application_registers_shared_dispatch_handlers():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
-        app = build_bootstrap(cfg, prov).application
+        app = build_bootstrap(cfg, prov, services=build_test_bot_services()).application
         command_callbacks: dict[str, str] = {}
         callback_patterns: list[tuple[str, str]] = []
         for group_handlers in app.handlers.values():
@@ -78,7 +107,7 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
 
 async def test_shared_message_path_remains_persist_first():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -88,7 +117,7 @@ async def test_shared_message_path_remains_persist_first():
 
         assert prov.run_calls == []
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
-        assert any(item["kind"] == "message" and item["state"] == "queued" for item in items)
+        assert any(item.kind == "message" and item.state == "queued" for item in items)
         message_payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert message_payload is not None
         message_event = deserialize_inbound("message", message_payload)
@@ -96,6 +125,23 @@ async def test_shared_message_path_remains_persist_first():
 
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
+
+
+async def test_shared_message_path_uses_runtime_submitter() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        runtime = current_runtime()
+        fake_submitter = _FakeSubmitter()
+        runtime.submitter = fake_submitter
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        message = FakeMessage(chat=chat, text="hello")
+        update = FakeUpdate(message=message, user=user, chat=chat)
+
+        await telegram_ingress.handle_message(update, FakeContext())
+
+        assert len(fake_submitter.admitted) == 1
+        assert fake_submitter.admitted[0].kind == "message"
+        assert "queued" in message.replies[-1]["text"].lower()
 
 
 async def test_shared_command_dispatch_persists_action_without_inline_execution():
@@ -121,10 +167,10 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         assert event.action == "approve_pending"
         assert event.transport == "telegram"
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
-        assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
+        assert any(item.kind == "action" and item.state == "queued" for item in items)
 
 
-def test_record_inbound_envelope_persists_transport_from_envelope() -> None:
+def test_record_inbound_envelope_persists_transport__envelope() -> None:
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
         event = InboundAction(
             user=InboundUser(id="slack:alice", username="alice"),
@@ -194,7 +240,30 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat.id))
-        assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
+        assert any(item.kind == "action" and item.state == "queued" for item in items)
+
+
+async def test_shared_command_dispatch_uses_runtime_submitter_for_worker_owned_actions() -> None:
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        runtime = current_runtime()
+        fake_submitter = _FakeSubmitter()
+        runtime.submitter = fake_submitter
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=runtime,
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+        assert len(fake_submitter.enqueued) == 1
+        assert fake_submitter.enqueued[0].kind == "action"
 
 
 async def test_shared_skills_command_routes_through_runtime_skill_owner(monkeypatch):
@@ -231,15 +300,11 @@ async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
-        session["pending_approval"] = {
-            "actor_key": "tg:42",
-            "prompt": "Ship it",
-            "image_paths": [],
-            "attachment_dicts": [],
-            "context_hash": "",
-            "trust_tier": "trusted",
-            "created_at": time.time(),
-        }
+        session["pending_approval"] = pending_approval_dict(
+            prompt="Ship it",
+            trust_tier="trusted",
+            created_at=time.time(),
+        )
         save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="done")]
 
@@ -298,7 +363,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
             build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
 
-        assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True
+        assert work_queue.is_cancel_requested(data_dir, claimed.id) is True
         payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
@@ -310,7 +375,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
 
 async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        telegram_bootstrap = build_bootstrap(cfg, prov)
+        telegram_bootstrap = build_bootstrap(cfg, prov, services=build_test_bot_services())
         parts = telegram_bootstrap.runtime.boot_id.split(":")
         assert len(parts) == 3
         assert parts[1].isdigit()
@@ -331,7 +396,7 @@ async def test_periodic_stale_sweep_recovers_expired_claim():
         )
         assert status == "admitted"
         claimed = work_queue.claim_next_any(data_dir, "old-worker")
-        assert claimed is not None and claimed["id"] == item_id
+        assert claimed is not None and claimed.id == item_id
 
         conn = work_queue.debug_transport_connection(data_dir)
         backdated = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 600))
@@ -362,9 +427,9 @@ async def test_periodic_stale_sweep_recovers_expired_claim():
             )
 
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
-        recovered = [row for row in items if row["id"] == item_id]
-        assert recovered and recovered[0]["state"] == "queued"
-        assert recovered[0]["dispatch_mode"] == "recovery"
+        recovered = [row for row in items if row.id == item_id]
+        assert recovered and recovered[0].state == "queued"
+        assert recovered[0].dispatch_mode == "recovery"
 
 
 async def test_periodic_stale_sweep_ignores_live_claim():
@@ -381,7 +446,7 @@ async def test_periodic_stale_sweep_ignores_live_claim():
         )
         assert status == "admitted"
         claimed = work_queue.claim_next_any(data_dir, "worker-a")
-        assert claimed is not None and claimed["id"] == item_id
+        assert claimed is not None and claimed.id == item_id
 
         stop = asyncio.Event()
 
@@ -407,8 +472,8 @@ async def test_periodic_stale_sweep_ignores_live_claim():
             )
 
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
-        live = [row for row in items if row["id"] == item_id]
-        assert live and live[0]["state"] == "claimed"
+        live = [row for row in items if row.id == item_id]
+        assert live and live[0].state == "claimed"
         conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute("SELECT worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
         assert row is not None and row["worker_id"] == "worker-a"
@@ -472,7 +537,7 @@ async def test_worker_loop_heartbeat_tracks_current_item():
         release = asyncio.Event()
 
         async def dispatch(_kind, _event, item):
-            assert item["id"] == item_id
+            assert item.id == item_id
             entered.set()
             await release.wait()
             stop.set()

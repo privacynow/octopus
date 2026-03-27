@@ -2,75 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING
-
-from app.config import BotConfig
-if TYPE_CHECKING:
-    from app.workflows.conversation.contracts import ConversationControlPort, ConversationSettingsPort
-    from app.workflows.credentials.contracts import CredentialManagementPort
-    from app.workflows.pending.contracts import PendingRequestPort
-    from app.workflows.provider_guidance.contracts import (
-        ProviderGuidanceManagementPort,
-        ProviderGuidancePort,
-    )
-    from app.workflows.recovery.contracts import RecoveryPort
-    from app.workflows.runtime_skills.contracts import (
-        RuntimeSkillActivationPort,
-        RuntimeSkillApprovalPort,
-        RuntimeSkillAuthoringPort,
-        RuntimeSkillCatalogPort,
-        RuntimeSkillImportPort,
-        RuntimeSkillSetupPort,
-    )
-
-
-@dataclass(frozen=True)
-class RuntimeSkillWorkflows:
-    catalog: "RuntimeSkillCatalogPort"
-    activation: "RuntimeSkillActivationPort"
-    imports: "RuntimeSkillImportPort"
-    setup: "RuntimeSkillSetupPort"
-    authoring: "RuntimeSkillAuthoringPort"
-    approval: "RuntimeSkillApprovalPort"
-
-
-@dataclass(frozen=True)
-class CredentialWorkflows:
-    management: "CredentialManagementPort"
-
-
-@dataclass(frozen=True)
-class ConversationWorkflows:
-    control: "ConversationControlPort"
-    settings: "ConversationSettingsPort"
-
-
-@dataclass(frozen=True)
-class PendingWorkflows:
-    requests: "PendingRequestPort"
-
-
-@dataclass(frozen=True)
-class RecoveryWorkflows:
-    replay: "RecoveryPort"
-
-
-@dataclass(frozen=True)
-class ProviderGuidanceWorkflows:
-    preview: "ProviderGuidancePort"
-    management: "ProviderGuidanceManagementPort"
-
-
-@dataclass(frozen=True)
-class WorkflowComposition:
-    runtime_skills: RuntimeSkillWorkflows
-    credentials: CredentialWorkflows
-    conversation: ConversationWorkflows
-    pending: PendingWorkflows
-    recovery: RecoveryWorkflows
-    provider_guidance: ProviderGuidanceWorkflows
+from octopus_sdk.bot_runtime import (
+    ConversationWorkflows,
+    CredentialWorkflows,
+    PendingWorkflows,
+    ProviderGuidanceWorkflows,
+    RecoveryWorkflows,
+    RuntimeSkillWorkflows,
+    WorkflowComposition,
+)
 
 
 @lru_cache(maxsize=1)

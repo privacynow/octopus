@@ -3,11 +3,28 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.channels.telegram.delegation_channel as delegation_channel
+import app.workflows.delegation.telegram as delegation_channel
+from app.agents.state import RegistryConnectionState, save_registry_connection_state
+from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.agent_directory import AuthorityResolution
 from app.channels.telegram.state import build_telegram_runtime
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
 from tests.support.handler_support import FakeChat, FakeMessage, FakeProvider, make_config
+from tests.support.config_support import make_registry_connection
+from tests.support.service_support import build_test_bot_services
+
+
+def _save_live_registry_state(tmp_path: Path, *, registry_id: str = "default", agent_id: str = "agent-primary") -> None:
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id=registry_id,
+            registry_scope="full",
+            agent_id=agent_id,
+            connectivity_state="connected",
+        ),
+    )
 
 
 def test_parse_delegation_callback_accepts_known_format():
@@ -25,25 +42,63 @@ def test_parse_delegation_callback_accepts_known_format():
 
 @pytest.mark.asyncio
 async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch, tmp_path: Path):
+    cfg = make_config(
+        tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+        registry_agent_ids={"default": "agent-primary"},
+    )
     runtime = build_telegram_runtime(
-        make_config(tmp_path),
+        cfg,
         FakeProvider("codex"),
+        services=build_test_bot_services(config=cfg),
     )
+    _save_live_registry_state(tmp_path)
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
-        delegation_title="Delegate this",
         text="delegate this work",
-        delegation_resume_instruction="resume",
-        delegation_tasks=[
-            {
-                "routed_task_id": "task-1",
-                "title": "Review docs",
-                "target_agent_id": "agent-reviewer",
-                "instructions": "Review the current docs",
-            },
-        ],
+        coordination_intent=DelegationIntent(
+            title="Delegate this",
+            resume_instruction="resume",
+            tasks=[
+                DelegationTaskDraft(
+                    draft_id="task-1",
+                    selector=TargetSelector(kind="agent", value="agent-reviewer", preferred_agent_id="agent-reviewer"),
+                    title="Review docs",
+                    instructions="Review the current docs",
+                )
+            ],
+        ),
     )
+    created = []
+    submitted = []
+
+    async def _create_conversation(**kwargs):
+        created.append(kwargs)
+        return "conversation-id"
+
+    async def _submit_action(*, conversation_id, envelope):
+        submitted.append((conversation_id, envelope))
+        return CoordinationActionResult(
+            conversation_id=conversation_id,
+            action_id=envelope.action_id,
+            action=envelope.action,
+            accepted=True,
+            proposal_id="proposal-1",
+        )
+
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "create_conversation",
+        _create_conversation,
+    )
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "submit_action",
+        _submit_action,
+    )
+
     async def _resolve_target_authority(*, target_agent_id):
         assert target_agent_id == "agent-reviewer"
         return AuthorityResolution(status="resolved", authority_ref="registry:default")
@@ -65,9 +120,13 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
 
     assert outcome.status == "delegation_proposed"
     assert session.pending_delegation is not None
+    assert session.pending_delegation.proposal_id == "proposal-1"
+    assert session.pending_delegation.conversation_ref == "conversation-id"
     assert session.pending_delegation.title == "Delegate this"
     assert len(session.pending_delegation.tasks) == 1
-    # delegation.proposed event is now published by execute_request via the event sink, not here
+    assert created[0]["external_conversation_ref"] == "12345"
+    assert submitted[0][0] == "conversation-id"
+    assert submitted[0][1].action == "delegate_tasks"
     assert message.replies[-1]["reply_markup"] is not None
     assert "Delegation plan" in message.replies[-1]["text"]
     assert "ready via" in message.replies[-1]["text"]
@@ -75,24 +134,58 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
 
 @pytest.mark.asyncio
 async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_plan(monkeypatch, tmp_path: Path):
-    runtime = build_telegram_runtime(
-        make_config(tmp_path),
-        FakeProvider("codex"),
+    cfg = make_config(
+        tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+        registry_agent_ids={"default": "agent-primary"},
     )
+    runtime = build_telegram_runtime(
+        cfg,
+        FakeProvider("codex"),
+        services=build_test_bot_services(config=cfg),
+    )
+    _save_live_registry_state(tmp_path)
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
-        delegation_title="Delegate this",
         text="delegate this work",
-        delegation_resume_instruction="resume",
-        delegation_tasks=[
-            {
-                "routed_task_id": "task-1",
-                "title": "Review docs",
-                "target_agent_id": "agent-reviewer",
-                "instructions": "Review the current docs",
-            },
-        ],
+        coordination_intent=DelegationIntent(
+            title="Delegate this",
+            resume_instruction="resume",
+            tasks=[
+                DelegationTaskDraft(
+                    draft_id="task-1",
+                    selector=TargetSelector(kind="agent", value="agent-reviewer", preferred_agent_id="agent-reviewer"),
+                    title="Review docs",
+                    instructions="Review the current docs",
+                )
+            ],
+        ),
+    )
+    async def _create_conversation(**kwargs):
+        del kwargs
+        return "conversation-id"
+
+    async def _submit_action(*, conversation_id, envelope):
+        del envelope
+        return CoordinationActionResult(
+            conversation_id=conversation_id,
+            action_id="proposal-action",
+            action="delegate_tasks",
+            accepted=True,
+            proposal_id="proposal-1",
+        )
+
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "create_conversation",
+        _create_conversation,
+    )
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "submit_action",
+        _submit_action,
     )
 
     async def _resolve_target_authority(*, target_agent_id):
@@ -123,52 +216,73 @@ async def test_propose_delegation_plan_autonomous_registry_origin_uses_bound_ext
     monkeypatch,
     tmp_path: Path,
 ):
-    runtime = build_telegram_runtime(
-        make_config(tmp_path, autonomous=True, approval_mode="off"),
-        FakeProvider("codex"),
+    cfg = make_config(
+        tmp_path,
+        autonomous=True,
+        approval_mode="off",
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+        registry_agent_ids={"default": "agent-primary"},
     )
+    runtime = build_telegram_runtime(
+        cfg,
+        FakeProvider("codex"),
+        services=build_test_bot_services(config=cfg),
+    )
+    _save_live_registry_state(tmp_path)
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
     message.external_id = "registry-ui-conv-1"
     message.authority_ref = "registry:default"
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
-        delegation_title="Delegate this",
         text="delegate this work",
-        delegation_resume_instruction="resume",
-        delegation_tasks=[
-            {
-                "routed_task_id": "task-1",
-                "title": "Review docs",
-                "target_agent_id": "agent-reviewer",
-                "instructions": "Review the current docs",
-            },
-        ],
+        coordination_intent=DelegationIntent(
+            title="Delegate this",
+            resume_instruction="resume",
+            tasks=[
+                DelegationTaskDraft(
+                    draft_id="task-1",
+                    selector=TargetSelector(kind="agent", value="agent-reviewer", preferred_agent_id="agent-reviewer"),
+                    title="Review docs",
+                    instructions="Review the current docs",
+                )
+            ],
+        ),
     )
-    captured_transport = {}
+    submitted = []
+
+    async def _submit_action(*, conversation_id, envelope):
+        submitted.append((conversation_id, envelope))
+        if envelope.action == "delegate_tasks":
+            return CoordinationActionResult(
+                conversation_id=conversation_id,
+                action_id=envelope.action_id,
+                action=envelope.action,
+                accepted=True,
+                proposal_id="proposal-1",
+            )
+        return CoordinationActionResult(
+            conversation_id=conversation_id,
+            action_id=envelope.action_id,
+            action=envelope.action,
+            accepted=True,
+            proposal_id="proposal-1",
+            routed_tasks=[
+                {
+                    "routed_task_id": "server-task-1",
+                    "target_agent_id": "agent-reviewer",
+                    "authority_ref": "",
+                    "title": "Review docs",
+                    "status": "queued",
+                }
+            ],
+        )
 
     monkeypatch.setattr(
-        delegation_channel,
-        "build_delegation_runtime",
-        lambda **kwargs: SimpleNamespace(**kwargs),
+        runtime.services.control_plane.conversation_projection,
+        "submit_action",
+        _submit_action,
     )
-    monkeypatch.setattr(delegation_channel, "registry_id_from_authority_ref", lambda ref: "default")
-    monkeypatch.setattr(delegation_channel, "runtime_registry_agent_id", lambda data_dir, registry_id: "agent-primary")
-
-    def _capture_sink(transport, projection, config):
-        del projection, config
-        captured_transport["origin_channel"] = transport.origin_channel
-        captured_transport["external_conversation_ref"] = transport.external_conversation_ref
-        captured_transport["conversation_ref"] = transport.conversation_ref
-        captured_transport["authority_ref"] = transport.authority_ref
-        captured_transport["target_agent_id"] = transport.target_agent_id
-        return object()
-
-    async def _approve(*args, **kwargs):
-        del args, kwargs
-        return None
-
-    monkeypatch.setattr("octopus_sdk.event_sink.build_event_sink_for_context", _capture_sink)
-    monkeypatch.setattr(delegation_channel, "handle_channel_delegation_approve", _approve)
 
     outcome = await delegation_channel.propose_delegation_plan(
         runtime,
@@ -180,10 +294,66 @@ async def test_propose_delegation_plan_autonomous_registry_origin_uses_bound_ext
     )
 
     assert outcome.status == "delegation_submitted"
-    assert captured_transport == {
-        "origin_channel": "registry",
-        "external_conversation_ref": "registry-ui-conv-1",
-        "conversation_ref": "registry:default:conversation:conv-1",
-        "authority_ref": "registry:default",
-        "target_agent_id": "agent-primary",
-    }
+    assert [envelope.action for _, envelope in submitted] == ["delegate_tasks", "approve_delegation"]
+    assert submitted[0][0] == submitted[1][0]
+    assert session.pending_delegation is not None
+    assert session.pending_delegation.status == "submitted"
+    assert session.pending_delegation.tasks[0].status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_submit_direct_assignment_uses_live_registry_state_not_config_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+):
+    cfg = make_config(
+        tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+        registry_agent_ids={},
+    )
+    runtime = build_telegram_runtime(
+        cfg,
+        FakeProvider("codex"),
+        services=build_test_bot_services(config=cfg),
+    )
+    _save_live_registry_state(tmp_path, agent_id="live-agent")
+    message = FakeMessage(chat=FakeChat(12345), text="/delegate @agent-reviewer do work")
+    created: list[dict] = []
+
+    async def _create_conversation(**kwargs):
+        created.append(kwargs)
+        return "conversation-id"
+
+    async def _submit_action(*, conversation_id, envelope):
+        return CoordinationActionResult(
+            conversation_id=conversation_id,
+            action_id=envelope.action_id,
+            action=envelope.action,
+            accepted=True,
+        )
+
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "create_conversation",
+        _create_conversation,
+    )
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "submit_action",
+        _submit_action,
+    )
+
+    result = await delegation_channel.submit_direct_assignment(
+        runtime,
+        "tg:12345",
+        message,
+        conversation_ref="conv-1",
+        selector=TargetSelector(kind="agent", value="agent-reviewer", preferred_agent_id="agent-reviewer"),
+        title="Direct assignment",
+        instructions="Do the work",
+        message_text="/delegate @agent-reviewer do work",
+    )
+
+    assert result.accepted is True
+    assert created and created[0]["target_agent_id"] == "live-agent"

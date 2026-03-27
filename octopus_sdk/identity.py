@@ -15,9 +15,10 @@ import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 from uuid import uuid4
 
+from octopus_sdk.config import BotConfigBase
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 log = logging.getLogger(__name__)
@@ -27,6 +28,14 @@ log = logging.getLogger(__name__)
 class BotIdentityState:
     bot_id: str
     created_at: str
+
+
+class ConversationScopedEvent(Protocol):
+    conversation_ref: str
+    conversation_key: str
+
+    @property
+    def chat_id(self) -> int | str: ...
 
 
 def _prefixed(prefix: str, value: int | str) -> str:
@@ -157,7 +166,7 @@ def bot_identity(data_dir: Path) -> str:
     return load_bot_identity_state(data_dir).bot_id
 
 
-def telegram_conversation_ref(config: Any, chat_id: int | str) -> str:
+def telegram_conversation_ref(config: BotConfigBase, chat_id: int | str) -> str:
     return f"telegram:{bot_identity(Path(config.data_dir))}:{chat_id}"
 
 
@@ -176,7 +185,7 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
     return conversation_ref
 
 
-def resolve_event_conversation_ref(*, config: Any, event: Any) -> str:
+def resolve_event_conversation_ref(*, config: BotConfigBase, event: ConversationScopedEvent) -> str:
     conversation_ref = str(getattr(event, "conversation_ref", "") or "")
     if conversation_ref:
         return conversation_ref

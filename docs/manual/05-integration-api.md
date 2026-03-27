@@ -1,6 +1,6 @@
 # Integration: Registry HTTP API
 
-[← Manual home](README.md) · [Prev: Telegram](04-product-telegram.md) · [Next: Troubleshooting →](06-troubleshooting.md)
+Manual: [Home](README.md) · Previous: [Telegram](04-product-telegram.md) · Next: [Troubleshooting](06-troubleshooting.md)
 
 Bots and automation call **`/v1/...`** on the registry with **agent tokens**.
 Operators use the same resource API through **session cookies + CSRF** from the

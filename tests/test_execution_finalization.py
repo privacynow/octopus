@@ -5,6 +5,7 @@ import pytest
 
 from app.agents.registry_capabilities import registry_authority_ref
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
@@ -62,7 +63,7 @@ async def test_finalization_records_usage_and_schedules_webhook() -> None:
 async def test_finalization_clears_resumed_delegation_after_outcome() -> None:
     session = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="on",
         pending_delegation=PendingDelegation(
             conversation_ref="registry:conv-2",
@@ -109,6 +110,9 @@ async def test_finalization_reports_routed_task_result() -> None:
     outcome = RequestExecutionOutcome(
         status="completed_with_denials",
         reply_text="Partial completion with denials.",
+        prompt_tokens=21,
+        completion_tokens=8,
+        cost_usd=0.19,
     )
 
     result = await finalize_execution(
@@ -140,6 +144,10 @@ async def test_finalization_reports_routed_task_result() -> None:
     payload = reported[0]["result"]
     assert payload.status == "completed"
     assert "Partial completion" in payload.full_text
+    assert payload.prompt_tokens == 21
+    assert payload.completion_tokens == 8
+    assert payload.cost_usd == 0.19
+    assert payload.provider == "claude"
 
 
 @pytest.mark.asyncio
@@ -276,7 +284,7 @@ async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) -> None:
+async def test_finalization_report_failure_emits_failed_fallback(caplog) -> None:
     status_updates: list[tuple[str, object]] = []
 
     class FailingTaskRouting:
@@ -319,5 +327,5 @@ async def test_finalization_report_failure_emits_partialfailed_fallback(caplog) 
     authority_ref, update = status_updates[0]
     assert authority_ref == registry_authority_ref("default")
     assert update.routed_task_id == "task-5"
-    assert update.status == "partialfailed"
+    assert update.status == "failed"
     assert "could not be delivered" in update.summary

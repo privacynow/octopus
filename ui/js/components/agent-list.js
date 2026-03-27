@@ -1,23 +1,33 @@
 /**
- * Agent list — home view showing all enrolled agents with pagination.
+ * Agent list — dense roster with direct conversation entry.
  */
 function renderAgentList(container) {
     const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
-    let cursorStack = []; // stack of previous cursors for "prev"
+    let cursorStack = [];
     let nameFilter = UI.readQueryParam('q', '');
     let stateFilter = UI.readQueryParam('state', '');
+    let hasLoaded = false;
+    let activeConversationOpen = '';
+    let searchTimeout = null;
 
-    // Shell
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Agents</h2><p>See which agents are healthy, which ones are struggling, and where to drill in when work slows down.</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Agents</h2>';
     container.appendChild(header);
 
-    // Filter bar
-    const filterBar = document.createElement('div');
-    filterBar.className = 'filter-bar';
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
+    const workbench = document.createElement('section');
+    workbench.className = 'workbench-panel';
+    shell.appendChild(workbench);
+
+    const controls = document.createElement('div');
+    controls.className = 'route-controls';
+    workbench.appendChild(controls);
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
@@ -25,35 +35,63 @@ function renderAgentList(container) {
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Filter agents by name');
     searchInput.setAttribute('title', 'Press / to focus search');
-    filterBar.appendChild(searchInput);
+    controls.appendChild(searchInput);
 
-    const searchHint = document.createElement('span');
-    searchHint.className = 'search-shortcut-hint';
-    searchHint.textContent = 'Shortcut: /';
-    filterBar.appendChild(searchHint);
+    const stateBar = document.createElement('div');
+    stateBar.className = 'segmented-control';
+    stateBar.setAttribute('role', 'tablist');
+    stateBar.setAttribute('aria-label', 'Agent state filter');
+    controls.appendChild(stateBar);
 
-    const stateSelect = document.createElement('select');
-    stateSelect.setAttribute('aria-label', 'Filter agents by connectivity state');
-    stateSelect.innerHTML = '<option value="">All states</option>' +
-        '<option value="connected">Connected</option>' +
-        '<option value="degraded">Degraded</option>' +
-        '<option value="disconnected">Disconnected</option>' +
-        '<option value="offline">Offline</option>';
-    filterBar.appendChild(stateSelect);
+    const states = [
+        ['all', '', 'All'],
+        ['connected', 'connected', 'Connected'],
+        ['degraded', 'degraded', 'Degraded'],
+        ['disconnected', 'disconnected', 'Disconnected'],
+        ['offline', 'offline', 'Offline'],
+    ];
 
-    container.appendChild(filterBar);
+    function applyStateFilter(value) {
+        stateFilter = value;
+        cursor = 0;
+        cursorStack = [];
+        syncStateButtons();
+        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
+        loadPage();
+    }
+
+    states.forEach(([key, value, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn';
+        btn.dataset.key = key;
+        btn.dataset.value = value;
+        btn.textContent = label;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(stateFilter === value));
+        btn.tabIndex = stateFilter === value ? 0 : -1;
+        if (stateFilter === value) btn.classList.add('active');
+        btn.addEventListener('click', () => applyStateFilter(value));
+        stateBar.appendChild(btn);
+    });
+    UI.bindSegmentedControlKeyboard(stateBar, (target) => applyStateFilter(target.dataset.value || ''));
+
+    const listShell = document.createElement('section');
+    listShell.className = 'list-shell';
+    shell.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.id = 'agent-list-content';
     listEl.className = 'list-container';
-    container.appendChild(listEl);
+    listShell.appendChild(listEl);
 
     const pagEl = document.createElement('div');
     pagEl.id = 'agent-list-pagination';
-    container.appendChild(pagEl);
+    pagEl.className = 'pagination-shell';
+    listShell.appendChild(pagEl);
 
-    // Debounced search (client-side filter on current page)
-    let searchTimeout = null;
+    searchInput.value = nameFilter;
+
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
@@ -62,72 +100,91 @@ function renderAgentList(container) {
             cursorStack = [];
             UI.updateQueryParams({ q: nameFilter, state: stateFilter });
             loadPage();
-        }, 300);
+        }, 250);
     });
 
-    stateSelect.addEventListener('change', () => {
-        stateFilter = stateSelect.value;
-        cursor = 0;
-        cursorStack = [];
-        UI.updateQueryParams({ q: nameFilter, state: stateFilter });
-        loadPage();
-    });
-    searchInput.value = nameFilter;
-    stateSelect.value = stateFilter;
-
-    function loadPage() {
-        listEl.textContent = '';
-        UI.renderSkeletons(listEl, 5, 'row');
-        pagEl.textContent = '';
-
-        API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then(data => {
-            const agents = data.agents || data || [];
-            renderCards(agents, data.has_more, data.next_cursor);
-        }).catch(err => {
-            listEl.textContent = '';
-            UI.renderError(listEl, 'Failed to load agents: ' + err.message, loadPage);
+    function syncStateButtons() {
+        stateBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const match = states.find(([key]) => key === btn.dataset.key);
+            const active = !!match && stateFilter === match[1];
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
         });
     }
 
-    function renderCards(agents, hasMore, nextCursor) {
-        listEl.textContent = '';
-        pagEl.textContent = '';
+    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
+        const wrapper = document.createElement('div');
+        UI.renderPagination(wrapper, {
+            hasPrev,
+            hasNext,
+            info: '',
+            onPrev,
+            onNext,
+        });
+        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
+    }
 
-        if (agents.length === 0) {
-            listEl.appendChild(UI.renderEmptyState(nameFilter || stateFilter ? 'No agents match filters' : 'No agents enrolled'));
+    function renderRows(agents, hasMore, nextCursor) {
+        if (!agents.length) {
+            const emptyMessage = nameFilter || stateFilter ? 'No agents match this view.' : 'No agents enrolled.';
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
+            UI.reconcileChildren(pagEl, []);
             return;
         }
 
-        agents.forEach(a => {
+        const rows = agents.map((agent) => {
+            const shell = document.createElement('div');
+            shell.className = 'list-row-shell';
+            shell.dataset.key = agent.agent_id;
+
             const sub = document.createElement('span');
-            const parts = [a.role || 'agent', a.provider || '', a.slug].filter(Boolean);
-            sub.appendChild(document.createTextNode(parts.join(' \u00b7 ')));
-            const heartbeat = document.createElement('span');
-            heartbeat.setAttribute('data-timestamp', a.last_heartbeat_at || '');
-            heartbeat.textContent = a.last_heartbeat_at ? UI.relativeTime(a.last_heartbeat_at) : '';
-            if (parts.length && heartbeat.textContent) {
-                sub.appendChild(document.createTextNode(' \u00b7 '));
-            }
-            if (heartbeat.textContent) {
-                sub.appendChild(heartbeat);
-            }
+            sub.textContent = [
+                agent.role || 'agent',
+                agent.provider || '',
+                agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
+            ].filter(Boolean).join(' · ');
 
             const row = UI.renderListRow({
-                href: '/ui/agents/' + a.agent_id,
-                label: a.display_name || a.slug,
+                href: '/ui/agents/' + agent.agent_id,
+                label: agent.display_name || agent.slug || agent.agent_id,
                 sublabelNode: sub,
-                badgeText: a.connectivity_state || 'unknown',
-                badgeClass: 'badge-' + (a.connectivity_state || 'stopped'),
+                badgeText: agent.connectivity_state || 'unknown',
+                badgeClass: 'badge-' + (agent.connectivity_state || 'stopped'),
             });
-            row.id = 'agent-badge-' + a.agent_id;
-            listEl.appendChild(row);
-        });
+            shell.appendChild(row);
 
-        // Pagination
-        UI.renderPagination(pagEl, {
+            const actionBtn = document.createElement('button');
+            actionBtn.type = 'button';
+            actionBtn.className = 'btn btn-sm list-row-action';
+            actionBtn.textContent = 'Open';
+            actionBtn.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
+            actionBtn.addEventListener('click', async () => {
+                if (activeConversationOpen === agent.agent_id) return;
+                activeConversationOpen = agent.agent_id;
+                actionBtn.disabled = true;
+                actionBtn.textContent = 'Opening…';
+                try {
+                    const conversation = await API.openConversationForAgent(agent.agent_id, {
+                        title: `Conversation with ${agent.display_name || agent.slug || agent.agent_id}`,
+                    });
+                    Router.navigate('/ui/conversations/' + conversation.conversation_id);
+                } catch (err) {
+                    UI.reportError('Failed to open a conversation for this agent', err, { context: 'Agent list open conversation failed' });
+                    actionBtn.disabled = false;
+                    actionBtn.textContent = 'Open';
+                    activeConversationOpen = '';
+                }
+            });
+            shell.appendChild(actionBtn);
+
+            return shell;
+        });
+        UI.reconcileChildren(listEl, rows);
+
+        renderPaginationState({
             hasPrev: cursorStack.length > 0,
             hasNext: !!hasMore,
-            info: '',
             onPrev: () => {
                 cursor = cursorStack.pop() || 0;
                 loadPage();
@@ -140,13 +197,33 @@ function renderAgentList(container) {
         });
     }
 
+    function loadPage({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
+            UI.reconcileChildren(pagEl, []);
+        }
+        API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then((data) => {
+            renderRows(data.agents || data || [], data.has_more, data.next_cursor);
+            hasLoaded = true;
+        }).catch((err) => {
+            if (soft && hasLoaded) {
+                UI.reportError('Failed to refresh agents', err, { context: 'Agent list soft refresh failed' });
+                return;
+            }
+            UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load agents: ' + err.message, loadPage)]);
+            UI.reconcileChildren(pagEl, []);
+        });
+    }
+
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadPage, 400);
+        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));
 
+    syncStateButtons();
     loadPage();
+
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

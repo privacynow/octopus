@@ -1,129 +1,132 @@
 /**
- * Provider guidance editor — view, edit, and manage provider guidance lifecycle.
+ * Provider guidance editor — compact provider-scoped draft and publish workflow.
  */
 function renderGuidanceEditor(container) {
-    const header = document.createElement('div');
-    header.className = 'page-header';
-    header.innerHTML = '<h2>Provider Guidance</h2><p>Manage system prompt guidance per provider</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Guidance</h2>';
     container.appendChild(header);
 
-    // Provider selector
-    const selectorBar = document.createElement('div');
-    selectorBar.className = 'filter-bar';
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
 
-    const providerSelect = document.createElement('select');
-    providerSelect.setAttribute('aria-label', 'Guidance provider');
-    providerSelect.innerHTML =
-        '<option value="claude">Claude</option>' +
-        '<option value="codex">Codex</option>';
-    selectorBar.appendChild(providerSelect);
-    container.appendChild(selectorBar);
+    const providerPanel = document.createElement('section');
+    providerPanel.className = 'workbench-panel';
+    shell.appendChild(providerPanel);
+
+    const providerBar = document.createElement('div');
+    providerBar.className = 'segmented-control';
+    providerBar.setAttribute('role', 'tablist');
+    providerBar.setAttribute('aria-label', 'Guidance provider');
+    providerPanel.appendChild(providerBar);
 
     const contentEl = document.createElement('div');
-    contentEl.style.marginTop = '16px';
-    container.appendChild(contentEl);
+    contentEl.className = 'editor-shell';
+    shell.appendChild(contentEl);
 
     let currentProvider = 'claude';
+    const providers = [
+        ['claude', 'Claude'],
+        ['codex', 'Codex'],
+    ];
 
-    providerSelect.addEventListener('change', () => {
-        currentProvider = providerSelect.value;
-        loadGuidance();
-    });
-
-    function loadGuidance() {
-        contentEl.textContent = '';
-        UI.renderSkeletons(contentEl, 2, 'card');
-
-        API.getGuidance(currentProvider).then(data => {
-            contentEl.textContent = '';
-            renderGuidanceContent(data);
-        }).catch(err => {
-            contentEl.textContent = '';
-            UI.renderError(contentEl, 'Failed: ' + err.message, loadGuidance);
+    function syncProviderButtons() {
+        providerBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const active = btn.dataset.value === currentProvider;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
         });
     }
 
-    function renderGuidanceContent(data) {
-        const guidance = data.guidance || data;
+    function applyProvider(provider) {
+        currentProvider = provider;
+        syncProviderButtons();
+        loadGuidance();
+    }
 
-        // Status card
-        const statusCard = document.createElement('div');
-        statusCard.className = 'card';
-        const statusRow = document.createElement('div');
-        statusRow.className = 'card-row';
-        const statusInfo = document.createElement('div');
+    providers.forEach(([value, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn';
+        btn.dataset.value = value;
+        btn.textContent = label;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(currentProvider === value));
+        btn.tabIndex = currentProvider === value ? 0 : -1;
+        btn.addEventListener('click', () => applyProvider(value));
+        providerBar.appendChild(btn);
+    });
+    UI.bindSegmentedControlKeyboard(providerBar, (target) => applyProvider(target.dataset.value || 'claude'));
 
-        const statusTitle = document.createElement('div');
-        statusTitle.className = 'card-title';
-        statusTitle.textContent = currentProvider + ' guidance';
-        statusInfo.appendChild(statusTitle);
+    function loadGuidance() {
+        UI.reconcileChildren(contentEl, UI.createSkeletonNodes(2, 'card'));
+        API.getGuidance(currentProvider).then((data) => {
+            renderGuidanceContent(data.guidance || data);
+        }).catch((err) => {
+            UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load guidance: ' + err.message, loadGuidance)]);
+        });
+    }
 
-        const statusSub = document.createElement('div');
-        statusSub.className = 'card-subtitle';
-        statusSub.textContent = 'Status: ' + (guidance.status || guidance.lifecycle_status || 'draft');
-        statusInfo.appendChild(statusSub);
+    function renderGuidanceContent(guidance) {
+        const nodes = [];
 
-        statusRow.appendChild(statusInfo);
+        const statusPanel = document.createElement('section');
+        statusPanel.className = 'editor-panel';
+        statusPanel.dataset.key = 'guidance-status';
 
-        if (guidance.status || guidance.lifecycle_status) {
-            const badge = document.createElement('span');
-            badge.className = 'badge badge-' + (guidance.status || guidance.lifecycle_status);
-            badge.textContent = guidance.status || guidance.lifecycle_status;
-            statusRow.appendChild(badge);
-        }
+        const statusHead = document.createElement('div');
+        statusHead.className = 'workspace-header-main';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'workspace-title-group';
+        const title = document.createElement('h3');
+        title.className = 'editor-section-title';
+        title.textContent = `${providers.find(([value]) => value === currentProvider)?.[1] || currentProvider} guidance`;
+        titleWrap.appendChild(title);
+        statusHead.appendChild(titleWrap);
+        const badge = document.createElement('span');
+        badge.className = `badge badge-${guidance.status || guidance.lifecycle_status || 'draft'}`;
+        badge.textContent = String(guidance.status || guidance.lifecycle_status || 'draft').replace(/_/g, ' ');
+        statusHead.appendChild(badge);
+        statusPanel.appendChild(statusHead);
+        nodes.push(statusPanel);
 
-        statusCard.appendChild(statusRow);
-        contentEl.appendChild(statusCard);
+        const editorPanel = document.createElement('section');
+        editorPanel.className = 'editor-panel';
+        editorPanel.dataset.key = 'guidance-editor';
 
-        // Draft editor
-        const editorCard = document.createElement('div');
-        editorCard.className = 'card';
-        editorCard.style.padding = '16px';
-
-        const label = document.createElement('div');
-        label.className = 'detail-label';
-        label.textContent = 'System Prompt Draft';
-        editorCard.appendChild(label);
+        const editorTitle = document.createElement('div');
+        editorTitle.className = 'editor-section-title';
+        editorTitle.textContent = 'System prompt draft';
+        editorPanel.appendChild(editorTitle);
 
         const textarea = document.createElement('textarea');
         textarea.className = 'guidance-textarea';
-        textarea.rows = 12;
+        textarea.rows = 14;
         textarea.value = guidance.draft_body || guidance.instruction_body || guidance.body || '';
-        textarea.style.width = '100%';
-        textarea.style.fontFamily = 'monospace';
-        textarea.style.fontSize = '13px';
-        textarea.style.padding = '8px';
-        textarea.style.border = '1px solid var(--border-color, #333)';
-        textarea.style.borderRadius = '4px';
-        textarea.style.backgroundColor = 'var(--bg-secondary, #1e1e1e)';
-        textarea.style.color = 'var(--text-primary, #e0e0e0)';
-        textarea.style.resize = 'vertical';
-        editorCard.appendChild(textarea);
+        textarea.setAttribute('aria-label', 'Guidance draft');
+        editorPanel.appendChild(textarea);
 
         const actions = document.createElement('div');
-        actions.className = 'card-actions';
-        actions.style.marginTop = '12px';
-        actions.style.display = 'flex';
-        actions.style.gap = '8px';
+        actions.className = 'editor-actions';
 
-        // Save draft
         const saveBtn = document.createElement('button');
         saveBtn.className = 'btn btn-primary btn-sm';
-        saveBtn.textContent = 'Save Draft';
+        saveBtn.textContent = 'Save draft';
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
             try {
                 await API.updateGuidanceDraft(currentProvider, { body: textarea.value });
                 saveBtn.textContent = 'Saved';
-                setTimeout(() => { saveBtn.textContent = 'Save Draft'; }, 2000);
+                setTimeout(() => { saveBtn.textContent = 'Save draft'; }, 1600);
             } catch (err) {
-                UI.reportError('Failed to save the draft', err, { context: 'Guidance save draft failed' });
+                UI.reportError('Failed to save the guidance draft', err, { context: 'Guidance save draft failed' });
             }
             saveBtn.disabled = false;
         });
         actions.appendChild(saveBtn);
 
-        // Preview
         const previewBtn = document.createElement('button');
         previewBtn.className = 'btn btn-sm';
         previewBtn.textContent = 'Preview';
@@ -132,7 +135,7 @@ function renderGuidanceEditor(container) {
             try {
                 const result = await API.previewGuidance(currentProvider);
                 const previewText = result.preview || result.system_prompt || JSON.stringify(result, null, 2);
-                _showPreview(previewText);
+                showPreview(previewText);
             } catch (err) {
                 UI.reportError('Failed to preview the guidance', err, { context: 'Guidance preview failed' });
             }
@@ -140,7 +143,6 @@ function renderGuidanceEditor(container) {
         });
         actions.appendChild(previewBtn);
 
-        // Submit
         const submitBtn = document.createElement('button');
         submitBtn.className = 'btn btn-sm';
         submitBtn.textContent = 'Submit';
@@ -151,50 +153,51 @@ function renderGuidanceEditor(container) {
                 loadGuidance();
             } catch (err) {
                 UI.reportError('Failed to submit the guidance', err, { context: 'Guidance submit failed' });
+                submitBtn.disabled = false;
             }
-            submitBtn.disabled = false;
         });
         actions.appendChild(submitBtn);
 
-        // Publish
         const publishBtn = document.createElement('button');
         publishBtn.className = 'btn btn-sm btn-primary';
         publishBtn.textContent = 'Publish';
         publishBtn.addEventListener('click', async () => {
-            UI.showConfirm('Publish Guidance', 'Publish this guidance to all active conversations?', async () => {
+            UI.showConfirm('Publish guidance', 'Publish this guidance to active conversations?', async () => {
                 publishBtn.disabled = true;
                 try {
                     await API.publishGuidance(currentProvider);
                     loadGuidance();
                 } catch (err) {
                     UI.reportError('Failed to publish the guidance', err, { context: 'Guidance publish failed' });
+                    publishBtn.disabled = false;
                 }
-                publishBtn.disabled = false;
             });
         });
         actions.appendChild(publishBtn);
 
-        editorCard.appendChild(actions);
-        contentEl.appendChild(editorCard);
+        editorPanel.appendChild(actions);
+        nodes.push(editorPanel);
+
+        UI.reconcileChildren(contentEl, nodes);
     }
 
-    function _showPreview(text) {
+    function showPreview(text) {
         const overlay = document.createElement('div');
         overlay.className = 'confirm-overlay';
 
         const dialog = document.createElement('div');
         dialog.className = 'confirm-dialog';
-        dialog.style.maxWidth = '700px';
+        dialog.style.maxWidth = '720px';
         dialog.style.maxHeight = '80vh';
         dialog.style.overflow = 'auto';
 
         const h3 = document.createElement('h3');
-        h3.textContent = 'System Prompt Preview';
+        h3.textContent = 'Guidance preview';
         dialog.appendChild(h3);
 
         const pre = document.createElement('pre');
+        pre.className = 'event-pre';
         pre.style.whiteSpace = 'pre-wrap';
-        pre.style.fontSize = '12px';
         pre.textContent = text;
         dialog.appendChild(pre);
 
@@ -211,6 +214,6 @@ function renderGuidanceEditor(container) {
         document.body.appendChild(overlay);
     }
 
+    syncProviderButtons();
     loadGuidance();
-
 }

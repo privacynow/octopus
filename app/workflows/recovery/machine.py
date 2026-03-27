@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from app.workflows.recovery.results import TransportDisposition, TransitionResult, TransportStateCorruption
+from octopus_sdk.work_queue import TransportDisposition, TransitionResult, TransportStateCorruption
 
 TRANSPORT_STATES = frozenset(
     {
@@ -173,7 +173,7 @@ def decide_transport_action(
         return TransportDecision(
             status="invalid_transition",
             ok=False,
-            reason=f"no transition 'claim_inline' from {state!r}",
+            reason=f"no transition 'claim_inline' {state!r}",
         )
 
     if isinstance(action, ClaimWorkerAction):
@@ -181,7 +181,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'claim_worker' from {state!r}",
+                reason=f"no transition 'claim_worker' {state!r}",
             )
         if snapshot.has_other_claimed_for_chat:
             return TransportDecision(
@@ -203,7 +203,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'complete' from {state!r}",
+                reason=f"no transition 'complete' {state!r}",
             )
         return TransportDecision(
             status="done",
@@ -219,7 +219,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'fail' from {state!r}",
+                reason=f"no transition 'fail' {state!r}",
             )
         return TransportDecision(
             status="failed",
@@ -235,7 +235,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'move_to_pending_recovery' from {state!r}",
+                reason=f"no transition 'move_to_pending_recovery' {state!r}",
             )
         return TransportDecision(
             status="pending_recovery",
@@ -251,7 +251,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'recover_stale_claim' from {state!r}",
+                reason=f"no transition 'recover_stale_claim' {state!r}",
             )
         if not snapshot.is_stale:
             return TransportDecision(
@@ -273,7 +273,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'reclaim_for_replay' from {state!r}",
+                reason=f"no transition 'reclaim_for_replay' {state!r}",
             )
         if snapshot.has_other_claimed_for_chat:
             return TransportDecision(
@@ -295,7 +295,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'discard_recovery' from {state!r}",
+                reason=f"no transition 'discard_recovery' {state!r}",
             )
         return TransportDecision(
             status="discarded",
@@ -311,7 +311,7 @@ def decide_transport_action(
             return TransportDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'supersede_recovery' from {state!r}",
+                reason=f"no transition 'supersede_recovery' {state!r}",
             )
         return TransportDecision(
             status="superseded",

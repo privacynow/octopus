@@ -3,34 +3,37 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
-from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.approvals import build_preflight_prompt
-from octopus_sdk.channels import ChannelDescriptor
-from octopus_sdk.delegation import DelegationIntentParser, XmlTagDelegationParser
+from octopus_sdk.bot_runtime import ExecutionServices
+from octopus_sdk.bot_runtime import ProviderDispatchRuntime
+from octopus_sdk.bot_runtime import run_provider_preflight
+from octopus_sdk.bot_runtime import run_provider_request
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.execution_events import ExecutionEventSink
 from octopus_sdk.formatting import extract_send_directives
 from octopus_sdk.inbound_types import InboundAttachment
+from octopus_sdk.providers import CredentialEnvRecord, DenialRecord
 from octopus_sdk.request_flow import extra_dirs_from_denials
-from octopus_sdk.runtime import ExecutionServices
-from octopus_sdk.runtime_dispatch import (
-    RuntimeDispatchRuntime,
-    run_provider_preflight,
-    run_provider_request,
+from octopus_sdk.transport import TransportDescriptor
+from octopus_sdk.sessions import (
+    PendingApproval,
+    PendingApprovalAttachmentRecord,
+    PendingRetry,
+    SessionState,
 )
-from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
-from octopus_sdk.registry.models import AgentDiscoveryQuery
+from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
+from octopus_sdk.transport import TransportEgress
 
 _log = logging.getLogger(__name__)
-_DEFAULT_DELEGATION_PARSER = XmlTagDelegationParser()
 
 
 def _progress_working() -> str:
@@ -86,27 +89,27 @@ class TransportIdentity:
     """Channel-supplied bundle for durable side effects."""
 
     conversation_key: str
-    origin_channel: str = ""
-    external_conversation_ref: str = ""
-    target_agent_id: str = ""
-    conversation_ref: str = ""
-    routed_task_id: str = ""
-    authority_ref: str = ""
-    actor: str = ""
+    origin_channel: str
+    actor: str
+    external_conversation_ref: str
+    target_agent_id: str
+    conversation_ref: str
+    routed_task_id: str
+    authority_ref: str
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)
 class ExecutionChannelMetadata:
     conversation_key: str
-    descriptor: ChannelDescriptor | None = None
-    message_conversation_ref: str = ""
-    routed_task_id: str = ""
-    authority_ref: str = ""
-    origin_channel: str = ""
-    external_conversation_ref: str = ""
-    target_agent_id: str = ""
-    actor: str = ""
+    origin_channel: str
+    actor: str
+    descriptor: TransportDescriptor | None
+    message_conversation_ref: str
+    routed_task_id: str
+    authority_ref: str
+    external_conversation_ref: str
+    target_agent_id: str
 
 
 @dataclass(frozen=True)
@@ -114,7 +117,7 @@ class RequestExecutionOutcome:
     status: str
     reply_text: str = ""
     error_text: str = ""
-    denials: tuple[dict[str, Any], ...] = ()
+    denials: tuple[DenialRecord, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
@@ -122,33 +125,9 @@ class RequestExecutionOutcome:
 
 @dataclass(frozen=True)
 class ExecutionRuntime:
-    dispatch: RuntimeDispatchRuntime
+    dispatch: ProviderDispatchRuntime
     services: ExecutionServices
     interrupted_exc: type[BaseException]
-    build_transport_identity: Callable[..., TransportIdentity]
-    build_event_sink: Callable[[TransportIdentity], ExecutionEventSink]
-    render_provider_error: Callable[[str], str]
-    show_foreign_setup: Callable[[Any, Any], Awaitable[None]]
-    show_setup_prompt: Callable[[Any, str, dict[str, object]], Awaitable[None]]
-    send_retry_prompt: Callable[[Any, tuple[dict[str, Any], ...], str], Awaitable[None]]
-    send_approval_prompt: Callable[[Any, str], Awaitable[None]]
-    send_formatted_reply: Callable[..., Awaitable[None]]
-    send_directed_artifacts: Callable[..., Awaitable[None]]
-    send_compact_reply: Callable[..., Awaitable[None]]
-    propose_delegation_plan: Callable[..., Awaitable[RequestExecutionOutcome]]
-    delegation_parser: DelegationIntentParser | None = field(default=None)
-    agent_directory: AgentDirectoryPort | None = field(default=None)
-
-
-def _transport_fields(metadata: ExecutionChannelMetadata) -> dict[str, Any]:
-    return {
-        "conversation_key": metadata.conversation_key,
-        "origin_channel": metadata.origin_channel,
-        "external_conversation_ref": metadata.external_conversation_ref,
-        "target_agent_id": metadata.target_agent_id,
-        "actor": metadata.actor,
-    }
-
 
 def build_transport_identity_from_metadata(
     metadata: ExecutionChannelMetadata,
@@ -157,9 +136,13 @@ def build_transport_identity_from_metadata(
     routed_task_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
 ) -> TransportIdentity:
     conversation_ref = metadata.message_conversation_ref
-    transport = _transport_fields(metadata)
     if metadata.routed_task_id and metadata.authority_ref:
         return TransportIdentity(
+            conversation_key=metadata.conversation_key,
+            origin_channel=metadata.origin_channel,
+            actor=metadata.actor,
+            external_conversation_ref=metadata.external_conversation_ref,
+            target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -167,7 +150,6 @@ def build_transport_identity_from_metadata(
                 metadata.routed_task_id,
                 metadata.authority_ref,
             ),
-            **transport,
         )
     descriptor = metadata.descriptor
     if (
@@ -177,6 +159,11 @@ def build_transport_identity_from_metadata(
         and descriptor.supports_timeline
     ):
         return TransportIdentity(
+            conversation_key=metadata.conversation_key,
+            origin_channel=metadata.origin_channel,
+            actor=metadata.actor,
+            external_conversation_ref=metadata.external_conversation_ref,
+            target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -184,14 +171,17 @@ def build_transport_identity_from_metadata(
                 conversation_ref,
                 metadata.routed_task_id,
             ),
-            **transport,
         )
     return TransportIdentity(
+        conversation_key=metadata.conversation_key,
+        origin_channel=metadata.origin_channel,
+        actor=metadata.actor,
+        external_conversation_ref=metadata.external_conversation_ref,
+        target_agent_id=metadata.target_agent_id,
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
         authority_ref=metadata.authority_ref,
         timeline_callback=None,
-        **transport,
     )
 
 
@@ -220,7 +210,7 @@ def _approval_event_id(conversation_key: str, callback_token: str) -> str:
     return f"approval:{conversation_key}:{callback_token}"
 
 
-def _retry_approval_content(denials: list[dict[str, object]]) -> str:
+def _retry_approval_content(denials: list[DenialRecord]) -> str:
     lines = ["Execution needs approval to continue after blocked actions."]
     for denial in denials:
         tool_name = str(denial.get("tool_name") or denial.get("tool") or "tool").strip() or "tool"
@@ -232,40 +222,18 @@ def _retry_approval_content(denials: list[dict[str, object]]) -> str:
 async def _discover_available_agents(
     runtime: ExecutionRuntime,
     cfg,
-) -> list[dict[str, str]] | None:
-    if runtime.agent_directory is None:
+) -> list[DiscoveredAgentRef] | None:
+    if runtime.services.agent_directory is None:
         return None
     try:
-        result = await runtime.agent_directory.search_agents(query=AgentDiscoveryQuery())
+        result = await runtime.services.agent_directory.search_agents(query=AgentDiscoveryQuery())
         if not result.agents:
             return None
         own_slug = cfg.agent_slug or cfg.instance
-        return [
-            {
-                "display_name": a.display_name,
-                "slug": a.slug,
-                "role": a.role,
-                "capabilities": ", ".join(a.capabilities) if a.capabilities else "",
-                "connectivity_state": a.connectivity_state,
-                "agent_id": a.agent_id,
-            }
-            for a in result.agents
-            if a.slug != own_slug
-        ]
+        return [a for a in result.agents if a.slug != own_slug]
     except Exception:
         _log.debug("Agent discovery failed, proceeding without agent context", exc_info=True)
         return None
-
-
-def _parse_delegation_from_response(
-    text: str,
-    available_agents: list[dict[str, str]] | None,
-    parser: DelegationIntentParser | None = None,
-) -> list[dict[str, str]]:
-    if not available_agents:
-        return []
-    effective_parser = parser or _DEFAULT_DELEGATION_PARSER
-    return effective_parser.parse(text, available_agents)
 
 
 def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
@@ -286,6 +254,15 @@ def _load(runtime: ExecutionRuntime, conversation_key: str) -> SessionState:
 
 def _save(runtime: ExecutionRuntime, conversation_key: str, session: SessionState) -> None:
     runtime.services.sessions.save(conversation_key, session)
+
+
+def _event_sink(runtime: ExecutionRuntime, transport: TransportIdentity) -> ExecutionEventSink:
+    from octopus_sdk.event_sink import _NOOP_SINK, build_event_sink_for_context
+
+    projection = runtime.services.conversation_projection
+    if projection is None:
+        return _NOOP_SINK
+    return build_event_sink_for_context(transport, projection, runtime.dispatch.config)
 
 
 def _resolve_context(
@@ -329,7 +306,7 @@ def load_approval_mode(
 def prompt_weight(
     role: str,
     active_skills: list[str],
-    available_agents: list[dict[str, str]] | None = None,
+    available_agents: list[DiscoveredAgentRef] | None = None,
     *,
     runtime: ExecutionRuntime,
 ) -> int:
@@ -344,20 +321,20 @@ async def check_credential_satisfaction(
     conversation_key: str,
     actor_key: str,
     session: SessionState,
-    message,
+    message: TransportEgress,
     *,
     resolved: ResolvedExecutionContext,
     runtime: ExecutionRuntime,
-) -> dict[str, str] | None:
+) -> CredentialEnvRecord | None:
     outcome = runtime.services.runtime_skill_setup.check_satisfaction(
         session,
         actor_key=actor_key,
         active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
-        return outcome.credential_env or {}
+        return outcome.credential_env or CredentialEnvRecord()
     if outcome.status == "foreign_setup" and outcome.foreign_setup is not None:
-        await runtime.show_foreign_setup(message, outcome.foreign_setup)
+        await message.show_foreign_setup(outcome.foreign_setup)
         return None
     if (
         outcome.status != "needs_setup"
@@ -366,11 +343,7 @@ async def check_credential_satisfaction(
     ):
         return None
     _save(runtime, conversation_key, session)
-    await runtime.show_setup_prompt(
-        message,
-        outcome.missing_skill,
-        outcome.first_requirement,
-    )
+    await message.show_setup_prompt(outcome.missing_skill, outcome.first_requirement)
     return None
 
 
@@ -378,7 +351,7 @@ async def execute_request(
     transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
-    message,
+    message: TransportEgress,
     extra_dirs: list[str] | None = None,
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
@@ -391,7 +364,7 @@ async def execute_request(
     guidance = runtime.services.guidance
 
     conversation_key = transport.conversation_key
-    event_sink = runtime.build_event_sink(transport)
+    event_sink = _event_sink(runtime, transport)
 
     session = _load(runtime, conversation_key)
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
@@ -520,9 +493,9 @@ async def execute_request(
 
     if result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
-        error_text = runtime.render_provider_error(error_text)
+        error_text = html.escape(error_text)
         if result.resume_failed:
-            error_text += runtime.render_provider_error(_progress_session_not_resumed())
+            error_text += html.escape(_progress_session_not_resumed())
         await progress.update(error_text, force=True)
         await event_sink.on_error(error_text, error_type="provider_error", message=error_text[:500])
         return RequestExecutionOutcome(status="failed", error_text=error_text)
@@ -549,15 +522,15 @@ async def execute_request(
             expires_at=_approval_expires_at(cfg.timeout_seconds),
             request_id=_approval_event_id(conversation_key, session.pending_retry.callback_token),
         )
-        await runtime.send_retry_prompt(
-            message,
-            tuple(result.denials),
-            session.pending_retry.callback_token,
-        )
+        await message.send_retry_prompt(tuple(result.denials), session.pending_retry.callback_token)
         cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
-            await runtime.send_formatted_reply(message, cleaned_reply)
-            await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
+            await message.send_formatted_reply(cleaned_reply)
+            await message.send_directed_artifacts(
+                conversation_key,
+                directives,
+                resolved_ctx=resolved,
+            )
         return RequestExecutionOutcome(
             status="completed_with_denials",
             reply_text=cleaned_reply,
@@ -567,28 +540,13 @@ async def execute_request(
             cost_usd=result.cost_usd,
         )
 
-    if not result.delegation_tasks and available_agents:
-        parsed_tasks = _parse_delegation_from_response(result.text, available_agents, parser=runtime.delegation_parser)
-        if parsed_tasks:
-            _log.info("Parsed %d delegation tasks from provider response", len(parsed_tasks))
-            result.delegation_tasks.extend(parsed_tasks)
-
-    if result.delegation_tasks:
-        _log.info("Delegation tasks present (%d), proposing plan", len(result.delegation_tasks))
+    if result.coordination_intent is not None:
+        intent = result.coordination_intent
+        _log.info("Coordination intent present (%d task(s)), proposing plan", len(intent.tasks))
         await progress.update("Delegation plan ready.", force=True)
-        tasks_summary = [
-            {
-                "title": t.get("title", ""),
-                "target": t.get("target_agent_id", ""),
-                "status": "proposed",
-            }
-            for t in result.delegation_tasks
-        ]
-        await event_sink.on_delegation_proposed(tasks_summary)
         session = _load(runtime, conversation_key)
-        return await runtime.propose_delegation_plan(
+        return await message.propose_delegation_plan(
             conversation_key,
-            message,
             session,
             conversation_ref=transport.conversation_ref,
             result=result,
@@ -600,10 +558,14 @@ async def execute_request(
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     if compact and len(cleaned_reply) > 800 and transport.origin_channel == "telegram":
-        await runtime.send_compact_reply(message, cleaned_reply, conversation_key, slot)
+        await message.send_compact_reply(cleaned_reply, conversation_key, slot)
     else:
-        await runtime.send_formatted_reply(message, cleaned_reply)
-    await runtime.send_directed_artifacts(conversation_key, message, directives, resolved_ctx=resolved)
+        await message.send_formatted_reply(cleaned_reply)
+    await message.send_directed_artifacts(
+        conversation_key,
+        directives,
+        resolved_ctx=resolved,
+    )
     await event_sink.on_bot_reply(cleaned_reply[:2000] if cleaned_reply else "")
     return RequestExecutionOutcome(
         status="completed",
@@ -619,7 +581,7 @@ async def dispatch_message_request(
     prompt: str,
     image_paths: list[str],
     attachments: list[InboundAttachment],
-    message,
+    message: TransportEgress,
     *,
     approval_mode: str,
     routed_task_id: str = "",
@@ -656,7 +618,7 @@ async def request_approval(
     prompt: str,
     image_paths: list[str],
     attachments,
-    message,
+    message: TransportEgress,
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
     *,
@@ -666,11 +628,11 @@ async def request_approval(
     prov = runtime.dispatch.provider
     guidance = runtime.services.guidance
     conversation_key = transport.conversation_key
-    event_sink = runtime.build_event_sink(transport)
+    event_sink = _event_sink(runtime, transport)
     session = _load(runtime, conversation_key)
 
     if session.has_pending:
-        await message.reply_text(_approval_already_waiting())
+        await message.send_text(_approval_already_waiting())
         return
 
     resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
@@ -726,14 +688,19 @@ async def request_approval(
 
     if plan_result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(plan_result.text, plan_result.returncode)
-        rendered_error = runtime.render_provider_error(
+        rendered_error = html.escape(
             f"{_approval_check_failed_prefix()}\n{error_text}"
         )
         await progress.update(rendered_error, force=True)
         return
 
     attachment_dicts = [
-        {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
+        PendingApprovalAttachmentRecord(
+            path=str(a.path),
+            original_name=a.original_name,
+            is_image=a.is_image,
+            mime_type=a.mime_type,
+        )
         for a in attachments
     ]
     session.pending_approval = PendingApproval(
@@ -759,5 +726,5 @@ async def request_approval(
 
     await progress.update(_approval_required(), force=True)
     runtime.services.artifacts.save_raw(conversation_key, prompt, plan_text, kind="approval")
-    await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
-    await runtime.send_approval_prompt(message, session.pending_approval.callback_token)
+    await message.send_formatted_reply("**Approval plan:**\n\n" + plan_text)
+    await message.send_approval_prompt(session.pending_approval.callback_token)

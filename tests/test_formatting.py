@@ -121,7 +121,7 @@ def test_split_html_nested_balanced():
             assert opens == closes
 
 def test_split_html_continuation_reopens_pre():
-    """Continuation: second chunk reopens tags from first."""
+    """Continuation: second chunk reopens tags first."""
     long_code = "<pre>" + "x" * 100 + "</pre>"
     chunks_pre = split_html(long_code, 60)
     assert chunks_pre[1].startswith("<pre>")
@@ -301,7 +301,7 @@ def test_split_html_plaintext_fallback():
     assert has_tags is False or all_balanced
 
 
-# -- Stress / edge cases (from test_edge_formatting.py) --
+# -- Stress / edge cases (test_edge_formatting.py) --
 
 
 def test_deeply_nested_markdown():

@@ -2,63 +2,42 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
-    registry_authority_ref,
-    registry_id_from_authority_ref,
 )
 from octopus_sdk.config import RegistryConnectionConfig
-from app.agents.state import runtime_registry_agent_id
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
-from app.control_plane.bus import ControlPlaneBus
-from app.control_plane.directory import build_control_plane_directory
-from octopus_sdk.channels import Channel, ChannelDescriptor
-from octopus_sdk.egress import ChannelEgress
-from app.runtime.channel_dispatcher import ChannelDispatcher
-from app.runtime.services import BotServices, build_bus_bot_services, build_noop_bot_services
+from app.runtime.services import BotServices
+from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.config import BotConfigBase
+from octopus_sdk.identity import conversation_key_for_ref, parse_actor_key
+from octopus_sdk.transport import TransportDescriptor
+from octopus_sdk.transport import TransportEgress
+from octopus_sdk.transport import TransportIdentityResolver
+from octopus_sdk.transport import TransportImplementation
 
 
-def _services_for_registry(
-    bus: ControlPlaneBus,
-    *,
-    registry: RegistryConnectionConfig,
-    authority_capabilities: dict[str, set[str]],
-    config: BotConfig,
-) -> BotServices:
-    authority_ref = registry_authority_ref(registry.registry_id)
-    capabilities = authority_capabilities.get(authority_ref, set())
-    if not capabilities:
-        return build_noop_bot_services()
-    directory = build_control_plane_directory({authority_ref: set(capabilities)})
+class _RegistryIdentityResolver(TransportIdentityResolver):
+    def conversation_key(self, raw_conversation_id: object) -> str:
+        return conversation_key_for_ref(str(raw_conversation_id).strip())
 
-    def _agent_id_for_authority(ref: str) -> str:
-        try:
-            rid = registry_id_from_authority_ref(ref)
-        except ValueError:
-            return ""
-        return runtime_registry_agent_id(
-            config.data_dir,
-            rid,
-            registry_scope=registry.registry_scope,
-        )
+    def actor_key(self, raw_actor_id: object) -> str:
+        return parse_actor_key(str(raw_actor_id).strip())
 
-    return build_bus_bot_services(
-        bus, directory, agent_id_for_authority=_agent_id_for_authority,
-    )
+    def external_conversation_ref(self, raw_conversation_id: object) -> str:
+        return binding_external_id_for_ref(str(raw_conversation_id).strip())
 
 
-class _RegistryChannel(Channel):
+class _RegistryChannel(TransportImplementation):
     def __init__(
         self,
         config: BotConfig,
         registry: RegistryConnectionConfig,
         *,
         ref_kind: str,
-        descriptor: ChannelDescriptor,
+        descriptor: TransportDescriptor,
         services: BotServices,
     ) -> None:
         self._config = config
@@ -68,17 +47,21 @@ class _RegistryChannel(Channel):
         self._services = services
 
     @property
-    def channel_id(self) -> str:
+    def transport_id(self) -> str:
         return f"registry:{self._registry.registry_id}:{self._ref_kind}"
 
     @property
-    def descriptor(self) -> ChannelDescriptor:
+    def descriptor(self) -> TransportDescriptor:
         return self._descriptor
+
+    @property
+    def identity(self) -> TransportIdentityResolver:
+        return _RegistryIdentityResolver()
 
     def ref_prefix(self) -> str:
         return f"registry:{self._registry.registry_id}:{self._ref_kind}:"
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         del config
         parsed = parse_registry_ref(conversation_ref)
         external_id = str(kw.get("external_id", "") or "").strip() or binding_external_id_for_ref(conversation_ref)
@@ -112,14 +95,14 @@ class RegistryConversationChannel(_RegistryChannel):
             config,
             registry,
             ref_kind="conversation",
-            descriptor=ChannelDescriptor(
-                channel_type="registry",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
                 display_name=f"Registry ({registry.registry_id})",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_channel_capability=True,
-                accepts_channel_input=True,
+                contributes_transport_capability=True,
+                accepts_transport_input=True,
                 supports_conversation_binding=True,
                 supports_timeline=True,
             ),
@@ -139,14 +122,14 @@ class RegistryTaskChannel(_RegistryChannel):
             config,
             registry,
             ref_kind="task",
-            descriptor=ChannelDescriptor(
-                channel_type="registry",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
                 display_name=f"Registry Tasks ({registry.registry_id})",
                 supports_multiple=True,
-                requires_polling=True,
+                inbound_model="delivery",
                 trust_tier="trusted",
-                contributes_channel_capability=False,
-                accepts_channel_input=False,
+                contributes_transport_capability=False,
+                accepts_transport_input=False,
                 supports_conversation_binding=False,
                 supports_timeline=False,
             ),
@@ -157,17 +140,16 @@ class RegistryTaskChannel(_RegistryChannel):
 def register_registry_channels(
     config: BotConfig,
     registries: tuple[RegistryConnectionConfig, ...],
-    dispatcher: ChannelDispatcher,
+    dispatcher: TransportDispatcher,
+    *,
+    services: BotServices,
 ) -> None:
     authority_capabilities = registry_authority_capabilities(registries)
-    bus = ControlPlaneBus(config.data_dir)
     for registry in registries:
-        services = _services_for_registry(
-            bus,
-            registry=registry,
-            authority_capabilities=authority_capabilities,
-            config=config,
-        )
+        authority_ref = f"registry:{registry.registry_id}"
+        capabilities = authority_capabilities.get(authority_ref, set())
+        if not capabilities:
+            continue
         if registry.registry_scope in {"channel", "full"}:
             dispatcher.register(
                 RegistryConversationChannel(

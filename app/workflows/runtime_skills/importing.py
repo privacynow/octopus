@@ -8,7 +8,7 @@ from app.provider_guidance_service import get_provider_guidance_service
 from app.workflows.runtime_skills.catalog import (
     get_runtime_skill_catalog_use_cases,
 )
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     PromptWarningContext,
     RegistryRuntimeSkillSearchHit,
     RuntimeSkillSearchResults,

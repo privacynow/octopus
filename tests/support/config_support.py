@@ -50,6 +50,7 @@ def _normalize_projects(projects):
 
 
 def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotConfig:
+    test_registry_agent_ids = dict(overrides.pop("registry_agent_ids", {}))
     defaults = dict(
         instance="test",
         telegram_token="x",
@@ -115,9 +116,11 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,
         registry_publish_level="standard",
-        registry_agent_ids={},
     )
     defaults.update(overrides)
     if "projects" in defaults:
         defaults["projects"] = _normalize_projects(defaults["projects"])
-    return BotConfig(**defaults)
+    cfg = BotConfig(**defaults)
+    if test_registry_agent_ids:
+        object.__setattr__(cfg, "_test_registry_agent_ids", test_registry_agent_ids)
+    return cfg

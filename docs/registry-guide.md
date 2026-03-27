@@ -1,249 +1,327 @@
 # Registry guide
 
-This guide explains **why** you use the registry, **how** `./octopus` fits in, and **how to use the Registry web UI** screen by screen. Terminal flows use the existing SVG assets under `docs/assets/registry/`; **browser** sections use screenshots captured from the current UI (see [Regenerating UI screenshots](#regenerating-ui-screenshots)).
+This guide ties the CLI lifecycle, the registry service, and the current
+operator UI together. It is written against the current codebase and screenshot
+set, not the older dashboard-first or board-plus-log UI revisions.
 
-For a **complete inventory** of operator and product flows (including Octopus menus, Telegram commands, and Registry API surfaces), see **[flows-catalog.md](flows-catalog.md)**.
+For the full flow inventory, see
+[flows-catalog.md](/Users/tinker/output/bots/telegram-agent-bot/docs/flows-catalog.md).
 
 ## Contents
 
-1. [When to use registry mode](#when-to-use-registry-mode)
-2. [Concepts (read this once)](#concepts-read-this-once)
-3. [CLI: lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
-4. [Browser: sign in](#browser-sign-in)
-5. [Browser: every screen](#browser-every-screen) — dashboard, agents, conversations (incl. **search filter**), timeline, tasks, capabilities, skills, usage, guidance, **deep-linked agent & conversation URLs**, plus a compact **mobile quick look**
-6. [What the UI does *not* do yet](#what-the-ui-does-not-do-yet)
-7. [Verification & troubleshooting](#verification--troubleshooting)
-8. [Regenerating UI screenshots](#regenerating-ui-screenshots)
+1. [When to use the registry operator stack](#when-to-use-the-registry-operator-stack)
+2. [Concepts](#concepts)
+3. [CLI lifecycle with `./octopus`](#cli-lifecycle-with-octopus)
+4. [Backup and clean refresh helpers](#backup-and-clean-refresh-helpers)
+5. [Browser sign in](#browser-sign-in)
+6. [Browser screens](#browser-screens)
+7. [Mobile quick look](#mobile-quick-look)
+8. [Verification and troubleshooting](#verification-and-troubleshooting)
+9. [Regenerating UI screenshots](#regenerating-ui-screenshots)
 
-**Image set (under `docs/assets/registry/ui/`):** `00-login`, `01-dashboard`, `01b-approvals`, `02-agents`, `03-agent-detail`, `04-agent-conversations`, `05-conversations`, `05b-conversations-filtered`, `06-conversation-detail`, `07-tasks`, `08-capabilities`, `09-skills`, `10-usage`, `11-guidance`, `12-agent-detail-deep-link`, `13-conversation-deep-link`, plus the mobile reference captures `14-mobile-dashboard`, `15-mobile-approvals`, and `16-mobile-conversation`. Desktop guide images keep the raw `*.png`, matching `*.meta.json`, and `*-annotated.png`; the mobile references are intentionally kept as raw PNGs so the small-screen layout stays readable.
+## When to use the registry operator stack
 
----
+In this repo's shipped Telegram profile, registry participation is not an
+extra add-on. It is how the local multi-bot product works.
 
-## When to use registry mode
+Use the registry stack when you want:
 
-Use registry mode when you want:
+- a browser UI for operators
+- shared visibility across multiple bots
+- routed tasks and direct cross-agent assignment
+- approvals, health, task state, and full activity in one place
+- one local operator console instead of following every bot through Telegram
 
-- A **browser UI** to inspect enrolled bots, conversations, and coordination state.
-- **Routed-task** coordination and **agent discovery** (depending on registry scope).
-- **One registry** shared by several bots, or **one bot** connected to **multiple** registries with different scopes.
+The SDK can still model runtimes without registry participation, but the local
+Octopus Telegram deployment, operator CLI flow, and browser UI assume
+registry-connected bots.
 
----
-
-## Concepts (read this once)
+## Concepts
 
 | Term | Meaning |
-|------|---------|
-| **Registry service** | HTTP API + optional Web UI (`/ui`). Bots call `/v1/…` with agent tokens; operators use the browser with `REGISTRY_UI_TOKEN`. |
-| **Registry scope** | What a *bot* may do on that connection: `full` (conversations + coordination), `channel` (conversation surfaces only), `coordination` (tasks/discovery/health, no conversation channel). |
-| **Operator** | A human using the **Registry UI** (password = `REGISTRY_UI_TOKEN`). |
-| **Agent token** | Issued at enroll time; bots use `Authorization: Bearer …` on `/v1/`. |
-| **Conversation** | Registry row keyed by `(target_agent_id, origin_channel, external_conversation_ref)`. Events live in the `events` table. |
-| **Routed task** | Delegation record from an **origin** bot to a **target** bot, tied to a **parent conversation**. |
+|---|---|
+| **Registry service** | FastAPI service for enroll/register/heartbeat, conversations, tasks, approvals, usage, websocket realtime, and the `/ui` SPA |
+| **Operator** | Human using the browser UI with `REGISTRY_UI_TOKEN` |
+| **Agent token** | Bearer token issued at enroll time for bot/runtime calls to `/v1/...` |
+| **Scope** | Registry permission lane for a bot connection: `full`, `channel`, or `coordination` |
+| **Conversation** | Registry conversation row plus stored event stream |
+| **Routed task** | Structured delegated work tied back to a parent conversation |
 
-**URLs**
+Important URLs:
 
-- Operator browser (local): `http://localhost:<port>/ui` (port from `./octopus status` or `.deploy/registry/.env`).
-- Bots inside Docker: `http://registry:8787` (same API, no `/ui` required).
+- operator UI: `http://localhost:<port>/ui`
+- bot-to-registry URL inside Docker: `http://registry:8787`
 
----
+## CLI lifecycle with `./octopus`
 
-## CLI: lifecycle with `./octopus`
+Use the verb-first commands or the no-argument menu.
 
-Use the verb-first lifecycle commands or the no-arg menu. The SVG storyboards
-under `docs/assets/registry/` document the current local-registry operator
-flows and map to the same lifecycle/connect/disconnect behavior.
-
-| Step | Topic | Asset |
-|------|--------|--------|
-| Check status | `./octopus status` | [`01-local-registry-states.svg`](assets/registry/01-local-registry-states.svg) |
-| Start local registry | `./octopus start registry` | [`02-start-local-registry.svg`](assets/registry/02-start-local-registry.svg) |
-| Connect eligible bots | `./octopus connect` | [`04-connect-local.svg`](assets/registry/04-connect-local.svg) |
-| Add a new bot, then connect it | `./octopus` → **Bots** → **Add bot**, then `./octopus connect <bot>` | [`05-add-bot-local.svg`](assets/registry/05-add-bot-local.svg) |
-| Disconnect local registry | `./octopus disconnect <bot>` | [`09-disconnect-registry.svg`](assets/registry/09-disconnect-registry.svg) |
-| Logs / stop / redeploy | `./octopus logs registry`, `stop registry`, `redeploy registry` | [`11-registry-maintenance.svg`](assets/registry/11-registry-maintenance.svg) |
+| Step | Command | Reference |
+|---|---|---|
+| Check local state | `./octopus status` | bots, registry, auth, image freshness |
+| Start local registry | `./octopus start registry` | starts the operator UI and API |
+| Connect eligible bots | `./octopus connect` | enrolls and connects local bots |
+| Restart registry | `./octopus redeploy registry` | rebuild/recreate while preserving state |
+| Follow logs | `./octopus logs registry` | registry runtime output |
+| Reset local state | `./octopus clean` | destructive local reset |
 
 After startup, note:
 
-- **Browser URL** printed by Octopus.
-- **`REGISTRY_UI_TOKEN`** in `.deploy/registry/.env` (this is the UI password).
-- **Bot URL** `http://registry:8787` for containers.
+- the `/ui` URL printed by Octopus
+- `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
+- bot URL `http://registry:8787` for containers
 
----
+The CLI lifecycle SVGs in
+[`docs/assets/registry/`](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry)
+still map to the current local-registry deployment model.
 
-## Browser: sign in
+## Backup and clean refresh helpers
 
-1. Open the printed URL (often `http://localhost:8787/ui` or similar).
-2. Sign in with **`REGISTRY_UI_TOKEN`** from `.deploy/registry/.env` — there is no separate username.
+When you need to refresh a live local checkout like `~/octopus` without losing
+its configured bots and registry state, use the ops helpers in
+[`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops).
 
-![Login](assets/registry/ui/00-login-annotated.png)
+### Backup only
 
----
+```bash
+bash scripts/ops/backup_octopus_deploy.sh --help
 
-## Browser: every screen
+bash scripts/ops/backup_octopus_deploy.sh \
+  --source /Users/tinker/octopus \
+  --target /tmp/octopus-backup
+```
 
-The UI is a **single-page app**: the sidebar switches views; URLs like `/ui/conversations` load the same shell and are safe to **bookmark or refresh** (the server serves `index.html` for those paths when you are logged in).
+This copies `/Users/tinker/octopus/.deploy` into `/tmp/octopus-backup/.deploy`
+with the same exclusions the refresh helper uses for transient provider-auth
+scratch directories.
 
-**About these screenshots:** They are produced by the capture harness in `docs/registry-ui-screenshots/`, which seeds the **current** registry contract: **six** enrolled bots, mixed scopes and connectivity, **ten** conversations with the current event taxonomy (`provider.request`, `provider.response`, `tool.execution`, `approval.*`, `delegation.*`, `task.status`, `error`, `message.*`), **four** routed tasks with varied statuses, heartbeat + worker rows, usage derived only from **provider response** events, and a seeded **provider guidance** draft. Highlight rectangles come from DOM-measured coordinates saved as `*.meta.json` next to each PNG, then rendered by `annotate.py` into **outlines plus a bottom legend strip** (no labels over the UI).
+### Clean refresh with restore
 
-### Sidebar (applies to all pages)
+```bash
+bash scripts/ops/refresh_octopus_with_backup.sh --help
 
-| Item | Route | Purpose |
-|------|-------|---------|
-| **Dashboard** | `/ui`, `/ui/` | Attention-first home screen built from summary + approvals/tasks/conversations. |
-| **Approvals** | `/ui/approvals` | Pending decisions that still block work. |
-| **Agents** | `/ui/agents` | Paginated list rows with server-side search/state filtering; entry to detail. |
-| **Conversations** | `/ui/conversations` | Paginated list; **search** (≥3 chars, server-side `q`); **status** filter. |
-| **Tasks** | `/ui/tasks` | Routed task row summaries; **status** filter; expand → **parent conversation**. |
-| **Capabilities** | `/ui/capabilities` | Global toggles (confirm); CSRF on POST. |
-| **Skills** | `/ui/skills` | Skill catalog; client-side search; install / uninstall. |
-| **Usage** | `/ui/usage` | Ranges: Today / 7d / 30d (`since` / `until`). |
-| **Guidance** | `/ui/guidance` | Provider guidance selector and draft editor. |
-| **Logout** | `/ui/logout` | Ends operator session. |
+bash scripts/ops/refresh_octopus_with_backup.sh \
+  /Users/tinker/octopus \
+  /Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups
+```
 
-On **narrow viewports**, the sidebar is a **drawer** (hamburger); at **tablet** width it **collapses** to icons; **desktop** shows full labels. WebSocket **connection status** appears in the sidebar footer when `/v1/ws` is available.
+This is the consistent “deploy clean” workflow:
 
-### 1. Dashboard
+1. back up `~/octopus/.deploy`
+2. pull the latest code into `~/octopus`
+3. run `./octopus clean`
+4. restore the saved `.deploy`
+5. start the registry and bots again
+6. reconnect the saved bots
+7. verify registry health, bot connectivity, and rebuilt images
 
-![Dashboard](assets/registry/ui/01-dashboard-annotated.png)
+At the end it prints the saved deploy snapshot path so you can inspect or reuse
+the captured `.deploy` later.
 
-- The home screen now starts with the next operator action instead of a pure metrics wall.
-- It combines **`GET /v1/summary`** with preview data from approvals, conversations, and tasks so you can see what needs attention first.
+## Browser sign in
 
-### 1b. Approvals
+1. Open the local `/ui` URL.
+2. Sign in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`.
 
-![Approvals](assets/registry/ui/01b-approvals-annotated.png)
+![Login](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/00-login.png)
 
-- This is the fastest path for pending decisions.
-- Each card shows the request text, agent context, expiry, and direct **Approve** / **Reject** actions.
+## Browser screens
 
-### 2. Agents list
+The UI is one responsive SPA. The left rail changes routes; the shell is the
+same on desktop and mobile.
 
-![Agents](assets/registry/ui/02-agents-annotated.png)
+### Sidebar routes
 
-- Each **row** is one enrolled agent; **connectivity** reflects the current heartbeat state.
-- The filters are server-side (`q` and `state`), not current-page-only.
-- **Click** a row → **Agent detail**.
+| Route | Purpose |
+|---|---|
+| `/ui` | Dashboard |
+| `/ui/approvals` | Pending decisions |
+| `/ui/agents` | Agent roster |
+| `/ui/conversations` | Quick start plus active thread list |
+| `/ui/tasks` | Routed-task queue |
+| `/ui/capabilities` | Global capability toggles |
+| `/ui/skills` | Skill catalog |
+| `/ui/usage` | Usage rollups |
+| `/ui/guidance` | Provider guidance |
 
-### 3. Agent detail
+### Dashboard
 
-![Agent detail](assets/registry/ui/03-agent-detail-annotated.png)
+The dashboard is an operator overview, not a metrics wall.
 
-- Shows **identity**, **registry scope**, **capabilities/tags**, **heartbeat**, and optional **worker** rows when reported.
-- **Conversations** for this agent appear **inline** below (paginated). The dedicated route **`/ui/agents/{id}/conversations`** shows the same scoped list in a full-page view (see §4).
+- summary rail for conversations, tasks, follow-up, and agents
+- `Needs attention` for approvals, failed work, and unhealthy agents
+- `Open conversations`, `Running tasks`, and `Agents` as direct jump targets
 
-### 4. Agent conversations
+![Dashboard](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01-dashboard.png)
 
-![Agent conversations](assets/registry/ui/04-agent-conversations-annotated.png)
+### Approvals
 
-- Lists conversations involving this agent. **Click** a row → **Conversation detail**.
+Approvals is the fastest screen for clearing blocked work.
 
-### 5. All conversations
+- request summary
+- requester/trust/expiry facts
+- direct `Open`, `Approve`, and `Reject`
 
-![Conversations](assets/registry/ui/05-conversations-annotated.png)
+![Approvals](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/01b-approvals.png)
 
-- **Pagination** — Previous / Next using cursor + `has_more`.
-- **Search** — type **three or more** characters (debounced); server-side `q`.
-- **Status** — dropdown filter.
-- **Start a conversation** creates an operator-owned registry conversation.
-- **Review approvals** is the shortcut into the dedicated approvals queue.
-- Click a **row** → **Conversation detail**.
+### Agents
 
-### 5b. Search filter (same route)
+The agent roster is action-first.
 
-![Conversations filtered](assets/registry/ui/05b-conversations-filtered-annotated.png)
+- server-side search
+- segmented state filter
+- one row per agent with heartbeat context
+- direct `Open` conversation action
 
-- With **3+ characters** in the search field, the list narrows (FTS-backed). The capture run uses the query **`Release`** to match synthetic conversation titles.
+![Agents](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/02-agents.png)
 
-### 6. Conversation detail (timeline)
+### Agent detail
 
-![Conversation detail](assets/registry/ui/06-conversation-detail-annotated.png)
+Agent detail is the compact health-and-entry workspace for one agent.
 
-- **Header**: title, target display name, source, reference, and status.
-- **Actions**: **Conversation** view vs **Full activity**; **Cancel** conversation; **Export** markdown.
-- **Compose**: operator message (**Enter** to send); uses session cookie + CSRF.
-- **Timeline**: `message.user` / `message.bot` as **bubbles**; the default view keeps approvals, delegation, task updates, and problems visible while lower-level provider/tool activity moves into **Full activity**.
-- **History**: older activity loads automatically when you **scroll up** to the top sentinel.
-- **Live updates**: WebSocket (`/v1/ws`) with reconnect backoff when the ASGI stack supports upgrades.
+- `Open conversation`
+- overview facts
+- capabilities
+- workers snapshot when published
+- inline conversations for that agent
 
-### 7. Tasks (routed tasks)
+![Agent detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/03-agent-detail.png)
 
-![Tasks](assets/registry/ui/07-tasks-annotated.png)
+The compatibility route `/ui/agents/{agent_id}/conversations` still exists, but
+it renders the same workspace:
 
-- **Pagination** and **status** filter keep task rows focused on one slice of routed work.
-- Expanding a row shows instructions, result summary, and the link back to the **parent conversation**.
-- Task rows refresh when routed-task updates land over the WebSocket.
+![Agent conversation deep link](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/04-agent-conversations.png)
 
-### 8. Capabilities
+### Conversations
 
-![Capabilities](assets/registry/ui/08-capabilities-annotated.png)
+The conversations index is the main operator thread list.
 
-- Operator-only **global toggles** for coordination features.
-- Mutations use **POST** with **CSRF** when using cookie sessions (`/v1/auth/csrf`).
+Top of page:
 
-### 9. Skills
+- compact quick-start chips for connected agents
+- overflow path to `Agents`
+- `Approvals` shortcut
 
-![Skills](assets/registry/ui/09-skills-annotated.png)
+Main list:
 
-- Searchable **catalog** view backed by `/v1/catalog/skills`.
-- Install / uninstall actions are available from the browser; the broader lifecycle remains API-first.
+- server-side search
+- segmented status filter
+- paginated rows into conversation detail
 
-### 10. Usage
+![Conversations](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05-conversations.png)
 
-![Usage](assets/registry/ui/10-usage-annotated.png)
+Search stays on the same route and sends `q` to the server:
 
-- **Today / 7 days / 30 days** buttons set `since` / `until` on `GET /v1/usage` (calendar-day boundaries for “Today”).
-- Aggregated **prompt/completion tokens and cost** come from **provider response** events only.
+![Conversations filtered](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/05b-conversations-filtered.png)
 
-### 11. Guidance
+### Conversation detail
 
-![Guidance](assets/registry/ui/11-guidance-annotated.png)
+Conversation detail is the main operator workspace.
 
-- **Provider selector** swaps between guidance surfaces such as Claude and Codex.
-- The page shows **lifecycle status**, the **draft system prompt body**, and the available preview / lifecycle actions.
+Header behavior:
 
-### 12. Direct URL to agent detail
+- title plus export/cancel actions
+- operator-facing metadata such as:
+  - `With M1`
+  - `Assigned to M2`
+  - `Started in registry`
+  - `Updated just now`
+- status chip
+- `Activity (n)` shortcut into `Full activity`
+- `Copy ref` action instead of a raw reference blob in the main hierarchy
 
-![Agent detail via URL](assets/registry/ui/12-agent-detail-deep-link-annotated.png)
+Tabs:
 
-- Loading **`/ui/agents/{agent_id}`** directly (bookmark or paste) renders the same agent detail view as clicking from the list — useful when sharing links from logs or API responses.
+- **Conversation** — messages, approvals, delegation milestones, task-status milestones, errors
+- **Tasks** — store-backed routed tasks with retry/cancel where valid
+- **Full activity** — raw stored event stream for diagnostics
 
-### 13. Direct URL to conversation detail
+Composer behavior:
 
-![Conversation detail via URL](assets/registry/ui/13-conversation-deep-link-annotated.png)
+- plain text sends a normal operator message
+- leading selectors such as `@m2`, `@cap:review`, or `@role:reviewer` submit a
+  typed direct assignment from the same composer
 
-- Loading **`/ui/conversations/{conversation_id}`** directly shows the **same** conversation detail (timeline, compose, cancel, export) as choosing a row from the list — shareable from API responses or task links.
+Conversation milestones are rendered as human events, not raw task payloads:
 
-### 14. Mobile quick look
+- `Task submitted`
+- `Assigned to M2`
+- `Task completed`
+- terminal task summaries where available
 
-The operator UI is still the same app on mobile: the sidebar becomes a drawer, the dashboard stacks into one column, approvals stay action-first, and the conversation view keeps the reply box and pending decisions visible without forcing you through a desktop layout.
+![Conversation detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/06-conversation-detail.png)
 
-**Dashboard**
+### Tasks
 
-![Mobile dashboard](assets/registry/ui/14-mobile-dashboard.png)
+Tasks is the routed-work queue across all conversations.
 
-**Approvals**
+- summary rail for pending/running/follow-up
+- segmented status filter
+- expandable task rows
+- parent-conversation link plus retry/cancel actions when valid
 
-![Mobile approvals](assets/registry/ui/15-mobile-approvals.png)
+![Tasks](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/07-tasks.png)
 
-**Conversation detail**
+### Capabilities
 
-![Mobile conversation detail](assets/registry/ui/16-mobile-conversation.png)
+Capabilities shows global capability toggles exposed by the registry service.
 
----
+![Capabilities](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/08-capabilities.png)
 
-## What the UI does *not* do yet
+### Skills
 
-| Area | Notes |
-|------|--------|
-| **Full skill lifecycle** | Catalog view only. Draft → submit → approve → publish flows are **API-first** (`/v1/catalog/skills/...`). |
-| **Conversation-bound skill activation** | Still API-first; there is no dedicated top-level browser screen for activating or clearing skills on one conversation. |
-| **Batch approval operations** | The approvals page is intentionally action-first one item at a time; there is no bulk decision workflow yet. |
-| **WebSocket without upgrade** | Live updates need a WebSocket-capable ASGI stack. If `/v1/ws` cannot upgrade, the UI still works via **`GET …/events`** polling on navigation and manual refresh patterns. |
-| **Automatic retry on 5xx** from the browser API client | Single `fetch` with timeout; optional future polish. |
+Skills is the runtime catalog surface.
 
----
+- client-side search
+- install/uninstall actions
 
-## Verification & troubleshooting
+![Skills](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/09-skills.png)
+
+### Usage
+
+Usage rolls provider-response usage into per-conversation totals.
+
+- segmented date ranges
+- summary rail
+- per-conversation table
+- delegated child work can roll into the parent conversation when usage is
+  reported back through routed-task results
+
+![Usage](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/10-usage.png)
+
+### Provider guidance
+
+Guidance is the provider-specific prompt/editor surface.
+
+![Guidance](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/11-guidance.png)
+
+### Deep links
+
+These routes load the same views as in-app navigation:
+
+- `/ui/agents/{agent_id}`
+- `/ui/conversations/{conversation_id}`
+
+![Agent detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/12-agent-detail-deep-link.png)
+
+![Conversation detail via URL](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/13-conversation-deep-link.png)
+
+## Mobile quick look
+
+Mobile uses the same routes and state model.
+
+- sidebar becomes a drawer
+- segmented controls stay horizontal and scroll instead of wrapping
+- dashboard sections stack
+- conversation detail keeps the composer inside the main workspace
+
+![Mobile dashboard](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/14-mobile-dashboard.png)
+
+![Mobile approvals](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/15-mobile-approvals.png)
+
+![Mobile conversation detail](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/16-mobile-conversation.png)
+
+## Verification and troubleshooting
 
 After any registry change:
 
@@ -252,65 +330,45 @@ After any registry change:
 ./octopus doctor <bot>
 ```
 
-Expect: bots in **registry** mode when connected, one connection line per registry with expected `registry_id`, `scope`, state, URL; local registry **running** when using local mode.
+Common checks:
 
-| Symptom | Things to check |
-|---------|------------------|
-| UI does not load | Registry container up; port in `.deploy/registry/.env`; try `./octopus start registry`. |
-| “No agents” | Bot not enrolled or heartbeat path broken — `./octopus doctor <bot>`, reconnect the bot. |
-| Remote registry config fails | Check the indexed `BOT_AGENT_REGISTRY_<n>_*` records, confirm the URL is `https://…`, then inspect the per-registry state shown by `./octopus doctor <bot>`. |
+| Symptom | Check |
+|---|---|
+| UI does not load | registry container, port, `./octopus start registry` |
+| No agents | bot not connected or heartbeat missing |
+| No conversations/tasks | registry scope, websocket/API errors, bot publish level |
+| Usage is zero | no usage-bearing provider responses were stored for that range |
 
-**Nuclear reset** (local dev only):
+For a destructive local reset:
 
 ```bash
 ./octopus clean
 ```
 
-Stops services, removes Docker volumes/networks and `.deploy/`.
-
----
-
 ## Regenerating UI screenshots
 
-Annotated PNGs live under `docs/assets/registry/ui/`. **Re-run capture** after material SPA or CSS changes so guides stay aligned.
+Desktop and mobile docs screenshots are generated from
+`docs/registry-ui-screenshots/` against a throwaway registry instance started
+by Playwright.
 
 ```bash
 cd docs/registry-ui-screenshots
 npm install
-npx playwright install chromium   # once per machine
-npm run capture                   # registry UI → docs/assets/registry/ui/*.png
-npm run annotate                  # *-annotated.png (uses repo-root .venv)
+npx playwright install chromium
+npm run capture
+npm run annotate
 ```
 
-The harness uses isolated tokens and a fresh throwaway DB under `docs/registry-ui-screenshots/` on every run. Usage screenshots now derive from the seeded **`provider.response`** events in the capture data; there is no separate legacy usage seeding path. **Outlines** in annotated images follow DOM positions from capture time — re-capture when layout shifts.
+`npm run capture` refreshes:
 
-If you need to verify real runtime behavior instead of seeded screenshot data,
-use the isolated live smoke harness from the repo root:
+- desktop route screenshots
+- mobile reference screenshots
+- sibling `*.meta.json` files used by `annotate.py`
+
+If you need to validate the live runtime instead of the seeded screenshot app,
+use the disposable live smoke harness from the repo root:
 
 ```bash
 bash scripts/e2e/run_live_registry_smoke.sh \
   --snapshot-deploy /path/to/saved/.deploy
 ```
-
-That path launches a disposable stack from the current repo and runs API +
-Chromium smoke against it without touching a live `~/octopus` checkout.
-
-**Other diagrams**
-
-- **Mermaid** (README, manual overview, ARCHITECTURE): edit the fenced blocks in the `.md` files; GitHub renders them.
-- **CLI registry SVGs** (`docs/assets/registry/*.svg`): update the source that produced them, or edit SVGs directly if you own that workflow.
-- **Quickstart SVGs** (`docs/assets/quickstart/`): static assets referenced from the root README.
-
----
-
-## Quick reference: registry scopes
-
-| Scope | Conversation UI / timelines | Routed tasks & discovery |
-|-------|------------------------------|---------------------------|
-| `full` | Yes | Yes |
-| `channel` | Yes | No |
-| `coordination` | No | Yes |
-
----
-
-*Screenshots in this revision were generated with Playwright (Chromium) against the in-repo Registry UI; `annotate.py` adds outlines and a legend strip under the image.*

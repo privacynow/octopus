@@ -10,7 +10,18 @@ if [ -z "$PYTHON_BIN" ] && [ -x "$REPO_DIR/.venv/bin/python" ]; then
   PYTHON_BIN="$REPO_DIR/.venv/bin/python"
 fi
 if [ -z "$PYTHON_BIN" ]; then
-  PYTHON_BIN="python3"
+  PYTHON_BIN="$REPO_DIR/.venv/bin/python"
+fi
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to bootstrap Octopus." >&2
+    exit 1
+  fi
+  echo "Bootstrapping .venv for Octopus..." >&2
+  python3 -m venv "$REPO_DIR/.venv"
+  "$REPO_DIR/.venv/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
+  PYTHON_BIN="$REPO_DIR/.venv/bin/python"
 fi
 
 exec "$PYTHON_BIN" -m app.octopus_cli "$@"

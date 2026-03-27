@@ -5,7 +5,7 @@ client of registry HTTP ingress, not a separate workflow path.
 
 This package will own:
 
-- ingress translation from registry-native requests into workflow calls
+- ingress translation registry-native requests into workflow calls
 - egress publication of registry-native outcomes/timeline updates
 - HTTP route registration and validation
 - UI shell/static serving

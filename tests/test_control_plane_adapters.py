@@ -15,6 +15,8 @@ from octopus_sdk.health_publication import HealthReport
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     DiscoveredAgentRef,
+    EventRecord,
+    MessageRecord,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
@@ -89,7 +91,12 @@ async def test_task_routing_result_timeout_returns_typed_unavailable() -> None:
     result = await adapter.report_routed_task_result(
         routed_task_id="task-1",
         authority_ref="registry:alpha",
-        result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
+        result=RoutedTaskResult(
+            routed_task_id="task-1",
+            status="completed",
+            transition_id="transition-1",
+            summary="done",
+        ),
     )
 
     assert result.status == "unavailable"
@@ -104,6 +111,7 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
         update=RoutedTaskUpdate(
             routed_task_id="task-1",
             status="running",
+            transition_id="transition-2",
             summary="halfway",
             timeline_events=(
                 {
@@ -124,8 +132,9 @@ async def test_task_routing_status_update_preserves_timeline_progress_and_update
     payload = json.loads(bus.submitted[0].payload_json)
     assert payload["progress"] == 50
     assert payload["updated_at"] == "2026-03-20T00:00:00+00:00"
+    assert payload["transition_id"] == "transition-2"
     assert payload["timeline_events"][0]["event_id"] == "evt-1"
-    assert bus.submitted[0].idempotency_key == "task-1:2026-03-20T00:00:00+00:00"
+    assert bus.submitted[0].idempotency_key == "transition-2"
 
 
 async def test_agent_directory_scatter_gather_returns_partial_result_on_timeout() -> None:
@@ -190,9 +199,43 @@ async def test_agent_directory_resolve_target_authority_aggregates_resolutions()
     assert resolution.authority_ref == "registry:alpha"
 
 
+async def test_conversation_projection_add_message_returns_typed_record() -> None:
+    bus = _FakeBus()
+    bus._request_replies["registry:alpha"] = ControlReply(
+        command_id="reply-a",
+        status="completed",
+        result_json=MessageRecord(
+            conversation_id="conv-1",
+            accepted=True,
+            event=EventRecord(
+                event_id="evt-1",
+                conversation_id="conv-1",
+                kind="message.user",
+                content="hello",
+            ),
+        ).model_dump_json(),
+    )
+    bus._request_replies["registry:beta"] = TimeoutError("timeout")
+    adapter = BusConversationProjection(bus, _directory())
+
+    result = await adapter.add_message(
+        conversation_id="conv-1",
+        text="hello",
+    )
+
+    assert isinstance(result, MessageRecord)
+    assert result.accepted is True
+    assert result.event is not None
+    assert result.event.event_id == "evt-1"
+
+
 async def test_health_publication_fans_out_to_health_authorities_only() -> None:
     bus = _FakeBus()
-    adapter = BusHealthPublication(bus, _directory())
+    adapter = BusHealthPublication(
+        bus,
+        _directory(),
+        connectivity_state_for_authority=lambda _authority_ref: "connected",
+    )
 
     await adapter.publish_health(
         report=HealthReport(
@@ -212,31 +255,44 @@ def test_health_publication_connection_summary_reports_authority_capabilities() 
     directory.register(capability="task_routing", authority_ref="registry:full")
     directory.register(capability="agent_directory", authority_ref="registry:coord")
     directory.register(capability="conversation_projection", authority_ref="registry:channel")
-    adapter = BusHealthPublication(_FakeBus(), directory)
+    states = {
+        "registry:channel": "connected",
+        "registry:coord": "offline",
+        "registry:full": "degraded",
+    }
+    adapter = BusHealthPublication(
+        _FakeBus(),
+        directory,
+        connectivity_state_for_authority=lambda authority_ref: states[authority_ref],
+    )
 
     summary = adapter.connection_summary()
 
     assert [authority.model_dump() for authority in summary.authorities] == [
         {
             "authority_ref": "registry:channel",
-            "connectivity_state": "configured",
+            "connectivity_state": "connected",
             "capabilities": ["conversation_projection"],
         },
         {
             "authority_ref": "registry:coord",
-            "connectivity_state": "configured",
+            "connectivity_state": "offline",
             "capabilities": ["agent_directory"],
         },
         {
             "authority_ref": "registry:full",
-            "connectivity_state": "configured",
+            "connectivity_state": "degraded",
             "capabilities": ["conversation_projection", "task_routing"],
         },
     ]
 
 
 def test_health_publication_connection_summary_is_empty_without_authorities() -> None:
-    adapter = BusHealthPublication(_FakeBus(), ControlPlaneDirectory())
+    adapter = BusHealthPublication(
+        _FakeBus(),
+        ControlPlaneDirectory(),
+        connectivity_state_for_authority=lambda _authority_ref: "offline",
+    )
 
     summary = adapter.connection_summary()
 

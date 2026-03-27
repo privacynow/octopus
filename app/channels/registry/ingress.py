@@ -25,7 +25,7 @@ from app.runtime.session_runtime import (
     resolve_session_context,
     save_runtime_session,
 )
-from app.workflows.runtime_skills.contracts import PromptWarningContext
+from octopus_sdk.workflows.skills import PromptWarningContext
 from octopus_sdk.sessions import SessionState
 
 ProviderStateFactory = Callable[[str], dict[str, Any]]

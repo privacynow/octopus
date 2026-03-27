@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from octopus_sdk.registry.models import AgentDiscoveryQuery, RoutedTaskRequest, RoutedTaskResult, RoutedTaskUpdate
+from app.access import get_authorization
+from app.runtime import composition
+import app.runtime_backend as runtime_backend
+from octopus_sdk.events import ConversationEvent
+from octopus_sdk.registry.models import (
+    AgentDiscoveryQuery,
+    MessageRecord,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+)
 from octopus_sdk.agent_directory import (
     AgentDirectoryPort,
     NoOpAgentDirectory,
@@ -22,6 +32,7 @@ from octopus_sdk.task_routing import (
     TaskSubmissionResult,
 )
 from app.runtime.services import BotServices, ControlPlaneServices
+from tests.support.registry_participant_support import build_noop_registry_participant
 
 
 async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> None:
@@ -40,8 +51,21 @@ async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> No
 
     await projection.publish_events(
         conversation_id=conversation_id,
-        events=[],
+        events=[
+            ConversationEvent(
+                event_id="evt-1",
+                kind="message.bot",
+                content="done",
+                created_at="2026-03-26T00:00:00+00:00",
+            )
+        ],
     )
+    message = await projection.add_message(
+        conversation_id=conversation_id,
+        text="hello",
+    )
+    assert isinstance(message, MessageRecord)
+    assert message.accepted is False
 
 
 async def test_noop_task_routing_returns_unavailable_for_request_reply_methods() -> None:
@@ -54,7 +78,12 @@ async def test_noop_task_routing_returns_unavailable_for_request_reply_methods()
         title="Delegate",
         instructions="Do the thing",
     )
-    result = RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done")
+    result = RoutedTaskResult(
+        routed_task_id="task-1",
+        status="completed",
+        transition_id="task-1-complete",
+        summary="done",
+    )
 
     assert isinstance(routing, TaskRoutingPort)
 
@@ -81,6 +110,7 @@ async def test_noop_task_routing_status_update_is_fire_and_forget() -> None:
     update = RoutedTaskUpdate(
         routed_task_id="task-1",
         status="running",
+        transition_id="task-1-running",
         summary="halfway",
     )
 
@@ -129,7 +159,11 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
             task_routing=routing,
             agent_directory=directory,
             health_publication=health,
-        )
+        ),
+        registry=build_noop_registry_participant(),
+        workflows=composition.workflows(),
+        authorization=get_authorization(),
+        work_queue=runtime_backend.transport_store(),
     )
 
     assert isinstance(summary, ConnectionSummary)

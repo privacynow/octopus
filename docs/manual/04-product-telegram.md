@@ -1,6 +1,6 @@
 # Product: Telegram
 
-[← Manual home](README.md) · [Prev: Registry UI — deep links](registry-ui/deep-links.md) · [Next: Integration →](05-integration-api.md)
+Manual: [Home](README.md) · Previous: [Registry UI deep links](registry-ui/deep-links.md) · Next: [Registry HTTP API](05-integration-api.md)
 
 Chat handling lives under [`app/channels/telegram/`](../../app/channels/telegram/). **`/help`** and **`/start`** list commands; **plain text** (not starting with `/`) is the main conversation with the agent. **`/settings`** uses inline buttons (`setting_*` callbacks). **`/skills`** lists and activates skills; **`/approval`**, **`/approve`**, **`/reject`**, **`/cancel`** apply when approval gates are on.
 
@@ -10,11 +10,19 @@ Inline button callbacks include `retry_*`, `approval_*`, `delegation_*`, `recove
 
 ## Runtime modes
 
-Telegram behavior is shaped by three different config axes:
+The SDK still models Telegram behavior across three config axes:
 
 - **`BOT_AGENT_MODE`** — `standalone` vs `registry`
 - **`BOT_RUNTIME_MODE`** — `local` vs `shared`
 - **`BOT_PROCESS_ROLE`** — `all`, `webhook`, or `worker`
+
+For the shipped Telegram runtime in this repo, the product profile is stricter
+than the generic SDK:
+
+- Telegram runs in `BOT_AGENT_MODE=registry`
+- startup requires configured registry connections
+- those connections must collectively provide full participant coverage across
+  `channel` and `coordination`
 
 Command registration specifically depends on **`BOT_RUNTIME_MODE`**:
 

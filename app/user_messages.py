@@ -1,7 +1,7 @@
 """Centralized user-facing copy for progress, recovery, approval, and trust clarity.
 
 Milestone D: one small authoritative home for messages touched by this milestone.
-Handlers and progress rendering import from here. No framework; no indirection
+Handlers and progress rendering import here. No framework; no indirection
 for its own sake. Preserves semantic distinctions (interrupted vs discarded vs
 already handled, expired vs context-changed, etc.) while keeping wording plain.
 """
@@ -206,7 +206,7 @@ def retry_permission_prompt() -> str:
 
 def retry_grant_and_retry_question() -> str:
     """Question after listing denials."""
-    return "Grant access and run again from the start?"
+    return "Grant access and run again the start?"
 
 
 def retry_button_grant() -> str:

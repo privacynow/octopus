@@ -21,7 +21,7 @@ def model(state: str, validation_result: str = "ok") -> PendingRequestWorkflowMo
 
 
 @pytest.mark.parametrize(
-    "event,from_state,to_state,disposition,kwargs",
+    "event,_state,to_state,disposition,kwargs",
     [
         ("create_approval", "none", "pending_approval", PendingRequestDisposition.ok, {}),
         ("create_retry", "none", "pending_retry", PendingRequestDisposition.ok, {}),
@@ -76,12 +76,12 @@ def model(state: str, validation_result: str = "ok") -> PendingRequestWorkflowMo
 )
 def test_allowed_transitions(
     event: str,
-    from_state: str,
+    _state: str,
     to_state: str,
     disposition: PendingRequestDisposition,
     kwargs: dict[str, str],
 ) -> None:
-    workflow_model = model(from_state, validation_result=kwargs.get("validation_result", "ok"))
+    workflow_model = model(_state, validation_result=kwargs.get("validation_result", "ok"))
     result = run_pending_request_event(workflow_model, event, **kwargs)
     assert result.allowed is True, result.reason
     assert result.new_state == to_state
@@ -89,7 +89,7 @@ def test_allowed_transitions(
 
 
 @pytest.mark.parametrize(
-    "from_state,event",
+    "_state,event",
     [
         ("none", "approve_execute"),
         ("none", "reject"),
@@ -102,11 +102,11 @@ def test_allowed_transitions(
         ("pending_retry", "create_retry"),
     ],
 )
-def test_forbidden_transitions(from_state: str, event: str) -> None:
+def test_forbidden_transitions(_state: str, event: str) -> None:
     validation_result = "ok"
     if event in ("expire", "invalidate_stale"):
         validation_result = "expired" if event == "expire" else "context_changed"
-    workflow_model = model(from_state, validation_result=validation_result)
+    workflow_model = model(_state, validation_result=validation_result)
     result = run_pending_request_event(
         workflow_model,
         event,

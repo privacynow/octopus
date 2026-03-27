@@ -35,7 +35,7 @@ def _setup_runtime(*, allow_open: bool = False, allowed_actor_keys=frozenset({"t
 def test_dispatcher_telegram_ref_produces_telegram_channel_egress():
     tmp, cfg = _setup_runtime()
     try:
-        channel_egress = current_runtime().channel_dispatcher.create_egress(
+        channel_egress = current_runtime().transport_dispatcher.create_egress(
             telegram_conversation_ref(cfg, 12345),
             bot=MinimalFakeBot(),
             chat_id=12345,
@@ -56,7 +56,7 @@ def test_dispatcher_registry_ref_produces_registry_channel_egress():
     )
     setup_globals(cfg, FakeProvider("claude"))
     try:
-        channel_egress = current_runtime().channel_dispatcher.create_egress(
+        channel_egress = current_runtime().transport_dispatcher.create_egress(
             registry_conversation_ref("default", "abc123"),
             bot=MinimalFakeBot(),
             chat_id=0,
@@ -81,7 +81,7 @@ def test_dispatcher_trust_tier_registry_ref_is_trusted():
             registry_conversation_ref("default", "conv-1"),
             user=None,
             config=cfg,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
         assert tier == "trusted"
     finally:
@@ -95,7 +95,7 @@ def test_dispatcher_trust_tier_telegram_ref_uses_user_tier():
             telegram_conversation_ref(cfg, 12345),
             user=InboundUser(id=telegram_actor_key(999), username="stranger"),
             config=cfg,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
         assert tier == "public"
     finally:

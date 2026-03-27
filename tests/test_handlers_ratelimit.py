@@ -153,7 +153,7 @@ async def test_rate_limit_implicit_admin_not_exempt():
 
 async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
     """If operator explicitly sets BOT_ADMIN_USERS equal to BOT_ALLOWED_USERS,
-    admins should be exempt from rate limiting."""
+    admins should be exempt rate limiting."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,

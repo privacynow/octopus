@@ -15,9 +15,12 @@ from app.agents.registry_capabilities import (
     registry_id_from_authority_ref,
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
-from app.agents.registry_runtime import RegistryRuntime
-from app.agents.state import RegistryConnectionState, save_registry_connection_state
-from app.channels.telegram.channel import TelegramChannelBootstrap
+from app.agents.state import (
+    RegistryConnectionState,
+    load_runtime_registry_connection_state,
+    save_registry_connection_state,
+)
+from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import build_telegram_runtime
 from app.config import BotConfig
 from app.control_plane.bus import ControlPlaneBus
@@ -26,12 +29,12 @@ from app.control_plane.processor_runner import ProcessorRunner
 from octopus_sdk.health_publication import HealthReport
 from octopus_sdk.task_routing import TaskResultReport
 from app.registry_service.store import RegistrySQLiteStore
-from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices, build_bus_bot_services
 from app.storage import ensure_data_dirs
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.execution import RequestExecutionOutcome
-from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
+from octopus_sdk.registry.models import HealthSummary, RoutedTaskResult, RoutedTaskUpdate, TaskRecord
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
@@ -85,31 +88,35 @@ class _StoreBackedRegistryClient:
         self._maybe_fail("sync_binding")
         return {"ok": True}
 
-    async def submit_routed_task(self, request) -> dict[str, object]:
+    async def submit_routed_task(self, request) -> TaskRecord:
         self._maybe_fail("submit_routed_task")
         store = self._store()
         store.assert_agent_scope(self.agent_token, {"coordination", "full"})
         store.heartbeat(self.agent_token, {"connectivity_state": "connected"})
-        return store.create_routed_task(request.model_dump(mode="json"))
+        return TaskRecord.model_validate(store.create_routed_task(request.model_dump(mode="json")))
 
-    async def routed_task_status(self, routed_task_id: str, update) -> dict[str, object]:
+    async def routed_task_status(self, routed_task_id: str, update) -> TaskRecord:
         self._maybe_fail("routed_task_status")
         payload = update.model_dump(mode="json")
         payload.pop("routed_task_id", None)
-        return self._store().update_routed_task_status(
-            self.agent_token,
-            routed_task_id,
-            payload,
+        return TaskRecord.model_validate(
+            self._store().update_routed_task_status(
+                self.agent_token,
+                routed_task_id,
+                payload,
+            )
         )
 
-    async def routed_task_result(self, routed_task_id: str, result) -> dict[str, object]:
+    async def routed_task_result(self, routed_task_id: str, result) -> TaskRecord:
         self._maybe_fail("routed_task_result")
         payload = result.model_dump(mode="json")
         payload.pop("routed_task_id", None)
-        return self._store().update_routed_task_result(
-            self.agent_token,
-            routed_task_id,
-            payload,
+        return TaskRecord.model_validate(
+            self._store().update_routed_task_result(
+                self.agent_token,
+                routed_task_id,
+                payload,
+            )
         )
 
     async def heartbeat(
@@ -119,17 +126,46 @@ class _StoreBackedRegistryClient:
         current_capacity: int,
         max_capacity: int,
         runtime_health: dict[str, object] | None = None,
-    ) -> dict[str, object]:
+    ) -> HealthSummary:
         self._maybe_fail("heartbeat")
-        return self._store().heartbeat(
-            self.agent_token,
-            {
-                "connectivity_state": connectivity_state,
-                "current_capacity": current_capacity,
-                "max_capacity": max_capacity,
-                "runtime_health": runtime_health or {},
-            },
+        return HealthSummary.model_validate(
+            self._store().heartbeat(
+                self.agent_token,
+                {
+                    "connectivity_state": connectivity_state,
+                    "current_capacity": current_capacity,
+                    "max_capacity": max_capacity,
+                    "runtime_health": runtime_health or {},
+                },
+            )
         )
+
+
+@dataclass(frozen=True)
+class _StoreBackedRegistryAccess:
+    config: BotConfig
+    registries: tuple[RegistryConnectionConfig, ...]
+
+    def client_for_registry(self, registry_id: str):
+        registry = next((item for item in self.registries if item.registry_id == registry_id), None)
+        if registry is None:
+            return None
+        state = load_runtime_registry_connection_state(
+            self.config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if not state.agent_token:
+            return None
+        return _StoreBackedRegistryClient(registry.url, agent_token=state.agent_token)
+
+    def origin_agent_id(self, registry_id: str) -> str:
+        registry = next((item for item in self.registries if item.registry_id == registry_id), None)
+        return load_runtime_registry_connection_state(
+            self.config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope if registry is not None else "full",
+        ).agent_id
 
 
 def _agent_card(*, name: str, slug: str, registry_scope: str) -> dict[str, object]:
@@ -234,7 +270,7 @@ def _services_for_config(config: BotConfig) -> BotServices:
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
     return build_bus_bot_services(
-        ControlPlaneBus(config.data_dir), directory,
+        ControlPlaneBus(config.data_dir), directory, config=config,
         agent_id_for_authority=_agent_id_for_authority,
     )
 
@@ -254,7 +290,7 @@ async def _running_registry_processor(config: BotConfig):
     )
     runner.register(
         RegistryControlProcessor(
-            RegistryRuntime(config.agent_registries, ChannelDispatcher(), None, config=config)
+            _StoreBackedRegistryAccess(config, config.agent_registries)
         )
     )
     stop_event = asyncio.Event()
@@ -280,7 +316,6 @@ async def _wait_for(predicate, *, timeout: float = 2.0, message: str = "conditio
 
 
 def _install_store_backed_clients(
-    monkeypatch: pytest.MonkeyPatch,
     seeded_registries: list[_SeededRegistry],
     *,
     failing_ops_by_url: dict[str, set[str]] | None = None,
@@ -293,10 +328,6 @@ def _install_store_backed_clients(
         url.rstrip("/"): set(ops)
         for url, ops in (failing_ops_by_url or {}).items()
     }
-    monkeypatch.setattr(
-        "app.agents.registry_runtime.AgentRegistryClient",
-        _StoreBackedRegistryClient,
-    )
 
 
 def _build_telegram_runtime_with_dispatcher(
@@ -312,9 +343,9 @@ def _build_telegram_runtime_with_dispatcher(
         bot_instance=bot,
         services=services,
     )
-    dispatcher = ChannelDispatcher()
-    dispatcher.register(TelegramChannelBootstrap(config, provider, services))
-    runtime.channel_dispatcher = dispatcher
+    dispatcher = TransportDispatcher()
+    dispatcher.register(TelegramTransport(config, provider, services))
+    runtime.transport_dispatcher = dispatcher
     return runtime, dispatcher
 
 
@@ -344,7 +375,7 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
         stores_dir=stores_dir,
         with_origin_agent=True,
     )
-    _install_store_backed_clients(monkeypatch, [seeded])
+    _install_store_backed_clients([seeded])
     services = _services_for_config(config)
     parent = seeded.store.create_conversation(
         target_agent_id=seeded.origin_agent_id,
@@ -371,6 +402,7 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="task-1-complete",
                 summary="done",
                 full_text="full delegated result",
             ),
@@ -413,7 +445,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
         stores_dir=stores_dir,
         with_origin_agent=True,
     )
-    _install_store_backed_clients(monkeypatch, [seeded])
+    _install_store_backed_clients([seeded])
     services = _services_for_config(config)
     parent = seeded.store.create_conversation(
         target_agent_id=seeded.origin_agent_id,
@@ -432,12 +464,22 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
             "created_at": "2026-03-20T00:00:00+00:00",
         }
     )
+    seeded.store.update_routed_task_status(
+        seeded.local_agent_token,
+        "task-status-1",
+        {
+            "status": "leased",
+            "transition_id": "task-status-1-lease",
+            "updated_at": "2026-03-20T00:00:05+00:00",
+        },
+    )
 
     async with _running_registry_processor(config):
         await services.control_plane.task_routing.update_routed_task_status(
             update=RoutedTaskUpdate(
                 routed_task_id="task-status-1",
                 status="running",
+                transition_id="task-status-1-running",
                 summary="halfway",
                 timeline_events=(
                     {
@@ -464,10 +506,9 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
 
     assert task["status"] == "running"
     assert task["summary"] == "halfway"
-    assert [event["metadata"].get("status") for event in timeline if event["kind"] == "task.status"] == [
-        "queued",
-        "running",
-    ]
+    status_events = [event["metadata"].get("status") for event in timeline if event["kind"] == "task.status"]
+    assert status_events[:2] == ["queued", "leased"]
+    assert status_events[-1] == "running"
     assert any(event["event_id"] == "evt-1" for event in timeline)
     assert any(event["metadata"].get("progress") == 50 for event in timeline)
 
@@ -496,7 +537,7 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
         stores_dir=stores_dir,
         with_origin_agent=True,
     )
-    _install_store_backed_clients(monkeypatch, [seeded])
+    _install_store_backed_clients([seeded])
     services = _services_for_config(config)
     parent = seeded.store.create_conversation(
         target_agent_id=seeded.origin_agent_id,
@@ -541,12 +582,12 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
             ),
         )
         await _wait_for(
-            lambda: seeded.store.list_tasks()[0]["status"] == "partialfailed",
+            lambda: seeded.store.list_tasks()[0]["status"] == "failed",
             message="fallback routed-task status did not reach registry store",
         )
 
     task = seeded.store.list_tasks()[0]
 
     assert result.routed_result_status == "report_failed"
-    assert task["status"] == "partialfailed"
+    assert task["status"] == "failed"
     assert "could not be delivered" in task["summary"]

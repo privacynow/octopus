@@ -73,7 +73,7 @@ def init_content_store_for_config(config) -> AbstractContentStore:
 
 
 def get_content_store() -> AbstractContentStore:
-    """Return the active content store, lazily seeded from runtime env when needed."""
+    """Return the active content store, lazily seeded runtime env when needed."""
     if _store is not None:
         return _store
     data_dir = Path(os.environ.get("BOT_DATA_DIR", "/tmp/telegram-agent-content")).expanduser()

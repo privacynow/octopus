@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.skills import (
     RuntimeSkillCatalogItem,
     RuntimeSkillDetail,
     RuntimeSkillDraftRecord,
@@ -10,7 +10,7 @@ from app.workflows.runtime_skills.contracts import (
 )
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 
 
 class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):

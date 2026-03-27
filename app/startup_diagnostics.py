@@ -123,7 +123,7 @@ def sanitize_url_for_logging(raw: str) -> str:
 
 
 def redact_sensitive_startup_text(text: str) -> str:
-    """Redact secret-bearing values from operator-visible strings."""
+    """Redact secret-bearing values operator-visible strings."""
     redacted = _TELEGRAM_URL_TOKEN_RE.sub(rf"\1{_SANITIZED_TOKEN}", text)
     redacted = _TELEGRAM_TOKEN_RE.sub(_SANITIZED_TOKEN, redacted)
     redacted = _POSTGRES_URL_PASSWORD_RE.sub(
@@ -156,7 +156,7 @@ def _sanitize_log_args(args):
 
 
 class StartupLogRedactionFilter(logging.Filter):
-    """Remove token-bearing details from startup/runtime logs."""
+    """Remove token-bearing details startup/runtime logs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
@@ -211,12 +211,12 @@ async def collect_telegram_doctor_diagnostics(token: str, *, instance: str) -> l
     if telegram_token_is_placeholder(stripped):
         return [
             f"FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in {env_hint}. "
-            "Set a real token from @BotFather before starting the bot."
+            "Set a real token @BotFather before starting the bot."
         ]
     if not telegram_token_looks_plausible(stripped):
         return [
             f"FAIL: TELEGRAM_BOT_TOKEN in {env_hint} does not look like a real Telegram bot token. "
-            "Use the full token from @BotFather and try again."
+            "Use the full token @BotFather and try again."
         ]
 
     url = f"https://api.telegram.org/bot{stripped}/getMe"
@@ -245,7 +245,7 @@ async def collect_telegram_doctor_diagnostics(token: str, *, instance: str) -> l
     if response.status_code == 401 or "unauthorized" in description.lower():
         return [
             f"FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in {env_hint}. "
-            "Update it with a valid token from @BotFather and restart."
+            "Update it with a valid token @BotFather and restart."
         ]
     if response.status_code >= 400:
         detail = description or f"HTTP {response.status_code}"
@@ -262,7 +262,7 @@ def format_startup_exception(exc: BaseException, *, instance: str, mode: str) ->
     if isinstance(exc, InvalidToken):
         return [
             "Startup failed: Telegram rejected TELEGRAM_BOT_TOKEN.",
-            f"Update TELEGRAM_BOT_TOKEN in {env_hint} with a valid token from @BotFather, then start again.",
+            f"Update TELEGRAM_BOT_TOKEN in {env_hint} with a valid token @BotFather, then start again.",
         ]
     if isinstance(exc, Conflict):
         return [

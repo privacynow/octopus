@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from telegram.ext import (
     Application,
@@ -15,17 +14,22 @@ from telegram.ext import (
 )
 
 from app import user_messages as _msg
-from app.channels.telegram import ingress
-from app.channels.telegram import execution as telegram_execution
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram import progress as telegram_progress
-from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
-from app.channels.telegram import worker as telegram_worker
-from app.channels.telegram.delegation_channel import propose_delegation_plan
+from app.presentation import telegram as telegram_presenters
+from app.runtime import telegram_execution
+from app.runtime import telegram_ingress as ingress
+from app.runtime import telegram_shared_dispatch as telegram_shared_mode_dispatch
+from app.runtime import telegram_worker
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
+from octopus_sdk.bot_runtime import WorkerDispatchPort
+from octopus_sdk.execution import ExecutionRuntime
+from octopus_sdk.inbound_types import InboundAction, InboundCallback, InboundCommand, InboundMessage
 from octopus_sdk.providers import Provider
-from app.runtime.services import BotServices, build_noop_bot_services
+from octopus_sdk.work_queue import WorkItemRecord
+from app.runtime.services import BotServices
+
+if TYPE_CHECKING:
+    from app.runtime.transport_dispatcher import TransportDispatcher
 
 
 @dataclass(frozen=True)
@@ -34,8 +38,7 @@ class TelegramBootstrap:
 
     application: Application
     runtime: TelegramRuntime
-    worker_dispatch: Callable[[str, Any, dict], Awaitable[None]]
-    worker_deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None
+    worker_processor: WorkerDispatchPort
 
 
 @dataclass(frozen=True)
@@ -43,24 +46,37 @@ class TelegramWorkerBundle:
     """Runtime-only Telegram worker bundle for non-Telegram ingress processes."""
 
     runtime: TelegramRuntime
-    worker_dispatch: Callable[[str, Any, dict], Awaitable[None]]
-    worker_deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None
+    worker_processor: WorkerDispatchPort
+
+
+@dataclass(frozen=True)
+class TelegramWorkerProcessor(WorkerDispatchPort):
+    runtime: TelegramRuntime
+    execution_runtime: ExecutionRuntime
+
+    async def dispatch_claimed_item(
+        self,
+        kind: str,
+        event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+        item: WorkItemRecord,
+    ) -> None:
+        await telegram_worker.worker_dispatch(
+            kind,
+            event,
+            item,
+            runtime=self.runtime,
+            execution_runtime=self.execution_runtime,
+        )
+
+    async def notify_deserialize_failure(self, item: WorkItemRecord) -> None:
+        await telegram_worker.notify_deserialize_failure(
+            item,
+            runtime=self.runtime,
+        )
 
 
 def _execution_runtime(runtime: TelegramRuntime):
-    execution_collaborators = telegram_execution.bind_execution_collaborators(
-        runtime,
-        progress_factory=telegram_progress.TelegramProgress,
-        keep_typing_fn=telegram_progress.keep_typing,
-        heartbeat_fn=telegram_progress.heartbeat,
-        progress_timeline_callback_fn=telegram_progress.progress_timeline_callback,
-        routed_task_progress_callback_fn=telegram_progress.routed_task_progress_callback,
-        propose_delegation_plan_fn=propose_delegation_plan,
-    )
-    return telegram_execution.build_execution_runtime(
-        runtime,
-        collaborators=execution_collaborators,
-    )
+    return telegram_execution.build_execution_runtime(runtime)
 
 
 async def handle_unknown_command(update, context, *, runtime: TelegramRuntime | None = None) -> None:
@@ -131,6 +147,7 @@ def build_application(runtime: TelegramRuntime) -> Application:
         app.add_handler(CommandHandler("id", ingress.cmd_id))
         app.add_handler(CommandHandler("doctor", ingress.cmd_doctor))
         app.add_handler(CommandHandler("discover", ingress.cmd_discover))
+        app.add_handler(CommandHandler("delegate", ingress.cmd_delegate))
         app.add_handler(CommandHandler("settings", ingress.cmd_settings))
         app.add_handler(CommandHandler("allowuser", ingress.cmd_allowuser))
         app.add_handler(CommandHandler("blockuser", ingress.cmd_blockuser))
@@ -179,6 +196,7 @@ def build_application(runtime: TelegramRuntime) -> Application:
         app.add_handler(CommandHandler("id", ingress.cmd_id))
         app.add_handler(CommandHandler("doctor", ingress.cmd_doctor))
         app.add_handler(CommandHandler("discover", ingress.cmd_discover))
+        app.add_handler(CommandHandler("delegate", ingress.cmd_delegate))
         app.add_handler(CommandHandler("settings", ingress.cmd_settings))
         app.add_handler(CommandHandler("project", ingress.cmd_project))
         app.add_handler(CommandHandler("policy", ingress.cmd_policy))
@@ -212,26 +230,23 @@ def build_worker_bundle(
     config: BotConfig,
     provider: Provider,
     *,
-    services: BotServices | None = None,
+    services: BotServices,
+    dispatcher: TransportDispatcher | None = None,
 ) -> TelegramWorkerBundle:
     """Construct the Telegram-owned worker/runtime collaborators without PTB ingress."""
 
     runtime = build_telegram_runtime(
         config,
         provider,
-        services=services or build_noop_bot_services(),
+        services=services,
+        transport_dispatcher=dispatcher,
     )
     execution_runtime = _execution_runtime(runtime)
     return TelegramWorkerBundle(
         runtime=runtime,
-        worker_dispatch=functools.partial(
-            telegram_worker.worker_dispatch,
+        worker_processor=TelegramWorkerProcessor(
             runtime=runtime,
             execution_runtime=execution_runtime,
-        ),
-        worker_deserialize_failure_notifier=functools.partial(
-            telegram_worker.notify_deserialize_failure,
-            runtime=runtime,
         ),
     )
 
@@ -240,20 +255,21 @@ def build_bootstrap(
     config: BotConfig,
     provider: Provider,
     *,
-    services: BotServices | None = None,
+    services: BotServices,
+    dispatcher: TransportDispatcher | None = None,
 ) -> TelegramBootstrap:
     """Construct the Telegram runtime, PTB application, and worker dispatch."""
 
     worker_bundle = build_worker_bundle(
         config,
         provider,
-        services=services or build_noop_bot_services(),
+        services=services,
+        dispatcher=dispatcher,
     )
     runtime = worker_bundle.runtime
     application = build_application(runtime)
     return TelegramBootstrap(
         application=application,
         runtime=runtime,
-        worker_dispatch=worker_bundle.worker_dispatch,
-        worker_deserialize_failure_notifier=worker_bundle.worker_deserialize_failure_notifier,
+        worker_processor=worker_bundle.worker_processor,
     )

@@ -11,8 +11,8 @@ from typing import Any, Callable
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import telegram_conversation_key
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
-from app.workflows.delegation.contracts import DelegationUpdateOutcome
-from app.workflows.delegation.coordination import apply_routed_result
+from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
+from octopus_sdk.workflows.delegation import apply_routed_result
 
 _SCHEMA_VERSION = 2
 
@@ -180,15 +180,17 @@ class SQLiteSessionStore:
 
     def _upsert(self, conn: sqlite3.Connection, conversation_key: str, session: dict[str, Any]) -> None:
         from datetime import datetime, timezone
-        has_pending = (
-            session.get("pending_approval") is not None
-            or session.get("pending_retry") is not None
-        )
+        stored_session = dict(session)
         # Normalize timestamps before serializing so JSON data and column agree
-        if not session.get("created_at"):
-            session["created_at"] = datetime.now(timezone.utc).isoformat()
-        if not session.get("updated_at"):
-            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if not stored_session.get("created_at"):
+            stored_session["created_at"] = datetime.now(timezone.utc).isoformat()
+        if not stored_session.get("updated_at"):
+            stored_session["updated_at"] = datetime.now(timezone.utc).isoformat()
+        stored_session = session_to_dict(session_from_dict(stored_session))
+        has_pending = (
+            stored_session.get("pending_approval") is not None
+            or stored_session.get("pending_retry") is not None
+        )
         conn.execute(
             """INSERT OR REPLACE INTO sessions
                (conversation_key, provider, data, has_pending, has_setup,
@@ -196,14 +198,14 @@ class SQLiteSessionStore:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 conversation_key,
-                session.get("provider", ""),
-                json.dumps(session, sort_keys=True),
+                stored_session.get("provider", ""),
+                json.dumps(stored_session, sort_keys=True),
                 1 if has_pending else 0,
-                1 if session.get("awaiting_skill_setup") is not None else 0,
-                session.get("project_id"),
-                session.get("file_policy"),
-                session["created_at"],
-                session["updated_at"],
+                1 if stored_session.get("awaiting_skill_setup") is not None else 0,
+                stored_session.get("project_id"),
+                stored_session.get("file_policy"),
+                stored_session["created_at"],
+                stored_session["updated_at"],
             ),
         )
 

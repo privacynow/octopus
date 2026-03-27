@@ -17,7 +17,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING
+
+from octopus_sdk.content_models import RuntimeSkillTrackRecord
 
 if TYPE_CHECKING:
     from octopus_sdk.config import BotConfigBase
@@ -27,7 +29,7 @@ if TYPE_CHECKING:
 class SkillCatalogView(Protocol):
     def has_runtime_skill(self, name: str) -> bool: ...
 
-    def resolve_runtime_track(self, name: str) -> Any: ...
+    def resolve_runtime_track(self, name: str) -> RuntimeSkillTrackRecord | None: ...
 
 
 @dataclass(frozen=True)

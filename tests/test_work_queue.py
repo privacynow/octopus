@@ -11,7 +11,7 @@ import pytest
 
 import app.work_queue_sqlite_impl as work_queue_sqlite_impl
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.workflows.recovery.results import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption
 from app.work_queue import (
     DiscardResult,
     LeaveClaimed,
@@ -109,9 +109,9 @@ def test_enqueue_and_claim(data_dir):
 
     item = claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
     assert item is not None
-    assert item["id"] == item_id
-    assert item["state"] == "claimed"
-    assert item["worker_id"] == "w1"
+    assert item.id == item_id
+    assert item.state == "claimed"
+    assert item.worker_id == "w1"
 
 
 def test_claim_blocks_second_claim_same_chat(data_dir):
@@ -129,16 +129,16 @@ def test_claim_blocks_second_claim_same_chat(data_dir):
     assert second is None
 
     # Complete the first, second becomes claimable
-    complete_work_item(data_dir, first["id"])
+    complete_work_item(data_dir, first.id)
     second = claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
     assert second is not None
-    assert second["event_id"] == _event(201)
+    assert second.event_id == _event(201)
 
 
-def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
+def test_record_and_enqueue_preclaim_derived__machine(data_dir):
     """Preclaim (create as claimed) only when machine allows claim_inline; impossible rejection raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     # When machine rejects claim_inline in preclaim path, repository raises (no silent fallback to queued).
     record_update(data_dir, _event(8888), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
@@ -229,8 +229,8 @@ def test_claim_for_update_exact_row_path_already_handled_when_state_changed(data
     # Same update: handler-1 can claim; different worker cannot
     item1 = claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(5030), worker_id="handler-1")
     assert item1 is not None
-    assert item1["state"] == "claimed"
-    assert item1["worker_id"] == "handler-1"
+    assert item1.state == "claimed"
+    assert item1.worker_id == "handler-1"
     item2 = claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(5030), worker_id="other-worker")
     assert item2 is None
     conn = _transport_db(data_dir)
@@ -248,7 +248,7 @@ def test_claim_next_returns_none_when_another_worker_claimed(data_dir):
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(5040))
     first = claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
     assert first is not None
-    assert first["state"] == "claimed"
+    assert first.state == "claimed"
     second = claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-b")
     assert second is None
 
@@ -418,7 +418,7 @@ def test_has_queued_or_claimed(data_dir):
     item = claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
     assert has_queued_or_claimed(data_dir, conversation_key=_conv(1)) is True
 
-    complete_work_item(data_dir, item["id"])
+    complete_work_item(data_dir, item.id)
     assert has_queued_or_claimed(data_dir, conversation_key=_conv(1)) is False
 
 
@@ -435,7 +435,7 @@ def test_recover_stale_claims_different_worker_after_ttl(data_dir):
     conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(600)))
     conn.commit()
 
-    requeued = recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
+    requeued = recover_stale_claims(data_dir, lease_ttl_seconds=300)
     assert requeued == 1
 
     # Item is now claimable again
@@ -455,7 +455,7 @@ def test_recover_stale_claims_expired(data_dir):
     conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(601)))
     conn.commit()
 
-    requeued = recover_stale_claims(data_dir, current_worker_id="w1", max_age_seconds=300)
+    requeued = recover_stale_claims(data_dir, lease_ttl_seconds=300)
     assert requeued == 1
 
 
@@ -465,7 +465,7 @@ def test_recover_stale_claims_fresh_not_touched(data_dir):
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(602))
     claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
 
-    requeued = recover_stale_claims(data_dir, current_worker_id="w1", max_age_seconds=300)
+    requeued = recover_stale_claims(data_dir, lease_ttl_seconds=300)
     assert requeued == 0
 
 
@@ -475,7 +475,7 @@ def test_recover_stale_claims_live_other_worker_not_touched(data_dir):
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(603))
     claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
 
-    requeued = recover_stale_claims(data_dir, current_worker_id="worker-b", max_age_seconds=300)
+    requeued = recover_stale_claims(data_dir, lease_ttl_seconds=300)
     assert requeued == 0
 
 
@@ -493,7 +493,7 @@ def test_purge_old(data_dir):
     conn.execute("UPDATE updates SET received_at = ? WHERE event_id = ?", (old_time, _event(700)))
     conn.commit()
 
-    deleted = purge_old(data_dir, older_than_hours=24)
+    deleted = purge_old(data_dir, older_than_seconds=24 * 3600)
     assert deleted == 1
 
     # Verify both tables are clean
@@ -508,7 +508,7 @@ def test_purge_keeps_recent(data_dir):
     claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
     complete_work_item(data_dir, item_id)
 
-    deleted = purge_old(data_dir, older_than_hours=24)
+    deleted = purge_old(data_dir, older_than_seconds=24 * 3600)
     assert deleted == 0
 
 
@@ -522,7 +522,7 @@ def test_purge_keeps_active(data_dir):
     conn.execute("UPDATE work_items SET created_at = ?", (old_time,))
     conn.commit()
 
-    deleted = purge_old(data_dir, older_than_hours=24)
+    deleted = purge_old(data_dir, older_than_seconds=24 * 3600)
     assert deleted == 0
 
 
@@ -611,10 +611,10 @@ def test_claim_next_any_single_item(data_dir):
 
     item = claim_next_any(data_dir, "w1")
     assert item is not None
-    assert item["conversation_key"] == _conv(1)
-    assert item["state"] == "claimed"
-    assert item["kind"] == "message"
-    assert item["payload"] == '{"text":"hi"}'
+    assert item.conversation_key == _conv(1)
+    assert item.state == "claimed"
+    assert item.kind == "message"
+    assert item.payload == '{"text":"hi"}'
 
 
 def test_claim_next_any_skips_busy_chat(data_dir):
@@ -627,7 +627,7 @@ def test_claim_next_any_skips_busy_chat(data_dir):
 
     first = claim_next_any(data_dir, "w1")
     assert first is not None
-    assert first["conversation_key"] == _conv(1)
+    assert first.conversation_key == _conv(1)
 
     # Second claim should return None (only chat 1, and it's busy)
     second = claim_next_any(data_dir, "w1")
@@ -635,7 +635,7 @@ def test_claim_next_any_skips_busy_chat(data_dir):
 
 
 def test_claim_next_any_cross_chat(data_dir):
-    """claim_next_any claims items from different chats concurrently."""
+    """claim_next_any claims items different chats concurrently."""
     record_update(data_dir, _event(1200), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     record_update(data_dir, _event(1201), conversation_key=_conv(2), actor_key=_actor(42), kind="command")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1200))
@@ -648,11 +648,11 @@ def test_claim_next_any_cross_chat(data_dir):
     assert second is not None
 
     # Different chats
-    assert first["conversation_key"] != second["conversation_key"]
+    assert first.conversation_key != second.conversation_key
 
 
 def test_claim_next_any_includes_payload(data_dir):
-    """claim_next_any returns kind and payload from the joined updates table."""
+    """claim_next_any returns kind and payload the joined updates table."""
     msg = InboundMessage(
         user=InboundUser(id=_actor(42), username="alice"),
         conversation_key=_conv(5), text="test message",
@@ -664,8 +664,8 @@ def test_claim_next_any_includes_payload(data_dir):
     enqueue_work_item(data_dir, conversation_key=_conv(5), event_id=_event(1300))
 
     item = claim_next_any(data_dir, "w1")
-    assert item["kind"] == "message"
-    restored = deserialize_inbound(item["kind"], item["payload"])
+    assert item.kind == "message"
+    restored = deserialize_inbound(item.kind, item.payload)
     assert isinstance(restored, InboundMessage)
     assert restored.text == "test message"
     assert restored.user.id == _actor(42)
@@ -674,7 +674,7 @@ def test_claim_next_any_includes_payload(data_dir):
 # -- Worker loop -----------------------------------------------------------
 
 async def test_worker_loop_processes_items(data_dir):
-    """Worker loop claims and dispatches items from the queue."""
+    """Worker loop claims and dispatches items the queue."""
     from app.worker import worker_loop
 
     # Set up two items in different chats
@@ -693,7 +693,7 @@ async def test_worker_loop_processes_items(data_dir):
     dispatched = []
 
     async def dispatch(kind, event, item):
-        dispatched.append((kind, event, item["conversation_key"]))
+        dispatched.append((kind, event, item.conversation_key))
 
     stop = asyncio.Event()
 
@@ -841,7 +841,7 @@ async def test_worker_loop_notifies_on_deserialize_failure(data_dir):
         raise AssertionError("dispatch should not run when deserialization fails")
 
     async def notify(item):
-        notified.append(str(item["id"]))
+        notified.append(item.id)
 
     stop = asyncio.Event()
 
@@ -865,7 +865,7 @@ async def test_worker_loop_notifies_on_deserialize_failure(data_dir):
 
 
 async def test_worker_loop_respects_per_chat_serialization(data_dir):
-    """Worker loop processes items from the same chat in order."""
+    """Worker loop processes items the same chat in order."""
     from app.worker import worker_loop
 
     # Two items in same chat
@@ -878,7 +878,7 @@ async def test_worker_loop_respects_per_chat_serialization(data_dir):
 
     order = []
     async def dispatch(kind, event, item):
-        order.append(item["event_id"])
+        order.append(item.event_id)
 
     stop = asyncio.Event()
     async def run_then_stop():
@@ -932,16 +932,16 @@ def test_recovery_after_crash(data_dir):
     conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(1900)))
     conn.commit()
 
-    recovered = recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
+    recovered = recover_stale_claims(data_dir, lease_ttl_seconds=300)
     assert recovered == 1
 
     # Now it's claimable by the new worker
     item = claim_next_any(data_dir, "new-worker")
     assert item is not None
-    assert item["event_id"] == _event(1900)
+    assert item.event_id == _event(1900)
 
     # And the payload is intact
-    restored = deserialize_inbound(item["kind"], item["payload"])
+    restored = deserialize_inbound(item.kind, item.payload)
     assert isinstance(restored, InboundMessage)
     assert restored.text == "before crash"
 
@@ -1005,7 +1005,7 @@ def test_record_and_enqueue_no_orphan_update(data_dir):
 
 
 def test_record_and_enqueue_rollback_on_non_integrity_error(data_dir):
-    """On non-IntegrityError (e.g. TransportStateCorruption from _insert_initial_work_item), transaction is rolled back and no rows remain."""
+    """On non-IntegrityError (e.g. TransportStateCorruption _insert_initial_work_item), transaction is rolled back and no rows remain."""
     from unittest.mock import patch
 
     event_id = _event(21000)
@@ -1069,7 +1069,7 @@ def test_write_tx_rejects_nested_use(data_dir):
 def test_mark_pending_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for move_to_pending_recovery, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3001), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3001), worker_id="w1")
@@ -1092,7 +1092,7 @@ def test_mark_pending_recovery_raises_on_invalid_transition(data_dir):
 def test_discard_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for discard_recovery, repository raises (not already_handled)."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3002), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3002), worker_id="w1")
@@ -1116,7 +1116,7 @@ def test_discard_recovery_raises_on_invalid_transition(data_dir):
 def test_supersede_pending_recovery_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for supersede_recovery, repository raises (not return 0)."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3003), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3003), worker_id="w1")
@@ -1140,7 +1140,7 @@ def test_supersede_pending_recovery_raises_on_invalid_transition(data_dir):
 def test_reclaim_for_replay_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition (not blocked_replay) for reclaim_for_replay, repository raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3004), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3004), worker_id="w1")
@@ -1206,7 +1206,7 @@ def test_supersede_pending_recovery_raises_when_chat_invalid(data_dir):
 def test_claim_queued_item_returns_none_only_for_other_claimed_for_chat(data_dir):
     """_claim_queued_item returns None only when disposition is other_claimed_for_chat; invalid_transition raises."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3005), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3005))  # queued
@@ -1229,7 +1229,7 @@ def test_claim_queued_item_returns_none_only_for_other_claimed_for_chat(data_dir
 def test_complete_work_item_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for complete, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3010), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3010), worker_id="w1")
@@ -1252,7 +1252,7 @@ def test_complete_work_item_raises_on_invalid_transition(data_dir):
 def test_fail_work_item_raises_on_invalid_transition(data_dir):
     """When machine returns invalid_transition for fail, repository raises and rolls back."""
     from unittest.mock import patch
-    from app.workflows.recovery.results import TransitionResult, TransportDisposition
+    from octopus_sdk.work_queue import TransitionResult, TransportDisposition
 
     record_update(data_dir, _event(3011), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(3011), worker_id="w1")
@@ -1290,7 +1290,7 @@ async def test_worker_replay_calls_dispatch_for_message(data_dir):
     old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
     conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(2100)))
     conn.commit()
-    recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
+    recover_stale_claims(data_dir, lease_ttl_seconds=300)
 
     dispatched = []
     async def dispatch(kind, event, item):
@@ -1487,8 +1487,8 @@ def test_complete_work_item_exact_cas_does_not_overwrite_later_claim(data_dir):
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(9100))
     claimed_item = claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
     assert claimed_item is not None
-    assert claimed_item["id"] == item_id
-    assert claimed_item["state"] == "claimed"
+    assert claimed_item.id == item_id
+    assert claimed_item.state == "claimed"
 
     # Stale load: pretend the first load in complete_work_item sees queued (race).
     stale_row = {
@@ -1841,8 +1841,8 @@ def test_transport_db_open_migrates_v5_legacy_identity_data(data_dir):
     assert get_update_payload(data_dir, _event(101)) == '{"text":"hello"}'
     claimed = claim_next(data_dir, _conv(12345), worker_id="worker-x")
     assert claimed is not None
-    assert claimed["id"] == "item-1"
-    assert claimed["event_id"] == _event(101)
+    assert claimed.id == "item-1"
+    assert claimed.event_id == _event(101)
 
 
 # -- Contract: non-duplicate IntegrityError must raise --

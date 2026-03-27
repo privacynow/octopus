@@ -1,4 +1,4 @@
-"""HTTP client for bot → registry communication.
+"""HTTP client for bot -> registry communication.
 
 Methods are async (HTTP I/O). This does not imply the registry store should be
 async — the client and store run in different processes.
@@ -6,22 +6,34 @@ async — the client and store run in different processes.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from typing import TypeVar
 
 import httpx
 from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.registry.models import (
+    AckResult,
     AgentCard,
     AgentDiscoveryQuery,
+    AgentRecord,
+    CoordinationActionEnvelope,
+    CoordinationActionResult,
     ConversationCreate,
+    ConversationRecord,
     ConversationProgressUpdate,
+    DeliveryPollResult,
+    EnrollmentResult,
+    HealthSummary,
+    MessageRecord,
+    RuntimeHealthPayload,
     RoutedTaskRequest,
     RoutedTaskResult,
+    TaskRecord,
     RoutedTaskUpdate,
 )
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class RegistryClientError(RuntimeError):
@@ -52,9 +64,9 @@ def _registry_http_error_code(status_code: int) -> str:
 
 
 def _validated_model(
-    value: BaseModel | Mapping[str, Any],
-    schema: type[BaseModel],
-) -> BaseModel:
+    value: ModelT | Mapping[str, object],
+    schema: type[ModelT],
+) -> ModelT:
     if isinstance(value, schema):
         return value
     return schema.model_validate(dict(value))
@@ -94,11 +106,11 @@ class RegistryClient:
         path: str,
         *,
         require_auth: bool = True,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: object,
+    ) -> object:
         headers = self._headers(require_auth=require_auth)
 
-        async def _do(client: httpx.AsyncClient) -> Any:
+        async def _do(client: httpx.AsyncClient) -> object:
             try:
                 response = await client.request(
                     method,
@@ -145,7 +157,7 @@ class RegistryClient:
         origin_channel: str,
         external_conversation_ref: str,
         title: str = "",
-    ) -> dict[str, Any]:
+    ) -> ConversationRecord:
         """Idempotent get-or-create. Returns { conversation_id, ... }."""
         payload = ConversationCreate(
             target_agent_id=target_agent_id,
@@ -153,13 +165,37 @@ class RegistryClient:
             external_conversation_ref=external_conversation_ref,
             title=title,
         )
-        return await self._request("POST", "/v1/conversations", json=payload.model_dump())
+        result = await self._request("POST", "/v1/conversations", json=payload.model_dump())
+        return ConversationRecord.model_validate(result)
 
-    async def get_conversation(self, conversation_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/v1/conversations/{conversation_id}")
+    async def get_conversation(self, conversation_id: str) -> ConversationRecord:
+        result = await self._request("GET", f"/v1/conversations/{conversation_id}")
+        return ConversationRecord.model_validate(result)
 
-    async def get_agent_status(self, agent_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/v1/agents/{agent_id}/status")
+    async def add_message(self, conversation_id: str, text: str) -> MessageRecord:
+        result = await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/messages",
+            json={"text": text},
+        )
+        return MessageRecord.model_validate(result)
+
+    async def submit_action(
+        self,
+        conversation_id: str,
+        envelope: CoordinationActionEnvelope,
+    ) -> CoordinationActionResult:
+        payload = _validated_model(envelope, CoordinationActionEnvelope)
+        result = await self._request(
+            "POST",
+            f"/v1/conversations/{conversation_id}/actions",
+            json=payload.model_dump(exclude_unset=True),
+        )
+        return CoordinationActionResult.model_validate(result)
+
+    async def get_agent_status(self, agent_id: str) -> AgentRecord:
+        result = await self._request("GET", f"/v1/agents/{agent_id}/status")
+        return AgentRecord.model_validate(result)
 
     async def publish_events(
         self,
@@ -180,7 +216,7 @@ class RegistryClient:
     async def publish_progress(
         self,
         conversation_id: str,
-        progress: ConversationProgressUpdate | Mapping[str, Any],
+        progress: ConversationProgressUpdate,
     ) -> None:
         payload = _validated_model(progress, ConversationProgressUpdate)
         await self._request(
@@ -192,11 +228,11 @@ class RegistryClient:
     async def enroll(
         self,
         enrollment_token: str,
-        card: AgentCard | Mapping[str, Any],
-    ) -> dict[str, Any]:
+        card: AgentCard,
+    ) -> EnrollmentResult:
         """Enroll a new agent. No bearer token needed — uses enrollment_token in body."""
         agent_card = _validated_model(card, AgentCard)
-        return await self._request(
+        result = await self._request(
             "POST",
             "/v1/agents/enroll",
             json={
@@ -205,15 +241,16 @@ class RegistryClient:
             },
             require_auth=False,
         )
+        return EnrollmentResult.model_validate(result)
 
     async def register(
         self,
-        card: AgentCard | Mapping[str, Any],
+        card: AgentCard,
         *,
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-    ) -> dict[str, Any]:
+    ) -> HealthSummary:
         agent_card = _validated_model(card, AgentCard)
         payload = {
             "agent_card": agent_card.model_dump(exclude_unset=True),
@@ -221,7 +258,8 @@ class RegistryClient:
             "current_capacity": current_capacity,
             "max_capacity": max_capacity,
         }
-        return await self._request("POST", "/v1/agents/register", json=payload)
+        result = await self._request("POST", "/v1/agents/register", json=payload)
+        return HealthSummary.model_validate(result)
 
     async def heartbeat(
         self,
@@ -229,75 +267,84 @@ class RegistryClient:
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        runtime_health: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        runtime_health: RuntimeHealthPayload | None = None,
+    ) -> HealthSummary:
+        payload: dict[str, object] = {
             "connectivity_state": connectivity_state,
             "current_capacity": current_capacity,
             "max_capacity": max_capacity,
         }
         if runtime_health is not None:
-            payload["runtime_health"] = runtime_health
-        return await self._request("POST", "/v1/agents/heartbeat", json=payload)
+            payload["runtime_health"] = _validated_model(
+                runtime_health,
+                RuntimeHealthPayload,
+            ).model_dump(exclude_unset=True)
+        result = await self._request("POST", "/v1/agents/heartbeat", json=payload)
+        return HealthSummary.model_validate(result)
 
     async def search(
         self,
-        query: AgentDiscoveryQuery | Mapping[str, Any],
-    ) -> list[dict[str, Any]]:
+        query: AgentDiscoveryQuery,
+    ) -> list[AgentRecord]:
         payload = _validated_model(query, AgentDiscoveryQuery)
         result = await self._request(
             "POST",
             "/v1/agents/discovery/search",
             json=payload.model_dump(exclude_unset=True),
         )
-        return list(result.get("agents", []))
+        return [AgentRecord.model_validate(item) for item in list(result.get("agents", []))]
 
     async def submit_routed_task(
         self,
-        request: RoutedTaskRequest | Mapping[str, Any],
-    ) -> dict[str, Any]:
+        request: RoutedTaskRequest,
+    ) -> TaskRecord:
         payload = _validated_model(request, RoutedTaskRequest)
         body = payload.model_dump(exclude_unset=True)
         # created_at is server-visible request identity and must survive the client dump
         # even when populated by the model default.
         body["created_at"] = payload.created_at
-        return await self._request(
+        result = await self._request(
             "POST",
             "/v1/agents/routed-tasks",
             json=body,
         )
+        return TaskRecord.model_validate(result)
 
     async def routed_task_status(
         self,
         routed_task_id: str,
-        update: RoutedTaskUpdate | Mapping[str, Any],
-    ) -> dict[str, Any]:
+        update: RoutedTaskUpdate,
+    ) -> TaskRecord:
         payload = _validated_model(update, RoutedTaskUpdate)
         body = payload.model_dump(exclude_unset=True)
         # The routed task id is carried in the URL path; the registry rejects it in the body.
         body.pop("routed_task_id", None)
         body["updated_at"] = payload.updated_at
-        return await self._request(
+        body["transition_id"] = payload.transition_id
+        result = await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/status",
             json=body,
         )
+        return TaskRecord.model_validate(result)
 
     async def routed_task_result(
         self,
         routed_task_id: str,
-        result: RoutedTaskResult | Mapping[str, Any],
-    ) -> dict[str, Any]:
+        result: RoutedTaskResult,
+    ) -> TaskRecord:
         payload = _validated_model(result, RoutedTaskResult)
         body = payload.model_dump(exclude_unset=True)
         # The routed task id is carried in the URL path; the registry rejects it in the body.
         body.pop("routed_task_id", None)
         body["completed_at"] = payload.completed_at
-        return await self._request(
+        body["transition_id"] = payload.transition_id
+        response = await self._request(
             "POST",
             f"/v1/agents/routed-tasks/{routed_task_id}/result",
             json=body,
         )
+        return TaskRecord.model_validate(response)
 
     async def poll(
         self,
@@ -306,21 +353,51 @@ class RegistryClient:
         limit: int = 20,
         wait_seconds: int = 1,
         kind_filter: list[str] | tuple[str, ...] | None = None,
-    ) -> dict[str, Any]:
-        params: dict[str, Any] = {
+    ) -> DeliveryPollResult:
+        params: dict[str, object] = {
             "cursor": cursor,
             "limit": limit,
             "wait_seconds": wait_seconds,
         }
         if kind_filter is not None:
             params["kind_filter"] = list(kind_filter)
-        return await self._request("GET", "/v1/agents/poll", params=params)
+        result = await self._request("GET", "/v1/agents/poll", params=params)
+        return DeliveryPollResult.model_validate(result)
 
-    async def ack(self, delivery_ids: list[str], classification: str = "accepted") -> dict[str, Any]:
-        return await self._request("POST", "/v1/agents/ack", json={
+    async def ack(self, delivery_ids: list[str], classification: str = "accepted") -> AckResult:
+        result = await self._request("POST", "/v1/agents/ack", json={
             "delivery_ids": delivery_ids,
             "classification": classification,
         })
+        return AckResult.model_validate(result)
 
-    async def deregister(self) -> dict[str, Any]:
-        return await self._request("POST", "/v1/agents/deregister", json={})
+    async def deregister(self) -> AgentRecord:
+        result = await self._request("POST", "/v1/agents/deregister", json={})
+        return AgentRecord.model_validate(result)
+
+    async def renew_enrollment(
+        self,
+        agent_id: str,
+        card: AgentCard,
+    ) -> EnrollmentResult:
+        del agent_id
+        agent_card = _validated_model(card, AgentCard)
+        summary = await self.register(
+            agent_card,
+            connectivity_state=agent_card.connectivity_state or "connected",
+            current_capacity=agent_card.current_capacity,
+            max_capacity=agent_card.max_capacity,
+        )
+        agent = summary.agent
+        return EnrollmentResult(
+            agent_id=agent.agent_id if agent is not None else "",
+            agent_token=self._agent_token,
+            slug=agent.slug if agent is not None else agent_card.slug,
+            poll_cursor="0",
+        )
+
+    async def disconnect_agent(self, agent_id: str) -> AgentRecord:
+        return await self.deregister()
+
+    async def fail_delivery(self, delivery_id: str, reason: str = "") -> AckResult:
+        return await self.ack([delivery_id], classification="rejected")

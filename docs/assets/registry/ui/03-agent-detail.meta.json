@@ -1,34 +1,34 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 26,
-      "width": 1060,
-      "height": 114.1875,
-      "label": "Identity, role, provider, and connectivity",
+      "x": 250,
+      "y": 18,
+      "width": 1092,
+      "height": 69.921875,
+      "label": "Compact header with direct Open conversation action",
       "color": "#ff9800"
     },
     {
-      "x": 272,
-      "y": 150.1875,
-      "width": 1064,
-      "height": 384.078125,
-      "label": "Registry identity, scope, heartbeat, capabilities, and tags",
+      "x": 248,
+      "y": 85.921875,
+      "width": 1096,
+      "height": 231.046875,
+      "label": "Registry identity, scope, version, and heartbeat",
       "color": "#2196f3"
     },
     {
-      "x": 272,
-      "y": 530.265625,
-      "width": 1064,
-      "height": 192.0625,
-      "label": "Worker state from runtime heartbeat",
+      "x": 248,
+      "y": 316.96875,
+      "width": 1096,
+      "height": 191.203125,
+      "label": "Worker state published by runtime heartbeat",
       "color": "#9c27b0"
     },
     {
-      "x": 272,
-      "y": 722.328125,
-      "width": 1064,
-      "height": 292.390625,
+      "x": 248,
+      "y": 508.171875,
+      "width": 1096,
+      "height": 251.578125,
       "label": "Inline conversations for this agent",
       "color": "#4caf50"
     }

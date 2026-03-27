@@ -38,7 +38,7 @@ def get_connection(
     max_size: int = 10,
     connect_timeout: int = 10,
 ) -> Generator:
-    """Yield a connection from the pool for the given URL."""
+    """Yield a connection the pool for the given URL."""
     pool = get_pool(
         database_url,
         min_size=min_size,

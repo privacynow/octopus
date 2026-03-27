@@ -1,19 +1,19 @@
 {
   "rects": [
     {
-      "x": 274,
-      "y": 199.296875,
-      "width": 851.234375,
-      "height": 58,
-      "label": "Search activates after 3+ characters",
+      "x": 267,
+      "y": 174.984375,
+      "width": 643.859375,
+      "height": 61.25,
+      "label": "Debounced server-side conversation search",
       "color": "#ff9800"
     },
     {
-      "x": 275,
-      "y": 264.296875,
-      "width": 1058,
-      "height": 93.296875,
-      "label": "Filtered results from registry search",
+      "x": 251,
+      "y": 250.234375,
+      "width": 1090,
+      "height": 90.890625,
+      "label": "Filtered results from the registry conversation index",
       "color": "#2196f3"
     }
   ],

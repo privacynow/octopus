@@ -10,9 +10,9 @@ HTTP boundary. The metadata schemas are the machine-checkable contract.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ConversationEvent(BaseModel):
@@ -25,7 +25,7 @@ class ConversationEvent(BaseModel):
     actor: str = ""                  # display name, not transport-specific ID
     content: str = ""                # text/markdown body
     created_at: str = Field(..., min_length=1)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -101,22 +101,33 @@ class DelegationTaskSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    draft_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)  # target agent slug or agent_id
     status: str = Field(..., min_length=1)  # proposed, submitted, completed, failed
+    routed_task_id: str = ""
+    selector_kind: str = ""
+    selector_value: str = ""
+    instructions: str = ""
+    priority: str = ""
+    requested_capabilities: list[str] = Field(default_factory=list)
+    context: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class DelegationMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    proposal_id: str = Field(..., min_length=1)
     tasks: list[DelegationTaskSummary] = Field(..., min_length=1)
 
 
 class TaskStatusMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    routed_task_id: str = Field(..., min_length=1)
     status: str = Field(..., min_length=1)
     progress: int | None = None
+    transition_id: str = ""
 
 
 class ErrorMetadata(BaseModel):
@@ -142,7 +153,7 @@ EVENT_METADATA_SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 
-def validate_event_metadata(event: ConversationEvent) -> dict[str, Any]:
+def validate_event_metadata(event: ConversationEvent) -> dict[str, JsonValue]:
     """Validate that event.metadata matches the schema for event.kind.
 
     Returns the normalized metadata payload.

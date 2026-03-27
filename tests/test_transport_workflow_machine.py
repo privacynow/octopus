@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
 from app.workflows.recovery.machine import (
     ClaimInlineAction,
     ReclaimForReplayAction,
@@ -32,7 +32,7 @@ def model(
 
 
 @pytest.mark.parametrize(
-    "event,from_state,to_state,disposition,kwargs",
+    "event,_state,to_state,disposition,kwargs",
     [
         ("claim_inline", "queued", "claimed", TransportDisposition.ok, {"requesting_worker_id": "w1"}),
         ("claim_worker", "queued", "claimed", TransportDisposition.ok, {}),
@@ -49,13 +49,13 @@ def model(
 )
 def test_allowed_transitions(
     event: str,
-    from_state: str,
+    _state: str,
     to_state: str,
     disposition: TransportDisposition,
     kwargs: dict[str, str],
 ) -> None:
     workflow_model = model(
-        from_state,
+        _state,
         is_stale=event == "recover_stale_claim",
         **{k: v for k, v in kwargs.items() if k == "requesting_worker_id" and v},
     )
@@ -65,7 +65,7 @@ def test_allowed_transitions(
     assert result.disposition == disposition
 
 
-def test_claim_inline_from_claimed_same_worker_no_op() -> None:
+def test_claim_inline__claimed_same_worker_no_op() -> None:
     workflow_model = model("claimed", worker_id="worker-1", requesting_worker_id="worker-1")
     result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="worker-1")
     assert result.allowed is True
@@ -73,7 +73,7 @@ def test_claim_inline_from_claimed_same_worker_no_op() -> None:
     assert result.disposition == TransportDisposition.already_claimed_by_worker
 
 
-def test_claim_inline_from_claimed_other_worker_blocked() -> None:
+def test_claim_inline__claimed_other_worker_blocked() -> None:
     workflow_model = model(
         "claimed",
         worker_id="owner",
@@ -86,7 +86,7 @@ def test_claim_inline_from_claimed_other_worker_blocked() -> None:
     assert "other_claimed_for_chat" in result.reason or result.reason
 
 
-def test_claim_inline_from_claimed_ownerless_blocked() -> None:
+def test_claim_inline__claimed_ownerless_blocked() -> None:
     workflow_model = TransportWorkflowModel(
         state="claimed",
         worker_id=None,
@@ -98,7 +98,7 @@ def test_claim_inline_from_claimed_ownerless_blocked() -> None:
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
-def test_claim_inline_from_queued_requires_requester() -> None:
+def test_claim_inline__queued_requires_requester() -> None:
     workflow_model = model("queued")
     result = run_transport_event(workflow_model, "claim_inline")
     assert result.allowed is False
@@ -106,7 +106,7 @@ def test_claim_inline_from_queued_requires_requester() -> None:
 
 
 @pytest.mark.parametrize(
-    "from_state,event",
+    "_state,event",
     [
         ("queued", "move_to_pending_recovery"),
         ("queued", "reclaim_for_replay"),
@@ -120,8 +120,8 @@ def test_claim_inline_from_queued_requires_requester() -> None:
         ("pending_recovery", "complete"),
     ],
 )
-def test_forbidden_transitions(from_state: str, event: str) -> None:
-    workflow_model = model(from_state)
+def test_forbidden_transitions(_state: str, event: str) -> None:
+    workflow_model = model(_state)
     kwargs = {"requesting_worker_id": "w1"} if event == "claim_inline" else {}
     result = run_transport_event(workflow_model, event, **kwargs)
     assert result.allowed is False

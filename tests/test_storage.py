@@ -10,6 +10,8 @@ import pytest
 
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import telegram_conversation_key
+from octopus_sdk.providers import ProviderStateRecord
+from tests.support.handler_support import pending_approval_dict
 from app.storage_sqlite import SQLiteSessionStore
 from app.storage import (
     build_upload_path,
@@ -25,6 +27,10 @@ from app.storage import (
     save_session,
     session_exists,
 )
+
+
+def _state(**kwargs) -> ProviderStateRecord:
+    return ProviderStateRecord(kwargs)
 
 
 # -- sanitize_filename --
@@ -65,7 +71,7 @@ def test_session_management():
         # sessions.db is created on first session use (no longer by ensure_data_dirs)
 
         # default_session
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         assert s["provider"] == "claude"
         assert s["provider_state"]["session_id"] == "abc"
         assert s["approval_mode"] == "on"
@@ -82,7 +88,7 @@ def test_session_management():
             data_dir,
             telegram_conversation_key(12345),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         assert loaded["provider"] == "claude"
@@ -93,7 +99,7 @@ def test_session_management():
             data_dir,
             telegram_conversation_key(12345),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False, "new_key": "default"},
+            lambda _ck="": _state(session_id="abc", started=False, new_key="default"),
             "on",
         )
         assert loaded2["provider_state"]["new_key"] == "default"
@@ -106,7 +112,7 @@ def test_session_management():
             data_dir,
             telegram_conversation_key(12345),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         assert loaded3["approval_mode"] == "off"
@@ -117,7 +123,7 @@ def test_session_management():
             data_dir,
             telegram_conversation_key(99999),
             "codex",
-            lambda _ck="": {"thread_id": None},
+            lambda _ck="": _state(thread_id=None),
             "off",
         )
         assert fresh["provider"] == "codex"
@@ -131,37 +137,37 @@ def test_session_store_uses_thread_local_sqlite_connections():
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
         conversation_key = telegram_conversation_key(4242)
-        session = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        session = default_session("claude", _state(session_id="abc", started=False), "on")
         save_session(data_dir, conversation_key, session)
 
-        loaded_from_thread: dict[str, object] = {}
-        error_from_thread: list[BaseException] = []
+        loaded__thread: dict[str, object] = {}
+        error__thread: list[BaseException] = []
 
         def _load() -> None:
             try:
-                loaded_from_thread.update(
+                loaded__thread.update(
                     load_session(
                         data_dir,
                         conversation_key,
                         "claude",
-                        lambda _ck="": {"session_id": "abc", "started": False},
+                        lambda _ck="": _state(session_id="abc", started=False),
                         "on",
                     )
                 )
             except BaseException as exc:  # pragma: no cover - assertion below
-                error_from_thread.append(exc)
+                error__thread.append(exc)
 
         worker = threading.Thread(target=_load)
         worker.start()
         worker.join()
 
-        assert error_from_thread == []
-        assert loaded_from_thread["provider"] == "claude"
-        assert loaded_from_thread["provider_state"]["session_id"] == "abc"
+        assert error__thread == []
+        assert loaded__thread["provider"] == "claude"
+        assert loaded__thread["provider_state"]["session_id"] == "abc"
 
 
 def _delegation_session(provider_name: str = "claude") -> dict:
-    session = default_session(provider_name, {"session_id": "abc", "started": False}, "on")
+    session = default_session(provider_name, _state(session_id="abc", started=False), "on")
     session["pending_delegation"] = {
         "conversation_ref": "telegram:agent:12345",
         "title": "Delegation plan",
@@ -214,6 +220,7 @@ def test_apply_delegation_result_atomically_merges_concurrent_updates_for_same_c
                     result=RoutedTaskResult(
                         routed_task_id=task_id,
                         status="completed",
+                        transition_id=f"{task_id}-complete",
                         summary=summary,
                     ),
                 )
@@ -236,7 +243,7 @@ def test_apply_delegation_result_atomically_merges_concurrent_updates_for_same_c
             data_dir,
             conversation_key,
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         pending = loaded["pending_delegation"]
@@ -271,6 +278,7 @@ def test_apply_delegation_result_atomically_does_not_touch_other_conversations()
             result=RoutedTaskResult(
                 routed_task_id="task-1",
                 status="completed",
+                transition_id="task-1-complete",
                 summary="updated",
             ),
         )
@@ -279,14 +287,14 @@ def test_apply_delegation_result_atomically_does_not_touch_other_conversations()
             data_dir,
             first_key,
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         unchanged = store.load_session(
             data_dir,
             second_key,
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         assert changed["pending_delegation"]["tasks"][0]["summary"] == "updated"
@@ -338,12 +346,12 @@ def test_list_sessions():
         assert list_sessions(data_dir) == []
 
         # Create two sessions
-        s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s1 = default_session("claude", _state(session_id="a", started=False), "on")
         s1["active_skills"] = ["code-review"]
         save_session(data_dir, telegram_conversation_key(111), s1)
 
-        s2 = default_session("codex", {"thread_id": None}, "off")
-        s2["pending_approval"] = {"prompt": "test", "created_at": 0}
+        s2 = default_session("codex", _state(thread_id=None), "off")
+        s2["pending_approval"] = pending_approval_dict(prompt="test", created_at=0)
         save_session(data_dir, telegram_conversation_key(222), s2)
 
         result = list_sessions(data_dir)
@@ -379,11 +387,11 @@ def test_json_file_migration():
         # Create legacy JSON session files
         sessions_dir = data_dir / "sessions"
         sessions_dir.mkdir()
-        s = default_session("claude", {"session_id": "migrated"}, "on")
+        s = default_session("claude", _state(session_id="migrated"), "on")
         s["active_skills"] = ["github-integration"]
         (sessions_dir / "12345.json").write_text(json.dumps(s))
 
-        s2 = default_session("codex", {"thread_id": "t1"}, "off")
+        s2 = default_session("codex", _state(thread_id="t1"), "off")
         (sessions_dir / "67890.json").write_text(json.dumps(s2))
 
         # Also a corrupt file — should be skipped
@@ -401,7 +409,7 @@ def test_json_file_migration():
             data_dir,
             telegram_conversation_key(12345),
             "claude",
-            lambda _ck="": {"session_id": "new"},
+            lambda _ck="": _state(session_id="new"),
             "on",
         )
         assert loaded["provider_state"]["session_id"] == "migrated"
@@ -411,7 +419,7 @@ def test_json_file_migration():
             data_dir,
             telegram_conversation_key(67890),
             "codex",
-            lambda _ck="": {"thread_id": None},
+            lambda _ck="": _state(thread_id=None),
             "off",
         )
         assert loaded2["provider_state"]["thread_id"] == "t1"
@@ -477,7 +485,7 @@ def test_session_migration_rolls_back_when_step_fails(monkeypatch: pytest.Monkey
         assert "migration_probe" not in tables
 
 
-# -- Session/upload isolation (from test_high_risk.py) --
+# -- Session/upload isolation (test_high_risk.py) --
 
 
 def test_session_provider_mismatch():
@@ -488,8 +496,8 @@ def test_session_provider_mismatch():
         data_dir = Path(tmpdir)
         conversation_key = telegram_conversation_key(1001)
 
-        claude_state_factory = lambda _ck="": {"session_id": "new-id", "started": False}
-        codex_state_factory = lambda _ck="": {"thread_id": None}
+        claude_state_factory = lambda _ck="": _state(session_id="new-id", started=False)
+        codex_state_factory = lambda _ck="": _state(thread_id=None)
 
         # Save a Claude session with explicit approval_mode override
         session = default_session("claude", claude_state_factory(), "on")
@@ -503,7 +511,7 @@ def test_session_provider_mismatch():
         loaded_codex = load_session(data_dir, conversation_key, "codex", codex_state_factory, "on")
         assert loaded_codex["provider_state"].get("started") is None
         assert loaded_codex["provider_state"].get("session_id") is None
-        # Approval mode from saved session should persist
+        # Approval mode saved session should persist
         assert loaded_codex["approval_mode"] == "off"
 
         # Same provider reload should preserve state
@@ -569,7 +577,7 @@ def test_load_session_corrupt_provider_state_falls_back_to_defaults():
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
         # Save a valid session first
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         save_session(data_dir, telegram_conversation_key(55555), s)
         # Corrupt provider_state to a list in the raw JSON
         db_path = data_dir / "sessions.db"
@@ -595,7 +603,7 @@ def test_load_session_corrupt_provider_state_falls_back_to_defaults():
             data_dir,
             telegram_conversation_key(55555),
             "claude",
-            lambda _ck="": {"session_id": "new", "started": False},
+            lambda _ck="": _state(session_id="new", started=False),
             "on",
         )
         assert isinstance(loaded["provider_state"], dict)
@@ -610,7 +618,7 @@ def test_created_at_preserved_on_resave():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         original_created = s["created_at"]
         save_session(data_dir, telegram_conversation_key(77777), s)
         # Load, mutate, and re-save
@@ -618,7 +626,7 @@ def test_created_at_preserved_on_resave():
             data_dir,
             telegram_conversation_key(77777),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         loaded["role"] = "test-role"
@@ -628,7 +636,7 @@ def test_created_at_preserved_on_resave():
             data_dir,
             telegram_conversation_key(77777),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         assert reloaded["created_at"] == original_created
@@ -641,14 +649,14 @@ def test_falsy_created_at_normalized_on_save():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         s["created_at"] = ""  # force falsy
         save_session(data_dir, telegram_conversation_key(88888), s)
         loaded = load_session(
             data_dir,
             telegram_conversation_key(88888),
             "claude",
-            lambda _ck="": {"session_id": "abc", "started": False},
+            lambda _ck="": _state(session_id="abc", started=False),
             "on",
         )
         assert loaded["created_at"] != "", "falsy created_at was not normalized on save"
@@ -663,7 +671,7 @@ def test_load_session_non_object_json_falls_back_to_defaults():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s = default_session("claude", _state(session_id="abc", started=False), "on")
         save_session(data_dir, telegram_conversation_key(66666), s)
         # Overwrite stored data with a valid-JSON non-object
         db_path = data_dir / "sessions.db"
@@ -680,7 +688,7 @@ def test_load_session_non_object_json_falls_back_to_defaults():
             data_dir,
             telegram_conversation_key(66666),
             "claude",
-            lambda _ck="": {"session_id": "new", "started": False},
+            lambda _ck="": _state(session_id="new", started=False),
             "on",
         )
         assert isinstance(loaded["provider_state"], dict)

@@ -29,6 +29,7 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, save_session
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
+from octopus_sdk.providers import ProviderStateRecord
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -512,7 +513,7 @@ def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: P
     agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
 
     conversation_key = telegram_conversation_key(12345)
-    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    session = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
     save_session(data_dir, conversation_key, session)
     conv = _create_conversation(client, token, agent_id, "telegram:dev-bot:12345", title="Telegram chat 12345", origin_channel="telegram")
     conversation_id = conv["conversation_id"]
@@ -549,10 +550,10 @@ def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monke
 
     conv = _create_conversation(client, token, agent_id, "telegram:dev-bot:12346", title="Telegram chat 12346", origin_channel="telegram")
     conversation_id = conv["conversation_id"]
-    # Save session using the conversation_key derived from the new conversation_id
+    # Save session using the conversation_key derived the new conversation_id
     from octopus_sdk.identity import conversation_key_for_ref
     conversation_key = conversation_key_for_ref(conversation_id)
-    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    session = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
     session["active_skills"] = ["code-review", "missing-skill"]
     save_session(data_dir, conversation_key, session)
 
@@ -1214,21 +1215,6 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     )
     assert publish.status_code == 200
 
-    pending_task = client.post(
-        "/v1/agents/routed-tasks",
-        headers={"Authorization": f"Bearer {origin_token}"},
-        json={
-            "routed_task_id": "task-summary-pending",
-            "parent_conversation_id": conversation_id,
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Pending review",
-            "instructions": "Queue this work.",
-            "created_at": now_iso,
-        },
-    )
-    assert pending_task.status_code == 200
-
     running_task = client.post(
         "/v1/agents/routed-tasks",
         headers={"Authorization": f"Bearer {origin_token}"},
@@ -1244,16 +1230,39 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     )
     assert running_task.status_code == 200
 
+    target_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert target_poll.status_code == 200
+
     status = client.post(
         "/v1/agents/routed-tasks/task-summary-running/status",
         headers={"Authorization": f"Bearer {target_token}"},
         json={
             "status": "running",
+            "transition_id": "task-summary-running-start",
             "summary": "In progress",
             "timeline_events": [],
         },
     )
     assert status.status_code == 200
+
+    pending_task = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-summary-pending",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Pending review",
+            "instructions": "Queue this work.",
+            "created_at": now_iso,
+        },
+    )
+    assert pending_task.status_code == 200
 
     _login_ui(client)
     summary = client.get("/v1/summary")
@@ -1279,6 +1288,86 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "prompt_tokens": 11,
         "completion_tokens": 7,
         "cost_usd": 0.25,
+    }
+
+
+def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-usage-rollup")
+    target_id, target_token = _enroll_and_register(client, "Target Bot", "target-usage-rollup")
+    conv = _create_conversation(client, origin_token, origin_id, "conv-usage-rollup", title="Usage rollup conversation")
+    conversation_id = conv["conversation_id"]
+
+    created = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-usage-rollup",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Usage rollup task",
+            "instructions": "Return only the number 4.",
+            "created_at": now_iso,
+        },
+    )
+    assert created.status_code == 200
+
+    target_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert target_poll.status_code == 200
+
+    running = client.post(
+        "/v1/agents/routed-tasks/task-usage-rollup/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "running",
+            "transition_id": "task-usage-rollup-start",
+            "summary": "In progress",
+            "timeline_events": [],
+        },
+    )
+    assert running.status_code == 200
+
+    completed = client.post(
+        "/v1/agents/routed-tasks/task-usage-rollup/result",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "completed",
+            "transition_id": "task-usage-rollup-complete",
+            "summary": "4",
+            "full_text": "4",
+            "prompt_tokens": 13,
+            "completion_tokens": 5,
+            "cost_usd": 0.17,
+            "provider": "codex",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert completed.status_code == 200
+
+    _login_ui(client)
+    usage = client.get("/v1/usage", params={"since": "1970-01-01T00:00:00+00:00"})
+    assert usage.status_code == 200
+    payload = usage.json()
+    assert payload["daily_total"] == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "cost_usd": 0.17,
+    }
+    row = next(item for item in payload["by_conversation"] if item["conversation_id"] == conversation_id)
+    assert row == {
+        "conversation_id": conversation_id,
+        "title": "Usage rollup conversation",
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "cost_usd": 0.17,
     }
 
 
@@ -1342,7 +1431,7 @@ def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path:
     decision = client.post(
         f"/v1/conversations/{decided['conversation_id']}/actions",
         headers={"X-CSRF-Token": csrf},
-        json={"action": "approve", "payload": {"request_id": "evt-approval-decided"}},
+        json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "evt-approval-decided"}},
     )
     assert decision.status_code == 200
 
@@ -1369,7 +1458,7 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
     cancel = client.post(
         f"/v1/conversations/{conversation_id}/actions",
         headers={"X-CSRF-Token": csrf_token},
-        json={"action": "cancel_conversation"},
+        json={"action_id": "cancel-action-1", "action": "cancel_conversation", "payload": {}},
     )
     assert cancel.status_code == 200
 
@@ -1383,7 +1472,7 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
                         "kind": "task.status",
                         "content": "Still winding down",
                         "created_at": "2026-03-15T00:00:02+00:00",
-                        "metadata": {"status": "running"},
+                        "metadata": {"routed_task_id": "task-cancel-progress", "status": "running"},
                     }
                 ]
             },
@@ -1495,11 +1584,24 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert target_poll.status_code == 200
     assert target_poll.json()["deliveries"][0]["kind"] == "routed_task"
 
+    started = client.post(
+        "/v1/agents/routed-tasks/task-1/status",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "status": "running",
+            "transition_id": "task-1-start",
+            "summary": "In progress",
+            "timeline_events": [],
+        },
+    )
+    assert started.status_code == 200
+
     result = client.post(
         "/v1/agents/routed-tasks/task-1/result",
         headers={"Authorization": f"Bearer {target_token}"},
         json={
             "status": "completed",
+            "transition_id": "task-1-complete",
             "summary": "Added missing tests",
             "full_text": "Test plan updated with edge cases.",
             "artifacts": [],
@@ -1519,6 +1621,43 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
     routed_result = next(item for item in origin_deliveries if item["kind"] == "routed_result")
     assert routed_result["payload"]["parent_external_conversation_ref"] == "conv-1"
+
+
+def test_registry_list_tasks_can_filter_by_parent_conversation_id(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot")
+    target_id, _target_token = _enroll_and_register(client, "Target Bot", "target-bot")
+    first = _create_conversation(client, origin_token, origin_id, "conv-filter-1", title="First parent")
+    second = _create_conversation(client, origin_token, origin_id, "conv-filter-2", title="Second parent")
+
+    for task_id, parent_id in (
+        ("task-filter-1", first["conversation_id"]),
+        ("task-filter-2", second["conversation_id"]),
+    ):
+        response = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": task_id,
+                "parent_conversation_id": parent_id,
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": f"Task {task_id}",
+                "instructions": "Do work.",
+                "created_at": "2026-03-25T00:00:00+00:00",
+            },
+        )
+        assert response.status_code == 200
+
+    filtered = client.get(
+        "/v1/tasks",
+        params={"parent_conversation_id": first["conversation_id"], "limit": 10},
+    )
+    assert filtered.status_code == 200
+    assert [task["routed_task_id"] for task in filtered.json()["tasks"]] == ["task-filter-1"]
 
 
 def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):
@@ -1765,3 +1904,21 @@ def test_create_conversation_idempotent_on_same_agent(monkeypatch, tmp_path: Pat
     assert conv1["conversation_id"] == conv2["conversation_id"]
     # Title should be updated by the second call
     assert conv2["title"] == "Updated title"
+
+
+def test_agent_status_endpoint_returns_typed_agent_status(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Status Bot", "status-bot")
+
+    response = client.get(
+        f"/v1/agents/{agent_id}/status",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["agent_id"] == agent_id
+    assert payload["workers"] == []
+    assert payload["active_conversations"] == 0
+    assert payload["recent_errors"] == 0

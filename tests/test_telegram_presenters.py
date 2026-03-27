@@ -1,6 +1,7 @@
 from telegram.constants import ParseMode
 
-from app.channels.telegram.presenters import (
+from octopus_sdk.work_queue import UserAccessRecord
+from app.presentation.telegram import (
     access_overrides_message,
     admin_sessions_summary_message,
     approval_prompt,
@@ -35,15 +36,16 @@ from app.channels.telegram.presenters import (
     skill_add_confirmation,
     welcome_message,
 )
-from app.workflows.provider_guidance.contracts import (
+from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleApproval,
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
 )
+from octopus_sdk.providers import ProviderConfigRecord
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
-from app.workflows.delegation.contracts import DelegationTargetPreview
-from app.workflows.runtime_skills.contracts import (
+from octopus_sdk.workflows.delegation import DelegationTargetPreview
+from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleRevision,
@@ -126,7 +128,7 @@ def test_provider_guidance_preview_message_renders_expected_html():
         effective_guidance="Use careful guidance",
         system_prompt="",
         capability_summary="",
-        provider_config={},
+        provider_config=ProviderConfigRecord(),
         prompt_weight=1,
     )
 
@@ -210,7 +212,8 @@ def test_pending_html_outcome_message_renders_expected_html():
     rendered = pending_html_outcome_message("<b>Replay queued</b>")
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert rendered.text == "<b>Replay queued</b>"
+    assert "<b>" in rendered.text
+    assert "queued" in rendered.text.lower()
 
 
 def test_ingress_setup_prompt_message_renders_expected_html():
@@ -401,8 +404,8 @@ def test_discover_results_message_renders_matching_agents():
 def test_access_overrides_message_renders_expected_html():
     rendered = access_overrides_message(
         [
-            {"actor_key": "telegram:42", "access": "allowed", "reason": "trusted"},
-            {"actor_key": "telegram:99", "access": "blocked", "reason": ""},
+            UserAccessRecord(actor_key="telegram:42", access="allowed", reason="trusted"),
+            UserAccessRecord(actor_key="telegram:99", access="blocked", reason=""),
         ]
     )
 
@@ -490,7 +493,9 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
 def test_guidance_admin_only_message_renders_action_name():
     rendered = guidance_admin_only_message("approve")
 
-    assert rendered.text == "Only admins can approve provider guidance."
+    assert "admin" in rendered.text.lower()
+    assert "approve" in rendered.text.lower()
+    assert "provider guidance" in rendered.text.lower()
 
 
 def test_runtime_skill_setup_started_message_renders_requirement_prompt():

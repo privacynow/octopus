@@ -1,6 +1,6 @@
 """Request flow — trust tiers, public enforcement, validation, credentials.
 
-Owner suite for (distinct contract from test_handlers):
+Owner suite for (distinct contract test_handlers):
 - Execution context, trust shaping, invalidation, stale detection, request-lifecycle contracts
 - Public trust tier enforcement in resolve_execution_context
 - is_public_user / is_allowed predicates
@@ -11,7 +11,7 @@ Owner suite for (distinct contract from test_handlers):
 - Approval/retry trust tier round-trips
 - validate_pending with stored trust tier
 - Credential satisfaction checks
-- extra_dirs_from_denials extraction
+- extra_dirs__denials extraction
 - Cross-feature: compact + long reply + public user
 - Export resolved skills (not raw session)
 
@@ -22,8 +22,8 @@ test_model_command_public_user_*, test_model_callback_public_user_*, test_projec
 Those tests assert user-visible command/callback behaviour; test_handlers owns that contract.
 This file keeps contract over execution context, trust shaping, validate_pending, and request lifecycle.
 
-Migrated from tests/test_invariants.py invariants 13–24 and related
-cross-feature checks, and tests/test_high_risk.py (extra_dirs_from_denials).
+Migrated tests/test_invariants.py invariants 13–24 and related
+cross-feature checks, and tests/test_high_risk.py (extra_dirs__denials).
 """
 
 import asyncio
@@ -31,11 +31,13 @@ import datetime
 import os
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from app.channels.telegram.session_io import (
+from app.runtime.telegram_session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
 )
@@ -45,8 +47,8 @@ from octopus_sdk.execution_context import (
     resolve_execution_context,
 )
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from octopus_sdk.providers import RunResult
-from octopus_sdk.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from octopus_sdk.providers import ProviderStateRecord, RunResult
+from octopus_sdk.request_flow import extra_dirs_from_denials as _extra_dirs__denials
 from octopus_sdk.execution import TransportIdentity, execute_request
 from app.runtime.work_admission import trust_tier_for_ref
 from app.skill_catalog_service import get_skill_catalog_service
@@ -61,7 +63,9 @@ from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
     current_bot_instance,
+    current_execution_message,
     current_execution_runtime,
+    current_transport_identity,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -135,7 +139,7 @@ _MODEL_PROFILES = {"fast": "haiku", "balanced": "sonnet", "best": "opus"}
 def test_public_trust_forces_inspect():
     """Public users must have file_policy forced to 'inspect'."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         file_policy="edit",
     )
     cfg = _make_config()
@@ -146,7 +150,7 @@ def test_public_trust_forces_inspect():
 def test_public_trust_forces_public_working_dir():
     """Public users must use BOT_PUBLIC_WORKING_DIR."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(public_working_dir="/srv/public")
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -156,7 +160,7 @@ def test_public_trust_forces_public_working_dir():
 def test_public_trust_strips_extra_dirs():
     """Public users must have no extra_dirs."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(extra_dirs=(Path("/opt/private"),))
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -166,7 +170,7 @@ def test_public_trust_strips_extra_dirs():
 def test_public_trust_strips_skills():
     """Public users must have no active skills."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         active_skills=["code-review"],
     )
     cfg = _make_config()
@@ -179,7 +183,7 @@ def test_trusted_context_filters_unresolvable_skills():
     with fresh_env() as (_data_dir, cfg, _prov):
         session = SessionState(
             provider="claude",
-            provider_state={},
+            provider_state=ProviderStateRecord(),
             approval_mode="off",
             active_skills=["code-review", "missing-skill", "code-review"],
         )
@@ -197,7 +201,7 @@ def test_public_trust_strips_project():
     """Public users must have no project binding."""
     project_dir = tempfile.mkdtemp()
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         project_id="frontend",
     )
     cfg = _make_config(projects=(("frontend", project_dir, ()),))
@@ -211,7 +215,7 @@ def test_public_trust_restricts_model_profiles():
     from octopus_sdk.execution_context import resolve_effective_model
 
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
         model_profile="best",
     )
     cfg = _make_config(
@@ -226,7 +230,7 @@ def test_public_trust_restricts_model_profiles():
 def test_public_vs_trusted_different_context_hash():
     """Same session must produce different context hash for public vs trusted."""
     session = SessionState(
-        provider="claude", provider_state={}, approval_mode="off",
+        provider="claude", provider_state=ProviderStateRecord(), approval_mode="off",
     )
     cfg = _make_config(public_working_dir="/srv/public")
     hash_trusted = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
@@ -240,7 +244,7 @@ def test_public_vs_trusted_different_context_hash():
 
 def test_is_public_user_open_with_allowed_list():
     """User not in allowed list + allow_open=True -> public."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -257,7 +261,7 @@ def test_is_public_user_open_with_allowed_list():
 
 def test_is_public_user_open_no_allowed_list():
     """allow_open=True with no allowed list -> everyone is public."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, allow_open=True,
@@ -270,7 +274,7 @@ def test_is_public_user_open_no_allowed_list():
 
 def test_is_public_user_closed():
     """allow_open=False -> no one is public (they wouldn't pass is_allowed)."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -301,9 +305,9 @@ _GATED_COMMANDS = [
 
 @pytest.mark.parametrize("cmd_name,args", _GATED_COMMANDS,
                          ids=[c[0] for c in _GATED_COMMANDS])
-async def test_public_user_blocked_from_restricted_command(cmd_name, args):
-    """Public users get a denial message from restricted commands."""
-    import app.channels.telegram.ingress as th
+async def test_public_user_blocked__restricted_command(cmd_name, args):
+    """Public users get a denial message restricted commands."""
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -322,9 +326,9 @@ async def test_public_user_blocked_from_restricted_command(cmd_name, args):
         assert "not available in public mode" in reply
 
 
-async def test_trusted_user_not_blocked_from_restricted_command():
+async def test_trusted_user_not_blocked__restricted_command():
     """Trusted users can invoke restricted commands normally."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=7002)
@@ -348,7 +352,7 @@ def test_public_user_cannot_escalate_to_restricted_model():
         default_model_profile="balanced",
         public_model_profiles=frozenset({"fast", "balanced"}),
     )
-    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
     session.model_profile = "best"  # attempt escalation
     model = resolve_effective_model(session, cfg, trust_tier="public")
     # Should NOT get claude-opus-4-6
@@ -364,7 +368,7 @@ def test_inspect_policy_survives_model_change():
         default_model_profile="fast",
         public_working_dir="/tmp/pub",
     )
-    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
     session.model_profile = "best"
 
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -379,7 +383,7 @@ def test_compact_mode_works_for_public_users():
         default_model_profile="fast",
         public_working_dir="/tmp/pub",
     )
-    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
     session.compact_mode = True
 
     ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -396,7 +400,7 @@ def test_compact_mode_works_for_public_users():
 def test_public_mode_applies_default_rate_limits():
     """build_application should apply conservative rate-limit defaults when
     allow_open=True and no explicit limits are set."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -418,7 +422,7 @@ def test_public_mode_applies_default_rate_limits():
 
 def test_explicit_rate_limits_not_overridden():
     """When operator sets explicit rate limits, they should not be overridden."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -444,7 +448,7 @@ def test_explicit_rate_limits_not_overridden():
 @pytest.mark.asyncio
 async def test_is_allowed_mixed_mode_admits_stranger():
     """Stranger admitted when allow_open + allow-lists both set."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -462,7 +466,7 @@ async def test_is_allowed_mixed_mode_admits_stranger():
 @pytest.mark.asyncio
 async def test_is_allowed_closed_mode_rejects_stranger():
     """Stranger rejected when allow_open=False, even with allow-lists."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -482,7 +486,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 @pytest.mark.asyncio
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
-    import app.channels.telegram.execution as telegram_execution
+    import app.runtime.telegram_execution as telegram_execution
     from octopus_sdk.execution import execute_request
 
     with fresh_env(config_overrides={
@@ -508,13 +512,14 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
+        execution_message = current_execution_message(msg)
         await execute_request(
-            current_execution_runtime().build_transport_identity(
-                msg,
+            current_transport_identity(
+                execution_message,
                 chat.id,
                 actor_key=telegram_actor_key(999),
             ),
-            "test prompt", [], msg,
+            "test prompt", [], execution_message,
             trust_tier="public",
             runtime=current_execution_runtime(),
         )
@@ -529,7 +534,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 @pytest.mark.asyncio
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
-    import app.channels.telegram.execution as telegram_execution
+    import app.runtime.telegram_execution as telegram_execution
     from octopus_sdk.execution import execute_request
 
     with fresh_env(config_overrides={
@@ -551,13 +556,14 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
+        execution_message = current_execution_message(msg)
         await execute_request(
-            current_execution_runtime().build_transport_identity(
-                msg,
+            current_transport_identity(
+                execution_message,
                 chat.id,
                 actor_key=telegram_actor_key(42),
             ),
-            "test prompt", [], msg,
+            "test prompt", [], execution_message,
             trust_tier="trusted",
             runtime=current_execution_runtime(),
         )
@@ -572,42 +578,32 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_user_message():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="resume")
+        message = current_execution_message(FakeMessage(chat=chat, text="resume"))
         base_runtime = current_execution_runtime()
         sink = _RecordingEventSink()
+        services = replace(base_runtime.services, conversation_projection=object())
         runtime = base_runtime.__class__(
             dispatch=base_runtime.dispatch,
-            services=base_runtime.services,
+            services=services,
             interrupted_exc=base_runtime.interrupted_exc,
-            build_transport_identity=base_runtime.build_transport_identity,
-            build_event_sink=lambda _transport: sink,
-            render_provider_error=base_runtime.render_provider_error,
-            show_foreign_setup=base_runtime.show_foreign_setup,
-            show_setup_prompt=base_runtime.show_setup_prompt,
-            send_retry_prompt=base_runtime.send_retry_prompt,
-            send_approval_prompt=base_runtime.send_approval_prompt,
-            send_formatted_reply=base_runtime.send_formatted_reply,
-            send_directed_artifacts=base_runtime.send_directed_artifacts,
-            send_compact_reply=base_runtime.send_compact_reply,
-            propose_delegation_plan=base_runtime.propose_delegation_plan,
-            delegation_parser=base_runtime.delegation_parser,
-            agent_directory=base_runtime.agent_directory,
         )
-
-        outcome = await execute_request(
-            TransportIdentity(
-                conversation_key=telegram_conversation_key(chat.id),
-                origin_channel="registry",
-                external_conversation_ref="registry-conv-1",
-                conversation_ref="registry:default:conversation:registry-conv-1",
-                target_agent_id="agent-1",
-                actor="reg:delegation-resume:child-task-1",
-            ),
-            "Synthetic resume prompt",
-            [],
-            message,
-            runtime=runtime,
-        )
+        with patch("octopus_sdk.event_sink.build_event_sink_for_context", return_value=sink):
+            outcome = await execute_request(
+                TransportIdentity(
+                    conversation_key=telegram_conversation_key(chat.id),
+                    origin_channel="registry",
+                    actor="reg:delegation-resume:child-task-1",
+                    external_conversation_ref="registry-conv-1",
+                    target_agent_id="agent-1",
+                    conversation_ref="registry:default:conversation:registry-conv-1",
+                    routed_task_id="",
+                    authority_ref="",
+                ),
+                "Synthetic resume prompt",
+                [],
+                message,
+                runtime=runtime,
+            )
 
         assert outcome is not None
         assert outcome.status == "completed"
@@ -618,7 +614,7 @@ async def test_execute_request_does_not_publish_synthetic_delegation_resume_as_u
 @pytest.mark.asyncio
 async def test_handle_message_public_user_threads_trust_tier():
     """Full handle_message path for a public user passes trust_tier through."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -628,7 +624,7 @@ async def test_handle_message_public_user_threads_trust_tier():
         chat = FakeChat(12345)
         stranger = FakeUser(uid=999, username="nobody")
 
-        msg = await send_text(chat, stranger, "hello from public user")
+        msg = await send_text(chat, stranger, "hello public user")
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
@@ -640,7 +636,7 @@ async def test_handle_message_public_user_threads_trust_tier():
 @pytest.mark.asyncio
 async def test_handle_message_trusted_user_not_forced_inspect():
     """Full handle_message path for a trusted user does NOT force inspect."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -650,12 +646,12 @@ async def test_handle_message_trusted_user_not_forced_inspect():
         chat = FakeChat(12345)
         trusted = FakeUser(uid=42, username="trustedguy")
 
-        msg = await send_text(chat, trusted, "hello from trusted user")
+        msg = await send_text(chat, trusted, "hello trusted user")
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
-        # Trusted user gets default file_policy from session (empty = edit)
+        # Trusted user gets default file_policy session (empty = edit)
         assert ctx.file_policy != "inspect"
         assert ctx.working_dir != "/tmp/public-sandbox"
 
@@ -674,7 +670,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
     )
     assert pending.trust_tier == "public"
 
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
     session.pending_approval = pending
     d = session_to_dict(session)
     restored = session_from_dict(d)
@@ -695,7 +691,7 @@ async def test_pending_retry_preserves_trust_tier():
     )
     assert pending.trust_tier == "public"
 
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
     session.pending_retry = pending
     d = session_to_dict(session)
     restored = session_from_dict(d)
@@ -715,7 +711,7 @@ def test_validate_pending_respects_stored_trust_tier():
         public_working_dir="/tmp/public",
         timeout_seconds=3600,
     )
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
 
     # Compute the public context hash
     public_ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
@@ -746,7 +742,7 @@ def test_validate_pending_detects_real_context_change():
     from octopus_sdk.request_flow import validate_pending
 
     cfg = _make_config(timeout_seconds=3600)
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
 
     pending = PendingApproval(
         actor_key=telegram_actor_key(42),
@@ -767,7 +763,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
     from octopus_sdk.request_flow import classify_pending_validation
 
     cfg = _make_config(timeout_seconds=3600)
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
     current_hash = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
 
     # ok: fresh, matching context
@@ -812,7 +808,7 @@ def test_classify_pending_validation_accepts_iso_created_at():
     from octopus_sdk.request_flow import classify_pending_validation
 
     cfg = _make_config(timeout_seconds=3600)
-    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="on")
     current_hash = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
     stale_iso = (
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
@@ -842,7 +838,7 @@ def test_credential_check_uses_resolved_skills_not_session():
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
-        session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+        session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
         # Session has skills, but resolved list is empty (public user)
         session.active_skills = ["github-integration"]
         init_credential_store_for_config(make_config(data_dir=data_dir))
@@ -863,7 +859,7 @@ def test_credential_check_with_resolved_skills():
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
-        session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+        session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
         init_credential_store_for_config(make_config(data_dir=data_dir))
 
         # Use a fake skill name — check_credentials returns [] for unknown skills
@@ -877,50 +873,50 @@ def test_credential_check_with_resolved_skills():
 
 
 # =====================================================================
-# extra_dirs_from_denials extraction
-# (migrated from tests/test_high_risk.py)
+# extra_dirs__denials extraction
+# (migrated tests/test_high_risk.py)
 # =====================================================================
 
-def test_extra_dirs_from_denials_empty():
-    assert _extra_dirs_from_denials([]) == []
+def test_extra_dirs__denials_empty():
+    assert _extra_dirs__denials([]) == []
 
 
-def test_extra_dirs_from_denials_file_path():
+def test_extra_dirs__denials_file_path():
     denials_file = [{"tool_name": "Write", "tool_input": {"file_path": "/home/user/project/foo.py"}}]
-    dirs = _extra_dirs_from_denials(denials_file)
+    dirs = _extra_dirs__denials(denials_file)
     assert "/home/user/project" in dirs
     assert "/home/user" not in dirs
 
 
-def test_extra_dirs_from_denials_directory():
+def test_extra_dirs__denials_directory():
     denials_dir = [{"tool_name": "Glob", "tool_input": {"directory": "/home/tinker/private"}}]
-    dirs_dir = _extra_dirs_from_denials(denials_dir)
+    dirs_dir = _extra_dirs__denials(denials_dir)
     assert "/home/tinker/private" in dirs_dir
     assert "/home/tinker" not in dirs_dir
 
 
-def test_extra_dirs_from_denials_command():
+def test_extra_dirs__denials_command():
     denials_cmd = [{"tool_name": "Bash", "tool_input": {"command": "ls -la"}}]
-    dirs_cmd = _extra_dirs_from_denials(denials_cmd)
+    dirs_cmd = _extra_dirs__denials(denials_cmd)
     assert "/" in dirs_cmd
 
 
-def test_extra_dirs_from_denials_multiple():
+def test_extra_dirs__denials_multiple():
     denials_multi = [
         {"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}},
         {"tool_name": "Read", "tool_input": {"path": "/var/log/syslog"}},
     ]
-    dirs_multi = _extra_dirs_from_denials(denials_multi)
+    dirs_multi = _extra_dirs__denials(denials_multi)
     assert "/etc" in dirs_multi
     assert "/var/log" in dirs_multi
 
 
-def test_extra_dirs_from_denials_mixed():
+def test_extra_dirs__denials_mixed():
     denials_mixed = [
         {"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}},
         {"tool_name": "Glob", "tool_input": {"directory": "/opt/data"}},
     ]
-    dirs_mixed = _extra_dirs_from_denials(denials_mixed)
+    dirs_mixed = _extra_dirs__denials(denials_mixed)
     assert "/opt/app" in dirs_mixed
     assert "/opt/data" in dirs_mixed
     assert "/opt" not in dirs_mixed
@@ -933,7 +929,7 @@ def test_extra_dirs_from_denials_mixed():
 @pytest.mark.asyncio
 async def test_compact_long_reply_public_user():
     """Public user + compact mode + long response -> blockquote/expand, inspect enforced."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -972,9 +968,9 @@ async def test_compact_long_reply_public_user():
 @pytest.mark.asyncio
 async def test_export_uses_resolved_skills_not_raw_session():
     """/export header shows resolved skills, not raw session.active_skills."""
-    import app.channels.telegram.execution as telegram_execution
-    import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import normalize_user
+    import app.runtime.telegram_execution as telegram_execution
+    import app.runtime.telegram_ingress as th
+    from app.runtime.telegram_normalization import normalize_user
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -996,7 +992,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
             telegram_conversation_ref(current_runtime().config, chat.id),
             normalize_user(public_user),
             config=current_runtime().config,
-            dispatcher=current_runtime().channel_dispatcher,
+            dispatcher=current_runtime().transport_dispatcher,
         )
         resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (

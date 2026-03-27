@@ -50,7 +50,7 @@ def control_plane_store():
 
 
 def init(config: BotConfig) -> None:
-    """Select and initialize the session and transport backend from config. Call once at startup."""
+    """Select and initialize the session and transport backend config. Call once at startup."""
     global _backend
     if config.database_url:
         from app.control_plane.postgres_impl import PostgresControlPlaneStore

@@ -11,15 +11,21 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.recovery.transport_contract import (
+from octopus_sdk.work_queue import (
+    QueueSnapshot,
+    UsageRecord,
+    UserAccessRecord,
+    WorkItemRecord,
+    WorkerHeartbeat,
+)
+from octopus_sdk.work_queue import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
 )
-from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
 from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,
@@ -181,7 +187,7 @@ def _create_new_transport_db(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 2 to 3: add dispatch_mode to work_items."""
+    """Migrate transport DB schema version 2 to 3: add dispatch_mode to work_items."""
     try:
         conn.execute(
             "ALTER TABLE work_items ADD COLUMN dispatch_mode TEXT NOT NULL DEFAULT 'fresh'"
@@ -192,7 +198,7 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 3 to 4: add usage_log table."""
+    """Migrate transport DB schema version 3 to 4: add usage_log table."""
     _execute_sql_script(
         conn,
         """
@@ -213,7 +219,7 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 4 to 5: add user_access table."""
+    """Migrate transport DB schema version 4 to 5: add user_access table."""
     _execute_sql_script(
         conn,
         """
@@ -229,7 +235,7 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 5 to 6: channel-neutral text identities."""
+    """Migrate transport DB schema version 5 to 6: channel-neutral text identities."""
     _execute_sql_script(
         conn,
         """
@@ -334,7 +340,7 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 6 to 7: durable cancel metadata."""
+    """Migrate transport DB schema version 6 to 7: durable cancel metadata."""
     _execute_sql_script(
         conn,
         """
@@ -346,7 +352,7 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 7 to 8: durable worker heartbeats."""
+    """Migrate transport DB schema version 7 to 8: durable worker heartbeats."""
     _execute_sql_script(
         conn,
         """
@@ -871,14 +877,14 @@ def update_payload(conn: sqlite3.Connection, event_id: str, payload: str) -> Non
 
 def claim_for_update(
     conn: sqlite3.Connection, conversation_key: str, event_id: str, worker_id: str
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
         if row is None:
             return None
         if row["state"] == "claimed" and row.get("worker_id") == worker_id:
-            return row
+            return WorkItemRecord.from_mapping(row)
         if row["state"] != "queued":
             return None
         has_other_claimed = conn.execute(
@@ -902,12 +908,12 @@ def claim_for_update(
             u = dict(u)
             out["kind"] = u["kind"]
             out["payload"] = u["payload"]
-        return out
+        return None if out is None else WorkItemRecord.from_mapping(out)
 
 
 def claim_next(
     conn: sqlite3.Connection, conversation_key: str, worker_id: str
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         row = conn.execute(
@@ -929,10 +935,10 @@ def claim_next(
             has_other_claimed_for_chat=False,
             event_name="claim_worker",
         )
-        return out
+        return None if out is None else WorkItemRecord.from_mapping(out)
 
 
-def claim_next_any(conn: sqlite3.Connection, worker_id: str) -> dict[str, Any] | None:
+def claim_next_any(conn: sqlite3.Connection, worker_id: str) -> WorkItemRecord | None:
     with _write_tx(conn):
         row = conn.execute(
             "SELECT id, conversation_key FROM work_items "
@@ -1159,7 +1165,7 @@ def is_cancel_requested(conn: sqlite3.Connection, item_id: str) -> bool:
     return bool(row and row["cancel_requested_at"])
 
 
-def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> list[dict[str, Any]]:
+def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> list[WorkItemRecord]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     rows = conn.execute(
         "SELECT w.id, w.event_id, w.state, w.error, w.dispatch_mode, u.kind "
@@ -1167,7 +1173,7 @@ def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> 
         "WHERE w.conversation_key = ? ORDER BY w.created_at ASC",
         (conversation_key,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [WorkItemRecord.from_mapping(dict(r)) for r in rows]
 
 
 def get_queue_snapshot(conn: sqlite3.Connection) -> QueueSnapshot:
@@ -1301,16 +1307,16 @@ def mark_pending_recovery(conn: sqlite3.Connection, item_id: str) -> None:
 
 def get_pending_recovery_for_update(
     conn: sqlite3.Connection, conversation_key: str, event_id: str
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
     if row is None or row["state"] != "pending_recovery":
         return None
-    return row
+    return WorkItemRecord.from_mapping(row)
 
 
 def get_latest_pending_recovery(
     conn: sqlite3.Connection, conversation_key: str
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     rows = conn.execute(
         "SELECT w.*, u.kind, u.payload FROM work_items w "
@@ -1322,7 +1328,7 @@ def get_latest_pending_recovery(
         r = dict(row)
         _validate_work_item_row(r, r["id"])
         if r["state"] == "pending_recovery":
-            return r
+            return WorkItemRecord.from_mapping(r)
     return None
 
 
@@ -1387,7 +1393,7 @@ def reclaim_for_replay(
     worker_id: str,
     *,
     ignore_claimed_item_id: str = "",
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
@@ -1426,14 +1432,14 @@ def reclaim_for_replay(
             return None
         r = dict(full)
         _validate_work_item_row(r, item_id)
-        return r
+        return WorkItemRecord.from_mapping(r)
 
 
 def recover_stale_claims(
-    conn: sqlite3.Connection, current_worker_id: str, max_age_seconds: int = 300
+    conn: sqlite3.Connection, lease_ttl_seconds: int = 300
 ) -> int:
     now = datetime.now(timezone.utc)
-    stale_before = (now - timedelta(seconds=max_age_seconds)).isoformat()
+    stale_before = (now - timedelta(seconds=lease_ttl_seconds)).isoformat()
     with _write_tx(conn):
         rows = conn.execute(
             "SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
@@ -1488,8 +1494,8 @@ def recover_stale_claims(
         return requeued
 
 
-def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
-    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+def purge_old(conn: sqlite3.Connection, older_than_seconds: int = 7 * 24 * 3600) -> int:
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat()
     with _write_tx(conn):
         cursor = conn.execute(
             "DELETE FROM work_items WHERE state IN ('done', 'failed', 'pending_recovery') AND created_at < ?",
@@ -1507,8 +1513,8 @@ def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
         return deleted_items
 
 
-def purge_old_usage(conn: sqlite3.Connection, older_than_hours: int = 168) -> int:
-    cutoff_epoch = time.time() - (older_than_hours * 3600)
+def purge_old_usage(conn: sqlite3.Connection, older_than_seconds: int = 30 * 24 * 3600) -> int:
+    cutoff_epoch = time.time() - older_than_seconds
     with _write_tx(conn):
         cursor = conn.execute(
             "DELETE FROM usage_log WHERE recorded_at < ?",
@@ -1548,16 +1554,13 @@ def set_user_access(
     conn.commit()
 
 
-def list_user_access(conn: sqlite3.Connection) -> list[dict]:
+def list_user_access(conn: sqlite3.Connection) -> list[UserAccessRecord]:
     """Return all user access overrides ordered by most recent grant first."""
     rows = conn.execute(
         "SELECT actor_key, access, reason, granted_by, granted_at "
         "FROM user_access ORDER BY granted_at DESC"
     ).fetchall()
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        results.append(dict(row))
-    return results
+    return [UserAccessRecord.from_mapping(dict(row)) for row in rows]
 
 
 def record_usage(
@@ -1590,7 +1593,7 @@ def record_usage(
 
 def get_usage_since(
     conn: sqlite3.Connection, *, since_epoch: float,
-) -> list[dict]:
+) -> list[UsageRecord]:
     rows = conn.execute(
         """SELECT
                conversation_key, work_item_id, provider, prompt_tokens,
@@ -1600,4 +1603,4 @@ def get_usage_since(
            ORDER BY recorded_at""",
         (since_epoch,),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [UsageRecord.from_mapping(dict(row)) for row in rows]

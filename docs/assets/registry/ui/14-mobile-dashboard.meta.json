@@ -1,0 +1,29 @@
+{
+  "rects": [
+    {
+      "x": 6,
+      "y": 6,
+      "width": 56,
+      "height": 56,
+      "label": "Sidebar drawer trigger on mobile",
+      "color": "#ff9800"
+    },
+    {
+      "x": 8,
+      "y": 102.03125,
+      "width": 527.0625,
+      "height": 480,
+      "label": "Summary cards collapse into a single vertical rail",
+      "color": "#2196f3"
+    },
+    {
+      "x": 8,
+      "y": 594.03125,
+      "width": 527.0625,
+      "height": 1771.40625,
+      "label": "Attention sections stack into one reading column",
+      "color": "#4caf50"
+    }
+  ],
+  "arrows": []
+}

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.skill_types import SkillRequirement
+from octopus_sdk.skill_types import SkillRequirement
 
 
 log = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ _DEFAULT_ALLOWED_VALIDATION_HOSTS = (
 
 def credential_validation_target_host(req: SkillRequirement) -> str:
     """Return the configured validation host for *req*, or an empty string."""
-    validate = req.validate if isinstance(req.validate, dict) else None
+    validate = req.validate
     if not validate:
         return ""
     url = str(validate.get("url", "")).strip()
@@ -188,5 +188,5 @@ def _friendly_validation_error(got: int, expected: int) -> str:
     elif 500 <= got < 600:
         hint = "The service is temporarily unavailable. Try again in a few minutes."
     else:
-        hint = "Unexpected response from the service."
+        hint = "Unexpected response the service."
     return f"{hint} (HTTP {got}, expected {expected})"

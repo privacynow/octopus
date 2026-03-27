@@ -1,66 +1,34 @@
 /**
- * Dashboard — action-first registry overview.
+ * Dashboard — dense operator overview with immediate follow-up paths.
  */
 function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
 
-    const header = document.createElement('div');
-    header.className = 'page-header page-header-hero';
-    header.innerHTML = '<h2>Registry</h2><p>Start with what needs a decision, then check health and ongoing conversations.</p>';
+    const header = document.createElement('header');
+    header.className = 'page-header page-header-compact';
+    header.innerHTML = '<h2>Dashboard</h2>';
     container.appendChild(header);
 
     const content = document.createElement('div');
     content.className = 'dashboard-shell';
     container.appendChild(content);
 
-    function pickPrimaryAction(summary) {
-        if ((summary.conversations?.pending_approvals || 0) > 0) {
-            return ['/ui/approvals', 'Review approvals', 'Work is waiting for a decision.'];
-        }
-        if ((summary.agents?.degraded || 0) > 0 || (summary.agents?.disconnected || 0) > 0) {
-            return ['/ui/agents', 'Check agent health', 'Some agents need attention.'];
-        }
-        if ((summary.tasks?.failed_24h || 0) > 0) {
-            return ['/ui/tasks', 'Review failed work', 'A delegated task needs follow-up.'];
-        }
-        return ['/ui/conversations', 'Open conversations', 'See what is active and reply where needed.'];
-    }
-
-    function createAttentionCard({ title, value, detail, href, cta, tone = '' }) {
-        const card = document.createElement('section');
-        card.className = `card attention-card${tone ? ' attention-card-' + tone : ''}`;
-
-        const valueEl = document.createElement('div');
-        valueEl.className = 'attention-value';
-        valueEl.textContent = String(value);
-        card.appendChild(valueEl);
-
-        const titleEl = document.createElement('div');
-        titleEl.className = 'attention-title';
-        titleEl.textContent = title;
-        card.appendChild(titleEl);
-
-        const detailEl = document.createElement('p');
-        detailEl.className = 'attention-detail';
-        detailEl.textContent = detail;
-        card.appendChild(detailEl);
-
-        const link = document.createElement('a');
-        link.href = href;
-        link.className = 'btn btn-primary';
-        link.textContent = cta;
-        card.appendChild(link);
-        return card;
-    }
-
-    function createPreviewList(title, subtitle, emptyText, items, href) {
+    function createSection(key, title, href, rows, emptyText) {
         const section = document.createElement('section');
-        section.className = 'card dashboard-section';
+        section.className = 'workspace-section';
+        section.dataset.key = key;
 
         const head = document.createElement('div');
-        head.className = 'dashboard-section-header';
-        head.innerHTML = `<div><strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span></div>`;
-        if (href) {
+        head.className = 'section-header';
+        const titleEl = document.createElement('strong');
+        titleEl.textContent = title;
+        head.appendChild(titleEl);
+        if (href && rows.length) {
             const link = document.createElement('a');
             link.href = href;
             link.className = 'section-link';
@@ -69,201 +37,224 @@ function renderDashboard(container) {
         }
         section.appendChild(head);
 
-        if (!items.length) {
-            const empty = document.createElement('div');
-            empty.className = 'empty-state empty-state-compact';
-            empty.textContent = emptyText;
-            section.appendChild(empty);
-            return section;
-        }
-
-        const list = document.createElement('div');
-        list.className = 'preview-list';
-        items.forEach((item) => list.appendChild(item));
-        section.appendChild(list);
+        const body = document.createElement('div');
+        body.className = 'list-container';
+        UI.reconcileChildren(body, rows.length ? rows : [UI.renderEmptyState(emptyText, true)]);
+        section.appendChild(body);
         return section;
     }
 
-    function createPreviewRow({ title, subtitle, badge, href, badgeClass = '' }) {
-        const row = document.createElement('a');
-        row.href = href;
-        row.className = 'preview-row';
-
-        const text = document.createElement('div');
-        text.className = 'preview-row-text';
-        text.innerHTML = `<strong>${UI.esc(title)}</strong><span>${UI.esc(subtitle)}</span>`;
-        row.appendChild(text);
-
-        if (badge) {
-            const badgeEl = document.createElement('span');
-            badgeEl.className = badgeClass || 'badge';
-            badgeEl.textContent = badge;
-            row.appendChild(badgeEl);
-        }
+    function createRow({ key, title, subtitle, badge, badgeClass = '', href }) {
+        const row = UI.renderListRow({
+            href,
+            label: title,
+            sublabel: subtitle,
+            badgeText: badge,
+            badgeClass,
+        });
+        if (key) row.dataset.key = key;
         return row;
     }
 
-    function renderDashboardView(summary, approvalsData, conversationsData, failedTasksData) {
-        content.textContent = '';
-        const primaryAction = pickPrimaryAction(summary);
+    function buildNeedsAttention(summary, approvalsData, tasksData, agentsData) {
+        const rows = [];
+        (approvalsData.approvals || []).slice(0, 3).forEach((item) => {
+            rows.push(createRow({
+                key: `approval:${item.request_id || item.conversation_id}`,
+                title: item.conversation_title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Approval waiting',
+                subtitle: [
+                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
+                    item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
+                ].filter(Boolean).join(' · '),
+                badge: 'Approval',
+                badgeClass: 'badge-queued',
+                href: '/ui/approvals',
+            }));
+        });
+        (tasksData.tasks || []).slice(0, 3).forEach((item) => {
+            rows.push(createRow({
+                key: `task:${item.routed_task_id}`,
+                title: item.title || 'Task needs follow-up',
+                subtitle: [
+                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
+                    UI.relativeTime(item.updated_at || item.created_at),
+                ].filter(Boolean).join(' · '),
+                badge: item.status || 'failed',
+                badgeClass: 'badge-' + (item.status || 'failed'),
+                href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
+            }));
+        });
+        const riskyAgents = (agentsData.agents || agentsData || []).filter((agent) => ['degraded', 'disconnected', 'offline'].includes(agent.connectivity_state || ''));
+        riskyAgents.slice(0, 2).forEach((item) => {
+            rows.push(createRow({
+                key: `agent:${item.agent_id}`,
+                title: item.display_name || item.slug || 'Agent',
+                subtitle: [
+                    item.role || 'agent',
+                    item.provider || '',
+                    item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
+                ].filter(Boolean).join(' · '),
+                badge: item.connectivity_state || 'connected',
+                badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
+                href: '/ui/agents/' + item.agent_id,
+            }));
+        });
 
-        const lead = document.createElement('section');
-        lead.className = 'card dashboard-lead';
-        lead.innerHTML = `
-            <div class="dashboard-lead-copy">
-                <span class="eyebrow">Operator workspace</span>
-                <h3>Start with the next decision, not the raw telemetry.</h3>
-                <p>The registry keeps the system state underneath, but your first job here is to review blockers, monitor health, and keep conversations moving.</p>
-            </div>
-        `;
-        const leadActions = document.createElement('div');
-        leadActions.className = 'dashboard-lead-actions';
-        const primary = document.createElement('a');
-        primary.href = primaryAction[0];
-        primary.className = 'btn btn-primary';
-        primary.textContent = primaryAction[1];
-        const secondary = document.createElement('div');
-        secondary.className = 'dashboard-lead-note';
-        secondary.textContent = primaryAction[2];
-        leadActions.appendChild(primary);
-        leadActions.appendChild(secondary);
-        lead.appendChild(leadActions);
-        content.appendChild(lead);
+        return rows.slice(0, 6);
+    }
 
-        const attentionGrid = document.createElement('div');
-        attentionGrid.className = 'attention-grid';
-        attentionGrid.appendChild(createAttentionCard({
-            title: 'Pending approvals',
-            value: summary.conversations?.pending_approvals || 0,
-            detail: 'Requests waiting for a decision before work can continue.',
-            href: '/ui/approvals',
-            cta: 'Review now',
-            tone: 'warm',
-        }));
-        attentionGrid.appendChild(createAttentionCard({
-            title: 'Agent health',
-            value: (summary.agents?.degraded || 0) + (summary.agents?.disconnected || 0),
-            detail: `${summary.agents?.degraded || 0} degraded · ${summary.agents?.disconnected || 0} offline`,
-            href: '/ui/agents',
-            cta: 'Inspect agents',
-            tone: (summary.agents?.degraded || 0) + (summary.agents?.disconnected || 0) > 0 ? 'danger' : 'calm',
-        }));
-        attentionGrid.appendChild(createAttentionCard({
-            title: 'Failed work',
-            value: summary.tasks?.failed_24h || 0,
-            detail: `${summary.tasks?.running || 0} running · ${summary.tasks?.pending || 0} queued or submitted`,
-            href: '/ui/tasks',
-            cta: 'Open tasks',
-            tone: (summary.tasks?.failed_24h || 0) > 0 ? 'danger' : 'calm',
-        }));
-        content.appendChild(attentionGrid);
+    function renderDashboardView(summary, approvalsData, conversationsData, tasksData, agentsData) {
+        const shell = document.createElement('div');
+        shell.className = 'dashboard-grid';
+        shell.dataset.key = 'dashboard-grid';
 
-        const healthGrid = document.createElement('div');
-        healthGrid.className = 'stat-grid stat-grid-hero stat-grid-simple';
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.agents?.connected || 0),
-            label: 'Connected agents',
-            detail: `${summary.agents?.total || 0} enrolled`,
-            href: '/ui/agents?state=connected',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.conversations?.active || 0),
-            label: 'Open conversations',
-            detail: `${summary.conversations?.total || 0} total`,
-            href: '/ui/conversations?status=open',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: String(summary.tasks?.running || 0),
-            label: 'Running tasks',
-            detail: `${summary.tasks?.pending || 0} pending`,
-            href: '/ui/tasks?status=running',
-        }));
-        healthGrid.appendChild(UI.renderStatCard({
-            value: `$${Number(summary.usage_24h?.cost_usd || 0).toFixed(2)}`,
-            label: '24h cost',
-            detail: `${Number(summary.usage_24h?.prompt_tokens || 0).toLocaleString()} prompt tokens`,
-            href: '/ui/usage',
-        }));
-        content.appendChild(healthGrid);
+        const summaryRail = document.createElement('section');
+        summaryRail.className = 'summary-rail';
+        summaryRail.dataset.key = 'summary-rail';
+        [
+            {
+                key: 'open-conversations',
+                value: String(summary.conversations?.open || 0),
+                label: 'Open conversations',
+                detail: `${summary.conversations?.pending_approvals || 0} waiting on review`,
+                href: '/ui/conversations?status=open',
+            },
+            {
+                key: 'running-tasks',
+                value: String(summary.tasks?.running || 0),
+                label: 'Running tasks',
+                detail: `${summary.tasks?.pending || 0} pending`,
+                href: '/ui/tasks?status=running',
+            },
+            {
+                key: 'needs-follow-up',
+                value: String(summary.tasks?.failed_24h || 0),
+                label: 'Needs follow-up',
+                detail: 'failed in the last day',
+                href: '/ui/tasks?status=failed',
+            },
+            {
+                key: 'connected-agents',
+                value: String(summary.agents?.connected || 0),
+                label: 'Connected agents',
+                detail: `${(summary.agents?.degraded || 0) + (summary.agents?.disconnected || 0)} unhealthy`,
+                href: '/ui/agents',
+            },
+        ].forEach((item) => {
+            const card = UI.renderStatCard(item);
+            card.dataset.key = item.key;
+            summaryRail.appendChild(card);
+        });
+        shell.appendChild(summaryRail);
 
-        const lowerGrid = document.createElement('div');
-        lowerGrid.className = 'dashboard-grid dashboard-grid-wide';
+        const workGrid = document.createElement('div');
+        workGrid.className = 'dashboard-work-grid';
+        workGrid.dataset.key = 'work-grid';
 
-        const approvalRows = (approvalsData.approvals || []).map((item) => createPreviewRow({
-            title: item.conversation_title || item.conversation_id,
+        const needsAttentionRows = buildNeedsAttention(summary, approvalsData, tasksData, agentsData);
+        if (needsAttentionRows.length) {
+            workGrid.appendChild(createSection(
+                'needs-attention',
+                'Needs attention',
+                '/ui/approvals',
+                needsAttentionRows,
+                'Nothing urgent right now.',
+            ));
+        }
+
+        const conversationRows = (conversationsData.conversations || []).slice(0, 6).map((item) => createRow({
+            key: item.conversation_id,
+            title: item.title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Conversation',
             subtitle: [
-                item.target_display_name || item.target_agent_id || 'agent',
-                item.request_kind || 'approval request',
-                item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
-            ].filter(Boolean).join(' · '),
-            badge: 'Review',
-            badgeClass: 'badge badge-queued',
-            href: '/ui/approvals',
-        }));
-        lowerGrid.appendChild(createPreviewList(
-            'Ready for review',
-            'Decisions that are currently blocking work.',
-            'Nothing is waiting for approval.',
-            approvalRows,
-            '/ui/approvals',
-        ));
-
-        const conversationRows = (conversationsData.conversations || []).map((item) => createPreviewRow({
-            title: item.title || item.conversation_id,
-            subtitle: [
-                item.target_display_name || item.target_agent_id || 'agent',
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].join(' · '),
             badge: item.status || 'open',
-            badgeClass: `badge badge-${item.status || 'open'}`,
+            badgeClass: 'badge-' + (item.status || 'open'),
             href: '/ui/conversations/' + item.conversation_id,
         }));
-        lowerGrid.appendChild(createPreviewList(
-            'Ongoing conversations',
-            'The most recently updated open threads.',
-            'No open conversations right now.',
-            conversationRows,
-            '/ui/conversations?status=open',
-        ));
+        if (conversationRows.length) {
+            workGrid.appendChild(createSection(
+                'open-conversations',
+                'Open conversations',
+                '/ui/conversations?status=open',
+                conversationRows,
+                'No open conversations.',
+            ));
+        }
 
-        const taskRows = (failedTasksData.tasks || []).map((item) => createPreviewRow({
-            title: item.title || item.routed_task_id,
+        const runningRows = (tasksData.running_tasks || tasksData.tasks || []).slice(0, 6).map((item) => createRow({
+            key: item.routed_task_id,
+            title: item.title || 'Running task',
             subtitle: [
-                item.target_display_name || item.target_agent_id || 'agent',
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
                 UI.relativeTime(item.updated_at || item.created_at),
-            ].join(' · '),
-            badge: item.status || 'failed',
-            badgeClass: `badge badge-${item.status || 'failed'}`,
+            ].filter(Boolean).join(' · '),
+            badge: item.status || 'running',
+            badgeClass: 'badge-' + (item.status || 'running'),
             href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
         }));
-        lowerGrid.appendChild(createPreviewList(
-            'Recent failures',
-            'Tasks that need follow-up or retry decisions.',
-            'No failed tasks in the last page of work.',
-            taskRows,
-            '/ui/tasks?status=failed',
-        ));
+        if (runningRows.length) {
+            workGrid.appendChild(createSection(
+                'running-tasks',
+                'Running tasks',
+                '/ui/tasks?status=running',
+                runningRows,
+                'No running tasks.',
+            ));
+        }
 
-        content.appendChild(lowerGrid);
+        const agentRows = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => createRow({
+            key: item.agent_id,
+            title: item.display_name || item.slug || 'Agent',
+            subtitle: [
+                item.role || 'agent',
+                item.provider || '',
+                item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
+            ].filter(Boolean).join(' · '),
+            badge: item.connectivity_state || 'connected',
+            badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
+            href: '/ui/agents/' + item.agent_id,
+        }));
+        if (agentRows.length) {
+            workGrid.appendChild(createSection(
+                'agents',
+                'Agents',
+                '/ui/agents',
+                agentRows,
+                'No agents available.',
+            ));
+        }
+
+        shell.appendChild(workGrid);
+        UI.reconcileChildren(content, [shell]);
     }
 
-    function loadSummary() {
-        content.textContent = '';
-        const shell = document.createElement('div');
-        shell.className = 'dashboard-shell';
-        UI.renderSkeletons(shell, 6, 'card');
-        content.appendChild(shell);
+    let hasLoaded = false;
 
+    function loadSummary({ soft = false } = {}) {
+        if (!soft || !hasLoaded) {
+            UI.reconcileChildren(content, UI.createSkeletonNodes(5, 'card'));
+        }
         Promise.all([
             API.getSummary(),
             API.listApprovals({ limit: 4 }),
-            API.listConversations({ limit: 4, status: 'open' }),
-            API.listTasks({ limit: 4, status: 'failed' }),
-        ]).then(([summary, approvals, conversations, failedTasks]) => {
-            renderDashboardView(summary, approvals, conversations, failedTasks);
+            API.listConversations({ limit: 6, status: 'open' }),
+            API.listTasks({ limit: 6, status: 'failed' }),
+            API.listTasks({ limit: 6, status: 'running' }).catch(() => ({ tasks: [] })),
+            API.listAgents({ limit: 8 }),
+        ]).then(([summary, approvals, conversations, failedTasks, runningTasks, agents]) => {
+            renderDashboardView(summary, approvals, conversations, {
+                tasks: failedTasks.tasks || failedTasks || [],
+                running_tasks: runningTasks.tasks || runningTasks || [],
+            }, agents);
+            hasLoaded = true;
         }).catch((err) => {
-            content.textContent = '';
-            UI.renderError(content, 'Failed to load dashboard: ' + err.message, loadSummary);
+            if (soft && hasLoaded) {
+                UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });
+                return;
+            }
+            UI.reconcileChildren(content, [UI.createErrorCard('Failed to load dashboard: ' + err.message, loadSummary)]);
         });
     }
 
@@ -271,7 +262,7 @@ function renderDashboard(container) {
     ['summary', 'agents', 'conversations', 'tasks', 'approvals', 'usage'].forEach((topic) => {
         cleanups.add(WS.subscribe(topic, () => {
             clearTimeout(reloadDebounce);
-            reloadDebounce = setTimeout(loadSummary, 400);
+            reloadDebounce = setTimeout(() => loadSummary({ soft: true }), 350);
         }));
     });
 

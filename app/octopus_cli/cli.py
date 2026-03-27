@@ -258,8 +258,8 @@ class OctopusCLI:
 
     def execute_disconnect(self, targets: list[ResolvedTarget]) -> int:
         for target in targets:
-            self.manager.disconnect_bot_from_local_registry(target.identifier)
-            self.io.print(f"Disconnected {target.label} from the local registry.")
+            self.manager.disconnect_bot__local_registry(target.identifier)
+            self.io.print(f"Disconnected {target.label} the local registry.")
         return 0
 
     def cmd_logs(self, targets: list[str], *, follow: bool) -> int:
@@ -337,7 +337,7 @@ class OctopusCLI:
             if result is not None:
                 return int(result)
 
-    def choose_from_items(self, title: str, items: list[tuple[str, callable[[], int | None]]]) -> int | None:
+    def choose__items(self, title: str, items: list[tuple[str, callable[[], int | None]]]) -> int | None:
         while True:
             self.io.print(title)
             for index, (label, _) in enumerate(items, start=1):
@@ -362,10 +362,10 @@ class OctopusCLI:
             self.io.print("No recommended actions right now.")
             return None
         items = [(label, lambda callback=callback: callback()) for label, callback in recommended]
-        return self.choose_from_items("Recommended Actions", items)
+        return self.choose__items("Recommended Actions", items)
 
     def menu_lifecycle(self) -> int | None:
-        return self.choose_from_items(
+        return self.choose__items(
             "Lifecycle",
             [
                 ("Start", lambda: self.menu_select_action(Action.START)),
@@ -394,7 +394,7 @@ class OctopusCLI:
     def menu_select_action(self, action: Action) -> int | None:
         state = self.manager.inspect_state()
         choices = self.target_choices_for_menu(state)
-        return self.choose_from_items(
+        return self.choose__items(
             f"{action.value.title()}",
             [(label, lambda targets=targets, act=action: self.run_mutating(act, [target.identifier for target in targets], yes=False)) for label, targets in choices],
         )
@@ -414,7 +414,7 @@ class OctopusCLI:
                     ("Inspect", lambda: self.cmd_status(["bots"])),
                 ]
             )
-        return self.choose_from_items("Bots", items)
+        return self.choose__items("Bots", items)
 
     def menu_registry(self) -> int | None:
         state = self.manager.inspect_state()
@@ -431,7 +431,7 @@ class OctopusCLI:
         items.append(("Redeploy registry", lambda: self.run_mutating(Action.REDEPLOY, ["registry"], yes=False)))
         items.append(("Open registry UI", lambda: webbrowser.open(state.registry.ui_url) or 0))
         items.append(("Inspect registry", lambda: self.cmd_status(["registry"])))
-        return self.choose_from_items("Registry", items)
+        return self.choose__items("Registry", items)
 
     def menu_workspaces(self) -> int | None:
         items = [
@@ -441,7 +441,7 @@ class OctopusCLI:
             ("Detach bot", self.menu_workspace_detach),
             ("Inspect workspaces", self.menu_workspace_status),
         ]
-        return self.choose_from_items("Workspaces", items)
+        return self.choose__items("Workspaces", items)
 
     def menu_workspace_create(self) -> int:
         name = self.io.prompt("Workspace name: ").strip()
@@ -455,7 +455,7 @@ class OctopusCLI:
         if not state.workspaces:
             raise OctopusError("No workspaces configured.")
         choices = [(workspace.slug, lambda slug=workspace.slug: self._workspace_remove(slug)) for workspace in state.workspaces]
-        result = self.choose_from_items("Remove workspace", choices)
+        result = self.choose__items("Remove workspace", choices)
         return 0 if result is None else int(result)
 
     def _workspace_remove(self, slug: str) -> int:
@@ -463,7 +463,7 @@ class OctopusCLI:
         members = self.manager.workspace_members(slug)
         if ws_dir.exists():
             for member in members:
-                self.manager.remove_bot_from_workspace(slug, member)
+                self.manager.remove_bot__workspace(slug, member)
             for child in sorted(ws_dir.glob("*"), reverse=True):
                 if child.is_file():
                     child.unlink()
@@ -491,8 +491,8 @@ class OctopusCLI:
         ws_name = self.io.prompt("Workspace name: ").strip()
         bot_selector = self.io.prompt("Bot: ").strip()
         bot = self.manager.resolve_bot(bot_selector, state)
-        self.manager.remove_bot_from_workspace(ws_name, bot.slug)
-        self.io.print(f'Removed "{bot.slug}" from workspace "{ws_name}".')
+        self.manager.remove_bot__workspace(ws_name, bot.slug)
+        self.io.print(f'Removed "{bot.slug}" workspace "{ws_name}".')
         return 0
 
     def menu_workspace_status(self) -> int:
@@ -519,7 +519,7 @@ class OctopusCLI:
             ("Doctor", lambda: self._diagnose_choose_target(self.cmd_doctor, bot_only=True)),
             ("Provider auth", self.menu_provider_auth),
         ]
-        return self.choose_from_items("Diagnose", items)
+        return self.choose__items("Diagnose", items)
 
     def _diagnose_choose_target(self, callback, *, bot_only: bool = False):
         state = self.manager.inspect_state()
@@ -528,7 +528,7 @@ class OctopusCLI:
             items.append(("registry", lambda: callback(["registry"])))
         for bot in state.bots:
             items.append((bot.label, lambda slug=bot.slug: callback([slug])))
-        return self.choose_from_items("Choose a target", items)
+        return self.choose__items("Choose a target", items)
 
     def menu_provider_auth(self) -> int:
         state = self.manager.inspect_state()
@@ -539,7 +539,7 @@ class OctopusCLI:
             )
             for provider in state.provider_auth
         ]
-        result = self.choose_from_items("Provider auth", items)
+        result = self.choose__items("Provider auth", items)
         return 0 if result is None else int(result)
 
     def _provider_auth(self, provider: str) -> int:
@@ -548,7 +548,7 @@ class OctopusCLI:
         return 0
 
     def menu_status(self) -> int | None:
-        return self.choose_from_items(
+        return self.choose__items(
             "Status",
             [
                 ("System summary", lambda: self.cmd_status([])),

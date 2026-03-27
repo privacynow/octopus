@@ -153,7 +153,8 @@ Current main routes:
   operator-facing header metadata (`With`, `Assigned to`, `Started in`), plus
   export/cancel and activity/ref actions
 - **Tasks** — routed-task queue with compact summary cards, segmented status
-  filters, expandable task rows, and links back to the parent conversation
+  filters, expandable task rows that stay open across live task refreshes, and
+  links back to the parent conversation
 - **Usage** — per-conversation token/cost rollups
 - **Capabilities**, **Skills**, **Guidance** — operator configuration and
   catalog surfaces
@@ -164,6 +165,8 @@ Conversation work now happens in one flow:
 - start with `@m2`, `@cap:review`, or `@role:reviewer` to submit a structured
   direct assignment from the same composer
 - use **Tasks** for routed-work state and actions
+- use the conversation **Tasks** tab for per-thread routed work without
+  leaving the active conversation
 - use **Full activity** for the full stored event stream when you need
   diagnostics
 
@@ -181,6 +184,19 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
 
 ## Runtime Notes
 
+- `app/main.py` is the runnable entrypoint
+- `app/runtime/startup.py` owns startup validation, doctor/provider-health
+  modes, provider/database checks, and the guarded handoff into the runtime
+- `app/runtime/services.py` builds the shipped runtime profile by composing:
+  - control-plane services
+  - registry participant services
+  - workflow composition
+  - transport stack builders
+  - `octopus_sdk.bot_runtime.BotRuntime`
+- `app/runtime/transport_builders.py` registers Telegram plus registry-scoped
+  delivery transports behind one dispatcher
+- once composition is complete, `BotRuntime.run()` owns transport startup,
+  worker admission, claim processing, and shutdown
 - `.deploy/bots/<slug>/.env` and `.deploy/registry/.env` are operator-owned
   deployment state
 - runtime-owned bot identity and per-registry state live under

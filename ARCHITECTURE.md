@@ -117,8 +117,22 @@ shipped Telegram implementation in this repo is stricter:
 - those connections must collectively provide full participant coverage across
   `channel` and `coordination`
 
-`app/main.py` is now a thin runnable entrypoint. Profile validation and runtime
-composition live in `app/runtime/process.py`.
+`app/main.py` is now a thin runnable entrypoint. The current runtime handoff is
+split by responsibility:
+
+- `app/runtime/startup.py`
+  - startup validation
+  - provider/database checks
+  - doctor/provider-health modes
+  - guarded runtime launch
+- `app/runtime/services.py`
+  - service graph composition
+  - registry participant composition
+  - `BotRuntime` construction
+- `app/runtime/transport_builders.py`
+  - Telegram transport registration
+  - registry channel registration
+  - registry delivery transport registration
 
 ## SDK Surface
 
@@ -319,16 +333,16 @@ concrete implementations.
 
 ### Composition Root
 
-`app/main.py` is now a thin launcher. `app/runtime/process.py` performs the
-current startup sequence:
+`app/main.py` is now a thin launcher. The current startup sequence is:
 
-1. load config
-2. validate the required implementation profile
-3. construct provider
-4. initialize content and credential stores
-5. create shared control-plane and participant services
-6. register primary transports and registry delivery transport
-7. start dispatcher-managed ingress plus worker/runtime components for the selected mode
+1. parse CLI flags and load config in `app/main.py`
+2. run startup validation/doctor/provider-health guards in `app/runtime/startup.py`
+3. build shared control-plane services, participant services, workflows, and
+   the final `BotRuntime` in `app/runtime/services.py`
+4. register Telegram plus registry-scoped transports in
+   `app/runtime/transport_builders.py`
+5. hand the composed runtime back to `octopus_sdk.bot_runtime.BotRuntime.run()`
+   for transport startup, worker claim processing, and shutdown
 
 ### Main Subsystems
 
@@ -349,7 +363,8 @@ Telegram is the reference implementation of the unified model in this repo:
 
 - `app/channels/telegram/channel.py` implements the primary transport contract
 - `app/runtime/registry_participant.py` provides the full registry participant surface
-- `app/runtime/process.py` composes both into the shipped Telegram runtime profile
+- `app/runtime/services.py` and `app/runtime/transport_builders.py` compose both
+  into the shipped Telegram runtime profile
 - Telegram-specific presentation code stays in transport/presenter modules rather than owning registry policy
 
 ### Registry Bot-Side As An SDK Consumer
@@ -358,7 +373,8 @@ Registry conversation/task channels in `app/channels/registry/channel.py` and
 the registry delivery transport in `app/channels/registry/delivery_transport.py`
 also consume the same SDK transport and participant contracts. They build
 registry-scoped egress and route projection/routing/health through bus-backed
-services from `app/runtime/services.py`.
+services from `app/runtime/bot_services.py`, and they are registered into the
+runtime transport stack by `app/runtime/transport_builders.py`.
 
 ## Registry Service And Operator UI
 

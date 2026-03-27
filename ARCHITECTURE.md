@@ -17,19 +17,19 @@ Octopus is four cooperating systems:
 
 ```mermaid
 flowchart LR
-    Operator["Operator"] --> CLI["./octopus"]
-    Operator --> Browser["Operator browser"]
-    Telegram["Telegram"] --> Bot["Bot application<br/>python -m app.main"]
+    operator["Operator"] --> cli["octopus CLI"]
+    operator --> browser["Operator browser"]
+    telegram["Telegram"] --> bot["Bot application"]
 
-    CLI --> Deploy[".deploy state<br/>Docker Compose"]
-    Deploy --> Bot
-    Deploy --> Registry["Registry service<br/>HTTP API + websocket + UI"]
+    cli --> deploy["Deploy state and Docker"]
+    deploy --> bot
+    deploy --> registry["Registry service"]
 
-    Browser --> Registry
-    Bot --> Provider["Claude / Codex"]
-    Bot <--> Registry
-    Bot --> SDK["octopus_sdk"]
-    Registry --> SDK
+    browser --> registry
+    bot --> provider["Claude or Codex"]
+    bot --> sdk["octopus_sdk"]
+    bot <--> registry
+    registry --> sdk
 ```
 
 ### Layering
@@ -40,55 +40,48 @@ it shows code ownership boundaries and the main dependency direction between
 
 ```mermaid
 flowchart TB
-    CLI["./octopus"]
+    cli["octopus CLI"]
+    main["app main"]
+    startup["runtime startup"]
+    services["runtime services"]
+    builders["transport builders"]
+    bot_services["bot services"]
+    telegram_transport["telegram transport"]
+    registry_transport["registry bot transport"]
+    app_workflows["app workflows"]
+    app_control["app control plane"]
+    app_providers["app providers"]
 
-    subgraph App["app/"]
-        Main["main.py"]
-        Startup["runtime/startup.py"]
-        Services["runtime/services.py"]
-        Builders["runtime/transport_builders.py"]
-        BotServices["runtime/bot_services.py"]
-        Telegram["channels/telegram/*"]
-        RegistryTransport["channels/registry/channel.py<br/>channels/registry/delivery_transport.py"]
-        Workflows["workflows/*"]
-        ControlPlane["control_plane/*<br/>runtime/registry_participant.py"]
-        Providers["providers/*"]
-    end
+    sdk_runtime["sdk bot runtime"]
+    sdk_transport["sdk transport contracts"]
+    sdk_participant["sdk registry participant"]
+    sdk_ports["sdk workflow and support ports"]
+    sdk_provider["sdk provider contracts"]
+    sdk_models["sdk registry and realtime models"]
 
-    subgraph SDK["octopus_sdk/"]
-        Runtime["bot_runtime.py"]
-        Transport["transport.py"]
-        Participant["registry_participant.py"]
-        Models["registry.models<br/>events<br/>realtime"]
-        Ports["workflow + support ports"]
-        ProviderSdk["providers.py"]
-    end
+    registry_api["registry api and websocket"]
+    registry_store["registry store"]
 
-    subgraph Registry["registry service"]
-        Api["channels/registry/http.py<br/>channels/registry/ws.py"]
-        Store["registry_service/*"]
-    end
-
-    CLI --> Main
-    Main --> Startup
-    Main --> Services
-    Services --> BotServices
-    Services --> Builders
-    Services --> Runtime
-    Builders --> Telegram
-    Builders --> RegistryTransport
-    Builders --> Transport
-    BotServices --> Workflows
-    BotServices --> ControlPlane
-    BotServices --> Providers
-    Workflows --> Ports
-    ControlPlane --> Participant
-    Providers --> ProviderSdk
-    Telegram --> Transport
-    RegistryTransport --> Transport
-    Api --> Store
-    Api --> Models
-    Store --> Models
+    cli --> main
+    main --> startup
+    main --> services
+    services --> bot_services
+    services --> builders
+    services --> sdk_runtime
+    builders --> telegram_transport
+    builders --> registry_transport
+    builders --> sdk_transport
+    bot_services --> app_workflows
+    bot_services --> app_control
+    bot_services --> app_providers
+    app_workflows --> sdk_ports
+    app_control --> sdk_participant
+    app_providers --> sdk_provider
+    telegram_transport --> sdk_transport
+    registry_transport --> sdk_transport
+    registry_api --> registry_store
+    registry_api --> sdk_models
+    registry_store --> sdk_models
 ```
 
 ## Deployment And Process Model
@@ -287,29 +280,24 @@ The resulting runtime shape would look like this:
 
 ```mermaid
 flowchart TB
-    Slack["Slack"]
+    slack["Slack"]
+    bolt["Bolt for Python"]
+    transport["Slack transport"]
+    runtime["BotRuntime"]
+    participant["Registry participant"]
+    provider["Claude or Codex"]
+    registry["Registry service"]
+    sdk["octopus_sdk contracts"]
 
-    subgraph Bot["Slack bot process"]
-        direction TB
-        Bolt["Bolt for Python"]
-        Transport["Slack transport"]
-        Runtime["BotRuntime"]
-        Participant["Registry participant"]
-    end
-
-    Provider["Claude / Codex"]
-    Registry["Registry service"]
-    SDK["octopus_sdk contracts"]
-
-    Slack <--> Bolt
-    Bolt <--> Transport
-    Transport <--> Runtime
-    Runtime <--> Provider
-    Runtime <--> Participant
-    Participant <--> Registry
-    Transport --> SDK
-    Runtime --> SDK
-    Participant --> SDK
+    slack <--> bolt
+    bolt <--> transport
+    transport <--> runtime
+    runtime <--> provider
+    runtime <--> participant
+    participant <--> registry
+    transport --> sdk
+    runtime --> sdk
+    participant --> sdk
 ```
 
 The transport split would look like this:
@@ -373,6 +361,37 @@ concrete implementations.
    `app/runtime/transport_builders.py`
 5. hand the composed runtime back to `octopus_sdk.bot_runtime.BotRuntime.run()`
    for transport startup, worker claim processing, and shutdown
+
+The composition flow looks like this:
+
+```mermaid
+flowchart TD
+    main["app main"]
+    load["load config and provider"]
+    validate["startup validation and doctor checks"]
+    build["build_runtime"]
+    bot_services["build_bus_bot_services"]
+    transport_stack["build_runtime_transport_stack"]
+    runtime["BotRuntime"]
+    run["BotRuntime.run"]
+    dispatcher["TransportDispatcher"]
+    telegram["TelegramTransport"]
+    registry_delivery["Registry delivery transport"]
+    worker["worker loop and claims"]
+
+    main --> load
+    load --> validate
+    validate --> build
+    build --> bot_services
+    build --> transport_stack
+    build --> runtime
+    transport_stack --> dispatcher
+    dispatcher --> telegram
+    dispatcher --> registry_delivery
+    runtime --> run
+    run --> dispatcher
+    run --> worker
+```
 
 ### Main Subsystems
 
@@ -538,9 +557,9 @@ sequenceDiagram
     TT->>BR: submit inbound envelope
     BR->>WQ: record and admit
     WQ->>WD: claim queued work
-    WD->>P: run / preflight
-    WD->>RP: publish events / task updates
-    WD->>TT: reply / actions / progress
+    WD->>P: run and preflight
+    WD->>RP: publish events and task updates
+    WD->>TT: reply actions and progress
 ```
 
 ### Registry Projection
@@ -557,12 +576,12 @@ sequenceDiagram
     participant C as Registry client
     participant R as Registry service
 
-    WD->>RP: create conversation / publish events
-    RP->>CP: projection / routing / health ports
+    WD->>RP: create conversation and publish events
+    RP->>CP: projection routing and health ports
     CP->>B: control command
     B->>PR: leased bus work
     PR->>C: registry authority request
-    C->>R: HTTP API call
+    C->>R: HTTP API request
 ```
 
 ### Delegation And Routed Tasks
@@ -577,12 +596,12 @@ sequenceDiagram
     participant DT as Registry delivery transport
     participant G as Target runtime
 
-    O->>RP: direct_assign / delegate_tasks
-    RP->>R: typed action + routed task request
+    O->>RP: direct assign or delegate tasks
+    RP->>R: typed action and routed task request
     R->>DT: delivery available
     DT->>G: submit routed task envelope
     G->>R: task status / result
-    R->>O: mirrored task.status + routed result
+    R->>O: mirrored task status and routed result
 ```
 
 Parent conversations also receive mirrored `task.status` events so delegated

@@ -3,13 +3,15 @@
 import threading
 
 from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.providers import ProviderStateRecord
 from app import storage_postgres
 from octopus_sdk.identity import telegram_conversation_key
 from octopus_sdk.sessions import default_session
 
 
 def _provider_state_factory(conversation_key: str):
-    return {}
+    del conversation_key
+    return ProviderStateRecord()
 
 
 def _delegation_session() -> dict:
@@ -251,7 +253,7 @@ def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
             )
         conn.commit()
         loaded = storage_postgres.load_session(
-            conn, conversation_key, "claude", lambda _ck="": {"session_id": "new"}, "on"
+            conn, conversation_key, "claude", lambda _ck="": ProviderStateRecord({"session_id": "new"}), "on"
         )
     assert isinstance(loaded["provider_state"], dict)
     assert loaded["provider_state"]["session_id"] == "new"

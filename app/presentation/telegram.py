@@ -17,6 +17,7 @@ from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
 from app.registry_errors import registry_error_summary
 from octopus_sdk.sessions import PendingDelegation
+from octopus_sdk.work_queue import UserAccessRecord
 from octopus_sdk.workflows.delegation import DelegationTargetPreview
 from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleDetail,
@@ -681,7 +682,7 @@ def runtime_skill_search_results_message(
         lines.append(f"\n<i>Registry search failed: {html.escape(results.registry_error)}</i>")
     if not lines:
         return _html_message(f"No skills matching '{html.escape(query)}'.")
-    lines.append("\nUse /skills info <name> for details, /skills install <name> to import from the registry.")
+    lines.append("\nUse /skills info <name> for details, /skills install <name> to import the registry.")
     return _html_message("\n".join(lines))
 
 
@@ -1035,7 +1036,7 @@ def _help_command_lines(
         "/approve / /reject — act on a pending plan",
         "/cancel — cancel a running task, credential setup, or a pending request",
         "/clear_credentials — remove your stored credentials",
-        "/send &lt;path&gt; — retrieve a file from the server",
+        "/send &lt;path&gt; — retrieve a file the server",
         "/compact on|off — toggle short/full answers",
     ]
     if has_model_profiles:
@@ -1375,12 +1376,12 @@ def listaccess_empty_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text="No access overrides set.")
 
 
-def access_overrides_message(rows: list[dict[str, Any]]) -> TelegramRenderedMessage:
+def access_overrides_message(rows: list[UserAccessRecord]) -> TelegramRenderedMessage:
     lines = ["<b>Access overrides</b>"]
     for row in rows:
-        status = "\u2705 allowed" if row["access"] == "allowed" else "\ud83d\udeab blocked"
-        reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
-        lines.append(f"\u2022 <code>{row['actor_key']}</code> {status}{reason}")
+        status = "\u2705 allowed" if row.access == "allowed" else "\ud83d\udeab blocked"
+        reason = f" — {html.escape(row.reason)}" if row.reason else ""
+        lines.append(f"\u2022 <code>{row.actor_key}</code> {status}{reason}")
     return _html_message("\n".join(lines))
 
 

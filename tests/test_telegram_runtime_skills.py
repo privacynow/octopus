@@ -2,7 +2,7 @@ import contextlib
 from types import SimpleNamespace
 
 from app.credential_validation import validate_credential
-from app.channels.telegram.runtime_skills import (
+from app.workflows.runtime_skills.telegram import (
     TelegramRuntimeSkillsRuntime,
     handle_skills_command,
     skills_install,
@@ -29,7 +29,7 @@ async def _noop_chat_lock(*args, **kwargs):
     yield False
 
 
-async def test_runtime_skills_show_runs_from_explicit_runtime_boundary():
+async def test_runtime_skills_show_runs__explicit_runtime_boundary():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -59,7 +59,7 @@ async def test_runtime_skills_show_runs_from_explicit_runtime_boundary():
             reset_handler_test_runtime()
 
 
-async def test_runtime_skills_command_usage_runs_from_explicit_runtime_boundary():
+async def test_runtime_skills_command_usage_runs__explicit_runtime_boundary():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -119,11 +119,11 @@ async def test_runtime_skills_install_hides_raw_registry_exception(monkeypatch):
 
             fake_imports = SimpleNamespace(install_from_registry=_raise_install)
             monkeypatch.setattr(
-                "app.channels.telegram.runtime_skills._is_admin",
+                "app.workflows.runtime_skills.telegram._is_admin",
                 lambda runtime, user: True,
             )
             monkeypatch.setattr(
-                "app.channels.telegram.runtime_skills._flows",
+                "app.workflows.runtime_skills.telegram._flows",
                 lambda: SimpleNamespace(runtime_skills=SimpleNamespace(imports=fake_imports)),
             )
 

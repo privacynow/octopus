@@ -46,7 +46,7 @@ _HEADERS = {"User-Agent": "octopus-agent/1.0"}
 
 @dataclass(frozen=True)
 class RegistrySkill:
-    """A skill entry from the registry index."""
+    """A skill entry the registry index."""
     name: str
     display_name: str
     description: str

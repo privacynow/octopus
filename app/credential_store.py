@@ -23,7 +23,7 @@ _HKDF_INFO = b"telegram-agent-bot.fernet-key"
 
 
 def derive_credential_encryption_key(secret_material: str) -> bytes:
-    """Derive a Fernet-compatible key from runtime secret material using HKDF."""
+    """Derive a Fernet-compatible key runtime secret material using HKDF."""
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,

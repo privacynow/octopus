@@ -73,19 +73,22 @@ def load_session(
 
 
 def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
-    has_pending = (
-        session.get("pending_approval") is not None
-        or session.get("pending_retry") is not None
-    )
+    stored_session = dict(session)
     has_setup = session.get("awaiting_skill_setup") is not None
     # Normalize timestamps before serializing so JSON data and column agree
-    if not session.get("created_at"):
-        session["created_at"] = datetime.now(timezone.utc).isoformat()
-    if not session.get("updated_at"):
-        session["updated_at"] = datetime.now(timezone.utc).isoformat()
-    created_at = session["created_at"]
-    updated_at = session["updated_at"]
-    data_json = json.dumps(session, sort_keys=True)
+    if not stored_session.get("created_at"):
+        stored_session["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not stored_session.get("updated_at"):
+        stored_session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    stored_session = session_to_dict(session_from_dict(stored_session))
+    has_pending = (
+        stored_session.get("pending_approval") is not None
+        or stored_session.get("pending_retry") is not None
+    )
+    has_setup = stored_session.get("awaiting_skill_setup") is not None
+    created_at = stored_session["created_at"]
+    updated_at = stored_session["updated_at"]
+    data_json = json.dumps(stored_session, sort_keys=True)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -103,12 +106,12 @@ def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
             """,
             (
                 conversation_key,
-                session.get("provider", ""),
+                stored_session.get("provider", ""),
                 data_json,
                 has_pending,
                 has_setup,
-                session.get("project_id"),
-                session.get("file_policy"),
+                stored_session.get("project_id"),
+                stored_session.get("file_policy"),
                 created_at,
                 updated_at,
             ),

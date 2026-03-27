@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 import pytest
+from pydantic import ValidationError
 
 from app.registry_service.store import RegistrySQLiteStore
 from app.registry_service.store_base import CapabilityDisabledError
@@ -21,6 +22,26 @@ from app.runtime_health import (
     WorkerHeartbeat,
     report_to_dict,
 )
+from octopus_sdk.registry.models import (
+    AgentCard,
+    AgentDiscoveryQuery,
+    AgentHeartbeatRequest,
+    AgentRegisterRequest,
+    ApproveRejectActionPayload,
+    CancelTaskActionPayload,
+    CoordinationActionEnvelope,
+    DirectAssignActionPayload,
+    EventRecord,
+    RegistryJsonRecord,
+    RuntimeHealthDiagnosticRecord,
+    RuntimeHealthPayload,
+    RuntimeHealthSummaryRecord,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+    TargetSelector,
+    TimelineEventPayload,
+)
 
 
 def _card(
@@ -29,22 +50,22 @@ def _card(
     *,
     display_name: str | None = None,
     registry_scope: str = "full",
-) -> dict:
-    return {
-        "display_name": display_name or slug,
-        "slug": slug,
-        "role": "developer",
-        "registry_scope": registry_scope,
-        "capabilities": capabilities or ["python"],
-        "tags": ["backend"],
-        "description": f"{slug} description",
-        "provider": "codex",
-        "mode": "registry",
-        "connectivity_state": "connected",
-        "channel_capabilities": ["registry"],
-        "version": "test",
-        "bot_key": f"bot-{slug}",
-    }
+) -> AgentCard:
+    return AgentCard(
+        display_name=display_name or slug,
+        slug=slug,
+        role="developer",
+        registry_scope=registry_scope,
+        capabilities=capabilities or ["python"],
+        tags=["backend"],
+        description=f"{slug} description",
+        provider="codex",
+        mode="registry",
+        connectivity_state="connected",
+        channel_capabilities=["registry"],
+        version="test",
+        bot_key=f"bot-{slug}",
+    )
 
 
 def _enroll(
@@ -57,18 +78,22 @@ def _enroll(
 ) -> tuple[str, str]:
     enrolled = store.enroll(_card(slug, capabilities, display_name=display_name, registry_scope=registry_scope))
     store.register(
-        enrolled["agent_token"],
-        {
-            "agent_card": _card(slug, capabilities, display_name=display_name, registry_scope=registry_scope),
-            "connectivity_state": "connected",
-            "current_capacity": 0,
-            "max_capacity": 2,
-        },
+        enrolled.agent_token,
+        AgentRegisterRequest(
+            agent_card=_card(slug, capabilities, display_name=display_name, registry_scope=registry_scope),
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=2,
+        ),
     )
-    return enrolled["agent_id"], enrolled["agent_token"]
+    return enrolled.agent_id, enrolled.agent_token
 
 
-def _runtime_health_payload(*, worker_count: int = 2) -> dict:
+def _runtime_health_payload(
+    *,
+    worker_count: int = 2,
+    generated_at: str = "2026-03-16T00:00:10+00:00",
+) -> RuntimeHealthPayload:
     workers = tuple(
         WorkerHeartbeat(
             worker_id=f"worker-{idx}",
@@ -119,7 +144,17 @@ def _runtime_health_payload(*, worker_count: int = 2) -> dict:
             ),
         ),
     )
-    return report_to_dict(report)
+    wire = report_to_dict(report)
+    return RuntimeHealthPayload(
+        schema_version=int(wire["schema_version"]),
+        generated_at=generated_at,
+        summary=RuntimeHealthSummaryRecord.model_validate(wire["summary"]),
+        snapshot=RegistryJsonRecord(wire["snapshot"]),
+        diagnostics=[
+            RuntimeHealthDiagnosticRecord.model_validate(item)
+            for item in wire["diagnostics"]
+        ],
+    )
 
 
 def _stored_agent_token(store, agent_id: str) -> str:
@@ -182,7 +217,7 @@ def _create_routed_task(
     store,
     *,
     routed_task_id: str = "task-1",
-) -> tuple[dict, str, str, str, str]:
+) -> tuple[object, str, str, str, str]:
     origin_id, _origin_token = _enroll(store, f"origin-{routed_task_id}")
     target_id, target_token = _enroll(store, f"target-{routed_task_id}", ["reviewer"])
     conversation = store.create_conversation(
@@ -192,38 +227,39 @@ def _create_routed_task(
         external_conversation_ref=f"conv-{routed_task_id}",
     )
     routed = store.create_routed_task(
-        {
-            "routed_task_id": routed_task_id,
-            "parent_conversation_id": conversation["conversation_id"],
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Review task",
-            "instructions": "Review the spec.",
-            "context": {},
-            "constraints": {},
-            "requested_capabilities": ["reviewer"],
-            "priority": "normal",
-            "created_at": "2026-03-16T00:00:00+00:00",
-        }
+        RoutedTaskRequest(
+            routed_task_id=routed_task_id,
+            parent_conversation_id=conversation.conversation_id,
+            origin_agent_id=origin_id,
+            target_agent_id=target_id,
+            title="Review task",
+            instructions="Review the spec.",
+            context=RegistryJsonRecord(),
+            constraints=RegistryJsonRecord(),
+            requested_capabilities=["reviewer"],
+            priority="normal",
+            created_at="2026-03-16T00:00:00+00:00",
+        )
     )
-    return routed, origin_id, target_id, target_token, conversation["conversation_id"]
+    return routed, origin_id, target_id, target_token, conversation.conversation_id
 
 
 def _lease_routed_task(store, target_token: str) -> None:
-    deliveries = store.poll(target_token, cursor=0, limit=20)["deliveries"]
-    assert any(item["kind"] == "routed_task" for item in deliveries)
+    deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
+    assert any(item.kind == "routed_task" for item in deliveries)
 
 
 def _start_routed_task(store, target_token: str, routed_task_id: str) -> None:
     store.update_routed_task_status(
         target_token,
         routed_task_id,
-        {
-            "status": "running",
-            "transition_id": f"{routed_task_id}-start",
-            "summary": "started",
-            "timeline_events": [],
-        },
+        RoutedTaskUpdate(
+            routed_task_id=routed_task_id,
+            status="running",
+            transition_id=f"{routed_task_id}-start",
+            summary="started",
+            timeline_events=[],
+        ),
     )
 
 
@@ -246,7 +282,7 @@ def test_enroll_and_register_returns_agent_id(store):
     assert agent_token
     agents = store.list_agents()
     assert len(agents) == 1
-    assert agents[0]["agent_id"] == agent_id
+    assert agents[0].agent_id == agent_id
 
 
 def test_enroll_persists_registry_scope(store):
@@ -255,8 +291,8 @@ def test_enroll_persists_registry_scope(store):
     agents = store.list_agents()
 
     assert len(agents) == 1
-    assert agents[0]["agent_id"] == agent_id
-    assert agents[0]["registry_scope"] == "channel"
+    assert agents[0].agent_id == agent_id
+    assert agents[0].registry_scope == "channel"
 
 
 def test_enroll_requires_explicit_registry_scope(store):
@@ -292,15 +328,15 @@ def test_poll_delivers_to_enrolled_agent(store):
     delivery = store.create_delivery(
         target_agent_id=agent_id,
         kind="channel_input",
-        payload={"conversation_id": "conv-1", "text": "hello"},
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
     )
 
     polled = store.poll(agent_token, cursor=0, limit=20)
 
-    assert delivery["delivery_id"]
-    assert len(polled["deliveries"]) == 1
-    assert polled["deliveries"][0]["kind"] == "channel_input"
-    assert polled["deliveries"][0]["payload"]["text"] == "hello"
+    assert delivery.delivery_id
+    assert len(polled.deliveries) == 1
+    assert polled.deliveries[0].kind == "channel_input"
+    assert polled.deliveries[0].payload["text"] == "hello"
 
 
 def test_ack_marks_delivery_done(store):
@@ -308,14 +344,14 @@ def test_ack_marks_delivery_done(store):
     store.create_delivery(
         target_agent_id=agent_id,
         kind="channel_input",
-        payload={"conversation_id": "conv-1", "text": "hello"},
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
     )
 
     polled = store.poll(agent_token, cursor=0, limit=20)
-    delivery_id = polled["deliveries"][0]["delivery_id"]
+    delivery_id = polled.deliveries[0].delivery_id
     store.ack(agent_token, delivery_ids=[delivery_id], classification="accepted")
 
-    assert store.poll(agent_token, cursor=0, limit=20)["deliveries"] == []
+    assert store.poll(agent_token, cursor=0, limit=20).deliveries == []
 
 
 def test_conversation_status_transitions_cover_running_terminal_and_cancelling_states():
@@ -333,10 +369,10 @@ def test_ack_rejects_invalid_classification(store):
     store.create_delivery(
         target_agent_id=agent_id,
         kind="channel_input",
-        payload={"conversation_id": "conv-1", "text": "hello"},
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
     )
     polled = store.poll(agent_token, cursor=0, limit=20)
-    delivery_id = polled["deliveries"][0]["delivery_id"]
+    delivery_id = polled.deliveries[0].delivery_id
 
     with pytest.raises(ValueError, match="classification"):
         store.ack(agent_token, delivery_ids=[delivery_id], classification="later")
@@ -345,10 +381,10 @@ def test_ack_rejects_invalid_classification(store):
 def test_search_agents_by_capability(store):
     _enroll(store, "rust-bot", ["rust"])
 
-    hits = store.search_agents({"capabilities": ["rust"], "required_state": "connected"})
-    misses = store.search_agents({"capabilities": ["python"], "required_state": "connected"})
+    hits = store.search_agents(AgentDiscoveryQuery(capabilities=["rust"], required_state="connected"))
+    misses = store.search_agents(AgentDiscoveryQuery(capabilities=["python"], required_state="connected"))
 
-    assert [item["slug"] for item in hits] == ["rust-bot"]
+    assert [item.slug for item in hits] == ["rust-bot"]
     assert misses == []
 
 
@@ -356,7 +392,7 @@ def test_search_agents_excludes_offline(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.deregister(agent_token)
 
-    assert store.search_agents({"required_state": "connected"}) == []
+    assert store.search_agents(AgentDiscoveryQuery(required_state="connected")) == []
 
 
 def test_create_routed_task_and_lookup(store):
@@ -364,12 +400,12 @@ def test_create_routed_task_and_lookup(store):
         store, routed_task_id="task-1"
     )
 
-    deliveries = store.poll(target_token, cursor=0, limit=20)["deliveries"]
+    deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
 
-    assert routed["routed_task_id"] == "task-1"
-    assert routed["delivery_id"]
+    assert routed.routed_task_id == "task-1"
+    assert routed.delivery_id
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "routed_task"
+    assert deliveries[0].kind == "routed_task"
 
 
 def test_create_routed_task_mirrors_parent_conversation_event(store):
@@ -377,14 +413,14 @@ def test_create_routed_task_mirrors_parent_conversation_event(store):
         store, routed_task_id="task-mirror-create"
     )
 
-    events = store.list_events(conversation_id)["events"]
+    events = store.list_events(conversation_id).events
 
-    assert routed["events_written"] is True
-    assert routed["inserted_events"][0]["seq"] > 0
+    assert routed.events_written is True
+    assert routed.inserted_events[0].seq and routed.inserted_events[0].seq > 0
     assert len(events) == 1
-    assert events[0]["kind"] == "task.status"
-    assert events[0]["metadata"] == {"routed_task_id": "task-mirror-create", "status": "queued"}
-    assert events[0]["seq"] == routed["inserted_events"][0]["seq"]
+    assert events[0].kind == "task.status"
+    assert events[0].metadata == {"routed_task_id": "task-mirror-create", "status": "queued"}
+    assert events[0].seq == routed.inserted_events[0].seq
 
 
 def test_create_routed_task_requires_required_fields(store):
@@ -399,14 +435,15 @@ def test_create_routed_task_requires_required_fields(store):
 
     with pytest.raises(ValueError, match="title"):
         store.create_routed_task(
-            {
-                "routed_task_id": "task-missing-title",
-                "parent_conversation_id": conversation["conversation_id"],
-                "origin_agent_id": origin_id,
-                "target_agent_id": target_id,
-                "instructions": "Review the spec.",
-                "requested_capabilities": ["reviewer"],
-            }
+            RoutedTaskRequest(
+                routed_task_id="task-missing-title",
+                parent_conversation_id=conversation.conversation_id,
+                origin_agent_id=origin_id,
+                target_agent_id=target_id,
+                title="",
+                instructions="Review the spec.",
+                requested_capabilities=["reviewer"],
+            )
         )
 
 
@@ -424,56 +461,60 @@ def test_routed_task_status_updates_do_not_overwrite_protected_status(store, pro
         store.update_routed_task_result(
             target_token,
             routed_task_id,
-            {
-                "status": "completed",
-                "transition_id": f"{routed_task_id}-complete",
-                "summary": protected_summary,
-                "full_text": "Full result",
-            },
+            RoutedTaskResult(
+                status="completed",
+                transition_id=f"{routed_task_id}-complete",
+                summary=protected_summary,
+                full_text="Full result",
+                routed_task_id=routed_task_id,
+            ),
         )
     elif protected_status == "failed":
         _start_routed_task(store, target_token, routed_task_id)
         store.update_routed_task_status(
             target_token,
             routed_task_id,
-            {
-                "status": "failed",
-                "transition_id": f"{routed_task_id}-{protected_status}",
-                "summary": protected_summary,
-                "timeline_events": [],
-            },
+            RoutedTaskUpdate(
+                routed_task_id=routed_task_id,
+                status="failed",
+                transition_id=f"{routed_task_id}-{protected_status}",
+                summary=protected_summary,
+                timeline_events=[],
+            ),
         )
     elif protected_status == "cancelled":
         store.add_conversation_action(
             conversation_id,
-            {
-                "action_id": f"{routed_task_id}-cancel",
-                "action": "cancel_task",
-                "payload": {"routed_task_id": routed_task_id},
-            },
+            CoordinationActionEnvelope(
+                action_id=f"{routed_task_id}-cancel",
+                action="cancel_task",
+                payload=CancelTaskActionPayload(routed_task_id=routed_task_id),
+            ),
         )
     else:
         store.update_routed_task_status(
             target_token,
             routed_task_id,
-            {
-                "status": protected_status,
-                "transition_id": f"{routed_task_id}-{protected_status}",
-                "summary": protected_summary,
-                "timeline_events": [],
-            },
+            RoutedTaskUpdate(
+                routed_task_id=routed_task_id,
+                status=protected_status,
+                transition_id=f"{routed_task_id}-{protected_status}",
+                summary=protected_summary,
+                timeline_events=[],
+            ),
         )
 
     with pytest.raises(ValueError):
         store.update_routed_task_status(
             target_token,
             routed_task_id,
-            {
-                "status": "running",
-                "transition_id": f"{routed_task_id}-late-progress",
-                "summary": "late progress",
-                "timeline_events": [],
-            },
+            RoutedTaskUpdate(
+                routed_task_id=routed_task_id,
+                status="running",
+                transition_id=f"{routed_task_id}-late-progress",
+                summary="late progress",
+                timeline_events=[],
+            ),
         )
 
     task = _routed_task_row(store, routed_task_id)
@@ -495,32 +536,34 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
     status_result = store.update_routed_task_status(
         target_token,
         "task-auto-mirror",
-        {
-            "status": "running",
-            "transition_id": "task-auto-mirror-running",
-            "summary": "halfway there",
-            "timeline_events": [],
-        },
+        RoutedTaskUpdate(
+            routed_task_id="task-auto-mirror",
+            status="running",
+            transition_id="task-auto-mirror-running",
+            summary="halfway there",
+            timeline_events=[],
+        ),
     )
     result_result = store.update_routed_task_result(
         target_token,
         "task-auto-mirror",
-        {
-            "status": "completed",
-            "transition_id": "task-auto-mirror-complete",
-            "summary": "done",
-            "full_text": "All set",
-            "completed_at": "2026-03-16T00:01:00+00:00",
-        },
+        RoutedTaskResult(
+            routed_task_id="task-auto-mirror",
+            status="completed",
+            transition_id="task-auto-mirror-complete",
+            summary="done",
+            full_text="All set",
+            completed_at="2026-03-16T00:01:00+00:00",
+        ),
     )
 
-    events = store.list_events(conversation_id)["events"]
+    events = store.list_events(conversation_id).events
 
-    assert status_result["events_written"] is True
-    assert status_result["inserted_events"][0]["seq"] > 0
-    assert result_result["events_written"] is True
-    assert result_result["inserted_events"][0]["seq"] > 0
-    assert [event["metadata"]["status"] for event in events] == ["queued", "running", "completed"]
+    assert status_result.events_written is True
+    assert status_result.inserted_events[0].seq and status_result.inserted_events[0].seq > 0
+    assert result_result.events_written is True
+    assert result_result.inserted_events[0].seq and result_result.inserted_events[0].seq > 0
+    assert [event.metadata["status"] for event in events] == ["queued", "running", "completed"]
 
 
 def test_list_tasks_can_filter_by_parent_conversation_id(store):
@@ -535,19 +578,19 @@ def test_list_tasks_can_filter_by_parent_conversation_id(store):
         title="Second parent",
     )
     store.create_routed_task(
-        {
-            "routed_task_id": "task-parent-filter-2",
-            "parent_conversation_id": second_conversation["conversation_id"],
-            "origin_agent_id": origin_id,
-            "target_agent_id": target_id,
-            "title": "Second task",
-            "instructions": "Do second work.",
-            "created_at": "2026-03-25T00:00:00+00:00",
-        }
+        RoutedTaskRequest(
+            routed_task_id="task-parent-filter-2",
+            parent_conversation_id=second_conversation.conversation_id,
+            origin_agent_id=origin_id,
+            target_agent_id=target_id,
+            title="Second task",
+            instructions="Do second work.",
+            created_at="2026-03-25T00:00:00+00:00",
+        )
     )
 
     tasks = store.list_tasks(parent_conversation_id=conversation_id)
-    assert [task["routed_task_id"] for task in tasks] == [first["routed_task_id"]]
+    assert [task.routed_task_id for task in tasks] == [first.routed_task_id]
 
 
 def test_list_agents_supports_query_and_connectivity_filters(store):
@@ -559,9 +602,9 @@ def test_list_agents_supports_query_and_connectivity_filters(store):
     connected_hits = store.list_agents(connectivity_state="connected")
     offline_hits = store.list_agents(connectivity_state="offline")
 
-    assert [item["slug"] for item in q_hits] == ["alpha-reviewer"]
-    assert {item["slug"] for item in connected_hits} == {"alpha-reviewer"}
-    assert [item["agent_id"] for item in offline_hits] == [beta_id]
+    assert [item.slug for item in q_hits] == ["alpha-reviewer"]
+    assert {item.slug for item in connected_hits} == {"alpha-reviewer"}
+    assert [item.agent_id for item in offline_hits] == [beta_id]
 
 
 def test_routed_task_status_requires_explicit_non_empty_status(store):
@@ -573,11 +616,12 @@ def test_routed_task_status_requires_explicit_non_empty_status(store):
         store.update_routed_task_status(
             target_token,
             "task-status-required",
-            {
-                "transition_id": "task-status-required-transition",
-                "summary": "missing status",
-                "timeline_events": [],
-            },
+            RoutedTaskUpdate(
+                routed_task_id="task-status-required",
+                transition_id="task-status-required-transition",
+                summary="missing status",
+                timeline_events=[],
+            ),
         )
 
 
@@ -590,11 +634,13 @@ def test_routed_task_result_requires_explicit_non_empty_status(store):
         store.update_routed_task_result(
             target_token,
             "task-result-required",
-            {
-                "transition_id": "task-result-required-transition",
-                "summary": "missing status",
-                "full_text": "No explicit status",
-            },
+            RoutedTaskResult(
+                routed_task_id="task-result-required",
+                transition_id="task-result-required-transition",
+                summary="missing status",
+                full_text="No explicit status",
+                status="",
+            ),
         )
 
 
@@ -609,45 +655,47 @@ def test_routed_task_status_rejection_does_not_upsert_timeline_events(store):
     store.update_routed_task_result(
         target_token,
         routed_task_id,
-        {
-            "status": "completed",
-            "transition_id": f"{routed_task_id}-complete",
-            "summary": "done",
-            "full_text": "Final result",
-        },
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id=f"{routed_task_id}-complete",
+            summary="done",
+            full_text="Final result",
+        ),
     )
 
-    assert store.list_events("conv-blocked-timeline")["events"] == []
+    assert store.list_events("conv-blocked-timeline").events == []
 
     with pytest.raises(ValueError):
         store.update_routed_task_status(
             target_token,
             routed_task_id,
-            {
-                "status": "running",
-                "transition_id": f"{routed_task_id}-late-progress",
-                "summary": "late progress",
-                "timeline_events": [
-                    {
-                        "event_id": "evt-blocked-timeline",
-                        "conversation_id": "conv-blocked-timeline",
-                        "kind": "progress",
-                        "title": "Late progress",
-                        "body": "This should not land.",
-                        "status": "running",
-                        "progress": None,
-                        "metadata": {},
-                        "created_at": "2026-03-16T00:00:05+00:00",
-                    }
+            RoutedTaskUpdate(
+                routed_task_id=routed_task_id,
+                status="running",
+                transition_id=f"{routed_task_id}-late-progress",
+                summary="late progress",
+                timeline_events=[
+                    TimelineEventPayload(
+                        event_id="evt-blocked-timeline",
+                        conversation_id="conv-blocked-timeline",
+                        kind="progress",
+                        title="Late progress",
+                        body="This should not land.",
+                        status="running",
+                        progress=None,
+                        metadata=RegistryJsonRecord(),
+                        created_at="2026-03-16T00:00:05+00:00",
+                    )
                 ],
-            },
+            ),
         )
 
     task = _routed_task_row(store, routed_task_id)
 
     assert task["status"] == "completed"
     assert "Final result" in str(task["result_json"])
-    assert store.list_events("conv-blocked-timeline")["events"] == []
+    assert store.list_events("conv-blocked-timeline").events == []
 
 
 def test_assert_agent_scope_rejects_wrong_scope(store):
@@ -662,17 +710,17 @@ def test_channel_scope_poll_filters_routed_deliveries(store):
     store.create_delivery(
         target_agent_id=agent_id,
         kind="channel_input",
-        payload={"conversation_id": "conv-1", "text": "hello"},
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
     )
     store.create_delivery(
         target_agent_id=agent_id,
         kind="routed_task",
-        payload={"routed_task_id": "task-1"},
+        payload=RegistryJsonRecord({"routed_task_id": "task-1"}),
     )
 
-    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+    deliveries = store.poll(agent_token, cursor=0, limit=20).deliveries
 
-    assert [item["kind"] for item in deliveries] == ["channel_input"]
+    assert [item.kind for item in deliveries] == ["channel_input"]
 
 
 def test_coordination_scope_poll_filters_channel_deliveries(store):
@@ -680,17 +728,17 @@ def test_coordination_scope_poll_filters_channel_deliveries(store):
     store.create_delivery(
         target_agent_id=agent_id,
         kind="channel_input",
-        payload={"conversation_id": "conv-1", "text": "hello"},
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
     )
     store.create_delivery(
         target_agent_id=agent_id,
         kind="routed_task",
-        payload={"routed_task_id": "task-1"},
+        payload=RegistryJsonRecord({"routed_task_id": "task-1"}),
     )
 
-    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+    deliveries = store.poll(agent_token, cursor=0, limit=20).deliveries
 
-    assert [item["kind"] for item in deliveries] == ["routed_task"]
+    assert [item.kind for item in deliveries] == ["routed_task"]
 
 
 def test_create_routed_task_disabled_capability_raises(store):
@@ -706,19 +754,19 @@ def test_create_routed_task_disabled_capability_raises(store):
 
     with pytest.raises(CapabilityDisabledError):
         store.create_routed_task(
-            {
-                "routed_task_id": "task-disabled",
-                "parent_conversation_id": conversation["conversation_id"],
-                "origin_agent_id": origin_id,
-                "target_agent_id": target_id,
-                "title": "Disabled review task",
-                "instructions": "Review the spec.",
-                "requested_capabilities": ["reviewer"],
-                "context": {},
-                "constraints": {},
-                "priority": "normal",
-                "created_at": "2026-03-16T00:00:00+00:00",
-            }
+            RoutedTaskRequest(
+                routed_task_id="task-disabled",
+                parent_conversation_id=conversation.conversation_id,
+                origin_agent_id=origin_id,
+                target_agent_id=target_id,
+                title="Disabled review task",
+                instructions="Review the spec.",
+                requested_capabilities=["reviewer"],
+                context=RegistryJsonRecord(),
+                constraints=RegistryJsonRecord(),
+                priority="normal",
+                created_at="2026-03-16T00:00:00+00:00",
+            )
         )
 
 
@@ -732,7 +780,7 @@ def test_create_conversation_delivers_channel_input(store):
         external_conversation_ref="alpha-conv-1",
     )
 
-    assert conversation["conversation_id"]
+    assert conversation.conversation_id
 
 
 def test_add_conversation_message_requires_non_empty_text(store):
@@ -745,7 +793,7 @@ def test_add_conversation_message_requires_non_empty_text(store):
     )
 
     with pytest.raises(ValueError, match="message text"):
-        store.add_conversation_message(conversation["conversation_id"], "   ")
+        store.add_conversation_message(conversation.conversation_id, "   ")
 
 
 def test_add_conversation_action_requires_non_empty_action(store):
@@ -759,8 +807,12 @@ def test_add_conversation_action_requires_non_empty_action(store):
 
     with pytest.raises(ValueError, match="action"):
         store.add_conversation_action(
-            conversation["conversation_id"],
-            {"action_id": "action-1", "action": "", "payload": {}},
+            conversation.conversation_id,
+            CoordinationActionEnvelope(
+                action_id="action-1",
+                action="",
+                payload=RegistryJsonRecord(),
+            ),
         )
 
 
@@ -775,20 +827,20 @@ def test_direct_assign_accepts_unique_display_name_alias(store):
     )
 
     result = store.add_conversation_action(
-        conversation["conversation_id"],
-        {
-            "action_id": "direct-assign-display-name",
-            "action": "direct_assign",
-            "payload": {
-                "selector": {"kind": "agent", "value": "m2"},
-                "title": "Add numbers",
-                "instructions": "Add 2 and 2 and return the result only.",
-            },
-        },
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="direct-assign-display-name",
+            action="direct_assign",
+            payload=DirectAssignActionPayload(
+                selector=TargetSelector(kind="agent", value="m2"),
+                title="Add numbers",
+                instructions="Add 2 and 2 and return the result only.",
+            ),
+        ),
     )
 
-    assert result["accepted"] is True
-    assert result["routed_tasks"][0]["target_agent_id"] == target_id
+    assert result.accepted is True
+    assert result.routed_tasks[0].target_agent_id == target_id
 
 
 def test_direct_assign_persists_visible_operator_message(store):
@@ -802,47 +854,48 @@ def test_direct_assign_persists_visible_operator_message(store):
     )
 
     result = store.add_conversation_action(
-        conversation["conversation_id"],
-        {
-            "action_id": "direct-assign-history",
-            "action": "direct_assign",
-            "payload": {
-                "selector": {"kind": "agent", "value": "m2"},
-                "title": "Add numbers",
-                "instructions": "Add 2 and 2 and return the result only.",
-                "message_text": "@m2 add 2 and 2",
-            },
-        },
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="direct-assign-history",
+            action="direct_assign",
+            payload=DirectAssignActionPayload(
+                selector=TargetSelector(kind="agent", value="m2"),
+                title="Add numbers",
+                instructions="Add 2 and 2 and return the result only.",
+                message_text="@m2 add 2 and 2",
+            ),
+        ),
     )
 
-    routed_task_id = result["routed_tasks"][0]["routed_task_id"]
+    routed_task_id = result.routed_tasks[0].routed_task_id
     _lease_routed_task(store, target_token)
     _start_routed_task(store, target_token, routed_task_id)
     store.update_routed_task_result(
         target_token,
         routed_task_id,
-        {
-            "status": "completed",
-            "transition_id": f"{routed_task_id}-complete",
-            "summary": "4",
-            "full_text": "4",
-        },
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id=f"{routed_task_id}-complete",
+            summary="4",
+            full_text="4",
+        ),
     )
 
-    events = store.list_events(conversation["conversation_id"])["events"]
+    events = store.list_events(conversation.conversation_id).events
 
-    assert events[0]["kind"] == "message.user"
-    assert events[0]["content"] == "@m2 add 2 and 2"
-    assert events[0]["metadata"]["source_action"] == "direct_assign"
+    assert events[0].kind == "message.user"
+    assert events[0].content == "@m2 add 2 and 2"
+    assert events[0].metadata["source_action"] == "direct_assign"
     assert any(
-        event["kind"] == "delegation.submitted"
-        and event["metadata"]["tasks"][0]["routed_task_id"] == routed_task_id
+        event.kind == "delegation.submitted"
+        and event.metadata["tasks"][0]["routed_task_id"] == routed_task_id
         for event in events
     )
     assert any(
-        event["kind"] == "task.status"
-        and event["metadata"]["status"] == "completed"
-        and event["metadata"]["routed_task_id"] == routed_task_id
+        event.kind == "task.status"
+        and event.metadata["status"] == "completed"
+        and event.metadata["routed_task_id"] == routed_task_id
         for event in events
     )
 
@@ -860,16 +913,16 @@ def test_direct_assign_rejects_ambiguous_display_name_alias(store):
 
     with pytest.raises(ValueError, match="ambiguous"):
         store.add_conversation_action(
-            conversation["conversation_id"],
-            {
-                "action_id": "direct-assign-display-name-ambiguous",
-                "action": "direct_assign",
-                "payload": {
-                    "selector": {"kind": "agent", "value": "m2"},
-                    "title": "Add numbers",
-                    "instructions": "Add 2 and 2 and return the result only.",
-                },
-            },
+            conversation.conversation_id,
+            CoordinationActionEnvelope(
+                action_id="direct-assign-display-name-ambiguous",
+                action="direct_assign",
+                payload=DirectAssignActionPayload(
+                    selector=TargetSelector(kind="agent", value="m2"),
+                    title="Add numbers",
+                    instructions="Add 2 and 2 and return the result only.",
+                ),
+            ),
         )
 
 
@@ -885,16 +938,16 @@ def test_direct_assign_does_not_fuzzy_match_partial_alias(store):
 
     with pytest.raises(ValueError, match="No connected agent matches"):
         store.add_conversation_action(
-            conversation["conversation_id"],
-            {
-                "action_id": "direct-assign-no-fuzzy",
-                "action": "direct_assign",
-                "payload": {
-                    "selector": {"kind": "agent", "value": "m"},
-                    "title": "Add numbers",
-                    "instructions": "Add 2 and 2 and return the result only.",
-                },
-            },
+            conversation.conversation_id,
+            CoordinationActionEnvelope(
+                action_id="direct-assign-no-fuzzy",
+                action="direct_assign",
+                payload=DirectAssignActionPayload(
+                    selector=TargetSelector(kind="agent", value="m"),
+                    title="Add numbers",
+                    instructions="Add 2 and 2 and return the result only.",
+                ),
+            ),
         )
 
 
@@ -910,41 +963,42 @@ def test_delegated_task_usage_rolls_up_to_parent_conversation(store):
     store.update_routed_task_result(
         target_token,
         routed_task_id,
-        {
-            "status": "completed",
-            "transition_id": f"{routed_task_id}-complete",
-            "summary": "4",
-            "full_text": "4",
-            "prompt_tokens": 13,
-            "completion_tokens": 5,
-            "cost_usd": 0.17,
-            "provider": "codex",
-        },
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id=f"{routed_task_id}-complete",
+            summary="4",
+            full_text="4",
+            prompt_tokens=13,
+            completion_tokens=5,
+            cost_usd=0.17,
+            provider="codex",
+        ),
     )
 
     usage_rows = store.get_usage_summary("1970-01-01T00:00:00+00:00")
-    usage_row = next(item for item in usage_rows if item["conversation_id"] == conversation_id)
-    assert usage_row["title"] == f"Conversation {routed_task_id}"
-    assert usage_row["metadata"]["prompt_tokens"] == 13
-    assert usage_row["metadata"]["completion_tokens"] == 5
-    assert usage_row["metadata"]["cost_usd"] == 0.17
-    assert usage_row["metadata"]["provider"] == "codex"
+    usage_row = next(item for item in usage_rows if item.conversation_id == conversation_id)
+    assert usage_row.title == f"Conversation {routed_task_id}"
+    assert usage_row.metadata["prompt_tokens"] == 13
+    assert usage_row.metadata["completion_tokens"] == 5
+    assert usage_row.metadata["cost_usd"] == 0.17
+    assert usage_row.metadata["provider"] == "codex"
 
     per_conversation = store.get_usage(
         conversation_id=conversation_id,
         since="1970-01-01T00:00:00+00:00",
     )
     assert any(
-        row["conversation_id"] == conversation_id
-        and row["metadata"]["prompt_tokens"] == 13
-        and row["metadata"]["completion_tokens"] == 5
-        and row["metadata"]["cost_usd"] == 0.17
-        and row["metadata"]["provider"] == "codex"
+        row.conversation_id == conversation_id
+        and row.metadata["prompt_tokens"] == 13
+        and row.metadata["completion_tokens"] == 5
+        and row.metadata["cost_usd"] == 0.17
+        and row.metadata["provider"] == "codex"
         for row in per_conversation
     )
 
     summary = store.get_summary(now_iso=datetime.now(timezone.utc).isoformat())
-    assert summary["usage_24h"] == {
+    assert summary.usage_24h == {
         "prompt_tokens": 13,
         "completion_tokens": 5,
         "cost_usd": 0.17,
@@ -968,48 +1022,56 @@ def test_list_approvals_returns_only_pending_requests(store):
 
     store.publish_events(
         agent_token,
-        pending["conversation_id"],
-        [{
-            "event_id": "approval-pending-event",
-            "kind": "approval.requested",
-            "actor": "operator",
-            "content": "Review this change",
-            "created_at": "2026-03-16T00:00:00+00:00",
-            "metadata": {
-                "request_kind": "preflight",
-                "actor_key": "reg:operator",
-                "trust_tier": "trusted",
-                "expires_at": "2026-04-16T01:00:00+00:00",
-            },
-        }],
+        pending.conversation_id,
+        [
+            EventRecord(
+                event_id="approval-pending-event",
+                kind="approval.requested",
+                actor="operator",
+                content="Review this change",
+                created_at="2026-03-16T00:00:00+00:00",
+                metadata={
+                    "request_kind": "preflight",
+                    "actor_key": "reg:operator",
+                    "trust_tier": "trusted",
+                    "expires_at": "2026-04-16T01:00:00+00:00",
+                },
+            )
+        ],
     )
     store.publish_events(
         agent_token,
-        decided["conversation_id"],
-        [{
-            "event_id": "approval-decided-event",
-            "kind": "approval.requested",
-            "actor": "operator",
-            "content": "Approve this deployment",
-            "created_at": "2026-03-16T00:05:00+00:00",
-            "metadata": {
-                "request_kind": "delegation",
-                "actor_key": "reg:operator",
-                "trust_tier": "trusted",
-                "expires_at": "2026-04-16T01:05:00+00:00",
-            },
-        }],
+        decided.conversation_id,
+        [
+            EventRecord(
+                event_id="approval-decided-event",
+                kind="approval.requested",
+                actor="operator",
+                content="Approve this deployment",
+                created_at="2026-03-16T00:05:00+00:00",
+                metadata={
+                    "request_kind": "delegation",
+                    "actor_key": "reg:operator",
+                    "trust_tier": "trusted",
+                    "expires_at": "2026-04-16T01:05:00+00:00",
+                },
+            )
+        ],
     )
     store.add_conversation_action(
-        decided["conversation_id"],
-        {"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "approval-decided-event"}},
+        decided.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="approval-action-1",
+            action="approve",
+            payload=ApproveRejectActionPayload(request_id="approval-decided-event"),
+        ),
     )
 
     approvals = store.list_approvals()
 
-    assert [item["conversation_id"] for item in approvals] == [pending["conversation_id"]]
-    assert approvals[0]["request_id"] == "approval-pending-event"
-    assert approvals[0]["request_kind"] == "preflight"
+    assert [item.conversation_id for item in approvals] == [pending.conversation_id]
+    assert approvals[0].request_id == "approval-pending-event"
+    assert approvals[0].request_kind == "preflight"
 
 
 def test_heartbeat_persists_runtime_health_and_workers(store):
@@ -1017,53 +1079,56 @@ def test_heartbeat_persists_runtime_health_and_workers(store):
 
     store.heartbeat(
         agent_token,
-        {
-            "connectivity_state": "connected",
-            "current_capacity": 0,
-            "max_capacity": 2,
-            "runtime_health": _runtime_health_payload(worker_count=2),
-        },
+        AgentHeartbeatRequest(
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=2,
+            runtime_health=_runtime_health_payload(worker_count=2),
+        ),
     )
 
     listed = store.list_agents()
-    assert listed[0]["runtime_health_summary"]["status"] == "degraded"
-    assert listed[0]["runtime_health_summary"]["healthy_worker_count"] == 2
+    assert listed[0].runtime_health_summary.status == "degraded"
+    assert listed[0].runtime_health_summary.healthy_worker_count == 2
     detail = store.get_agent_runtime_health(agent_id)
     assert detail is not None
-    assert detail["report"]["summary"]["claimed_count"] == 1
-    assert len(detail["workers"]) == 2
+    assert detail.report["summary"]["claimed_count"] == 1
+    assert len(detail.workers) == 2
 
 
 def test_heartbeat_replaces_missing_worker_rows(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
     first = _runtime_health_payload(worker_count=2)
-    second = _runtime_health_payload(worker_count=1)
-    second["generated_at"] = "2026-03-16T00:00:20+00:00"
-    second["summary"]["healthy_worker_count"] = 1
+    second = _runtime_health_payload(worker_count=1, generated_at="2026-03-16T00:00:20+00:00")
+    second = second.model_copy(
+        update={
+            "summary": second.summary.model_copy(update={"healthy_worker_count": 1}),
+        }
+    )
 
     store.heartbeat(
         agent_token,
-        {
-            "connectivity_state": "connected",
-            "current_capacity": 0,
-            "max_capacity": 2,
-            "runtime_health": first,
-        },
+        AgentHeartbeatRequest(
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=2,
+            runtime_health=first,
+        ),
     )
     store.heartbeat(
         agent_token,
-        {
-            "connectivity_state": "connected",
-            "current_capacity": 0,
-            "max_capacity": 2,
-            "runtime_health": second,
-        },
+        AgentHeartbeatRequest(
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=2,
+            runtime_health=second,
+        ),
     )
 
     detail = store.get_agent_runtime_health(agent_id)
     assert detail is not None
-    assert detail["last_mirrored_at"] == "2026-03-16T00:00:20+00:00"
-    assert [row["worker_id"] for row in detail["workers"]] == ["worker-1"]
+    assert detail.last_mirrored_at == "2026-03-16T00:00:20+00:00"
+    assert [row.worker_id for row in detail.workers] == ["worker-1"]
 
 
 def test_register_preserves_omitted_capacity_and_card_lists(store):
@@ -1071,55 +1136,56 @@ def test_register_preserves_omitted_capacity_and_card_lists(store):
 
     store.heartbeat(
         agent_token,
-        {
-            "connectivity_state": "connected",
-            "current_capacity": 2,
-            "max_capacity": 5,
-        },
+        AgentHeartbeatRequest(
+            connectivity_state="connected",
+            current_capacity=2,
+            max_capacity=5,
+        ),
     )
 
     updated = store.register(
         agent_token,
-        {
-            "agent_card": {
-                "display_name": "Partial Register Bot",
-                "registry_scope": "coordination",
-            },
-            "connectivity_state": "connected",
-        },
+        AgentRegisterRequest(
+            agent_card=AgentCard(
+                bot_key="bot-partial-register-bot",
+                display_name="Partial Register Bot",
+                registry_scope="coordination",
+            ),
+            connectivity_state="connected",
+        ),
     )
 
-    assert updated["agent_id"] == agent_id
-    assert updated["current_capacity"] == 2
-    assert updated["max_capacity"] == 5
-    assert updated["capabilities"] == ["python", "tests"]
-    assert updated["tags"] == ["backend"]
-    assert updated["channel_capabilities"] == ["registry"]
-    assert updated["registry_scope"] == "coordination"
+    assert updated.agent_id == agent_id
+    assert updated.current_capacity == 2
+    assert updated.max_capacity == 5
+    assert updated.capabilities == ["python", "tests"]
+    assert updated.tags == ["backend"]
+    assert updated.channel_capabilities == ["registry"]
+    assert updated.registry_scope == "coordination"
 
 
-def test_capability_override_disabled_excludes_from_search(store):
+def test_capability_override_disabled_excludes__search(store):
     _enroll(store, "rust-bot", ["rust"])
     store.set_capability_override("rust", enabled=False)
 
-    assert store.search_agents({"capabilities": ["rust"], "required_state": "connected"}) == []
+    assert store.search_agents(AgentDiscoveryQuery(capabilities=["rust"], required_state="connected")) == []
 
 
 def test_search_agents_rejects_string_filters(store):
     _enroll(store, "alpha-bot", ["python"])
 
-    with pytest.raises(ValueError, match="capabilities"):
-        store.search_agents({"capabilities": "python", "required_state": "connected"})
+    with pytest.raises(ValidationError):
+        AgentDiscoveryQuery(capabilities="python", required_state="connected")
 
 
 def test_list_capabilities_aggregates_declared(store):
     _enroll(store, "alpha-bot", ["python"])
     _enroll(store, "beta-bot", ["python"])
 
-    capabilities = {item["capability_name"]: item for item in store.list_capabilities()}
+    capabilities = {item.capability_name: item for item in store.list_capabilities()}
 
     assert "python" in capabilities
-    assert capabilities["python"]["declared_by_agents"] == ["alpha-bot", "beta-bot"]
+    assert capabilities["python"].declared_by_agents == ["alpha-bot", "beta-bot"]
 
 
 def test_capability_override_survives_agent_deregistration(store):
@@ -1127,7 +1193,7 @@ def test_capability_override_survives_agent_deregistration(store):
     store.set_capability_override("go", enabled=False)
     store.deregister(agent_token)
 
-    capabilities = {item["capability_name"]: item for item in store.list_capabilities()}
+    capabilities = {item.capability_name: item for item in store.list_capabilities()}
 
-    assert capabilities["go"]["enabled"] is False
-    assert capabilities["go"]["declared_by_agents"] == []
+    assert capabilities["go"].enabled is False
+    assert capabilities["go"].declared_by_agents == []

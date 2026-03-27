@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Protocol
 
 from octopus_sdk.inbound_types import InboundMessage
 
@@ -50,8 +50,8 @@ class RecoveryPort(Protocol):
         action: str,
         worker_id: str,
         ignore_claimed_item_id: str = "",
-        config: Any = None,
-        dispatcher: Any = None,
+        config: object | None = None,
+        dispatcher: object | None = None,
     ) -> RecoveryActionOutcome: ...
 
     def complete_replay(self, *, data_dir: Path, item_id: str) -> None: ...

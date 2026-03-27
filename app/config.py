@@ -55,7 +55,7 @@ def env_path_for_instance(instance: str) -> Path:
 
 
 def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
-    """Derive a stable, human-safe slug from a display name or instance id."""
+    """Derive a stable, human-safe slug a display name or instance id."""
     value = (raw or "").strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
     return value or fallback
@@ -334,7 +334,7 @@ def _validated_publish_level(raw: str) -> str:
 
 
 def load_config(instance: str | None = None) -> BotConfig:
-    """Load config from env file + environment variables.
+    """Load config env file + environment variables.
 
     Instance env file: .deploy/bots/<instance>/.env
     Environment variables override the file (env file is the base,
@@ -377,7 +377,6 @@ def load_config(instance: str | None = None) -> BotConfig:
             return validate_codex_sandbox(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
-
     default_data = Path.home() / ".octopus-agent" / instance
 
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
@@ -520,7 +519,7 @@ def load_config(instance: str | None = None) -> BotConfig:
 
 
 def load_config_provider_health() -> BotConfig:
-    """Load minimal config from environment for provider-only health checks.
+    """Load minimal config environment for provider-only health checks.
 
     Used by --provider-health. Does not require BOT_DATABASE_URL or Telegram
     config. Reads BOT_PROVIDER, BOT_MODEL, BOT_DATA_DIR, BOT_WORKING_DIR, and
@@ -552,7 +551,6 @@ def load_config_provider_health() -> BotConfig:
             return validate_codex_sandbox(raw)
         except ValueError as exc:
             raise SystemExit(f"CONFIG ERROR: {exc}") from exc
-
     instance = get("BOT_INSTANCE", "default")
     default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")

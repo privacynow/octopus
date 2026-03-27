@@ -1,6 +1,5 @@
 """Tests for config.py — env parsing, validation, webhook mode."""
 
-import asyncio
 import os
 import subprocess
 import sys
@@ -416,6 +415,7 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         run=AsyncMock(return_value=None),
         stop=AsyncMock(return_value=None),
     )
+    bootstrap = SimpleNamespace(worker_processor=MagicMock())
     telegram_transport_instance = SimpleNamespace(
         transport_id="telegram",
         boot_id="test-boot",
@@ -426,30 +426,34 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         stack.enter_context(patch("app.main.load_config", return_value=cfg))
         stack.enter_context(patch("app.main.make_provider", return_value=provider))
         stack.enter_context(patch("app.main.fail_fast"))
-        stack.enter_context(patch("app.runtime_backend.init"))
-        stack.enter_context(patch("app.runtime.process.ensure_data_dirs"))
-        stack.enter_context(patch("app.runtime.process.init_content_store_for_config"))
-        stack.enter_context(patch("app.runtime.process.init_credential_store_for_config"))
-        stack.enter_context(patch("app.runtime.process.TransportDispatcher", return_value=dispatcher))
-        stack.enter_context(patch("app.runtime.process.ControlPlaneBus", return_value=bus))
+        stack.enter_context(patch("app.runtime.startup.runtime_backend.init"))
+        stack.enter_context(patch("app.runtime.startup.ensure_data_dirs"))
+        stack.enter_context(patch("app.runtime.startup.init_content_store_for_config"))
+        stack.enter_context(patch("app.runtime.startup.init_credential_store_for_config"))
+        stack.enter_context(patch("app.runtime.transport_builders.TransportDispatcher", return_value=dispatcher))
+        stack.enter_context(patch("app.runtime.services.ControlPlaneBus", return_value=bus))
         register_registry_channels = stack.enter_context(
-            patch("app.runtime.process.register_registry_channels")
+            patch("app.runtime.transport_builders.register_registry_channels")
+        )
+        build_bootstrap = stack.enter_context(
+            patch("app.runtime.transport_builders.build_bootstrap", return_value=bootstrap)
         )
         telegram_bootstrap = stack.enter_context(
-            patch("app.runtime.process.TelegramTransport")
+            patch("app.runtime.transport_builders.TelegramTransport")
         )
         telegram_bootstrap.return_value = telegram_transport_instance
         build_registry_delivery_transport = stack.enter_context(
-            patch("app.runtime.process.build_registry_delivery_transport", return_value=delivery_transport)
+            patch(
+                "app.runtime.transport_builders.build_registry_delivery_transport",
+                return_value=delivery_transport,
+            )
         )
         bot_runtime_runner = stack.enter_context(
-            patch("app.runtime.process.BotRuntime.run", autospec=True)
+            patch("app.runtime.services.BotRuntime.run", autospec=True)
         )
         bot_runtime_runner.return_value = None
-        stack.enter_context(patch("app.runtime.process.close_db"))
-        stack.enter_context(patch("app.runtime.process.close_transport_db"))
-        stack.enter_context(patch("app.runtime.process.recover_stale_claims"))
-        stack.enter_context(patch("app.runtime.process.purge_old"))
+        stack.enter_context(patch("app.runtime.startup.close_db"))
+        stack.enter_context(patch("app.runtime.startup.close_transport_db"))
         stack.enter_context(
             patch(
                 "app.db.postgres.get_connection",
@@ -462,6 +466,8 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         yield SimpleNamespace(
             provider=provider,
             dispatcher=dispatcher,
+            build_bootstrap=build_bootstrap,
+            bootstrap=bootstrap,
             telegram_bootstrap=telegram_bootstrap,
             telegram_transport=telegram_transport_instance,
             bus=bus,
@@ -675,48 +681,43 @@ def test_main_registry_only_starts_without_telegram_ingress():
             boot_id="registry-only-boot",
             transport_dispatcher=None,
         ),
-        worker_dispatch=MagicMock(),
-        worker_deserialize_failure_notifier=None,
+        worker_processor=MagicMock(),
     )
     async def _run_runtime(bot_runtime):
-        assert bot_runtime.lifecycle is not None
-        stop_event = asyncio.Event()
-        await bot_runtime.lifecycle.startup(stop_event)
-        await bot_runtime.lifecycle.shutdown()
+        assert bot_runtime.worker_processor is worker_bundle.worker_processor
+        assert bot_runtime.boot_id == "registry-only-boot"
 
     with ExitStack() as stack:
         stack.enter_context(patch("app.main.load_config", return_value=cfg))
         stack.enter_context(patch("app.main.make_provider", return_value=provider))
         stack.enter_context(patch("app.main.fail_fast"))
-        stack.enter_context(patch("app.runtime_backend.init"))
-        stack.enter_context(patch("app.runtime.process.ensure_data_dirs"))
-        stack.enter_context(patch("app.runtime.process.init_content_store_for_config"))
-        stack.enter_context(patch("app.runtime.process.init_credential_store_for_config"))
-        stack.enter_context(patch("app.runtime.process.TransportDispatcher", return_value=dispatcher))
-        control_plane_bus_cls = stack.enter_context(patch("app.runtime.process.ControlPlaneBus"))
+        stack.enter_context(patch("app.runtime.startup.runtime_backend.init"))
+        stack.enter_context(patch("app.runtime.startup.ensure_data_dirs"))
+        stack.enter_context(patch("app.runtime.startup.init_content_store_for_config"))
+        stack.enter_context(patch("app.runtime.startup.init_credential_store_for_config"))
+        stack.enter_context(patch("app.runtime.transport_builders.TransportDispatcher", return_value=dispatcher))
+        control_plane_bus_cls = stack.enter_context(patch("app.runtime.services.ControlPlaneBus"))
         register_registry_channels = stack.enter_context(
-            patch("app.runtime.process.register_registry_channels")
+            patch("app.runtime.transport_builders.register_registry_channels")
         )
         telegram_bootstrap = stack.enter_context(
-            patch("app.runtime.process.TelegramTransport")
+            patch("app.runtime.transport_builders.TelegramTransport")
         )
         build_worker_bundle_mock = stack.enter_context(
-            patch("app.runtime.process.build_worker_bundle", return_value=worker_bundle)
+            patch("app.runtime.transport_builders.build_worker_bundle", return_value=worker_bundle)
         )
         build_registry_delivery_transport = stack.enter_context(
             patch(
-                "app.runtime.process.build_registry_delivery_transport",
+                "app.runtime.transport_builders.build_registry_delivery_transport",
                 return_value=SimpleNamespace(transport_id="registry-delivery"),
             )
         )
         bot_runtime_runner = stack.enter_context(
-            patch("app.runtime.process.BotRuntime.run", autospec=True)
+            patch("app.runtime.services.BotRuntime.run", autospec=True)
         )
         bot_runtime_runner.side_effect = _run_runtime
-        stack.enter_context(patch("app.runtime.process.close_db"))
-        stack.enter_context(patch("app.runtime.process.close_transport_db"))
-        stack.enter_context(patch("app.runtime.process.recover_stale_claims"))
-        stack.enter_context(patch("app.runtime.process.purge_old"))
+        stack.enter_context(patch("app.runtime.startup.close_db"))
+        stack.enter_context(patch("app.runtime.startup.close_transport_db"))
         stack.enter_context(patch("sys.argv", ["bot"]))
         bus = SimpleNamespace(reconcile_orphans=AsyncMock(return_value=0))
         control_plane_bus_cls.return_value = bus
@@ -729,6 +730,7 @@ def test_main_registry_only_starts_without_telegram_ingress():
     assert build_worker_bundle_call is not None
     assert build_worker_bundle_call.args == (cfg, provider)
     assert isinstance(build_worker_bundle_call.kwargs["services"], BotServices)
+    assert build_worker_bundle_call.kwargs["dispatcher"] is dispatcher
     dispatcher.build_all_ingresses.assert_not_called()
     register_registry_channels.assert_called_once()
     register_call = register_registry_channels.call_args
@@ -740,7 +742,6 @@ def test_main_registry_only_starts_without_telegram_ingress():
     await_args = bot_runtime_runner.await_args
     assert await_args is not None
     assert len(await_args.args) == 1
-    assert worker_bundle.runtime.transport_dispatcher is dispatcher
 
 
 def test_main_shared_worker_with_registries_skips_control_plane_processor_startup():
@@ -826,7 +827,7 @@ def test_main_doctor_live_provider_opt_in_enables_runtime_probe():
 
 
 def test_runs_registry_transport_moves_to_webhook_role_in_shared_mode():
-    from app.runtime.process import runs_registry_transport
+    from app.runtime.startup import runs_registry_transport
 
     cfg = make_config(
         agent_mode="registry",
@@ -839,7 +840,7 @@ def test_runs_registry_transport_moves_to_webhook_role_in_shared_mode():
 
 
 def test_runs_registry_transport_is_disabled_for_shared_worker_role():
-    from app.runtime.process import runs_registry_transport
+    from app.runtime.startup import runs_registry_transport
 
     cfg = make_config(
         agent_mode="registry",
@@ -867,7 +868,7 @@ def test_main_webhook_empty_secret_passes_none():
 
 
 def test_load_config_reads_webhook_env_vars():
-    """load_config picks up BOT_MODE and webhook env vars from .env file."""
+    """load_config picks up BOT_MODE and webhook env vars .env file."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
@@ -1084,7 +1085,7 @@ def test_claim_lease_ttl_defaults_to_300():
     assert cfg.claim_lease_ttl_seconds == 300
 
 
-def test_claim_lease_ttl_from_env():
+def test_claim_lease_ttl__env():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
@@ -1125,7 +1126,7 @@ def test_validate_config_rejects_invalid_telegram_api_base_url():
 
 
 def test_load_config_reads_database_url_and_pool_settings():
-    """load_config picks up BOT_DATABASE_URL and pool settings from .env."""
+    """load_config picks up BOT_DATABASE_URL and pool settings .env."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
@@ -1146,7 +1147,7 @@ def test_load_config_reads_database_url_and_pool_settings():
         os.unlink(env_path)
 
 
-# -- Config validation edge cases (from test_high_risk.py) --
+# -- Config validation edge cases (test_high_risk.py) --
 
 
 def test_config_bad_timeout():

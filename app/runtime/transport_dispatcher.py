@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.transport import BotRuntimeHandle, TransportCapabilities, TransportDescriptor
 from octopus_sdk.transport import TransportEgress
 from octopus_sdk.transport import TransportImplementation
@@ -39,7 +39,7 @@ class TransportDispatcher(TransportImplementation):
     def ref_prefix(self) -> str:
         return "dispatch:"
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         return self.create_egress(conversation_ref, config=config, **kw)
 
     def register(self, transport: TransportImplementation) -> None:
@@ -61,13 +61,13 @@ class TransportDispatcher(TransportImplementation):
                 return transport
         return None
 
-    def create_egress(self, conversation_ref: str, *, config: Any, **kw: Any) -> TransportEgress:
+    def create_egress(self, conversation_ref: str, *, config: BotConfigBase, **kw: object) -> TransportEgress:
         transport = self._transport_for_ref(conversation_ref)
         if transport is None:
             raise ValueError(f"unknown conversation ref: {conversation_ref}")
         return transport.build_egress(conversation_ref=conversation_ref, config=config, **kw)
 
-    def egress_ready_for_ref(self, conversation_ref: str, *, config: Any, **kw: Any) -> bool:
+    def egress_ready_for_ref(self, conversation_ref: str, *, config: BotConfigBase, **kw: object) -> bool:
         transport = self._transport_for_ref(conversation_ref)
         if transport is None:
             raise ValueError(f"unknown conversation ref: {conversation_ref}")

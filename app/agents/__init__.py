@@ -19,7 +19,6 @@ __all__ = [
     "AgentCard",
     "AgentDiscoveryQuery",
     "AgentRegistryClient",
-    "AgentRuntime",
     "RegistryClientError",
     "RegistryConnectionConfig",
     "RegistryConnectionState",
@@ -28,13 +27,4 @@ __all__ = [
     "RoutedTaskUpdate",
     "load_registry_connection_state",
     "save_registry_connection_state",
-    "AgentRuntime",
 ]
-
-
-def __getattr__(name: str):
-    if name == "AgentRuntime":
-        from app.agents.runtime import AgentRuntime
-
-        return AgentRuntime
-    raise AttributeError(name)

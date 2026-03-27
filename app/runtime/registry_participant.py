@@ -2,18 +2,39 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
+from app.agents.client import AgentRegistryClient, RegistryClientError
+from app.registry_errors import registry_error_detail
 from app.agents.registry_capabilities import registry_id_from_authority_ref
-from app.agents.state import load_runtime_registry_connection_state
+from app.agents.state import (
+    RegistryConnectionState,
+    load_runtime_registry_connection_state,
+    save_registry_connection_state,
+)
 from app.config import BotConfig
-from app.runtime.services import ControlPlaneServices
+from app.runtime.bot_services import ControlPlaneServices
+from app.runtime_health import (
+    RuntimeHealthRegistryProjector,
+    RuntimeHealthProjector,
+    RuntimeHealthProvider,
+)
+from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.identity import bot_identity
 from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
 from octopus_sdk.events import ConversationEvent
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
+    AgentCard,
+    DeliveryPollResult,
+    EnrollmentResult,
     ApproveDelegationActionPayload,
     AuthorityId,
     CancelDelegationActionPayload,
@@ -24,13 +45,14 @@ from octopus_sdk.registry.models import (
     DelegateTasksActionPayload,
     DelegationIntent,
     DirectAssignActionPayload,
-    EnrollmentResult,
     ExternalConversationRef,
     MirrorOutcome,
+    RuntimeHealthPayload,
     TargetResolutionPreview,
     TargetSelector,
     TransportActorKey,
     TransportConversationKey,
+    utcnow_iso,
 )
 from octopus_sdk.registry_participant import (
     RegistryConversationMirror,
@@ -42,141 +64,317 @@ from octopus_sdk.registry_participant import (
 )
 
 
-class _NoOpEnrollment(RegistryParticipant):
-    async def enroll(self) -> EnrollmentResult:
-        return EnrollmentResult()
-
-    async def heartbeat(self) -> None:
-        return None
-
-    def is_enrolled(self, authority: AuthorityId) -> bool:
-        del authority
-        return False
-
-    def local_agent_id(self, authority: AuthorityId) -> str:
-        del authority
-        return ""
+log = logging.getLogger(__name__)
 
 
-class _NoOpHealth(RegistryParticipantHealth):
-    def enrollment_state(self) -> dict[AuthorityId, EnrollmentResult]:
-        return {}
-
-    def connectivity_state(self, authority: AuthorityId) -> ConnectivityState:
-        del authority
-        return ConnectivityState("standalone")
-
-    def current_local_agent_ids(self) -> dict[AuthorityId, str]:
-        return {}
-
-    def live_local_agent_ids(self) -> dict[AuthorityId, str]:
-        return {}
+def _registered_card_hash(card: AgentCard) -> str:
+    payload = card.model_dump(mode="json")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-class _NoOpDiscovery(RegistryDiscovery):
-    async def search_agents(self, *, query: AgentDiscoveryQuery) -> AgentSearchResult:
-        del query
-        return AgentSearchResult(status="unavailable")
+class AgentRuntime:
+    """Maintains bot identity and heartbeat against the central registry."""
 
-    async def resolve_authority(self, *, selector: TargetSelector) -> AuthorityId:
-        del selector
-        raise RuntimeError("Registry participation unavailable.")
-
-
-class _NoOpMirror(RegistryConversationMirror):
-    async def create_conversation(
+    def __init__(
         self,
-        conversation_key: TransportConversationKey,
+        config: BotConfig,
         *,
-        origin_channel: str,
-        external_ref: ExternalConversationRef,
-    ) -> ConversationId:
-        del conversation_key, origin_channel, external_ref
-        return ConversationId("")
+        delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
+        runtime_health_provider: RuntimeHealthProvider | None = None,
+        runtime_health_projector: RuntimeHealthProjector[RuntimeHealthPayload] | None = None,
+        provider=None,
+        registry: RegistryConnectionConfig | None = None,
+        channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
+    ) -> None:
+        self.config = config
+        self._delivery_handler = delivery_handler
+        if registry is None and config.agent_mode == "registry":
+            raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
+        self._registry = registry
+        self._channel_capabilities_resolver = channel_capabilities_resolver
+        if self._registry is None:
+            self._state = RegistryConnectionState(registry_id="", registry_scope="full")
+        else:
+            self._state = load_runtime_registry_connection_state(
+                config.data_dir,
+                self._registry.registry_id,
+                registry_scope=self._registry.registry_scope,
+            )
+        self._runtime_health_provider = runtime_health_provider
+        self._runtime_health_projector = runtime_health_projector or RuntimeHealthRegistryProjector()
+        self._provider = provider
 
-    async def publish_events(
-        self,
-        conversation_id: ConversationId,
-        events: list[ConversationEvent],
-    ) -> list[MirrorOutcome]:
-        del conversation_id, events
-        return []
+    @property
+    def state(self) -> RegistryConnectionState:
+        return self._state
 
-    async def submit_message(
+    def _channel_capabilities(self) -> tuple[str, ...]:
+        if self._channel_capabilities_resolver is not None:
+            return self._channel_capabilities_resolver()
+        channels: list[str] = []
+        if self.config.telegram_token:
+            channels.append("telegram")
+        if any(registry.registry_scope in {"channel", "full"} for registry in self.config.agent_registries):
+            channels.append("registry")
+        return tuple(channels)
+
+    def _configured_registry_url(self) -> str:
+        if self._registry is None:
+            return ""
+        return self._registry.url
+
+    def _configured_enroll_token(self) -> str:
+        if self._registry is None:
+            return ""
+        return self._registry.enroll_token
+
+    def requested_card(self) -> AgentCard:
+        capabilities = self._effective_capabilities()
+        return AgentCard(
+            display_name=self.config.agent_display_name or self.config.instance,
+            slug=self._state.registered_slug or self.config.agent_slug,
+            role=self.config.agent_role or self.config.role,
+            registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
+            capabilities=list(capabilities),
+            tags=list(self.config.agent_tags),
+            description=self.config.agent_description,
+            provider=self.config.provider_name,
+            mode=self.config.agent_mode,
+            connectivity_state=self._state.connectivity_state,
+            current_capacity=0,
+            max_capacity=1,
+            channel_capabilities=list(self._channel_capabilities()),
+            version="",
+            bot_key=bot_identity(self.config.data_dir),
+        )
+
+    def _effective_capabilities(self) -> tuple[str, ...]:
+        return self.config.agent_capabilities
+
+    def _client(self) -> AgentRegistryClient:
+        return AgentRegistryClient(
+            self._configured_registry_url(),
+            agent_token=self._state.agent_token,
+        )
+
+    async def _runtime_health_payload(self) -> RuntimeHealthPayload | None:
+        if self._runtime_health_provider is None or self._provider is None:
+            return None
+        report = await self._runtime_health_provider.collect(
+            self.config,
+            self._provider,
+            caller_is_bot=True,
+            session_context=None,
+        )
+        return self._runtime_health_projector.project(report)
+
+    def _save_state(self) -> None:
+        if self._registry is None:
+            return
+        save_registry_connection_state(self.config.data_dir, self._state)
+
+    def _mark_state(
         self,
-        conversation_id: ConversationId,
+        connectivity_state: str,
         *,
-        text: str,
-        actor: TransportActorKey,
-    ) -> list[MirrorOutcome]:
-        del conversation_id, text, actor
-        return []
+        error: str = "",
+        detail: str = "",
+    ) -> None:
+        self._state.connectivity_state = connectivity_state
+        self._state.last_error = error
+        self._state.last_error_detail = detail
+        if connectivity_state == "connected":
+            self._state.last_successful_contact_at = utcnow_iso()
+        self._save_state()
 
-    async def submit_action(
+    async def sync_once(self) -> str:
+        if self.config.agent_mode == "standalone":
+            self._mark_state("standalone")
+            return "standalone"
+
+        if not self._configured_registry_url():
+            self._mark_state(
+                "degraded",
+                error="registry_url_missing",
+                detail="Registry URL not configured.",
+            )
+            return "degraded"
+
+        try:
+            if not self._state.agent_id or not self._state.agent_token:
+                enroll_token = self._configured_enroll_token()
+                if not enroll_token:
+                    self._mark_state(
+                        "degraded",
+                        error="registry_enroll_token_missing",
+                        detail="Registry enrollment token not configured.",
+                    )
+                    return "degraded"
+                enroll = await AgentRegistryClient(self._configured_registry_url()).enroll(
+                    self.requested_card(),
+                    enroll_token,
+                )
+                enroll = EnrollmentResult.model_validate(enroll)
+                self._state.agent_id = enroll.agent_id
+                self._state.agent_token = enroll.agent_token
+                self._state.registered_slug = enroll.slug or self.config.agent_slug
+                self._state.poll_cursor = enroll.poll_cursor or "0"
+                self._save_state()
+
+            card = self.requested_card().model_copy(
+                update={
+                    "slug": self._state.registered_slug or self.config.agent_slug,
+                    "connectivity_state": "connected",
+                }
+            )
+            client = self._client()
+            card_hash = _registered_card_hash(card)
+            if self._state.registered_card_hash != card_hash:
+                await client.register(
+                    card,
+                    connectivity_state="connected",
+                    current_capacity=0,
+                    max_capacity=1,
+                )
+                self._state.registered_card_hash = card_hash
+                self._save_state()
+            runtime_health_payload = None
+            try:
+                runtime_health_payload = await self._runtime_health_payload()
+            except Exception:
+                log.exception(
+                    "Runtime health collection failed for %s; continuing without mirrored health",
+                    self.config.instance,
+                )
+            heartbeat_kwargs = {
+                "connectivity_state": "connected",
+                "current_capacity": 0,
+                "max_capacity": 1,
+            }
+            if runtime_health_payload is not None:
+                heartbeat_kwargs["runtime_health"] = runtime_health_payload
+            await client.heartbeat(**heartbeat_kwargs)
+        except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
+            if isinstance(exc, RegistryClientError):
+                error_code = exc.error_code
+                detail = exc.operator_detail
+            elif isinstance(exc, asyncio.TimeoutError):
+                error_code = "registry_timeout"
+                detail = "Registry sync timed out."
+            else:
+                error_code = "registry_unreachable"
+                detail = f"Registry sync failed with {exc.__class__.__name__}."
+            log.warning(
+                "Agent registry sync degraded for %s: %s",
+                self.config.instance,
+                registry_error_detail(error_code, detail),
+            )
+            self._mark_state("degraded", error=error_code, detail=detail)
+            return "degraded"
+
+        self._mark_state("connected")
+        return "connected"
+
+    async def poll_once(self, *, kind_filter: Sequence[str] | None = None) -> int:
+        if self._delivery_handler is None or self._state.connectivity_state != "connected":
+            return 0
+        client = self._client()
+        poll_kwargs: dict[str, object] = {
+            "cursor": self._state.poll_cursor or "0",
+            "limit": 20,
+            "wait_seconds": 0,
+        }
+        if kind_filter is not None:
+            poll_kwargs["kind_filter"] = tuple(kind_filter)
+        result = await client.poll(
+            **poll_kwargs,
+        )
+        result = DeliveryPollResult.model_validate(result)
+        deliveries = list(result.deliveries)
+        if not deliveries:
+            self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
+            self._save_state()
+            return 0
+
+        accepted: list[str] = []
+        rejected: list[str] = []
+        retry_later: list[str] = []
+        for delivery in deliveries:
+            delivery_payload = delivery.model_dump(mode="json")
+            delivery_id = str(delivery_payload.get("delivery_id", ""))
+            try:
+                classification = await self._delivery_handler(delivery_payload)
+            except Exception:
+                log.exception(
+                    "Agent delivery handler failed for %s on %s",
+                    self.config.instance,
+                    delivery_id,
+                )
+                rejected.append(delivery_id)
+                continue
+            if classification == "accepted":
+                accepted.append(delivery_id)
+            elif classification == "retry_later":
+                retry_later.append(delivery_id)
+            else:
+                rejected.append(delivery_id)
+        if accepted:
+            await client.ack(accepted, classification="accepted")
+        if rejected:
+            await client.ack(rejected, classification="rejected")
+        if retry_later:
+            await client.ack(retry_later, classification="retry_later")
+        self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
+        self._save_state()
+        return len(deliveries)
+
+    async def run_forever(
         self,
-        conversation_id: ConversationId,
+        stop_event: asyncio.Event,
         *,
-        envelope: CoordinationActionEnvelope,
-    ) -> list[MirrorOutcome]:
-        del conversation_id, envelope
-        return []
+        kind_filter: Sequence[str] | None = None,
+    ) -> None:
+        import random
 
-
-class _NoOpCoordination(RegistryCoordination):
-    async def ensure_conversation_id(
-        self,
-        conversation_key: TransportConversationKey,
-        *,
-        conversation_ref: str,
-        origin_channel: str,
-        external_ref: ExternalConversationRef,
-        title: str,
-    ) -> ConversationId:
-        del conversation_key, conversation_ref, origin_channel, external_ref, title
-        raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
-
-    async def direct_assign(
-        self,
-        conversation_id: ConversationId,
-        *,
-        selector: TargetSelector,
-        title: str,
-        instructions: str,
-        message_text: str = "",
-    ) -> CoordinationActionResult:
-        del conversation_id, selector, title, instructions, message_text
-        raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
-
-    async def delegate_tasks(
-        self,
-        conversation_id: ConversationId,
-        *,
-        intent: DelegationIntent,
-    ) -> CoordinationActionResult:
-        del conversation_id, intent
-        raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
-
-    async def approve_delegation(
-        self,
-        conversation_id: ConversationId,
-        *,
-        proposal_id: str,
-    ) -> CoordinationActionResult:
-        del conversation_id, proposal_id
-        raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
-
-    async def cancel_delegation(
-        self,
-        conversation_id: ConversationId,
-        *,
-        proposal_id: str,
-    ) -> CoordinationActionResult:
-        del conversation_id, proposal_id
-        raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
-
-    async def preview_target_resolution(self, selector: TargetSelector) -> TargetResolutionPreview:
-        del selector
-        return TargetResolutionPreview(status="unavailable")
+        base = max(1.0, self.config.agent_poll_interval_seconds)
+        max_backoff = min(300.0, base * 32)
+        current_backoff = base
+        while not stop_event.is_set():
+            state = await self.sync_once()
+            if state == "connected":
+                try:
+                    if kind_filter is None:
+                        await self.poll_once()
+                    else:
+                        await self.poll_once(kind_filter=kind_filter)
+                except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
+                    if isinstance(exc, RegistryClientError):
+                        error_code = exc.error_code
+                        detail = exc.operator_detail
+                    elif isinstance(exc, asyncio.TimeoutError):
+                        error_code = "registry_timeout"
+                        detail = "Registry poll timed out."
+                    else:
+                        error_code = "registry_unreachable"
+                        detail = f"Registry poll failed with {exc.__class__.__name__}."
+                    log.warning(
+                        "Agent registry poll degraded for %s: %s",
+                        self.config.instance,
+                        registry_error_detail(error_code, detail),
+                    )
+                    self._mark_state("degraded", error=error_code, detail=detail)
+                except Exception:
+                    log.exception("Unexpected registry poll failure for %s", self.config.instance)
+            if self._state.connectivity_state == "connected":
+                current_backoff = base
+            else:
+                current_backoff = min(current_backoff * 2, max_backoff)
+            sleep_time = random.uniform(0, current_backoff)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=sleep_time)
+            except asyncio.TimeoutError:
+                continue
 
 
 def _is_live_connectivity_state(connectivity_state: str) -> bool:
@@ -564,14 +762,4 @@ def build_control_plane_registry_participant(
         coordination=_ParticipantCoordination(config, control_plane),
         discovery=_ParticipantDiscovery(config, control_plane),
         health=_ParticipantHealth(config),
-    )
-
-
-def build_noop_registry_participant() -> RegistryParticipantImplementation:
-    return ControlPlaneRegistryParticipant(
-        enrollment=_NoOpEnrollment(),
-        mirror=_NoOpMirror(),
-        coordination=_NoOpCoordination(),
-        discovery=_NoOpDiscovery(),
-        health=_NoOpHealth(),
     )

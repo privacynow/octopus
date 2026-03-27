@@ -7,10 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.access import get_authorization
-import app.channels.telegram.progress as telegram_progress
+import app.runtime.telegram_progress as telegram_progress
 import app.user_messages as _msg
 from app.runtime import composition
-from app.runtime.registry_participant import build_noop_registry_participant
 import app.runtime_backend as runtime_backend
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from octopus_sdk.agent_directory import NoOpAgentDirectory
@@ -20,6 +19,7 @@ from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeMessage, FakeProvider
+from tests.support.registry_participant_support import build_noop_registry_participant
 
 
 def _services(*, task_routing=None) -> BotServices:

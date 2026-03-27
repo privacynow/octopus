@@ -2,7 +2,7 @@
 
 Tests the ProgressEvent → render() contract that both providers depend on.
 Also tests the Codex _map_event and Claude _consume_stream mapping produce
-correct ProgressEvent types from raw CLI events.
+correct ProgressEvent types raw CLI events.
 """
 
 import asyncio
@@ -113,7 +113,7 @@ class TestRenderContract:
         assert "Compacting context" in html
 
     def test_all_events_return_string_or_none(self):
-        """Every event type must return str (not None) from render()."""
+        """Every event type must return str (not None) render()."""
         events = [
             Thinking(),
             CommandStart(command="x"),
@@ -306,7 +306,7 @@ class TestCodexMapEvent:
 # ---------------------------------------------------------------------------
 
 class TestCodexEndToEnd:
-    """The full pipeline from raw Codex event to user-visible HTML."""
+    """The full pipeline raw Codex event to user-visible HTML."""
 
     def test_command_start_pipeline(self):
         evt = CodexProvider._map_event(
@@ -331,7 +331,7 @@ class TestCodexEndToEnd:
         assert "FAILED" in html
 
     def test_internal_events_produce_no_html(self):
-        """Internal events must produce None from _map_event, never reaching render."""
+        """Internal events must produce None _map_event, never reaching render."""
         internal_events = [
             {"type": "thread.started", "thread_id": "t-1"},
             {"type": "session_meta", "payload": {"id": "s-1"}},
@@ -370,7 +370,6 @@ class _FakeStreamProcess:
         if self._lines:
             return (self._lines.pop(0) + "\n").encode()
         raise StopAsyncIteration
-
     async def wait(self):
         pass
 
@@ -464,7 +463,7 @@ class TestClaudeConsumeStream:
         assert progress.content_started.is_set()
 
     async def test_no_provider_internals_in_any_update(self):
-        """No progress update from Claude should contain provider names or IDs."""
+        """No progress update Claude should contain provider names or IDs."""
         from app.providers.claude import ClaudeProvider
         prov = ClaudeProvider(make_bot_config())
 
@@ -682,7 +681,7 @@ class TestClaudeTextDeliveryInvariants:
         proc = _FakeStreamProcess(lines)
         await prov._consume_stream(proc, progress)
 
-        # content_started should be set (from the text delta)
+        # content_started should be set (the text delta)
         assert progress.content_started.is_set()
 
     async def test_content_started_not_set_by_tool_events(self):
@@ -755,7 +754,7 @@ async def test_heartbeat_does_not_overwrite_provider_liveness():
     Heartbeat must not overwrite a recent Liveness update (same as for
     tool/command updates). Proves only one visible update per interval.
     """
-    import app.channels.telegram.progress as telegram_progress
+    import app.runtime.telegram_progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -799,7 +798,7 @@ async def test_rate_limit_preserves_semantic_command_events():
     command/tool events. Sends a burst so that some updates are suppressed;
     asserts CommandStart and CommandFinish still appear (plan Priority 3b).
     """
-    import app.channels.telegram.progress as telegram_progress
+    import app.runtime.telegram_progress as telegram_progress
 
     msg = FakeMessage()
     cfg = make_bot_config(stream_update_interval_seconds=0.2)
@@ -870,9 +869,9 @@ def test_codex_raw_fixture_mapping_and_render():
         )
     combined = " ".join(rendered)
     assert "Running" in combined and "command" in combined and "finished" in combined
-    assert "ls -la" in combined, "First command from fixture must appear in rendered output"
-    assert "echo done" in combined or "echo" in combined, "Second command from fixture must appear"
-    assert "Listing complete" in combined or "Draft reply" in combined, "Commentary from fixture must appear"
+    assert "ls -la" in combined, "First command fixture must appear in rendered output"
+    assert "echo done" in combined or "echo" in combined, "Second command fixture must appear"
+    assert "Listing complete" in combined or "Draft reply" in combined, "Commentary fixture must appear"
     for html in rendered:
         assert "codex" not in html.lower(), f"Rendered must not leak provider name: {html}"
 
@@ -891,12 +890,12 @@ async def test_claude_raw_fixture_consume_stream():
     assert "result" in result_data, "Stream should terminate on result event"
     # Fixture: tool_use Read, then two text_delta lines -> exactly 3 progress updates
     assert len(progress.updates) == 3, (
-        f"Expected exactly 3 progress updates from fixture; got {len(progress.updates)}: {progress.updates}"
+        f"Expected exactly 3 progress updates fixture; got {len(progress.updates)}: {progress.updates}"
     )
     combined = " ".join(progress.updates)
-    assert "Read" in combined, "Tool name from fixture must appear in updates"
-    assert "File contents here" in combined, "First text delta from fixture must appear"
-    assert "Hello world" in combined, "Second text delta from fixture must appear"
+    assert "Read" in combined, "Tool name fixture must appear in updates"
+    assert "File contents here" in combined, "First text delta fixture must appear"
+    assert "Hello world" in combined, "Second text delta fixture must appear"
     for u in progress.updates:
         assert "claude" not in u.lower(), f"Must not leak provider name: {u}"
         assert "session_id" not in u.lower(), f"Must not leak internal ID: {u}"

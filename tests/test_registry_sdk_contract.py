@@ -17,6 +17,7 @@ from octopus_sdk.registry.models import (
     EnrollmentResult,
     HealthSummary,
     RuntimeHealthPayload,
+    RuntimeHealthSummaryRecord,
     TaskRecord,
     ConversationCreate,
     extract_target_selector_message,
@@ -308,7 +309,7 @@ def test_extract_target_selector_message_requires_instructions():
     assert instructions == "return only the answer"
 
 
-def test_pending_delegation_transition_derives_partial_failure_from_child_states():
+def test_pending_delegation_transition_derives_partial_failure__child_states():
     result = apply_pending_delegation_transition(
         PendingDelegationSnapshot(status="submitted", task_statuses=("completed", "failed")),
         PendingDelegationTransitionRequest(
@@ -343,10 +344,12 @@ async def test_registry_event_sink_skips_user_message_mirror_for_registry_conver
             transport=TransportIdentity(
                 conversation_key="registry:local:conversation:conv-1",
                 origin_channel="registry",
-                external_conversation_ref="ext-1",
-                conversation_ref="registry:local:conversation:conv-1",
-                target_agent_id="agent-1",
                 actor="operator",
+                external_conversation_ref="ext-1",
+                target_agent_id="agent-1",
+                conversation_ref="registry:local:conversation:conv-1",
+                routed_task_id="",
+                authority_ref="",
             ),
             config=cfg,
         )
@@ -379,10 +382,12 @@ async def test_registry_event_sink_skips_bot_reply_mirror_for_registry_conversat
             transport=TransportIdentity(
                 conversation_key="registry:local:conversation:conv-1",
                 origin_channel="registry",
-                external_conversation_ref="ext-1",
-                conversation_ref="registry:local:conversation:conv-1",
-                target_agent_id="agent-1",
                 actor="registry:system",
+                external_conversation_ref="ext-1",
+                target_agent_id="agent-1",
+                conversation_ref="registry:local:conversation:conv-1",
+                routed_task_id="",
+                authority_ref="",
             ),
             config=cfg,
         )
@@ -393,7 +398,7 @@ async def test_registry_event_sink_skips_bot_reply_mirror_for_registry_conversat
         assert projection.published == []
 
 
-def test_sdk_client_submit_routed_task_includes_created_at_from_model_default():
+def test_sdk_client_submit_routed_task_includes_created_at__model_default():
     from unittest.mock import patch
     from octopus_sdk.registry.client import RegistryClient
 
@@ -721,7 +726,7 @@ def test_sdk_client_renew_enrollment_and_heartbeat_return_typed_models():
                 connectivity_state="connected",
                 current_capacity=0,
                 max_capacity=1,
-                runtime_health=RuntimeHealthPayload(summary={"ok": True}),
+                runtime_health=RuntimeHealthPayload(summary=RuntimeHealthSummaryRecord(ok=True)),
             )
         )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.formatting import summarize_text
 from octopus_sdk.identity import telegram_numeric_id
-from app.channels.telegram import presenters as telegram_presenters
+from app.presentation import telegram as telegram_presenters
 from app.channels.telegram.state import TelegramRuntime
 from octopus_sdk.execution import RequestExecutionOutcome
 from octopus_sdk.registry.models import (
@@ -145,7 +145,7 @@ async def handle_delegation_approve(
     chat_id: int,
     query,
 ) -> None:
-    from app.channels.telegram.session_io import conversation_key as _conversation_key
+    from app.runtime.telegram_session_io import conversation_key as _conversation_key
     outcome = await approve_participant_delegation(
         _participant_runtime(runtime),
         _conversation_key(chat_id),
@@ -158,7 +158,7 @@ async def handle_delegation_cancel(
     chat_id: int,
     query,
 ) -> None:
-    from app.channels.telegram.session_io import conversation_key as _conversation_key
+    from app.runtime.telegram_session_io import conversation_key as _conversation_key
     outcome = await cancel_participant_delegation(
         _participant_runtime(runtime),
         _conversation_key(chat_id),

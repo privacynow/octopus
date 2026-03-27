@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable
@@ -19,16 +20,19 @@ from octopus_sdk.config import BotConfigBase
 from octopus_sdk.conversation_projection import ConversationProjectionPort
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.health_publication import HealthPublicationPort
+from octopus_sdk.inbound_types import InboundAction
+from octopus_sdk.inbound_types import InboundCallback
+from octopus_sdk.inbound_types import InboundCommand
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.registry.models import DiscoveredAgentRef
 from octopus_sdk.sessions import SessionState
-from octopus_sdk.inbound_types import InboundEnvelope, serialize_inbound
+from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, deserialize_inbound, serialize_inbound
 from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import EditableHandle
 from octopus_sdk.transport import TransportEgress
 from octopus_sdk.transport import TransportImplementation
-from octopus_sdk.work_queue import WorkQueuePort
+from octopus_sdk.work_queue import LeaveClaimed, PendingRecovery, TransportStateCorruption, WorkItemRecord, WorkQueuePort, WorkerHeartbeat
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.workflows.conversation import ConversationControlPort, ConversationSettingsPort
 from octopus_sdk.workflows.credentials import CredentialManagementPort
@@ -166,10 +170,15 @@ class ControlPlanePort(Protocol):
 
 
 @runtime_checkable
-class RuntimeLifecyclePort(Protocol):
-    async def startup(self, stop_event: asyncio.Event) -> None: ...
+class WorkerDispatchPort(Protocol):
+    async def dispatch_claimed_item(
+        self,
+        kind: str,
+        event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+        item: WorkItemRecord,
+    ) -> None: ...
 
-    async def shutdown(self) -> None: ...
+    async def notify_deserialize_failure(self, item: WorkItemRecord) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -305,7 +314,8 @@ class BotRuntime:
     workflows: WorkflowComposition
     authorization: AuthorizationPort
     work_queue: WorkQueuePort
-    lifecycle: RuntimeLifecyclePort | None = None
+    boot_id: str = ""
+    worker_processor: WorkerDispatchPort | None = None
 
     async def submit(
         self,
@@ -363,6 +373,7 @@ class BotRuntime:
 
     async def run(self) -> None:
         stop_event = asyncio.Event()
+        worker_task: asyncio.Task[None] | None = None
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -371,15 +382,204 @@ class BotRuntime:
                 continue
 
         try:
-            if self.lifecycle is not None:
-                await self.lifecycle.startup(stop_event)
             await self.transport.start(runtime=self, stop_event=stop_event)
+            if self._runs_worker() and self.worker_processor is not None:
+                self.work_queue.recover_stale_claims(
+                    self.config.data_dir,
+                    lease_ttl_seconds=self.config.claim_lease_ttl_seconds,
+                )
+                worker_task = asyncio.create_task(
+                    self._run_worker_loop(stop_event),
+                    name="bot-runtime-worker",
+                )
             await stop_event.wait()
         finally:
             stop_event.set()
-            await self.transport.stop()
-            if self.lifecycle is not None:
-                await self.lifecycle.shutdown()
+            worker_failure: BaseException | None = None
+            if worker_task is not None:
+                try:
+                    await asyncio.wait_for(worker_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    worker_task.cancel()
+                    results = await asyncio.gather(worker_task, return_exceptions=True)
+                    if results and isinstance(results[0], BaseException) and not isinstance(results[0], asyncio.CancelledError):
+                        worker_failure = results[0]
+                except BaseException as exc:
+                    worker_failure = exc
+            transport_failure: BaseException | None = None
+            try:
+                await self.transport.stop()
+            except BaseException as exc:
+                transport_failure = exc
+            if worker_failure is not None:
+                raise worker_failure
+            if transport_failure is not None:
+                raise transport_failure
+
+    def _runs_worker(self) -> bool:
+        return self.config.process_role in {"all", "worker"}
+
+    def _worker_poll_interval(self) -> float:
+        return 0.5 if self.config.runtime_mode == "shared" else 1.0
+
+    def _worker_id(self) -> str:
+        return self.boot_id or self.config.instance
+
+    async def _run_worker_loop(self, stop_event: asyncio.Event) -> None:
+        if self.worker_processor is None:
+            return
+
+        poll_interval = self._worker_poll_interval()
+        started_at = time.time()
+        items_processed_total = 0
+        stale_recoveries_seen = 0
+        current_item_id = ""
+        current_conversation_key = ""
+        current_kind = ""
+        last_error = ""
+        last_heartbeat = 0.0
+        last_sweep = 0.0
+        last_usage_purge = float("-inf")
+        graceful_shutdown = False
+        heartbeat_enabled = self.config.runtime_mode == "shared"
+        worker_id = self._worker_id()
+
+        def _publish_heartbeat(*, force: bool = False) -> None:
+            nonlocal last_heartbeat
+            if not heartbeat_enabled:
+                return
+            now_mono = time.monotonic()
+            if not force and last_heartbeat and (now_mono - last_heartbeat) < 30.0:
+                return
+            self.work_queue.upsert_worker_heartbeat(
+                self.config.data_dir,
+                WorkerHeartbeat(
+                    worker_id=worker_id,
+                    process_role=self.config.process_role,
+                    started_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(started_at)),
+                    last_seen_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    current_item_id=current_item_id,
+                    current_conversation_key=current_conversation_key,
+                    current_kind=current_kind,
+                    items_processed=items_processed_total,
+                    stale_recoveries_seen=stale_recoveries_seen,
+                    last_error=last_error,
+                ),
+            )
+            last_heartbeat = now_mono
+
+        try:
+            _publish_heartbeat(force=True)
+            while not stop_event.is_set():
+                processed = 0
+                try:
+                    _publish_heartbeat()
+                    now_mono = time.monotonic()
+                    if now_mono - last_sweep >= self.config.claim_sweep_interval_seconds:
+                        recovered = self.work_queue.recover_stale_claims(
+                            self.config.data_dir,
+                            lease_ttl_seconds=self.config.claim_lease_ttl_seconds,
+                        )
+                        if recovered:
+                            stale_recoveries_seen += recovered
+                            _publish_heartbeat(force=True)
+                        if now_mono - last_usage_purge >= 3600.0:
+                            self.work_queue.purge_old_usage(
+                                self.config.data_dir,
+                                older_than_seconds=168 * 3600,
+                            )
+                            last_usage_purge = now_mono
+                        last_sweep = now_mono
+
+                    for _ in range(10):
+                        item = self.work_queue.claim_next_any(
+                            self.config.data_dir,
+                            worker_id,
+                        )
+                        if item is None:
+                            break
+
+                        item_id = item.id
+                        current_item_id = item_id
+                        current_conversation_key = item.conversation_key
+                        current_kind = item.kind or "unknown"
+                        last_error = ""
+                        _publish_heartbeat(force=True)
+
+                        try:
+                            event = deserialize_inbound(item.kind or "unknown", item.payload or "{}")
+                        except Exception:
+                            self.work_queue.fail_work_item(
+                                self.config.data_dir,
+                                item_id,
+                                error="deserialize_error",
+                            )
+                            try:
+                                await self.worker_processor.notify_deserialize_failure(item)
+                            except Exception:
+                                pass
+                            current_item_id = ""
+                            current_conversation_key = ""
+                            current_kind = ""
+                            items_processed_total += 1
+                            processed += 1
+                            _publish_heartbeat(force=True)
+                            continue
+
+                        try:
+                            await self.worker_processor.dispatch_claimed_item(
+                                item.kind or "unknown",
+                                event,
+                                item,
+                            )
+                            self.work_queue.complete_work_item(self.config.data_dir, item_id)
+                        except PendingRecovery:
+                            pass
+                        except LeaveClaimed:
+                            pass
+                        except TransportStateCorruption:
+                            last_error = "transport_state_corruption"
+                            _publish_heartbeat(force=True)
+                            raise
+                        except Exception:
+                            last_error = "dispatch_exception"
+                            self.work_queue.fail_work_item(
+                                self.config.data_dir,
+                                item_id,
+                                error=last_error,
+                            )
+                        current_item_id = ""
+                        current_conversation_key = ""
+                        current_kind = ""
+                        items_processed_total += 1
+                        processed += 1
+                        _publish_heartbeat(force=True)
+                except TransportStateCorruption:
+                    last_error = "transport_state_corruption"
+                    _publish_heartbeat(force=True)
+                    raise
+                except Exception:
+                    last_error = "dispatch_exception"
+                    _publish_heartbeat(force=True)
+
+                if processed:
+                    continue
+
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+            graceful_shutdown = True
+        finally:
+            if heartbeat_enabled and graceful_shutdown:
+                try:
+                    self.work_queue.clear_worker_heartbeat(
+                        self.config.data_dir,
+                        worker_id,
+                    )
+                except Exception:
+                    pass
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from octopus_sdk.registry.models import DeliveryPollResult
 from octopus_sdk.registry.models import EnrollmentResult
 from octopus_sdk.registry.models import HealthSummary
 from octopus_sdk.registry.models import MessageRecord
+from octopus_sdk.registry.models import RuntimeHealthPayload
 from octopus_sdk.realtime import ConversationProgressUpdate as SdkConversationProgressUpdate
 from octopus_sdk.registry.models import TaskRecord
 from octopus_sdk.registry.models import RoutedTaskRequest
@@ -67,7 +68,7 @@ class AgentRegistryClient(SdkRegistryClient):
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        runtime_health: dict[str, object] | None = None,
+        runtime_health: RuntimeHealthPayload | None = None,
     ) -> HealthSummary:
         return await super().heartbeat(
             connectivity_state=connectivity_state,

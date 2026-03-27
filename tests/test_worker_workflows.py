@@ -5,7 +5,6 @@ import pytest
 from app import work_queue
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref
-from app.channels.telegram.inbound_context import event_conversation_ref
 from octopus_sdk.identity import (
     resolve_event_conversation_ref,
     telegram_actor_key,
@@ -14,9 +13,10 @@ from octopus_sdk.identity import (
     telegram_event_id,
 )
 from octopus_sdk.inbound_types import InboundMessage, InboundUser, serialize_inbound
+from octopus_sdk.work_queue import WorkItemRecord
 from app.runtime.work_admission import admit_worker_message
 from app.workflows.recovery.replay import get_recovery_use_cases
-import app.channels.telegram.worker as telegram_worker
+import app.runtime.telegram_worker as telegram_worker
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     current_execution_runtime,
@@ -151,7 +151,7 @@ def test_event_conversation_ref_uses_chat_id_when_no_ref_or_key_is_present() -> 
     with fresh_env() as (_data_dir, cfg, _prov):
         event = SimpleNamespace(conversation_ref="", conversation_key="", chat_id=12345)
 
-        resolved = event_conversation_ref(config=cfg, event=event)
+        resolved = resolve_event_conversation_ref(config=cfg, event=event)
 
         assert resolved == telegram_conversation_ref(cfg, 12345)
         assert resolve_event_conversation_ref(config=cfg, event=event) == resolved
@@ -197,7 +197,7 @@ def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch)
         assert captured_refs == ["telegram:explicit-bot:12345"]
 
 
-def test_recovery_prepare_action_recovers_telegram_ref_from_numeric_conversation_key(
+def test_recovery_prepare_action_recovers_telegram_ref__numeric_conversation_key(
     monkeypatch,
 ) -> None:
     with fresh_env() as (data_dir, cfg, _prov):
@@ -407,12 +407,12 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
             routed_task_id="routed-task-recovery-1",
             authority_ref="registry:default",
         )
-        item = {
-            "id": "routed-task-recovery-item-1",
-            "conversation_key": "registry:default:task:routed-task-recovery-1",
-            "event_id": "recovery-event-1",
-            "dispatch_mode": "recovery",
-        }
+        item = WorkItemRecord(
+            id="routed-task-recovery-item-1",
+            conversation_key="registry:default:task:routed-task-recovery-1",
+            event_id="recovery-event-1",
+            dispatch_mode="recovery",
+        )
 
         with pytest.raises(work_queue.PendingRecovery):
             await telegram_worker.worker_dispatch(
@@ -474,12 +474,12 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
             text="recover telegram conversation",
             source="telegram",
         )
-        item = {
-            "id": "conversation-recovery-item-1",
-            "conversation_key": telegram_conversation_key(12345),
-            "event_id": telegram_event_id(8103),
-            "dispatch_mode": "recovery",
-        }
+        item = WorkItemRecord(
+            id="conversation-recovery-item-1",
+            conversation_key=telegram_conversation_key(12345),
+            event_id=telegram_event_id(8103),
+            dispatch_mode="recovery",
+        )
 
         with pytest.raises(work_queue.PendingRecovery):
             await telegram_worker.worker_dispatch(
@@ -512,12 +512,12 @@ async def test_worker_recovery_raises_on_unexpected_recovery_outcome(monkeypatch
             text="recover telegram conversation",
             source="telegram",
         )
-        item = {
-            "id": "conversation-recovery-item-2",
-            "conversation_key": telegram_conversation_key(12345),
-            "event_id": telegram_event_id(8104),
-            "dispatch_mode": "recovery",
-        }
+        item = WorkItemRecord(
+            id="conversation-recovery-item-2",
+            conversation_key=telegram_conversation_key(12345),
+            event_id=telegram_event_id(8104),
+            dispatch_mode="recovery",
+        )
 
         with pytest.raises(RuntimeError, match="Unexpected recovery outcome"):
             await telegram_worker.worker_dispatch(

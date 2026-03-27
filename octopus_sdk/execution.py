@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from octopus_sdk.approvals import build_preflight_prompt
 from octopus_sdk.bot_runtime import ExecutionServices
@@ -24,7 +24,12 @@ from octopus_sdk.inbound_types import InboundAttachment
 from octopus_sdk.providers import CredentialEnvRecord, DenialRecord
 from octopus_sdk.request_flow import extra_dirs_from_denials
 from octopus_sdk.transport import TransportDescriptor
-from octopus_sdk.sessions import PendingApproval, PendingRetry, SessionState
+from octopus_sdk.sessions import (
+    PendingApproval,
+    PendingApprovalAttachmentRecord,
+    PendingRetry,
+    SessionState,
+)
 from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
 from octopus_sdk.transport import TransportEgress
 
@@ -86,11 +91,11 @@ class TransportIdentity:
     conversation_key: str
     origin_channel: str
     actor: str
-    external_conversation_ref: str = ""
-    target_agent_id: str = ""
-    conversation_ref: str = ""
-    routed_task_id: str = ""
-    authority_ref: str = ""
+    external_conversation_ref: str
+    target_agent_id: str
+    conversation_ref: str
+    routed_task_id: str
+    authority_ref: str
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
@@ -99,12 +104,12 @@ class ExecutionChannelMetadata:
     conversation_key: str
     origin_channel: str
     actor: str
-    descriptor: TransportDescriptor | None = None
-    message_conversation_ref: str = ""
-    routed_task_id: str = ""
-    authority_ref: str = ""
-    external_conversation_ref: str = ""
-    target_agent_id: str = ""
+    descriptor: TransportDescriptor | None
+    message_conversation_ref: str
+    routed_task_id: str
+    authority_ref: str
+    external_conversation_ref: str
+    target_agent_id: str
 
 
 @dataclass(frozen=True)
@@ -124,17 +129,6 @@ class ExecutionRuntime:
     services: ExecutionServices
     interrupted_exc: type[BaseException]
 
-
-def _transport_fields(metadata: ExecutionChannelMetadata) -> dict[str, Any]:
-    return {
-        "conversation_key": metadata.conversation_key,
-        "origin_channel": metadata.origin_channel,
-        "external_conversation_ref": metadata.external_conversation_ref,
-        "target_agent_id": metadata.target_agent_id,
-        "actor": metadata.actor,
-    }
-
-
 def build_transport_identity_from_metadata(
     metadata: ExecutionChannelMetadata,
     *,
@@ -142,9 +136,13 @@ def build_transport_identity_from_metadata(
     routed_task_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
 ) -> TransportIdentity:
     conversation_ref = metadata.message_conversation_ref
-    transport = _transport_fields(metadata)
     if metadata.routed_task_id and metadata.authority_ref:
         return TransportIdentity(
+            conversation_key=metadata.conversation_key,
+            origin_channel=metadata.origin_channel,
+            actor=metadata.actor,
+            external_conversation_ref=metadata.external_conversation_ref,
+            target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -152,7 +150,6 @@ def build_transport_identity_from_metadata(
                 metadata.routed_task_id,
                 metadata.authority_ref,
             ),
-            **transport,
         )
     descriptor = metadata.descriptor
     if (
@@ -162,6 +159,11 @@ def build_transport_identity_from_metadata(
         and descriptor.supports_timeline
     ):
         return TransportIdentity(
+            conversation_key=metadata.conversation_key,
+            origin_channel=metadata.origin_channel,
+            actor=metadata.actor,
+            external_conversation_ref=metadata.external_conversation_ref,
+            target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
@@ -169,14 +171,17 @@ def build_transport_identity_from_metadata(
                 conversation_ref,
                 metadata.routed_task_id,
             ),
-            **transport,
         )
     return TransportIdentity(
+        conversation_key=metadata.conversation_key,
+        origin_channel=metadata.origin_channel,
+        actor=metadata.actor,
+        external_conversation_ref=metadata.external_conversation_ref,
+        target_agent_id=metadata.target_agent_id,
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
         authority_ref=metadata.authority_ref,
         timeline_callback=None,
-        **transport,
     )
 
 
@@ -690,7 +695,12 @@ async def request_approval(
         return
 
     attachment_dicts = [
-        {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
+        PendingApprovalAttachmentRecord(
+            path=str(a.path),
+            original_name=a.original_name,
+            is_image=a.is_image,
+            mime_type=a.mime_type,
+        )
         for a in attachments
     ]
     session.pending_approval = PendingApproval(

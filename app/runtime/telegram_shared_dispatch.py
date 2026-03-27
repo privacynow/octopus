@@ -11,8 +11,9 @@ from telegram.ext import ContextTypes
 
 from app import access
 from app import user_messages as _msg
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.conversation import (
+from app.presentation import telegram as telegram_presenters
+from app.runtime import composition
+from app.workflows.conversation.telegram import (
     TelegramConversationRuntime,
     cancel_chat_operation as conversation_cancel_chat_operation,
     cmd_approval as conversation_cmd_approval,
@@ -22,20 +23,84 @@ from app.channels.telegram.conversation import (
     cmd_project as conversation_cmd_project,
     cmd_role as conversation_cmd_role,
 )
-from app.channels.telegram.delegation_channel import parse_delegation_callback
-from app.channels.telegram.normalization import normalize_callback, normalize_command
-from app.channels.telegram.runtime_skills import (
+from app.workflows.delegation.telegram import parse_delegation_callback
+from app.runtime.telegram_normalization import normalize_callback, normalize_command
+from app.workflows.runtime_skills.telegram import (
     handle_skills_command as runtime_skill_handle_skills_command,
     TelegramRuntimeSkillsRuntime,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
 )
-from app.channels.telegram.session_io import actor_key as _actor_key, conversation_key, event_key
+from app.runtime.telegram_session_io import actor_key as _actor_key, conversation_key, event_key
 from app.channels.telegram.state import TelegramRuntime
 from octopus_sdk.inbound_types import InboundAction, InboundEnvelope
 from app import work_queue
 
 
 ChatLock = Callable[..., Any]
+
+
+def _guidance_flows():
+    return composition.workflows()
+
+
+async def handle_provider_guidance_command(event, update: Update, *, is_admin: bool) -> None:
+    args = event.args
+    if len(args) < 2:
+        rendered = telegram_presenters.guidance_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    sub = args[0].lower()
+    provider_name = args[1]
+
+    if sub == "preview":
+        preview = _guidance_flows().provider_guidance.preview.preview(
+            provider_name,
+            role="",
+            active_skills=[],
+            compact_mode=False,
+        )
+        rendered = telegram_presenters.provider_guidance_preview_message(provider_name, preview)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub == "history":
+        detail = _guidance_flows().provider_guidance.management.detail(provider_name)
+        if detail is None:
+            rendered = telegram_presenters.provider_guidance_not_found_message(provider_name)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        rendered = telegram_presenters.provider_guidance_history_message(provider_name, detail)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub == "edit" and len(args) >= 3:
+        result = _guidance_flows().provider_guidance.management.edit_draft(
+            provider_name,
+            actor_key=str(event.user.id),
+            body=" ".join(args[2:]),
+        )
+        rendered = telegram_presenters.provider_guidance_mutation_message(result.message)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub == "submit":
+        result = _guidance_flows().provider_guidance.management.submit(
+            provider_name,
+            actor_key=str(event.user.id),
+        )
+        rendered = telegram_presenters.provider_guidance_mutation_message(result.message)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if sub in {"approve", "reject", "publish", "archive"}:
+        if not is_admin:
+            rendered = telegram_presenters.guidance_admin_only_message(sub)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        action = getattr(_guidance_flows().provider_guidance.management, sub)
+        result = action(provider_name, actor_key=str(event.user.id))
+        rendered = telegram_presenters.provider_guidance_mutation_message(result.message)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+
+    rendered = telegram_presenters.guidance_usage_message()
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 def build_shared_command_handler(

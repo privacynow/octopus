@@ -132,7 +132,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'create_approval' from {state!r}",
+                reason=f"no transition 'create_approval' {state!r}",
             )
         return PendingRequestDecision(
             status="created_approval",
@@ -148,7 +148,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'create_retry' from {state!r}",
+                reason=f"no transition 'create_retry' {state!r}",
             )
         return PendingRequestDecision(
             status="created_retry",
@@ -164,7 +164,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'approve_execute' from {state!r}",
+                reason=f"no transition 'approve_execute' {state!r}",
             )
         if action.validation_result != "ok":
             return PendingRequestDecision(
@@ -186,7 +186,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'reject' from {state!r}",
+                reason=f"no transition 'reject' {state!r}",
             )
         return PendingRequestDecision(
             status="rejected",
@@ -202,7 +202,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'expire' from {state!r}",
+                reason=f"no transition 'expire' {state!r}",
             )
         if action.validation_result != "expired":
             return PendingRequestDecision(
@@ -224,7 +224,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'invalidate_stale' from {state!r}",
+                reason=f"no transition 'invalidate_stale' {state!r}",
             )
         if action.validation_result != "context_changed":
             return PendingRequestDecision(
@@ -249,7 +249,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'cancel' from {state!r}",
+                reason=f"no transition 'cancel' {state!r}",
             )
         return PendingRequestDecision(
             status="cancelled",
@@ -265,7 +265,7 @@ def decide_pending_request_action(
             return PendingRequestDecision(
                 status="invalid_transition",
                 ok=False,
-                reason=f"no transition 'clear_after_execution' from {state!r}",
+                reason=f"no transition 'clear_after_execution' {state!r}",
             )
         return PendingRequestDecision(
             status="cleared",

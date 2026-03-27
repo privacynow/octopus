@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 from app.config import load_dotenv_file, validate_config
 from octopus_sdk.execution_context import ResolvedExecutionContext
-from octopus_sdk.providers import PreflightContext, RunContext
+from octopus_sdk.providers import DenialRecord, PreflightContext, ProviderStateRecord, RunContext
 from octopus_sdk.sessions import PendingApproval, PendingRetry
 from tests.support.skill_test_helpers import (
     SkillRequirement,
@@ -36,6 +36,14 @@ from tests.support.skill_test_helpers import (
 from app.storage import default_session, load_session, save_session
 from tests.support.config_support import make_config
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+
+
+def _state(**kwargs) -> ProviderStateRecord:
+    return ProviderStateRecord(kwargs)
+
+
+def _denial(**kwargs) -> DenialRecord:
+    return DenialRecord(kwargs)
 
 
 def _hash(**kwargs):
@@ -76,7 +84,7 @@ def test_pending_retry_preserves_fields():
         prompt="write file",
         image_paths=[],
         context_hash="def456",
-        denials=[{"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}}],
+        denials=[_denial(tool_name="Write", tool_input={"file_path": "/etc/hosts"})],
     )
     assert len(pending_retry.denials) == 1
     assert pending_retry.actor_key == "tg:222"
@@ -362,25 +370,25 @@ def test_session_persistence():
         (data_dir / "sessions").mkdir(parents=True)
 
         # Create session with skills and role
-        session = default_session("claude", {"session_id": "x", "started": False}, "on", "engineer", ("code-review",))
+        session = default_session("claude", _state(session_id="x", started=False), "on", "engineer", ("code-review",))
         assert session["active_skills"] == ["code-review"]
         assert session["role"] == "engineer"
 
         # Save and reload
         save_session(data_dir, telegram_conversation_key(100), session)
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": {"session_id": "y", "started": False}, "on", "default-role", ("testing",))
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on", "default-role", ("testing",))
 
         # Saved values should override defaults
         assert loaded["active_skills"] == ["code-review"]
         assert loaded["role"] == "engineer"
 
         # Fresh session for new chat uses defaults
-        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda _ck="": {"session_id": "z", "started": False}, "on", "default-role", ("testing",))
+        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda _ck="": _state(session_id="z", started=False), "on", "default-role", ("testing",))
         assert fresh["role"] == "default-role"
         assert fresh["active_skills"] == ["testing"]
 
         # /new resets to defaults (simulated)
-        new_session = default_session("claude", {"session_id": "w", "started": False}, "on", "default-role", ("testing",))
+        new_session = default_session("claude", _state(session_id="w", started=False), "on", "default-role", ("testing",))
         assert new_session["active_skills"] == ["testing"]
         assert new_session["role"] == "default-role"
 
@@ -537,7 +545,7 @@ def test_per_user_credential_storage():
         assert creds_111["github"]["GITHUB_ORG"] == "acme-corp"
         assert creds_111["jira"]["JIRA_TOKEN"] == "jira_alice"
 
-        # Load user 222's credentials — isolated from 111
+        # Load user 222's credentials — isolated 111
         creds_222 = load_user_credentials(data_dir, 222, key)
         assert "github" in creds_222
         assert "jira" not in creds_222
@@ -695,7 +703,7 @@ def test_awaiting_skill_setup_persistence():
         data_dir = Path(tmpdir)
         (data_dir / "sessions").mkdir(parents=True)
 
-        session = default_session("claude", {"session_id": "x", "started": False}, "on")
+        session = default_session("claude", _state(session_id="x", started=False), "on")
         setup_state = {
             "actor_key": "tg:111",
             "skill": "github",
@@ -706,14 +714,14 @@ def test_awaiting_skill_setup_persistence():
         session["awaiting_skill_setup"] = setup_state
         save_session(data_dir, telegram_conversation_key(100), session)
 
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": {"session_id": "y", "started": False}, "on")
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on")
         assert loaded.get("awaiting_skill_setup") is not None
         assert loaded["awaiting_skill_setup"]["actor_key"] == "tg:111"
         assert loaded["awaiting_skill_setup"]["skill"] == "github"
         assert len(loaded["awaiting_skill_setup"]["remaining"]) == 1
 
         # /new clears awaiting_skill_setup
-        new_session = default_session("claude", {"session_id": "z", "started": False}, "on")
+        new_session = default_session("claude", _state(session_id="z", started=False), "on")
         assert new_session.get("awaiting_skill_setup") is None
 
 

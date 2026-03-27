@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.providers import ProviderStateRecord
@@ -49,7 +50,7 @@ class ConversationControlPort(Protocol):
         data_dir: Path,
         conversation_key: str,
         actor_key: str,
-        live_cancel_event: Any = None,
+        live_cancel_event: asyncio.Event | None = None,
         cancel_request_event_id: str = "",
         allow_override: bool = False,
     ) -> ConversationCancelOutcome: ...

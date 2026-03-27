@@ -6,14 +6,21 @@ import asyncio
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
+from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from collections.abc import Iterator, Mapping
 from typing import Protocol
 
+from octopus_sdk.config import BotConfigBase
+from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.inbound_types import InboundEnvelope
 from octopus_sdk.providers import DenialRecord
+from octopus_sdk.registry.models import ExternalConversationRef
+from octopus_sdk.registry.models import TransportActorKey
+from octopus_sdk.registry.models import TransportConversationKey
+from octopus_sdk.sessions import AwaitingSkillSetup
+from octopus_sdk.sessions import SessionState
 from octopus_sdk.skill_types import SkillRequirement
-
 
 @dataclass(frozen=True)
 class TransportDescriptor:
@@ -53,22 +60,57 @@ class InboundSubmissionResult:
     item_id: str | None = None
 
 
+@dataclass(frozen=True)
+class TransportBindingRecord:
+    conversation_ref: str = ""
+    title: str = ""
+    origin_channel: str = ""
+    external_id: str = ""
+
+
+@dataclass(frozen=True)
+class TransportHealthRecord(Mapping[str, object]):
+    transport_id: str
+    transport_type: str
+    inbound_model: str
+    bot_mode: str = ""
+    registry_ids: tuple[str, ...] = ()
+    ok: bool | None = None
+
+    def __getitem__(self, key: str) -> object:
+        return getattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        for field in fields(self):
+            yield field.name
+
+    def __len__(self) -> int:
+        return len(fields(self))
+
+    def get(self, key: str, default: object = None) -> object:
+        return getattr(self, key, default)
+
+
+class TypingTarget(Protocol):
+    async def send_action(self, action: str) -> None: ...
+
+
 class EditableHandle(ABC):
     @abstractmethod
-    async def edit_text(self, text: str, **kwargs: Any) -> None:
+    async def edit_text(self, text: str, **kwargs: object) -> None:
         ...
 
     @abstractmethod
-    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+    async def edit_reply_markup(self, reply_markup: object | None = None, **kwargs: object) -> None:
         ...
 
 
 class TransportIdentityResolver(Protocol):
-    def conversation_key(self, raw_conversation_id: object) -> str: ...
+    def conversation_key(self, raw_conversation_id: object) -> TransportConversationKey: ...
 
-    def actor_key(self, raw_actor_id: object) -> str: ...
+    def actor_key(self, raw_actor_id: object) -> TransportActorKey: ...
 
-    def external_conversation_ref(self, raw_conversation_id: object) -> str: ...
+    def external_conversation_ref(self, raw_conversation_id: object) -> ExternalConversationRef: ...
 
 
 class TransportEgress(ABC):
@@ -78,15 +120,15 @@ class TransportEgress(ABC):
         ...
 
     @abstractmethod
-    async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
+    async def send_text(self, text: str, **kwargs: object) -> EditableHandle:
         ...
 
     @abstractmethod
-    async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
+    async def send_photo(self, photo: Path | str | bytes, **kwargs: object) -> None:
         ...
 
     @abstractmethod
-    async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
+    async def send_document(self, document: Path | str | bytes, **kwargs: object) -> None:
         ...
 
     @abstractmethod
@@ -97,22 +139,15 @@ class TransportEgress(ABC):
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         ...
 
-    async def sync_binding(self, binding: Any) -> None:
-        del binding
-        return None
+    @abstractmethod
+    async def sync_binding(self, binding: TransportBindingRecord) -> None:
+        ...
 
-    async def bind(self, *, title: str, config: Any) -> None:
-        del title, config
-        return None
+    @abstractmethod
+    async def bind(self, *, title: str, config: BotConfigBase) -> None:
+        ...
 
-    async def on_message_received(self, text: str) -> None:
-        del text
-        return None
-
-    async def on_outcome(self, outcome: Any) -> None:
-        del outcome
-        return None
-
+    @abstractmethod
     async def send_recovery_notice(
         self,
         *,
@@ -122,71 +157,73 @@ class TransportEgress(ABC):
         skip_label: str,
         update_id: int,
     ) -> None:
-        del preview, prompt, run_again_label, skip_label, update_id
-        return None
+        ...
 
-    async def send_status(self, text: str, **kwargs: Any) -> EditableHandle:
-        return await self.send_text(text, **kwargs)
+    @abstractmethod
+    async def send_status(self, text: str, **kwargs: object) -> EditableHandle:
+        ...
 
-    def typing_target(self) -> Any:
-        return self
+    @abstractmethod
+    def typing_target(self) -> TypingTarget:
+        ...
 
-    async def show_foreign_setup(self, foreign_setup: Any) -> None:
-        del foreign_setup
-        return None
+    @abstractmethod
+    async def show_foreign_setup(self, foreign_setup: AwaitingSkillSetup) -> None:
+        ...
 
+    @abstractmethod
     async def show_setup_prompt(
         self,
         missing_skill: str,
         first_requirement: SkillRequirement,
     ) -> None:
-        del missing_skill, first_requirement
-        return None
+        ...
 
+    @abstractmethod
     async def send_retry_prompt(
         self,
         denials: tuple[DenialRecord, ...],
         callback_token: str,
     ) -> None:
-        del denials, callback_token
-        return None
+        ...
 
+    @abstractmethod
     async def send_approval_prompt(self, callback_token: str) -> None:
-        del callback_token
-        return None
+        ...
 
+    @abstractmethod
     async def send_formatted_reply(self, text: str) -> None:
-        await self.send_text(text)
+        ...
 
+    @abstractmethod
     async def send_directed_artifacts(
         self,
         conversation_key_value: str,
         directives: list[tuple[str, str]],
         *,
-        resolved_ctx: Any = None,
+        resolved_ctx: ResolvedExecutionContext | None = None,
     ) -> None:
-        del conversation_key_value, directives, resolved_ctx
-        return None
+        ...
 
+    @abstractmethod
     async def send_compact_reply(
         self,
         text: str,
         conversation_key_value: str,
         slot: int,
     ) -> None:
-        del conversation_key_value, slot
-        await self.send_formatted_reply(text)
+        ...
 
+    @abstractmethod
     async def propose_delegation_plan(
         self,
         conversation_key_value: str,
-        session: Any,
+        session: SessionState,
         *,
         conversation_ref: str,
-        result: Any,
-    ) -> Any:
-        del conversation_key_value, session, conversation_ref, result
-        return None
+        result: RunResult,
+    ) -> RequestExecutionOutcome | None:
+        ...
 
 
 class BotRuntimeHandle(Protocol):
@@ -229,10 +266,10 @@ class TransportImplementation(ABC):
         ...
 
     @abstractmethod
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         ...
 
-    def can_build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> bool:
+    def can_build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> bool:
         try:
             self.build_egress(conversation_ref=conversation_ref, config=config, **kw)
         except RuntimeError:
@@ -251,9 +288,9 @@ class TransportImplementation(ABC):
     async def stop(self) -> None:
         return None
 
-    async def health_check(self) -> dict[str, Any]:
-        return {
-            "transport_id": self.transport_id,
-            "transport_type": self.descriptor.transport_type,
-            "inbound_model": self.descriptor.inbound_model,
-        }
+    async def health_check(self) -> TransportHealthRecord:
+        return TransportHealthRecord(
+            transport_id=self.transport_id,
+            transport_type=self.descriptor.transport_type,
+            inbound_model=self.descriptor.inbound_model,
+        )

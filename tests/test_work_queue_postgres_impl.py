@@ -134,8 +134,8 @@ def test_claim_for_update_and_complete(postgres_truncated):
             worker_id="w1",
         )
         assert item is not None
-        assert item["state"] == "claimed"
-        work_queue_postgres_impl.complete_work_item(conn, item["id"])
+        assert item.state == "claimed"
+        work_queue_postgres_impl.complete_work_item(conn, item.id)
         has = work_queue_postgres_impl.has_queued_or_claimed(conn, conversation_key)
         assert has is False
 

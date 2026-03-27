@@ -12,12 +12,99 @@ Design rules:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator, Mapping
 import dataclasses
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
-from octopus_sdk.providers import DenialRecord, ProviderStateRecord, coerce_denial_records, coerce_provider_state
+from octopus_sdk.providers import (
+    DenialRecord,
+    JsonValue,
+    ProviderStateRecord,
+    coerce_denial_records,
+    coerce_provider_state,
+)
+from octopus_sdk.skill_types import SkillRequirement
+
+
+@dataclass(frozen=True)
+class PendingApprovalAttachmentRecord(Mapping[str, object]):
+    path: str
+    original_name: str
+    is_image: bool
+    mime_type: str | None = None
+
+    def __getitem__(self, key: str) -> object:
+        return self.to_dict()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.to_dict().get(key, default)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "original_name": self.original_name,
+            "is_image": self.is_image,
+            "mime_type": self.mime_type,
+        }
+
+
+def coerce_pending_approval_attachments(
+    values: list[PendingApprovalAttachmentRecord] | list[Mapping[str, object]] | None,
+) -> list[PendingApprovalAttachmentRecord]:
+    if not values:
+        return []
+    records: list[PendingApprovalAttachmentRecord] = []
+    for value in values:
+        if isinstance(value, PendingApprovalAttachmentRecord):
+            records.append(value)
+            continue
+        records.append(
+            PendingApprovalAttachmentRecord(
+                path=str(value.get("path", "") or ""),
+                original_name=str(value.get("original_name", "") or ""),
+                is_image=bool(value.get("is_image", False)),
+                mime_type=(
+                    None
+                    if value.get("mime_type") in (None, "")
+                    else str(value.get("mime_type"))
+                ),
+            )
+        )
+    return records
+
+
+def _coerce_skill_requirement(value: SkillRequirement | Mapping[str, object]) -> SkillRequirement:
+    if isinstance(value, SkillRequirement):
+        return value
+    return SkillRequirement(
+        key=str(value.get("key", "") or ""),
+        prompt=str(value.get("prompt", "") or ""),
+        help_url=(
+            None
+            if value.get("help_url") in (None, "")
+            else str(value.get("help_url"))
+        ),
+        validate=(
+            None
+            if value.get("validate") is None
+            else value.get("validate")
+        ),
+    )
+
+
+def coerce_skill_requirements(
+    values: list[SkillRequirement] | list[Mapping[str, object]] | None,
+) -> list[SkillRequirement]:
+    if not values:
+        return []
+    return [_coerce_skill_requirement(value) for value in values]
 
 @dataclass
 class ProjectBinding:
@@ -42,11 +129,14 @@ class PendingApproval:
     actor_key: str
     prompt: str
     image_paths: list[str]
-    attachment_dicts: list[dict[str, Any]]
+    attachment_dicts: list[PendingApprovalAttachmentRecord]
     context_hash: str
     callback_token: str = ""
     trust_tier: str = "trusted"
     created_at: float | str = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        self.attachment_dicts = coerce_pending_approval_attachments(self.attachment_dicts)
 
 
 @dataclass
@@ -70,8 +160,11 @@ class AwaitingSkillSetup:
     """Conversational credential collection state."""
     actor_key: str
     skill: str
-    remaining: list[dict[str, Any]]  # [{key, prompt, help_url, validate}, ...]
+    remaining: list[SkillRequirement]
     started_at: float | str = 0.0
+
+    def __post_init__(self) -> None:
+        self.remaining = coerce_skill_requirements(self.remaining)
 
 
 @dataclass
@@ -153,7 +246,7 @@ class SessionState:
 # Serialization: typed ↔ dict (used only by storage.py and _load/_save)
 # ---------------------------------------------------------------------------
 
-def session_to_dict(s: SessionState) -> dict[str, Any]:
+def session_to_dict(s: SessionState) -> dict[str, object]:
     """Convert a SessionState to a storage-ready dict via dataclasses.asdict()."""
     data = dataclasses.asdict(s)
     provider_state = data.get("provider_state")
@@ -172,7 +265,7 @@ def session_to_dict(s: SessionState) -> dict[str, Any]:
     return data
 
 
-def session_from_dict(d: dict[str, Any]) -> SessionState:
+def session_from_dict(d: Mapping[str, object]) -> SessionState:
     """Reconstruct a SessionState from a storage dict."""
     def _make_optional(cls, raw):
         if raw is None or not isinstance(raw, dict):
@@ -229,13 +322,17 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
     )
 
 
+ProviderStateInput = ProviderStateRecord | Mapping[str, JsonValue]
+ProviderStateFactory = Callable[[str], ProviderStateInput]
+
+
 def default_session(
     provider_name: str,
-    provider_state: ProviderStateRecord | dict[str, Any] | callable,
+    provider_state: ProviderStateInput | ProviderStateFactory,
     approval_mode: str,
     role: str = "",
     default_skills: tuple[str, ...] = (),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     from datetime import datetime, timezone
 
     if callable(provider_state):

@@ -6,14 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.channels.telegram.bootstrap as telegram_bootstrap
-import app.channels.telegram.cancellation as telegram_cancellation
-import app.channels.telegram.ingress as th
+import app.runtime.telegram_ingress as th
 import app.channels.telegram.state as telegram_state
-from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.egress import TelegramChannelEgress
-from app.channels.telegram.state import TelegramRuntime
-from app.channels.telegram.state import build_telegram_runtime
+from app.channels.telegram.state import TelegramCancellationRegistry, TelegramRuntime, build_telegram_runtime
 from app.runtime.services import BotServices
 from app.runtime.transport_dispatcher import TransportDispatcher
 from tests.support.config_support import make_config
@@ -21,6 +18,7 @@ from tests.support.handler_support import FakeProvider
 from tests.support.handler_support import MinimalFakeBot
 from tests.support.service_support import build_test_bot_services
 from octopus_sdk.transport import InboundSubmissionResult
+from octopus_sdk.work_queue import WorkItemRecord
 
 
 class _RuntimeHandle:
@@ -39,6 +37,14 @@ class _RuntimeHandle:
     async def record(self, envelope):
         del envelope
         return True
+
+
+class _WorkerProcessor:
+    async def dispatch_claimed_item(self, kind: str, event, item: WorkItemRecord) -> None:
+        del kind, event, item
+
+    async def notify_deserialize_failure(self, item: WorkItemRecord) -> None:
+        del item
 
 
 class _FakeUpdater:
@@ -95,8 +101,7 @@ def _fake_transport(cfg, *, lifecycle: list[object]) -> TelegramTransport:
     transport._bootstrap = telegram_bootstrap.TelegramBootstrap(
         application=_FakeApplication(lifecycle),
         runtime=runtime,
-        worker_dispatch=lambda *_args, **_kwargs: None,
-        worker_deserialize_failure_notifier=None,
+        worker_processor=_WorkerProcessor(),
     )
     return transport
 

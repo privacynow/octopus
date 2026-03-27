@@ -10,7 +10,7 @@ from app.content_store import get_content_store
 from octopus_sdk.skill_types import SkillMeta, SkillRequirement
 
 
-def _requirements_from_track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:
+def _requirements__track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:
     requirements: list[SkillRequirement] = []
     for item in record.revision.requirements:
         key = str(item.get("key", "") or "")
@@ -81,13 +81,13 @@ class SkillCatalogService:
         record = self.resolve_track(skill_name)
         if record is None:
             return []
-        return _requirements_from_track(record)
+        return _requirements__track(record)
 
     def runtime_requirements(self, skill_name: str) -> list[SkillRequirement]:
         record = self.resolve_runtime_track(skill_name)
         if record is None:
             return []
-        return _requirements_from_track(record)
+        return _requirements__track(record)
 
     def resolve_info(self, skill_name: str) -> SkillInfoRecord | None:
         record = self.resolve_track(skill_name)
@@ -106,7 +106,7 @@ class SkillCatalogService:
             body=record.revision.instruction_body,
             source=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
             providers=provider_names,
-            requirement_keys=tuple(item.key for item in _requirements_from_track(record)),
+            requirement_keys=tuple(item.key for item in _requirements__track(record)),
         )
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillTrackRecord:

@@ -119,7 +119,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         submitted = []
@@ -193,7 +193,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         called = []
@@ -253,7 +253,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         called = []
@@ -307,7 +307,7 @@ async def test_delegation_approve_no_pending_is_a_no_op():
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, _, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         chat = FakeChat()
@@ -329,7 +329,7 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         async def fake_submit_action(*, conversation_id, envelope):
@@ -377,7 +377,7 @@ async def test_delegation_approve_rejects_stale_plan_without_submission(monkeypa
             "delegation_timeout_seconds": 3600,
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         called = []
@@ -468,7 +468,7 @@ async def test_stale_submitted_delegation_expires_on_next_worker_message():
         assert "delegation timed out" in pending["tasks"][0]["summary"]
 
 
-async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_age(monkeypatch):
+async def test_recently_submitted_delegation_does_not_expire__old_proposal_age(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -478,7 +478,7 @@ async def test_recently_submitted_delegation_does_not_expire_from_old_proposal_a
             "registry_agent_ids": {"default": "test-agent", "dev": "test-agent-dev"},
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         async def fake_submit_action(*, conversation_id, envelope):

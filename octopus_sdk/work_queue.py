@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from collections.abc import Iterator, Mapping
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Protocol
+
+JsonScalar = str | int | float | bool | None
+JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+
+
+def _coerce_epoch_float(value: object) -> float:
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if value is None:
+        return 0.0
+    return float(value or 0.0)
 
 
 class LeaveClaimed(Exception):
@@ -79,8 +91,8 @@ class TransitionResult:
     disposition: TransportDisposition
     reason: str = ""
     user_message_key: str | None = None
-    extra: dict[str, Any] | None = None
-    model: Any | None = None
+    extra: dict[str, JsonValue] | None = None
+    model: object | None = None
 
 
 @dataclass(frozen=True)
@@ -111,83 +123,106 @@ class WorkerHeartbeat:
 
 
 @dataclass(frozen=True)
-class WorkItemRecord(Mapping[str, Any]):
-    data: dict[str, Any]
-
-    def __getitem__(self, key: str) -> Any:
-        return self.data[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.data)
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.data.get(key, default)
+class WorkItemRecord:
+    id: str = ""
+    conversation_key: str = ""
+    event_id: str = ""
+    actor_key: str = ""
+    kind: str = ""
+    payload: str = ""
+    state: str = ""
+    worker_id: str | None = None
+    claimed_at: str | None = None
+    completed_at: str | None = None
+    error: str | None = None
+    created_at: str = ""
+    dispatch_mode: str = ""
+    cancel_requested_at: str | None = None
+    cancel_requested_by: str = ""
+    cancel_request_event_id: str = ""
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any] | dict[str, Any]) -> "WorkItemRecord":
-        return cls(dict(value))
+    def from_mapping(cls, value: Mapping[str, object]) -> "WorkItemRecord":
+        raw = dict(value)
+        return cls(
+            id=str(raw.get("id", "") or ""),
+            conversation_key=str(raw.get("conversation_key", "") or ""),
+            event_id=str(raw.get("event_id", "") or ""),
+            actor_key=str(raw.get("actor_key", "") or ""),
+            kind=str(raw.get("kind", "") or ""),
+            payload=str(raw.get("payload", "") or ""),
+            state=str(raw.get("state", "") or ""),
+            worker_id=None if raw.get("worker_id") is None else str(raw.get("worker_id") or ""),
+            claimed_at=None if raw.get("claimed_at") is None else str(raw.get("claimed_at") or ""),
+            completed_at=None if raw.get("completed_at") is None else str(raw.get("completed_at") or ""),
+            error=None if raw.get("error") is None else str(raw.get("error") or ""),
+            created_at=str(raw.get("created_at", "") or ""),
+            dispatch_mode=str(raw.get("dispatch_mode", "") or ""),
+            cancel_requested_at=None if raw.get("cancel_requested_at") is None else str(raw.get("cancel_requested_at") or ""),
+            cancel_requested_by=str(raw.get("cancel_requested_by", "") or ""),
+            cancel_request_event_id=str(raw.get("cancel_request_event_id", "") or ""),
+        )
 
 
 @dataclass(frozen=True)
-class UserAccessRecord(Mapping[str, Any]):
-    data: dict[str, Any]
-
-    def __getitem__(self, key: str) -> Any:
-        return self.data[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.data)
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.data.get(key, default)
+class UserAccessRecord:
+    actor_key: str = ""
+    access: str = ""
+    reason: str = ""
+    granted_by: str = ""
+    granted_at: float = 0.0
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any] | dict[str, Any]) -> "UserAccessRecord":
-        return cls(dict(value))
+    def from_mapping(cls, value: Mapping[str, object]) -> "UserAccessRecord":
+        raw = dict(value)
+        return cls(
+            actor_key=str(raw.get("actor_key", "") or ""),
+            access=str(raw.get("access", "") or ""),
+            reason=str(raw.get("reason", "") or ""),
+            granted_by=str(raw.get("granted_by", "") or ""),
+            granted_at=_coerce_epoch_float(raw.get("granted_at", 0.0)),
+        )
 
 
 @dataclass(frozen=True)
-class UsageRecord(Mapping[str, Any]):
-    data: dict[str, Any]
-
-    def __getitem__(self, key: str) -> Any:
-        return self.data[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.data)
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.data.get(key, default)
+class UsageRecord:
+    conversation_key: str = ""
+    work_item_id: str = ""
+    provider: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    recorded_at: float = 0.0
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any] | dict[str, Any]) -> "UsageRecord":
-        return cls(dict(value))
+    def from_mapping(cls, value: Mapping[str, object]) -> "UsageRecord":
+        raw = dict(value)
+        return cls(
+            conversation_key=str(raw.get("conversation_key", "") or ""),
+            work_item_id=str(raw.get("work_item_id", "") or ""),
+            provider=str(raw.get("provider", "") or ""),
+            prompt_tokens=int(raw.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(raw.get("completion_tokens", 0) or 0),
+            cost_usd=float(raw.get("cost_usd", 0.0) or 0.0),
+            recorded_at=_coerce_epoch_float(raw.get("recorded_at", 0.0)),
+        )
 
 
-def coerce_work_item_record(value: Mapping[str, Any] | dict[str, Any] | WorkItemRecord | None) -> WorkItemRecord | None:
+def coerce_work_item_record(value: Mapping[str, object] | WorkItemRecord | None) -> WorkItemRecord | None:
     if value is None or isinstance(value, WorkItemRecord):
         return value
     return WorkItemRecord.from_mapping(value)
 
 
-def coerce_work_item_records(values: list[Mapping[str, Any] | dict[str, Any] | WorkItemRecord]) -> list[WorkItemRecord]:
+def coerce_work_item_records(values: list[Mapping[str, object] | WorkItemRecord]) -> list[WorkItemRecord]:
     return [record if isinstance(record, WorkItemRecord) else WorkItemRecord.from_mapping(record) for record in values]
 
 
-def coerce_user_access_records(values: list[Mapping[str, Any] | dict[str, Any] | UserAccessRecord]) -> list[UserAccessRecord]:
+def coerce_user_access_records(values: list[Mapping[str, object] | UserAccessRecord]) -> list[UserAccessRecord]:
     return [record if isinstance(record, UserAccessRecord) else UserAccessRecord.from_mapping(record) for record in values]
 
 
-def coerce_usage_records(values: list[Mapping[str, Any] | dict[str, Any] | UsageRecord]) -> list[UsageRecord]:
+def coerce_usage_records(values: list[Mapping[str, object] | UsageRecord]) -> list[UsageRecord]:
     return [record if isinstance(record, UsageRecord) else UsageRecord.from_mapping(record) for record in values]
 
 TRANSPORT_STATES = frozenset(
@@ -195,26 +230,30 @@ TRANSPORT_STATES = frozenset(
 )
 
 
-def validate_work_item_row(row: WorkItemRecord, item_id: str = "") -> None:
+def validate_work_item_row(
+    row: Mapping[str, object] | WorkItemRecord,
+    item_id: str = "",
+) -> None:
     """Raise TransportStateCorruption if a durable queue row violates invariants."""
 
-    state = row.get("state")
+    row = row if isinstance(row, WorkItemRecord) else WorkItemRecord.from_mapping(row)
+    state = row.state
     if state not in TRANSPORT_STATES:
         raise TransportStateCorruption(
             f"unknown state {state!r}" + (f" for item {item_id}" if item_id else ""),
         )
-    dispatch_mode = row.get("dispatch_mode")
+    dispatch_mode = row.dispatch_mode
     if dispatch_mode not in ("fresh", "recovery"):
         raise TransportStateCorruption(
             "work item row must have dispatch_mode in ('fresh', 'recovery')"
             + (f" (item {item_id})" if item_id else ""),
         )
     if state == "claimed":
-        if row.get("worker_id") is None:
+        if row.worker_id is None:
             raise TransportStateCorruption(
                 "claimed row must have worker_id" + (f" (item {item_id})" if item_id else ""),
             )
-        if row.get("claimed_at") is None:
+        if row.claimed_at is None:
             raise TransportStateCorruption(
                 "claimed row must have claimed_at" + (f" (item {item_id})" if item_id else ""),
             )
@@ -226,7 +265,7 @@ _validate_work_item_row = validate_work_item_row
 class WorkQueuePort(Protocol):
     def close_transport_db(self, data_dir: Path) -> None: ...
     def close_all_transport_db(self) -> None: ...
-    def debug_connection(self, data_dir: Path) -> Any: ...
+    def debug_connection(self, data_dir: Path) -> object: ...
     def reset_db_for_test(self, data_dir: Path) -> None: ...
     def record_and_enqueue(
         self,

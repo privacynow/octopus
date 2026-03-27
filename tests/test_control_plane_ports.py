@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app.access import get_authorization
 from app.runtime import composition
-from app.runtime.registry_participant import build_noop_registry_participant
 import app.runtime_backend as runtime_backend
 from octopus_sdk.events import ConversationEvent
 from octopus_sdk.registry.models import (
@@ -33,6 +32,7 @@ from octopus_sdk.task_routing import (
     TaskSubmissionResult,
 )
 from app.runtime.services import BotServices, ControlPlaneServices
+from tests.support.registry_participant_support import build_noop_registry_participant
 
 
 async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> None:

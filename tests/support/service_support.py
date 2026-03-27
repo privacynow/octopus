@@ -10,12 +10,12 @@ from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.runtime import composition
 import app.runtime_backend as runtime_backend
-from app.runtime.registry_participant import build_noop_registry_participant
 from app.runtime.services import BotServices, ControlPlaneServices, build_bus_bot_services
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.task_routing import NoOpTaskRouting
+from tests.support.registry_participant_support import build_noop_registry_participant
 
 
 def _noop_control_plane_services() -> ControlPlaneServices:

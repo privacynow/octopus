@@ -188,5 +188,5 @@ def _friendly_validation_error(got: int, expected: int) -> str:
     elif 500 <= got < 600:
         hint = "The service is temporarily unavailable. Try again in a few minutes."
     else:
-        hint = "Unexpected response from the service."
+        hint = "Unexpected response the service."
     return f"{hint} (HTTP {got}, expected {expected})"

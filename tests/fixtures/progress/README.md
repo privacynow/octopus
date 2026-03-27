@@ -7,7 +7,7 @@ These files are checked-in traces used to prove the mapping/render path handles 
 
 ## Capturing real traces
 
-To refresh or add fixtures from a real run:
+To refresh or add fixtures a real run:
 
 1. **Codex:** Run a short prompt that triggers at least one command and one assistant message. Redirect stdout to a file (stderr can be discarded or kept). One line per JSON object.
 2. **Claude:** Same idea; run a short prompt and capture stdout. Ensure the trace includes at least one `stream_event` and a terminating `result` line.

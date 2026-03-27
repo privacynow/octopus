@@ -12,6 +12,7 @@ import httpx
 
 from app.config import ProcessRole, RuntimeMode, validate_config
 from app.registry_errors import registry_error_detail
+from octopus_sdk.registry.models import RuntimeHealthPayload
 from octopus_sdk.sessions import session_from_dict
 from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
 from app.storage import list_sessions, load_session
@@ -51,7 +52,7 @@ class RuntimeDiagnostic:
 
 @dataclass(frozen=True)
 class RuntimeHealthSummary:
-    """Compact health summary derived once from the canonical report."""
+    """Compact health summary derived once the canonical report."""
 
     status: str = "healthy"
     healthy_worker_count: int = 0
@@ -189,7 +190,7 @@ def report_to_dict(report: RuntimeHealthReport) -> dict[str, Any]:
 
 
 def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | None:
-    """Rehydrate a canonical health report from a stored mapping."""
+    """Rehydrate a canonical health report a stored mapping."""
     if not payload:
         return None
     summary = payload.get("summary") or {}
@@ -267,6 +268,13 @@ class RuntimeHealthJsonProjector(RuntimeHealthProjector[dict[str, Any]]):
 
     def project(self, report: RuntimeHealthReport) -> dict[str, Any]:
         return report_to_dict(report)
+
+
+class RuntimeHealthRegistryProjector(RuntimeHealthProjector[RuntimeHealthPayload]):
+    """Project canonical runtime health into the typed registry wire model."""
+
+    def project(self, report: RuntimeHealthReport) -> RuntimeHealthPayload:
+        return RuntimeHealthPayload.model_validate(report_to_dict(report))
 
 
 class DoctorTextFormatter(RuntimeHealthFormatter):

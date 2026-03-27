@@ -1,6 +1,6 @@
 """Shared service layer for registry routing capabilities.
 
-This service keeps capability lifecycle terminology separate from runtime
+This service keeps capability lifecycle terminology separate runtime
 skill-catalog terminology. The backing registry store can evolve without
 forcing UI handlers to speak storage-centric names.
 """
@@ -62,14 +62,14 @@ class CapabilityService:
 
 
 def declared_capabilities(card: dict[str, Any]) -> list[str]:
-    """Return capability names from a registry card payload."""
+    """Return capability names a registry card payload."""
 
     raw = card.get("capabilities", [])
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
 def query_capabilities(query: dict[str, Any]) -> set[str]:
-    """Return requested capability filters from a discovery query payload."""
+    """Return requested capability filters a discovery query payload."""
 
     raw = query.get("capabilities", [])
     return {

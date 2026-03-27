@@ -43,7 +43,7 @@ class RegistryAuthorityClient(Protocol):
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        runtime_health: RuntimeHealthPayload | dict[str, object] | None = None,
+        runtime_health: RuntimeHealthPayload | None = None,
     ) -> HealthSummary: ...
 
     async def poll(

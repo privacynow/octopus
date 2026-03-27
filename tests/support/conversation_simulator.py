@@ -8,9 +8,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import app.channels.telegram.ingress as _th
+import app.runtime.telegram_ingress as _th
 from app import work_queue
-from app.agents.bridge import build_registry_message_delivery
+from app.channels.registry.delivery_transport import build_registry_message_delivery
 from app.channels.registry.refs import parse_registry_ref
 from tests.support.handler_support import (
     FakeChat,
@@ -41,7 +41,7 @@ class ConversationSimulator:
         set_bot_instance(self._bot)
 
     def inject_message(self, chat_id: int, user_id: int, text: str) -> None:
-        """Admit a plain message (handler path). Call from sync or async; for async use inject_message_async."""
+        """Admit a plain message (handler path). Call sync or async; for async use inject_message_async."""
         chat = FakeChat(chat_id)
         user = FakeUser(user_id)
         msg = FakeMessage(chat=chat, text=text)
@@ -55,7 +55,7 @@ class ConversationSimulator:
         except RuntimeError:
             loop = None
         if loop:
-            raise RuntimeError("Use inject_message_async from an async test")
+            raise RuntimeError("Use inject_message_async an async test")
         asyncio.run(_do())
 
     async def inject_message_async(self, chat_id: int, user_id: int, text: str) -> FakeUpdate:

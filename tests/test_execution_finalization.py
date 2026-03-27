@@ -5,6 +5,7 @@ import pytest
 
 from app.agents.registry_capabilities import registry_authority_ref
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.execution import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
@@ -62,7 +63,7 @@ async def test_finalization_records_usage_and_schedules_webhook() -> None:
 async def test_finalization_clears_resumed_delegation_after_outcome() -> None:
     session = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="on",
         pending_delegation=PendingDelegation(
             conversation_ref="registry:conv-2",

@@ -101,8 +101,18 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _json_ready(value):
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return _json_ready(value.to_dict())
+    if isinstance(value, list | tuple):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    return value
+
+
 def _json(value) -> str:
-    return json.dumps(value, sort_keys=True)
+    return json.dumps(_json_ready(value), sort_keys=True)
 
 
 def _parse_json(raw: str, default):
@@ -422,7 +432,7 @@ class SQLiteContentStore(AbstractContentStore):
             for row in rows
         )
 
-    def _record_from_row(self, row: sqlite3.Row) -> RuntimeSkillTrackRecord:
+    def _record__row(self, row: sqlite3.Row) -> RuntimeSkillTrackRecord:
         revision = SkillRevisionRecord(
             instruction_body=row["instruction_body"],
             requirements=_parse_json(row["requirements_json"], []),
@@ -451,7 +461,7 @@ class SQLiteContentStore(AbstractContentStore):
         )
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=False)]
+        records = [self._record__row(row) for row in self._rows_for_slug(slug, runtime_only=False)]
         return sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
@@ -459,7 +469,7 @@ class SQLiteContentStore(AbstractContentStore):
         return tracks[0] if tracks else None
 
     def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=True)]
+        records = [self._record__row(row) for row in self._rows_for_slug(slug, runtime_only=True)]
         records = sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
         return records[0] if records else None
 

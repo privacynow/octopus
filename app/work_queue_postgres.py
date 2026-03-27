@@ -231,20 +231,21 @@ class PostgresTransportStore:
             )
 
     def recover_stale_claims(
-        self, data_dir: Path, current_worker_id: str, max_age_seconds: int = 300,
+        self,
+        data_dir: Path,
+        *,
+        lease_ttl_seconds: int = 300,
     ) -> int:
         with self._conn() as conn:
-            return work_queue_postgres_impl.recover_stale_claims(
-                conn, current_worker_id, max_age_seconds
-            )
+            return work_queue_postgres_impl.recover_stale_claims(conn, lease_ttl_seconds)
 
-    def purge_old(self, data_dir: Path, older_than_hours: int = 24) -> int:
+    def purge_old(self, data_dir: Path, *, older_than_seconds: int = 7 * 24 * 3600) -> int:
         with self._conn() as conn:
-            return work_queue_postgres_impl.purge_old(conn, older_than_hours)
+            return work_queue_postgres_impl.purge_old(conn, older_than_seconds)
 
-    def purge_old_usage(self, data_dir: Path, older_than_hours: int = 168) -> int:
+    def purge_old_usage(self, data_dir: Path, *, older_than_seconds: int = 30 * 24 * 3600) -> int:
         with self._conn() as conn:
-            return work_queue_postgres_impl.purge_old_usage(conn, older_than_hours)
+            return work_queue_postgres_impl.purge_old_usage(conn, older_than_seconds)
 
     def get_user_access(self, data_dir: Path, actor_key: str) -> str | None:
         with self._conn() as conn:

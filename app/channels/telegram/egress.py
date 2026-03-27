@@ -9,13 +9,20 @@ from typing import Any
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
-from app.channels.telegram import presenters as telegram_presenters
+from app.presentation import telegram as telegram_presenters
 from app.config import BotConfig
 from octopus_sdk.transport import (
     EditableHandle,
+    TransportBindingRecord,
     TransportCapabilities,
     TransportEgress,
 )
+from octopus_sdk.transport import TransportHealthRecord
+from octopus_sdk.config import BotConfigBase
+from octopus_sdk.execution_context import ResolvedExecutionContext
+from octopus_sdk.providers import DenialRecord
+from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
+from octopus_sdk.skill_types import SkillRequirement
 from app.runtime.services import BotServices
 
 
@@ -60,6 +67,9 @@ class TelegramChannelEgress(TransportEgress):
         self._services = services
         self._mirror_input_event = mirror_input_event
         self._target_message_id = target_message_id
+        self.title = ""
+        self.external_id = str(chat_id)
+        self.origin_channel = "telegram"
         self.chat = _ChatShim(self)
         self.text = None
         self.replies: list[str] = []
@@ -72,6 +82,9 @@ class TelegramChannelEgress(TransportEgress):
         sent = await self._bot.send_message(self.chat_id, text, **kwargs)
         self.replies.append(text)
         return TelegramEditableHandle(sent)
+
+    async def send_status(self, text: str, **kwargs: Any) -> EditableHandle:
+        return await self.send_text(text, **kwargs)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
         await self._bot.send_photo(self.chat_id, photo, **kwargs)
@@ -93,14 +106,28 @@ class TelegramChannelEgress(TransportEgress):
         del text, show_alert
         return None
 
-    async def bind(self, *, title: str, config: Any) -> None:
-        del config, title
+    def typing_target(self):
+        return self
 
-    async def on_message_received(self, text: str) -> None:
-        del text
+    async def sync_binding(self, binding: TransportBindingRecord) -> None:
+        title = str(binding.title or "").strip()
+        if title:
+            self.title = title
+        external_id = str(binding.external_id or "").strip()
+        if external_id:
+            self.external_id = external_id
+        origin_channel = str(binding.origin_channel or "").strip()
+        if origin_channel:
+            self.origin_channel = origin_channel
+        conversation_ref = str(binding.conversation_ref or "").strip()
+        if conversation_ref:
+            self.conversation_ref = conversation_ref
 
-    async def on_outcome(self, outcome: Any) -> None:
-        del outcome
+    async def bind(self, *, title: str, config: BotConfigBase) -> None:
+        del config
+        cleaned = str(title or "").strip()
+        if cleaned:
+            self.title = cleaned
 
     async def send_recovery_notice(
         self,
@@ -123,28 +150,28 @@ class TelegramChannelEgress(TransportEgress):
             reply_markup=keyboard,
         )
 
-    async def show_foreign_setup(self, foreign_setup) -> None:
-        from app.channels.telegram.execution import show_foreign_setup
+    async def show_foreign_setup(self, foreign_setup: AwaitingSkillSetup) -> None:
+        from app.runtime.telegram_execution import show_foreign_setup
 
         await show_foreign_setup(self, foreign_setup)
 
-    async def show_setup_prompt(self, missing_skill: str, first_requirement: dict[str, object]) -> None:
-        from app.channels.telegram.execution import show_setup_prompt
+    async def show_setup_prompt(self, missing_skill: str, first_requirement: SkillRequirement) -> None:
+        from app.runtime.telegram_execution import show_setup_prompt
 
         await show_setup_prompt(self, missing_skill, first_requirement)
 
-    async def send_retry_prompt(self, denials: tuple[dict[str, Any], ...], callback_token: str) -> None:
-        from app.channels.telegram.execution import send_retry_prompt
+    async def send_retry_prompt(self, denials: tuple[DenialRecord, ...], callback_token: str) -> None:
+        from app.runtime.telegram_execution import send_retry_prompt
 
         await send_retry_prompt(self, denials, callback_token)
 
     async def send_approval_prompt(self, callback_token: str) -> None:
-        from app.channels.telegram.execution import send_approval_prompt
+        from app.runtime.telegram_execution import send_approval_prompt
 
         await send_approval_prompt(self, callback_token)
 
     async def send_formatted_reply(self, text: str) -> None:
-        from app.channels.telegram.execution import send_formatted_reply
+        from app.runtime.telegram_execution import send_formatted_reply
 
         await send_formatted_reply(self, text)
 
@@ -153,10 +180,10 @@ class TelegramChannelEgress(TransportEgress):
         conversation_key_value: str,
         directives: list[tuple[str, str]],
         *,
-        resolved_ctx: Any = None,
+        resolved_ctx: ResolvedExecutionContext | None = None,
     ) -> None:
-        from app.channels.telegram.execution import send_path_to_chat
-        from app.channels.telegram import presenters as telegram_presenters
+        from app.presentation import telegram as telegram_presenters
+        from app.runtime.telegram_execution import send_path_to_chat
         from app.storage import chat_upload_dir, resolve_allowed_path
 
         cfg = self._config
@@ -180,19 +207,19 @@ class TelegramChannelEgress(TransportEgress):
             await send_path_to_chat(self, allowed_path, force_image=(dtype == "IMAGE"))
 
     async def send_compact_reply(self, text: str, conversation_key_value: str, slot: int) -> None:
-        from app.channels.telegram.execution import send_compact_reply
+        from app.runtime.telegram_execution import send_compact_reply
 
         await send_compact_reply(self, text, conversation_key_value, slot)
 
     async def propose_delegation_plan(
         self,
         conversation_key_value: str,
-        session,
+        session: SessionState,
         *,
         conversation_ref: str,
-        result,
-    ):
-        from app.channels.telegram.delegation_channel import propose_delegation_plan
+        result: RunResult,
+    ) -> RequestExecutionOutcome:
+        from app.workflows.delegation.telegram import propose_delegation_plan
         from types import SimpleNamespace
 
         if self._config is None:

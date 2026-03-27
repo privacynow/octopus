@@ -10,9 +10,9 @@ HTTP boundary. The metadata schemas are the machine-checkable contract.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ConversationEvent(BaseModel):
@@ -25,7 +25,7 @@ class ConversationEvent(BaseModel):
     actor: str = ""                  # display name, not transport-specific ID
     content: str = ""                # text/markdown body
     created_at: str = Field(..., min_length=1)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ class DelegationTaskSummary(BaseModel):
     instructions: str = ""
     priority: str = ""
     requested_capabilities: list[str] = Field(default_factory=list)
-    context: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class DelegationMetadata(BaseModel):
@@ -153,7 +153,7 @@ EVENT_METADATA_SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 
-def validate_event_metadata(event: ConversationEvent) -> dict[str, Any]:
+def validate_event_metadata(event: ConversationEvent) -> dict[str, JsonValue]:
     """Validate that event.metadata matches the schema for event.kind.
 
     Returns the normalized metadata payload.

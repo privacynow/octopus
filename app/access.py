@@ -84,7 +84,7 @@ def is_public_user(config: BotConfig, user: InboundUser | None) -> bool:
 
 
 def trust_tier(config: BotConfig, user: InboundUser | None) -> str:
-    """Resolve the user trust tier from config and identity."""
+    """Resolve the user trust tier config and identity."""
     return "public" if is_public_user(config, user) else "trusted"
 
 

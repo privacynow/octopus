@@ -313,14 +313,19 @@ def reclaim_for_replay(
 
 
 def recover_stale_claims(
-    data_dir: Path, current_worker_id: str, max_age_seconds: int = 300,
+    data_dir: Path,
+    *,
+    lease_ttl_seconds: int = 300,
 ) -> int:
-    return _store().recover_stale_claims(data_dir, current_worker_id, max_age_seconds)
+    return _store().recover_stale_claims(
+        data_dir,
+        lease_ttl_seconds=lease_ttl_seconds,
+    )
 
 
-def purge_old(data_dir: Path, older_than_hours: int = 24) -> int:
-    return _store().purge_old(data_dir, older_than_hours)
+def purge_old(data_dir: Path, *, older_than_seconds: int = 7 * 24 * 3600) -> int:
+    return _store().purge_old(data_dir, older_than_seconds=older_than_seconds)
 
 
-def purge_old_usage(data_dir: Path, older_than_hours: int = 168) -> int:
-    return _store().purge_old_usage(data_dir, older_than_hours)
+def purge_old_usage(data_dir: Path, *, older_than_seconds: int = 30 * 24 * 3600) -> int:
+    return _store().purge_old_usage(data_dir, older_than_seconds=older_than_seconds)

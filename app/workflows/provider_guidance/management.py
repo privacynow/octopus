@@ -27,7 +27,7 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
     def _track(self, provider_name: str, *, scope_kind: str, scope_key: str) -> ProviderGuidanceTrackRecord | None:
         return self._store().get_provider_guidance(provider_name, scope_kind=scope_kind, scope_key=scope_key)
 
-    def _detail_from_track(self, track: ProviderGuidanceTrackRecord) -> ProviderGuidanceLifecycleDetail:
+    def _detail__track(self, track: ProviderGuidanceTrackRecord) -> ProviderGuidanceLifecycleDetail:
         revisions = tuple(
             ProviderGuidanceLifecycleRevision(
                 revision_id=item.revision_id,
@@ -111,7 +111,7 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
             return f"Provider guidance for '{provider_name}' must be approved before publishing."
         if action in {"approve", "reject"}:
             return f"Provider guidance for '{provider_name}' is not awaiting review."
-        return f"Cannot {action} provider guidance for '{provider_name}' from state '{track.revision.status}'."
+        return f"Cannot {action} provider guidance for '{provider_name}' state '{track.revision.status}'."
 
     def _apply_transition(
         self,
@@ -127,7 +127,7 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
                 status=decision.status,
                 ok=False,
                 message=self._transition_message(track.provider, action, decision, track),
-                detail=self._detail_from_track(track),
+                detail=self._detail__track(track),
             )
         effects = decision.effects
         if effects.set_status is not None or effects.published_pointer != "unchanged" or effects.approval_action is not None:
@@ -160,7 +160,7 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
         track = self._track(provider_name, scope_kind=scope_kind, scope_key=scope_key)
         if track is None:
             return None
-        return self._detail_from_track(track)
+        return self._detail__track(track)
 
     def edit_draft(
         self,

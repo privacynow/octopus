@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
+
+from octopus_sdk.providers import ProviderConfigRecord
 
 
 @dataclass(frozen=True)
@@ -12,7 +14,7 @@ class ProviderGuidancePreview:
     effective_guidance: str
     system_prompt: str
     capability_summary: str
-    provider_config: dict[str, Any]
+    provider_config: ProviderConfigRecord
     prompt_weight: int
 
 

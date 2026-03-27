@@ -28,7 +28,7 @@ from octopus_sdk.inbound_types import (
     InboundMessage,
     deserialize_inbound,
 )
-from octopus_sdk.work_queue import TransportStateCorruption
+from octopus_sdk.work_queue import TransportStateCorruption, WorkItemRecord
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ async def worker_loop(
     worker_id: str,
     dispatch,
     *,
-    deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    deserialize_failure_notifier: Callable[[WorkItemRecord], Awaitable[None]] | None = None,
     poll_interval: float = POLL_INTERVAL,
     lease_ttl: int = 300,
     sweep_interval: float = SWEEP_INTERVAL,
@@ -68,7 +68,7 @@ async def worker_loop(
     heartbeat_interval: float = HEARTBEAT_INTERVAL,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Continuously claim and dispatch work items from the durable queue.
+    """Continuously claim and dispatch work items the durable queue.
 
     Args:
         data_dir: Data directory containing transport.db.
@@ -136,8 +136,7 @@ async def worker_loop(
                     try:
                         recovered = work_queue.recover_stale_claims(
                             data_dir,
-                            worker_id,
-                            max_age_seconds=lease_ttl,
+                            lease_ttl_seconds=lease_ttl,
                         )
                         if recovered:
                             stale_recoveries_seen += recovered
@@ -153,7 +152,7 @@ async def worker_loop(
                         try:
                             work_queue.purge_old_usage(
                                 data_dir,
-                                older_than_hours=USAGE_PURGE_OLDER_THAN_HOURS,
+                                older_than_seconds=USAGE_PURGE_OLDER_THAN_HOURS * 3600,
                             )
                             last_usage_purge = now_mono
                         except Exception:
@@ -165,11 +164,11 @@ async def worker_loop(
                     if item is None:
                         break
 
-                    item_id = item["id"]
-                    kind = item.get("kind", "unknown")
-                    payload = item.get("payload", "{}")
+                    item_id = item.id
+                    kind = item.kind or "unknown"
+                    payload = item.payload or "{}"
                     current_item_id = item_id
-                    current_conversation_key = str(item.get("conversation_key", ""))
+                    current_conversation_key = item.conversation_key
                     current_kind = kind
                     last_error = ""
                     _publish_heartbeat(force=True)
@@ -217,7 +216,7 @@ async def worker_loop(
                     except Exception as exc:
                         # Dispatch code owns best-effort user/channel-facing
                         # error messages. This outer catch is the durable
-                        # fallback that prevents the item from staying claimed
+                        # fallback that prevents the item staying claimed
                         # forever if dispatch fails unexpectedly.
                         log.exception("Worker failed processing item %s", item_id)
                         error_code = _worker_error_code(exc)
@@ -266,7 +265,7 @@ def start_worker_task(
     worker_id: str,
     dispatch,
     *,
-    deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    deserialize_failure_notifier: Callable[[WorkItemRecord], Awaitable[None]] | None = None,
     poll_interval: float = POLL_INTERVAL,
     lease_ttl: int = 300,
     sweep_interval: float = SWEEP_INTERVAL,

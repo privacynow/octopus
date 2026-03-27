@@ -9,6 +9,7 @@ from app.content_store import get_content_store, init_content_store_for_config
 from app.content_store_postgres import PostgresContentStore
 from app.credential_store import init_credential_store_for_config
 from octopus_sdk.identity import telegram_actor_key
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
 from app.storage import close_db, default_session, ensure_data_dirs
 from app.workflows.provider_guidance.management import get_provider_guidance_management_use_cases
@@ -43,7 +44,9 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         assert created.detail.lifecycle_status == "draft"
         assert created.detail.runtime_available is False
 
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
         unavailable = activation.begin_activate(session, actor_key=actor_key, skill_name="workflow-draft")
         assert unavailable.status == "not_published"
 

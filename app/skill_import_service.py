@@ -82,7 +82,7 @@ def _diff_tracks(
     current: RuntimeSkillTrackRecord,
     incoming: RuntimeSkillTrackRecord,
     *,
-    from_label: str,
+    _label: str,
     to_label: str,
     max_chars: int,
 ) -> str:
@@ -99,13 +99,13 @@ def _diff_tracks(
             difflib.unified_diff(
                 before,
                 after,
-                fromfile=f"{from_label}/{current.slug}/{rel}",
+                fromfile=f"{_label}/{current.slug}/{rel}",
                 tofile=f"{to_label}/{incoming.slug}/{rel}",
             )
         )
     text = "".join(lines)
     if not text:
-        return f"Skill '{current.slug}' has no differences ({from_label} vs {to_label})."
+        return f"Skill '{current.slug}' has no differences ({_label} vs {to_label})."
     if len(text) > max_chars:
         return text[:max_chars] + f"\n... (truncated at {max_chars} chars)"
     return text
@@ -113,7 +113,7 @@ def _diff_tracks(
 
 def _safe_registry_failure_message(action: str) -> str:
     messages = {
-        "install": "Could not fetch skill from registry. Try again later.",
+        "install": "Could not fetch skill registry. Try again later.",
         "update": "Could not update skill. Try again later.",
         "diff": "Could not fetch skill for update check. Try again later.",
     }
@@ -214,7 +214,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=f"Skill '{name}' installed from registry. Use /skills add {name} to activate.",
+            message=f"Skill '{name}' installed registry. Use /skills add {name} to activate.",
         )
 
     def uninstall(self, name: str, default_skills: tuple[str, ...] = ()) -> SkillMutationResult:
@@ -232,7 +232,7 @@ class SkillImportService:
                 ok=False,
                 message=(
                     f"Skill '{name}' is listed in BOT_SKILLS. "
-                    "Remove it from your config before uninstalling the imported track."
+                    "Remove it your config before uninstalling the imported track."
                 ),
             )
         deleted = self._store().delete_skill_track(
@@ -308,7 +308,7 @@ class SkillImportService:
         if incoming.revision.digest == imported.revision.digest:
             return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' is already up to date.")
         self._store().replace_skill_track(incoming)
-        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated from registry.")
+        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated registry.")
 
     def update_all(self) -> list[SkillMutationResult]:
         results: list[SkillMutationResult] = []
@@ -342,7 +342,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=_diff_tracks(imported, incoming, from_label="installed", to_label="registry", max_chars=max_chars),
+            message=_diff_tracks(imported, incoming, _label="installed", to_label="registry", max_chars=max_chars),
         )
 
     def is_installed(self, name: str) -> bool:

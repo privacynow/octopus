@@ -39,8 +39,10 @@ from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
     CoordinationActionEnvelope,
+    HealthSummary,
     RoutedTaskResult,
     RoutedTaskUpdate,
+    utcnow_iso,
 )
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.realtime import ConversationProgressUpdate
@@ -299,13 +301,12 @@ async def register(
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        result = store.register(agent_token, payload)
+        agent = store.register(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    agent = result.get("agent", {})
-    agent_id = str(agent.get("agent_id", ""))
+    agent_id = str(agent.agent_id)
     authority.remember_agent_token(agent_id, agent_token)
     if agent_id:
         await _ws_manager.broadcast_heartbeat(agent_id, _json_payload(agent))
@@ -314,7 +315,13 @@ async def register(
         reason="agent.registered",
         agent_id=agent_id,
     )
-    return _json_payload(result)
+    return _json_payload(
+        HealthSummary(
+            agent=agent,
+            collections_changed=True,
+            server_time=utcnow_iso(),
+        )
+    )
 
 
 @app.post("/v1/agents/heartbeat")
@@ -412,8 +419,6 @@ def poll(
         return _json_payload(store.poll(agent_token, cursor=int(cursor or "0"), limit=limit))
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
-
-
 @app.post("/v1/agents/ack")
 def ack(
     payload: dict[str, Any],
@@ -430,8 +435,6 @@ def ack(
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/status")
 async def routed_task_status(
     routed_task_id: str,
@@ -725,7 +728,7 @@ async def resource_publish_events(
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     conversation_id = normalize_conversation_id(conversation_id)
-    # Resolve agent from token
+    # Resolve agent token
     agent_row = store.resolve_agent_for_token(agent_token)
     if agent_row is None:
         raise HTTPException(status_code=401, detail="Unknown agent token")
@@ -1089,8 +1092,6 @@ def api_catalog_skill_detail(
         return catalog_skill_detail(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.get("/v1/catalog/skills/{skill_name}/lifecycle")
 def api_catalog_skill_lifecycle_detail(
     skill_name: str,
@@ -1100,8 +1101,6 @@ def api_catalog_skill_lifecycle_detail(
         return catalog_skill_lifecycle_detail(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.put("/v1/catalog/skills/{skill_name}/draft")
 def api_catalog_skill_edit_draft(
     skill_name: str,
@@ -1118,8 +1117,6 @@ def api_catalog_skill_edit_draft(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/submit")
 def api_catalog_skill_submit(
     skill_name: str,
@@ -1130,8 +1127,6 @@ def api_catalog_skill_submit(
         return submit_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/approve")
 def api_catalog_skill_approve(
     skill_name: str,
@@ -1142,8 +1137,6 @@ def api_catalog_skill_approve(
         return approve_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/reject")
 def api_catalog_skill_reject(
     skill_name: str,
@@ -1154,8 +1147,6 @@ def api_catalog_skill_reject(
         return reject_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/publish")
 def api_catalog_skill_publish(
     skill_name: str,
@@ -1166,8 +1157,6 @@ def api_catalog_skill_publish(
         return publish_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/archive")
 def api_catalog_skill_archive(
     skill_name: str,
@@ -1178,8 +1167,6 @@ def api_catalog_skill_archive(
         return archive_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/install")
 def api_catalog_skill_install(
     skill_name: str,
@@ -1189,8 +1176,6 @@ def api_catalog_skill_install(
         return install_catalog_skill(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/uninstall")
 def api_catalog_skill_uninstall(
     skill_name: str,
@@ -1200,8 +1185,6 @@ def api_catalog_skill_uninstall(
         return uninstall_catalog_skill(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/catalog/skills/{skill_name}/update")
 def api_catalog_skill_update(
     skill_name: str,
@@ -1211,8 +1194,6 @@ def api_catalog_skill_update(
         return update_catalog_skill(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.get("/v1/catalog/skills/{skill_name}/diff")
 def api_catalog_skill_diff(
     skill_name: str,
@@ -1222,8 +1203,6 @@ def api_catalog_skill_diff(
         return diff_catalog_skill(skill_name)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.get("/v1/conversations/{conversation_id:path}/skills")
 def api_conversation_skills(
     conversation_id: str,
@@ -1235,8 +1214,6 @@ def api_conversation_skills(
         return conversation_skill_state(store, conversation_id)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/activate")
 def api_conversation_activate_skill(
     conversation_id: str,
@@ -1256,8 +1233,6 @@ def api_conversation_activate_skill(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/deactivate")
 def api_conversation_deactivate_skill(
     conversation_id: str,
@@ -1276,8 +1251,6 @@ def api_conversation_deactivate_skill(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/conversations/{conversation_id:path}/skills/clear")
 def api_conversation_clear_skills(
     conversation_id: str,
@@ -1294,8 +1267,6 @@ def api_conversation_clear_skills(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/preview")
 def api_provider_guidance_preview(
     provider_name: str,
@@ -1311,8 +1282,6 @@ def api_provider_guidance_preview(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.get("/v1/provider-guidance/{provider_name}")
 def api_provider_guidance_detail(
     provider_name: str,
@@ -1328,8 +1297,6 @@ def api_provider_guidance_detail(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.put("/v1/provider-guidance/{provider_name}/draft")
 def api_provider_guidance_edit_draft(
     provider_name: str,
@@ -1346,8 +1313,6 @@ def api_provider_guidance_edit_draft(
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/submit")
 def api_provider_guidance_submit(
     provider_name: str,
@@ -1358,8 +1323,6 @@ def api_provider_guidance_submit(
         return submit_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/approve")
 def api_provider_guidance_approve(
     provider_name: str,
@@ -1370,8 +1333,6 @@ def api_provider_guidance_approve(
         return approve_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/reject")
 def api_provider_guidance_reject(
     provider_name: str,
@@ -1382,8 +1343,6 @@ def api_provider_guidance_reject(
         return reject_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/publish")
 def api_provider_guidance_publish(
     provider_name: str,
@@ -1394,8 +1353,6 @@ def api_provider_guidance_publish(
         return publish_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 @app.post("/v1/provider-guidance/{provider_name}/archive")
 def api_provider_guidance_archive(
     provider_name: str,
@@ -1406,8 +1363,6 @@ def api_provider_guidance_archive(
         return archive_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
 def _render_login_html(title: str, error: str = "") -> str:
     error_block = f'<p class="error">{error}</p>' if error else ""
     return f"""<!DOCTYPE html>

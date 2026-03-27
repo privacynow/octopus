@@ -6,6 +6,7 @@ import app.content_store as content_store_mod
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillFileRecord, SkillRevisionRecord
 from app.content_store import get_content_store, init_content_store_for_config
 from octopus_sdk.execution_context import resolve_execution_context
+from octopus_sdk.providers import ProviderStateRecord
 from app.provider_guidance_service import get_provider_guidance_service
 from octopus_sdk.sessions import session_from_dict
 from app.skill_catalog_service import get_skill_catalog_service
@@ -176,7 +177,7 @@ def test_registry_digest_mismatch_leaves_no_content_residue(monkeypatch, tmp_pat
 
         result = imports.install_from_registry("tampered", cfg.registry_url)
         assert result.ok is False
-        assert result.message == "Could not fetch skill from registry. Try again later."
+        assert result.message == "Could not fetch skill registry. Try again later."
         assert get_skill_catalog_service().resolve_track("tampered") is None
         assert store.list_skill_tracks("tampered") == []
         assert {item.slug for item in store.list_skill_summaries()} == before
@@ -217,7 +218,7 @@ def test_execution_context_hash_tracks_content_store_updates(monkeypatch, tmp_pa
         imports = get_skill_import_service()
         assert imports.install_from_registry("helper", cfg.registry_url).ok is True
 
-        session = default_session("claude", {"session_id": "test", "started": False}, "off")
+        session = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "off")
         session["active_skills"] = ["helper"]
         ctx_v1 = resolve_execution_context(
             session_from_dict(session),

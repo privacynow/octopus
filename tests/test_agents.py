@@ -10,11 +10,14 @@ import pytest
 
 from app import work_queue
 import app.agents.state as agent_state_module
-import app.agents.runtime as agent_runtime_module
-from app.agents.bridge import admit_registry_delivery
 from app.agents.client import AgentRegistryClient, RegistryClientError
-from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.runtime import AgentRuntime, _registered_card_hash
+from app.channels.registry.delivery_transport import (
+    admit_registry_delivery,
+    build_registry_delivery_runtime,
+    handle_registry_delivery,
+)
+import app.runtime.registry_participant as agent_runtime_module
+from app.runtime.registry_participant import AgentRuntime, _registered_card_hash
 from app.agents.state import RegistryConnectionState
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
@@ -31,6 +34,7 @@ from octopus_sdk.identity import (
 )
 from octopus_sdk.inbound_types import deserialize_inbound
 from octopus_sdk.transport import InboundSubmissionResult
+from octopus_sdk.transport import TransportBindingRecord
 from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
@@ -477,7 +481,7 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
                 status_code=500,
             )
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -520,7 +524,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             calls.append(("heartbeat", connectivity_state, str(current_capacity)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -572,7 +576,7 @@ async def test_agent_runtime_connected_sync_uses_heartbeat_without_re_registerin
             calls.append(("register", "unexpected"))
             return {"ok": True}
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -658,7 +662,7 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
                 ),
             )
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -674,29 +678,29 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
     )
 
     assert await runtime.sync_once() == "connected"
-    assert calls == [
-        (
-            "heartbeat",
-            {
-                "schema_version": 1,
-                "generated_at": "2026-03-16T00:00:00+00:00",
-                "summary": {
-                    "status": "degraded",
-                    "healthy_worker_count": 1,
-                    "stale_worker_count": 0,
-                    "fresh_queued_count": 0,
-                    "claimed_count": 2,
-                    "pending_recovery_count": 0,
-                    "recovery_queued_count": 0,
-                    "oldest_claim_age_seconds": 12,
-                    "warning_count": 1,
-                    "error_count": 0,
-                },
-                "snapshot": None,
-                "diagnostics": [],
-            },
-        )
-    ]
+    assert len(calls) == 1
+    kind, runtime_health = calls[0]
+    assert kind == "heartbeat"
+    assert runtime_health is not None
+    assert runtime_health.model_dump() == {
+        "schema_version": 1,
+        "generated_at": "2026-03-16T00:00:00+00:00",
+        "summary": {
+            "ok": None,
+            "status": "degraded",
+            "healthy_worker_count": 1,
+            "stale_worker_count": 0,
+            "fresh_queued_count": 0,
+            "claimed_count": 2,
+            "pending_recovery_count": 0,
+            "recovery_queued_count": 0,
+            "oldest_claim_age_seconds": 12,
+            "warning_count": 1,
+            "error_count": 0,
+        },
+        "snapshot": None,
+        "diagnostics": [],
+    }
 
 
 async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Path):
@@ -746,7 +750,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     seen_deliveries: list[str] = []
 
     async def handler(delivery):
@@ -812,7 +816,7 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
     seen_deliveries: list[str] = []
 
     async def handler(delivery):
@@ -869,7 +873,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
 
     class _FakeEgress:
         async def sync_binding(self, binding):
-            seen.append(("bind", str(binding.get("conversation_ref", ""))))
+            seen.append(("bind", str(binding.conversation_ref)))
 
     class _FakeDispatcher:
         def create_egress(self, conversation_ref, *, config, **kwargs):
@@ -935,9 +939,9 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
         async def sync_binding(self, binding):
             seen_bindings.append(
                 {
-                    "conversation_ref": str(binding.get("conversation_ref", "")),
-                    "external_id": str(binding.get("external_id", "")),
-                    "origin_channel": str(binding.get("origin_channel", "")),
+                    "conversation_ref": str(binding.conversation_ref),
+                    "external_id": str(binding.external_id),
+                    "origin_channel": str(binding.origin_channel),
                 }
             )
 
@@ -960,7 +964,7 @@ async def test_admit_registry_delivery_preserves_external_id_for_qualified_non_r
             "registry_id": "prod",
             "payload": {
                 "conversation_id": "slack:eng:C0123ABC",
-                "text": "hello from slack",
+                "text": "hello slack",
             },
         },
         submitter=_QueuedRegistrySubmitter(),
@@ -987,8 +991,8 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
         async def sync_binding(self, binding):
             seen_bindings.append(
                 {
-                    "conversation_ref": str(binding.get("conversation_ref", "")),
-                    "external_id": str(binding.get("external_id", "")),
+                    "conversation_ref": str(binding.conversation_ref),
+                    "external_id": str(binding.external_id),
                 }
             )
 
@@ -1011,7 +1015,7 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
             "registry_id": "prod",
             "payload": {
                 "conversation_id": "conv-1",
-                "text": "hello from registry",
+                "text": "hello registry",
                 "external_conversation_ref": "operator-conv-1",
             },
         },
@@ -1413,7 +1417,7 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
                 return True
 
         monkeypatch.setattr(
-            "app.agents.delivery.apply_runtime_delegation_result",
+            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
             lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
         )
         services = build_test_bot_services()
@@ -1449,7 +1453,7 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
 
         assert outcome == "accepted"
         assert any(
-            "Routed result for task task-1 from authority registry:prod did not match"
+            "Routed result for task task-1 authority registry:prod did not match"
             in record.message
             for record in caplog.records
         )
@@ -1472,7 +1476,7 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
                 return True
 
         monkeypatch.setattr(
-            "app.agents.delivery.apply_runtime_delegation_result",
+            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
             lambda *args, **kwargs: DelegationUpdateOutcome(
                 status="submitted",
                 matched=True,

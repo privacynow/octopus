@@ -3,7 +3,7 @@
 import time
 from pathlib import Path
 
-from octopus_sdk.providers import PreflightContext, RunResult
+from octopus_sdk.providers import DenialRecord, PreflightContext, ProviderStateRecord, RunResult
 from app.storage import default_session, save_session
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
@@ -25,6 +25,8 @@ from tests.support.handler_support import (
     last_reply,
     load_session_disk,
     make_config,
+    pending_approval_dict,
+    pending_retry_dict,
     send_callback,
     send_command,
     send_text,
@@ -45,7 +47,7 @@ async def test_approval_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -101,7 +103,7 @@ def test_skip_permissions_grant_sites_are_limited_to_pending_approval_paths():
         if "skip_permissions=True" in text:
             hits.append(str(path.relative_to(repo)))
 
-    assert hits == ["app/channels/telegram/pending.py"]
+    assert hits == ["app/workflows/pending/telegram.py"]
 
 
 async def test_approval_wording():
@@ -110,7 +112,7 @@ async def test_approval_wording():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -146,7 +148,7 @@ async def test_denial_retry_flow():
         prov.run_results = [
             RunResult(
                 text="partial",
-                denials=[{"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}}],
+                denials=[DenialRecord({"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}})],
             ),
             RunResult(text="Success after retry"),
         ]
@@ -157,7 +159,7 @@ async def test_denial_retry_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -209,13 +211,11 @@ async def test_retry_skip():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state("tg:test"), "off")
-        session["pending_retry"] = {
-            "actor_key": "tg:42",
-            "prompt": "test",
-            "image_paths": [],
-            "context_hash": "somehash",
-            "denials": [{"tool_name": "X"}],
-        }
+        session["pending_retry"] = pending_retry_dict(
+            prompt="test",
+            context_hash="somehash",
+            denials=[DenialRecord({"tool_name": "X"})],
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
@@ -225,7 +225,7 @@ async def test_retry_skip():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -251,7 +251,7 @@ async def test_stale_bare_approval_callback_does_not_approve_current_pending_req
         msg = FakeMessage(chat=chat, text="read my files")
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -288,7 +288,7 @@ async def test_retry_allow_no_pending():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -304,13 +304,11 @@ async def test_stale_context_hash():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state("tg:test"), "off")
-        session["pending_retry"] = {
-            "actor_key": "tg:42",
-            "prompt": "test",
-            "image_paths": [],
-            "context_hash": "definitely_stale_hash",
-            "denials": [{"tool_name": "X"}],
-        }
+        session["pending_retry"] = pending_retry_dict(
+            prompt="test",
+            context_hash="definitely_stale_hash",
+            denials=[DenialRecord({"tool_name": "X"})],
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
@@ -320,7 +318,7 @@ async def test_stale_context_hash():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -343,7 +341,7 @@ async def test_cross_user_approval():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -386,7 +384,7 @@ async def test_approval_preflight_timeout():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -413,7 +411,7 @@ async def test_approval_preflight_error():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -432,7 +430,7 @@ async def test_duplicate_pending_blocked():
         prov.preflight_results = [RunResult(text="Plan 1"), RunResult(text="Plan 2")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -459,12 +457,12 @@ async def test_denial_preserves_actor_key():
         prov.run_results = [
             RunResult(
                 text="partial",
-                denials=[{"tool_name": "Read", "tool_input": {"file_path": "/etc/secrets"}}],
+                denials=[DenialRecord({"tool_name": "Read", "tool_input": {"file_path": "/etc/secrets"}})],
             )
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -487,20 +485,17 @@ async def test_cancel_pending():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
-        session["pending_approval"] = {
-            "actor_key": "tg:42",
-            "prompt": "test",
-            "image_paths": [],
-            "attachment_dicts": [],
-            "context_hash": "abc",
-            "created_at": time.time(),
-        }
+        session["pending_approval"] = pending_approval_dict(
+            prompt="test",
+            context_hash="abc",
+            created_at=time.time(),
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="/cancel")
@@ -522,7 +517,7 @@ async def test_cancel_nothing_to_cancel():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from app.user_messages import nothing_to_cancel
 
         chat = FakeChat(12345)
@@ -545,7 +540,7 @@ async def test_approve_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -566,7 +561,7 @@ async def test_reject_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -587,7 +582,7 @@ async def test_approve_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -609,7 +604,7 @@ async def test_reject_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
@@ -630,21 +625,17 @@ async def test_stale_pending_ttl():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.execution as telegram_execution
-        from app.channels.telegram.pending import approve_pending
+        import app.runtime.telegram_execution as telegram_execution
+        from app.workflows.pending.telegram import approve_pending
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
-        session["pending_approval"] = {
-            "actor_key": "tg:42",
-            "prompt": "old request",
-            "image_paths": [],
-            "attachment_dicts": [],
-            "context_hash": "",
-            "created_at": time.time() - 7200,
-        }
+        session["pending_approval"] = pending_approval_dict(
+            prompt="old request",
+            created_at=time.time() - 7200,
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="")
@@ -665,9 +656,9 @@ async def test_stale_pending_ttl():
 async def test_approval_with_project_active():
     """Approval flow must succeed when a project is active.
 
-    Regression test: the stored context_hash (from request_approval) must match
+    Regression test: the stored context_hash (request_approval) must match
     what _current_context_hash computes at approval time. Both must include
-    working_dir from the project.
+    working_dir the project.
     """
     import tempfile
     with fresh_data_dir() as data_dir:
@@ -681,7 +672,7 @@ async def test_approval_with_project_active():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -741,13 +732,13 @@ async def test_retry_with_project_active():
         prov.run_results = [
             RunResult(
                 text="partial",
-                denials=[{"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}}],
+                denials=[DenialRecord({"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}})],
             ),
             RunResult(text="Success after retry"),
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -784,12 +775,12 @@ async def test_retry_with_project_active():
         assert "Context changed" not in reply_texts
 
 
-# -- Approval edge cases (from test_edge_callbacks.py, test_edge_sessions.py) --
+# -- Approval edge cases (test_edge_callbacks.py, test_edge_sessions.py) --
 
 
 async def test_approval_after_session_reset():
     """Approve callback after /new should not execute stale request."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
@@ -815,7 +806,7 @@ async def test_retry_callback_without_pending():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
         query, _ = await send_callback(th.handle_callback, chat, user, "retry_approve:/tmp/dir")
         assert query.answered
         assert len(prov.run_calls) == 0
@@ -823,7 +814,7 @@ async def test_retry_callback_without_pending():
 
 async def test_role_change_invalidates_pending_approval():
     """Changing role while approval is pending must invalidate it."""
-    import app.channels.telegram.ingress as th
+    import app.runtime.telegram_ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)

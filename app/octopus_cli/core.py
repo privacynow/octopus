@@ -502,7 +502,7 @@ class OctopusManager:
 
     def read_bot_registry_state(self, slug: str, registry_id: str) -> dict[str, str]:
         script = (
-            "from pathlib import Path\n"
+            "pathlib import Path\n"
             "import json, os\n"
             "data_dir = Path(os.environ.get('BOT_DATA_DIR', '/home/bot/data')) / 'agent' / 'registries'\n"
             "path = data_dir / f\"{os.environ.get('OCTOPUS_REGISTRY_ID','')}.json\"\n"
@@ -537,7 +537,7 @@ class OctopusManager:
     def clear_bot_registry_state(self, slug: str, registry_ids: list[str] | None = None) -> None:
         ids = registry_ids or []
         script = (
-            "from pathlib import Path\n"
+            "pathlib import Path\n"
             "import os\n"
             "data_dir = Path(os.environ.get('BOT_DATA_DIR', '/home/bot/data')) / 'agent' / 'registries'\n"
             "registry_ids = [item for item in os.environ.get('OCTOPUS_CLEAR_REGISTRY_IDS','').split() if item]\n"
@@ -768,7 +768,7 @@ class OctopusManager:
             self.io.print(f"Will recreate: {', '.join(plan.recreate_targets)}")
         if plan.restart_targets and plan.action in {Action.START, Action.STOP, Action.RESTART}:
             self.io.print(f"Will affect: {', '.join(plan.restart_targets)}")
-        for note in dict.fromkeys(plan.notes):
+        for note in plan.notes:
             self.io.print(note)
 
     def confirm_plan(self, plan: ExecutionPlan, *, yes: bool) -> None:
@@ -1042,7 +1042,7 @@ class OctopusManager:
         self.restart_bot(slug, force_rebuild=False)
         self.verify_registry_enrollment(slug, connection.registry_id)
 
-    def disconnect_bot_from_local_registry(self, slug: str) -> None:
+    def disconnect_bot__local_registry(self, slug: str) -> None:
         connection = self.bot_local_registry_connection(slug)
         if connection is None:
             self.io.print(f"{slug} has no local registry connection.")
@@ -1282,7 +1282,7 @@ class OctopusManager:
             self.workspace_members_file(ws_slug).write_text("\n".join(sorted(members)) + "\n", encoding="utf-8")
         self.regenerate_bot_workspace_env(bot_slug)
 
-    def remove_bot_from_workspace(self, ws_slug: str, bot_slug: str) -> None:
+    def remove_bot__workspace(self, ws_slug: str, bot_slug: str) -> None:
         members = [member for member in self.workspace_members(ws_slug) if member != bot_slug]
         self.workspace_members_file(ws_slug).write_text("\n".join(sorted(members)) + ("\n" if members else ""), encoding="utf-8")
         self.regenerate_bot_workspace_env(bot_slug)
@@ -1309,10 +1309,10 @@ class OctopusManager:
         while True:
             token = self.io.prompt("Paste your Telegram bot token: ").strip()
             if telegram_token_is_placeholder(token):
-                self.io.error("That still looks like a placeholder token. Copy the full token from @BotFather.")
+                self.io.error("That still looks like a placeholder token. Copy the full token @BotFather.")
                 continue
             if not telegram_token_format_valid(token):
-                self.io.error("Telegram bot tokens look like digits:letters from @BotFather.")
+                self.io.error("Telegram bot tokens look like digits:letters @BotFather.")
                 continue
             try:
                 telegram_id, username, display_name = validate_telegram_token(token)

@@ -36,7 +36,7 @@ def test_build_lifecycle_snapshot_uses_track_and_latest_action():
     )
 
 
-def test_submit_from_draft_enters_review_and_records_submission():
+def test_submit__draft_enters_review_and_records_submission():
     decision = decide_lifecycle_action(
         LifecycleSnapshot(
             revision_status="draft",

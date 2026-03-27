@@ -15,6 +15,7 @@ from app.workflows.runtime_skills.activation import get_runtime_skill_activation
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
 from app.workflows.runtime_skills.importing import get_runtime_skill_import_use_cases
 from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
 from tests.support.skill_test_helpers import derive_encryption_key, load_user_credentials
 from app.storage import close_db, default_session, ensure_data_dirs
@@ -68,7 +69,9 @@ def test_catalog_use_cases_expose_clean_local_actions(monkeypatch, tmp_path: Pat
 def test_activation_use_cases_list_and_activate_skill(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
         activation = get_runtime_skill_activation_use_cases()
 
         outcome = activation.begin_activate(
@@ -167,7 +170,9 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
         actor_key = telegram_actor_key(42)
         activation = get_runtime_skill_activation_use_cases()
         setup = get_runtime_skill_setup_use_cases()
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
 
         decision = activation.begin_activate(
             session,
@@ -201,7 +206,9 @@ async def test_setup_use_case_logs_validation_host_with_skill_name(monkeypatch, 
         actor_key = telegram_actor_key(42)
         activation = get_runtime_skill_activation_use_cases()
         setup = get_runtime_skill_setup_use_cases()
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
 
         decision = activation.begin_activate(
             session,
@@ -241,7 +248,9 @@ def test_setup_use_case_cancel_and_clear_credential_effects(tmp_path: Path):
         actor_key = telegram_actor_key(42)
         activation = get_runtime_skill_activation_use_cases()
         setup = get_runtime_skill_setup_use_cases()
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
 
         decision = activation.begin_activate(
             session,
@@ -274,7 +283,9 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
     try:
         actor_key = telegram_actor_key(42)
         setup = get_runtime_skill_setup_use_cases()
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
         session.active_skills = ["github-integration"]
 
         outcome = setup.check_satisfaction(
@@ -297,7 +308,9 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
 def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypatch, tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
         calls: list[tuple[str, tuple[str, ...]]] = []
 
         class FakeCredentials:
@@ -333,7 +346,9 @@ def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypa
 def test_setup_use_case_checks_credentials_only_for_active_skills(monkeypatch, tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
-        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+        session = session_from_dict(
+            default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+        )
         session.active_skills = ["github-integration"]
         calls: list[tuple[str, tuple[str, ...]]] = []
 
@@ -375,7 +390,7 @@ def test_setup_use_case_detects_foreign_setup_without_skill_filter(tmp_path: Pat
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         setup = get_runtime_skill_setup_use_cases()
-        raw = default_session("claude", {"session_id": "test", "started": False}, "on")
+        raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),
             "skill": "github-integration",
@@ -398,7 +413,7 @@ def test_activation_use_case_blocks_active_foreign_setup_until_stale(tmp_path: P
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         activation = get_runtime_skill_activation_use_cases()
-        raw = default_session("claude", {"session_id": "test", "started": False}, "on")
+        raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),
             "skill": "code-review",
@@ -425,7 +440,7 @@ def test_activation_use_case_replaces_stale_foreign_setup(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         activation = get_runtime_skill_activation_use_cases()
-        raw = default_session("claude", {"session_id": "test", "started": False}, "on")
+        raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),
             "skill": "github-integration",

@@ -3,11 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.channels.telegram.delegation_channel as delegation_channel
+import app.workflows.delegation.telegram as delegation_channel
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.agent_directory import AuthorityResolution
 from app.channels.telegram.state import build_telegram_runtime
+from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
 from tests.support.handler_support import FakeChat, FakeMessage, FakeProvider, make_config
 from tests.support.config_support import make_registry_connection
@@ -54,7 +55,7 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
     )
     _save_live_registry_state(tmp_path)
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
         text="delegate this work",
         coordination_intent=DelegationIntent(
@@ -146,7 +147,7 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
     )
     _save_live_registry_state(tmp_path)
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
         text="delegate this work",
         coordination_intent=DelegationIntent(
@@ -232,7 +233,7 @@ async def test_propose_delegation_plan_autonomous_registry_origin_uses_bound_ext
     message = FakeMessage(chat=FakeChat(12345), text="delegate")
     message.external_id = "registry-ui-conv-1"
     message.authority_ref = "registry:default"
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    session = SessionState(provider="codex", provider_state=ProviderStateRecord(), approval_mode="off")
     result = SimpleNamespace(
         text="delegate this work",
         coordination_intent=DelegationIntent(

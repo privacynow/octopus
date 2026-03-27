@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
@@ -48,7 +49,15 @@ from octopus_sdk.registry.models import (
     MessagePageRecord,
     PublishEventsResult,
     RegistryRecordModel,
+    RegistryJsonRecord,
     RegistrySummaryRecord,
+    RoutedTaskRequest,
+    RoutedTaskResult,
+    RoutedTaskUpdate,
+    RuntimeHealthPayload,
+    RuntimeHealthSummaryRecord,
+    RuntimeWorkerRecord,
+    TimelineEventPayload,
     RecoveryActionPayload,
     RetryDecisionActionPayload,
     RetryTaskActionPayload,
@@ -113,83 +122,30 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def ensure_json(value: Any) -> str:
+_DefaultT = TypeVar("_DefaultT")
+
+
+def ensure_json(value: object) -> str:
     """Serialize dataclasses and JSON-encodable values to a JSON string."""
     if is_dataclass(value):
         value = asdict(value)
+    elif isinstance(value, RegistryJsonRecord):
+        value = value.as_dict()
+    elif isinstance(value, RegistryRecordModel):
+        value = value.model_dump(mode="json")
+    elif hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
     return json.dumps(value)
 
 
-def _require_mapping(value: Any, field_name: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be an object")
-    return value
-
-
-def _required_text(value: Any, field_name: str) -> str:
+def _required_text(value: object, field_name: str) -> str:
     text = str(value or "")
     if not text.strip():
         raise ValueError(f"{field_name} requires non-empty text")
     return text.strip()
 
 
-def _optional_text_field(payload: dict[str, Any], field_name: str) -> str | object:
-    if field_name not in payload:
-        return _MISSING
-    return str(payload.get(field_name) or "")
-
-
-def _optional_int_field(
-    payload: dict[str, Any],
-    field_name: str,
-    *,
-    minimum: int,
-) -> int | object:
-    if field_name not in payload:
-        return _MISSING
-    value = payload.get(field_name)
-    if value in (None, ""):
-        raise ValueError(f"{field_name} requires an integer value")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} requires an integer value") from exc
-    if parsed < minimum:
-        comparator = "positive" if minimum == 1 else "non-negative"
-        raise ValueError(f"{field_name} requires a {comparator} integer value")
-    return parsed
-
-
-def _optional_dict_field(payload: dict[str, Any], field_name: str) -> dict[str, Any] | object:
-    if field_name not in payload:
-        return _MISSING
-    value = payload.get(field_name)
-    if value is None:
-        raise ValueError(f"{field_name} must be an object")
-    return _require_mapping(value, field_name)
-
-
-def _optional_string_list_field(payload: dict[str, Any], field_name: str) -> list[str] | object:
-    if field_name not in payload:
-        return _MISSING
-    value = payload.get(field_name)
-    if isinstance(value, str) or not isinstance(value, (list, tuple, set)):
-        raise ValueError(f"{field_name} must be a list")
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def _reject_unknown_fields(
-    payload: dict[str, Any],
-    *,
-    allowed_fields: set[str],
-    field_name: str,
-) -> None:
-    unknown = sorted(set(payload) - allowed_fields)
-    if unknown:
-        raise ValueError(f"{field_name} contains unsupported fields: {', '.join(unknown)}")
-
-
-def validated_registry_scope(value: Any) -> str:
+def validated_registry_scope(value: object) -> str:
     scope = str(value or "").strip().lower()
     if not scope:
         raise ValueError("registry_scope requires non-empty text")
@@ -201,226 +157,69 @@ def validated_registry_scope(value: Any) -> str:
 
 
 def validated_agent_card_payload(
-    value: Any,
+    value: object,
     *,
     require_registry_scope: bool,
-) -> dict[str, Any]:
-    card = _require_mapping(value, "agent_card")
-    _reject_unknown_fields(
-        card,
-        allowed_fields={
-            "bot_key",
-            "display_name",
-            "slug",
-            "role",
-            "registry_scope",
-            "capabilities",
-            "tags",
-            "description",
-            "provider",
-            "mode",
-            "connectivity_state",
-            "current_capacity",
-            "max_capacity",
-            "channel_capabilities",
-            "version",
-        },
-        field_name="agent_card",
+) -> AgentCard:
+    if require_registry_scope and isinstance(value, Mapping) and "registry_scope" not in value:
+        raise ValueError("registry_scope is required")
+    del require_registry_scope
+    try:
+        card = AgentCard.model_validate(value)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    return card.model_copy(
+        update={"registry_scope": validated_registry_scope(card.registry_scope)}
     )
-    normalized: dict[str, Any] = {}
-    for field_name in (
-        "display_name",
-        "slug",
-        "role",
-        "description",
-        "provider",
-        "mode",
-        "connectivity_state",
-        "version",
-    ):
-        field_value = _optional_text_field(card, field_name)
-        if field_value is not _MISSING:
-            normalized[field_name] = field_value
-    capabilities = _optional_string_list_field(card, "capabilities")
-    if capabilities is not _MISSING:
-        normalized["capabilities"] = capabilities
-    tags = _optional_string_list_field(card, "tags")
-    if tags is not _MISSING:
-        normalized["tags"] = tags
-    channel_capabilities = _optional_string_list_field(card, "channel_capabilities")
-    if channel_capabilities is not _MISSING:
-        normalized["channel_capabilities"] = channel_capabilities
-    current_capacity = _optional_int_field(card, "current_capacity", minimum=0)
-    if current_capacity is not _MISSING:
-        normalized["current_capacity"] = current_capacity
-    max_capacity = _optional_int_field(card, "max_capacity", minimum=1)
-    if max_capacity is not _MISSING:
-        normalized["max_capacity"] = max_capacity
-    if require_registry_scope or "registry_scope" in card:
-        normalized["registry_scope"] = validated_registry_scope(card.get("registry_scope"))
-    bot_key = _optional_text_field(card, "bot_key")
-    if bot_key is not _MISSING:
-        normalized["bot_key"] = bot_key
-    return normalized
 
 
-def validated_register_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(payload, "register payload")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={"agent_card", "connectivity_state", "current_capacity", "max_capacity"},
-        field_name="register payload",
+def validated_register_payload(payload: object) -> AgentRegisterRequest:
+    try:
+        request = AgentRegisterRequest.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    return request.model_copy(
+        update={
+            "agent_card": validated_agent_card_payload(
+                request.agent_card.model_dump(mode="json"),
+                require_registry_scope=False,
+            )
+        }
     )
-    normalized: dict[str, Any] = {
-        "agent_card": validated_agent_card_payload(
-            data.get("agent_card"),
-            require_registry_scope=False,
-        )
-    }
-    connectivity_state = _optional_text_field(data, "connectivity_state")
-    if connectivity_state is not _MISSING:
-        normalized["connectivity_state"] = connectivity_state
-    current_capacity = _optional_int_field(data, "current_capacity", minimum=0)
-    if current_capacity is not _MISSING:
-        normalized["current_capacity"] = current_capacity
-    max_capacity = _optional_int_field(data, "max_capacity", minimum=1)
-    if max_capacity is not _MISSING:
-        normalized["max_capacity"] = max_capacity
-    return normalized
 
 
-def validated_heartbeat_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(payload, "heartbeat payload")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={"connectivity_state", "current_capacity", "max_capacity", "runtime_health"},
-        field_name="heartbeat payload",
-    )
-    normalized: dict[str, Any] = {}
-    connectivity_state = _optional_text_field(data, "connectivity_state")
-    if connectivity_state is not _MISSING:
-        normalized["connectivity_state"] = connectivity_state
-    current_capacity = _optional_int_field(data, "current_capacity", minimum=0)
-    if current_capacity is not _MISSING:
-        normalized["current_capacity"] = current_capacity
-    max_capacity = _optional_int_field(data, "max_capacity", minimum=1)
-    if max_capacity is not _MISSING:
-        normalized["max_capacity"] = max_capacity
-    runtime_health = _optional_dict_field(data, "runtime_health")
-    if runtime_health is not _MISSING:
-        normalized["runtime_health"] = runtime_health
-    return normalized
-
-
-def validated_timeline_events(value: Any, *, field_name: str = "events") -> list[dict[str, Any]]:
+def validated_heartbeat_payload(payload: object) -> AgentHeartbeatRequest:
+    try:
+        return AgentHeartbeatRequest.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+def validated_timeline_events(
+    value: object,
+    *,
+    field_name: str = "events",
+) -> list[TimelineEventPayload]:
     if isinstance(value, str) or not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list")
-    events: list[dict[str, Any]] = []
+    events: list[TimelineEventPayload] = []
     for index, raw_event in enumerate(value):
-        if not isinstance(raw_event, dict):
-            raise ValueError(f"{field_name}[{index}] must be an object")
-        metadata = raw_event.get("metadata", {})
-        if metadata is None:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            raise ValueError(f"{field_name}[{index}].metadata must be an object")
-        progress = raw_event.get("progress")
-        if progress is not None:
-            try:
-                progress = int(progress)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"{field_name}[{index}].progress requires an integer value") from exc
-        events.append(
-            {
-                "event_id": _required_text(raw_event.get("event_id"), f"{field_name}[{index}].event_id"),
-                "conversation_id": _required_text(
-                    raw_event.get("conversation_id"),
-                    f"{field_name}[{index}].conversation_id",
-                ),
-                "kind": _required_text(raw_event.get("kind"), f"{field_name}[{index}].kind"),
-                "title": _required_text(raw_event.get("title"), f"{field_name}[{index}].title"),
-                "body": str(raw_event.get("body", "") or ""),
-                "status": str(raw_event.get("status", "") or ""),
-                "progress": progress,
-                "metadata": metadata,
-                "created_at": _required_text(
-                    raw_event.get("created_at"),
-                    f"{field_name}[{index}].created_at",
-                ),
-            }
-        )
+        try:
+            events.append(TimelineEventPayload.model_validate(raw_event))
+        except Exception as exc:
+            raise ValueError(f"{field_name}[{index}] {exc}") from exc
     return events
 
 
-def validated_search_query(query: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(query, "search_agents query")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={"role", "required_state", "free_text", "capabilities", "tags", "exclude_agent_ids"},
-        field_name="search_agents query",
-    )
-    normalized: dict[str, Any] = {}
-    for field_name in ("role", "required_state", "free_text"):
-        field_value = _optional_text_field(data, field_name)
-        if field_value is not _MISSING:
-            normalized[field_name] = field_value
-    capabilities = _optional_string_list_field(data, "capabilities")
-    if capabilities is not _MISSING:
-        normalized["capabilities"] = capabilities
-    tags = _optional_string_list_field(data, "tags")
-    if tags is not _MISSING:
-        normalized["tags"] = tags
-    exclude = _optional_string_list_field(data, "exclude_agent_ids")
-    if exclude is not _MISSING:
-        normalized["exclude_agent_ids"] = exclude
-    return normalized
-
-
-def validated_routed_task_request(request: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(request, "create_routed_task payload")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={
-            "routed_task_id",
-            "parent_conversation_id",
-            "origin_agent_id",
-            "target_agent_id",
-            "title",
-            "instructions",
-            "context",
-            "constraints",
-            "requested_capabilities",
-            "priority",
-            "created_at",
-        },
-        field_name="create_routed_task payload",
-    )
-    normalized: dict[str, Any] = {}
-    for field_name in (
-        "routed_task_id",
-        "parent_conversation_id",
-        "origin_agent_id",
-        "target_agent_id",
-        "title",
-        "instructions",
-        "created_at",
-    ):
-        normalized[field_name] = _required_text(data.get(field_name), field_name)
-    for field_name in ("priority",):
-        field_value = _optional_text_field(data, field_name)
-        if field_value is not _MISSING:
-            normalized[field_name] = field_value
-    requested_capabilities = _optional_string_list_field(data, "requested_capabilities")
-    if requested_capabilities is not _MISSING:
-        normalized["requested_capabilities"] = requested_capabilities
-    for field_name in ("context", "constraints"):
-        field_value = _optional_dict_field(data, field_name)
-        if field_value is not _MISSING:
-            normalized[field_name] = field_value
-    return normalized
-
-
-def validated_ack_request(*, delivery_ids: Any, classification: Any) -> tuple[list[str], str]:
+def validated_search_query(query: object) -> AgentDiscoveryQuery:
+    try:
+        return AgentDiscoveryQuery.model_validate(query)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+def validated_routed_task_request(request: object) -> RoutedTaskRequest:
+    try:
+        return RoutedTaskRequest.model_validate(request)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+def validated_ack_request(*, delivery_ids: object, classification: object) -> tuple[list[str], str]:
     if isinstance(delivery_ids, str) or not isinstance(delivery_ids, list):
         raise ValueError("delivery_ids must be a list")
     ids = [_required_text(item, "delivery_ids[]") for item in delivery_ids]
@@ -432,106 +231,24 @@ def validated_ack_request(*, delivery_ids: Any, classification: Any) -> tuple[li
     return ids, normalized_classification
 
 
-def validated_routed_task_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(payload, "routed_task_status payload")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={"status", "transition_id", "summary", "timeline_events", "progress", "updated_at"},
-        field_name="routed_task_status payload",
-    )
-    normalized = {
-        "status": _required_text(data.get("status"), "status"),
-        "transition_id": _required_text(data.get("transition_id"), "transition_id"),
-        "summary": str(data.get("summary", "") or ""),
-        "timeline_events": [],
-    }
-    progress = data.get("progress")
-    if progress not in (None, ""):
-        try:
-            normalized["progress"] = int(progress)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("progress requires an integer value") from exc
-    updated_at = _optional_text_field(data, "updated_at")
-    if updated_at is not _MISSING:
-        normalized["updated_at"] = updated_at
-    if "timeline_events" in data:
-        normalized["timeline_events"] = validated_timeline_events(
-            data.get("timeline_events"),
-            field_name="timeline_events",
-        )
-    return normalized
-
-
-def validated_routed_task_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    data = _require_mapping(payload, "routed_task_result payload")
-    _reject_unknown_fields(
-        data,
-        allowed_fields={
-            "status",
-            "transition_id",
-            "summary",
-            "full_text",
-            "artifacts",
-            "follow_up_questions",
-            "prompt_tokens",
-            "completion_tokens",
-            "cost_usd",
-            "provider",
-            "completed_at",
-        },
-        field_name="routed_task_result payload",
-    )
-    normalized = {
-        "status": _required_text(data.get("status"), "status"),
-        "transition_id": _required_text(data.get("transition_id"), "transition_id"),
-        "summary": str(data.get("summary", "") or ""),
-        "full_text": str(data.get("full_text", "") or ""),
-    }
-    artifacts = data.get("artifacts", [])
-    if artifacts in (None, ""):
-        artifacts = []
-    if isinstance(artifacts, str) or not isinstance(artifacts, (list, tuple)):
-        raise ValueError("artifacts must be a list")
-    normalized["artifacts"] = list(artifacts)
-    follow_up_questions = data.get("follow_up_questions", [])
-    if follow_up_questions in (None, ""):
-        follow_up_questions = []
-    if isinstance(follow_up_questions, str) or not isinstance(follow_up_questions, (list, tuple)):
-        raise ValueError("follow_up_questions must be a list")
-    normalized["follow_up_questions"] = [
-        str(item)
-        for item in follow_up_questions
-    ]
-    prompt_tokens = _optional_int_field(data, "prompt_tokens", minimum=0)
-    if prompt_tokens is not _MISSING:
-        normalized["prompt_tokens"] = prompt_tokens
-    completion_tokens = _optional_int_field(data, "completion_tokens", minimum=0)
-    if completion_tokens is not _MISSING:
-        normalized["completion_tokens"] = completion_tokens
-    if "cost_usd" in data:
-        try:
-            normalized["cost_usd"] = float(data.get("cost_usd") or 0.0)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("cost_usd requires a numeric value") from exc
-        if normalized["cost_usd"] < 0:
-            raise ValueError("cost_usd requires a non-negative value")
-    provider = _optional_text_field(data, "provider")
-    if provider is not _MISSING:
-        normalized["provider"] = provider
-    completed_at = _optional_text_field(data, "completed_at")
-    if completed_at is not _MISSING:
-        normalized["completed_at"] = completed_at
-    return normalized
-
-
-def validated_conversation_message_text(text: Any) -> str:
+def validated_routed_task_status_payload(payload: object) -> RoutedTaskUpdate:
+    try:
+        return RoutedTaskUpdate.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+def validated_routed_task_result_payload(payload: object) -> RoutedTaskResult:
+    try:
+        return RoutedTaskResult.model_validate(payload)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+def validated_conversation_message_text(text: object) -> str:
     value = str(text or "")
     if not value.strip():
         raise ValueError("message text requires non-empty text")
     return value
 
 
-def validated_conversation_action(payload: Any) -> CoordinationActionEnvelope:
+def validated_conversation_action(payload: object) -> CoordinationActionEnvelope:
     try:
         envelope = CoordinationActionEnvelope.model_validate(payload)
     except Exception as exc:
@@ -539,14 +256,29 @@ def validated_conversation_action(payload: Any) -> CoordinationActionEnvelope:
     return envelope
 
 
-def validated_action_payload(envelope: CoordinationActionEnvelope) -> Any:
+def validated_action_payload(
+    envelope: CoordinationActionEnvelope,
+) -> (
+    ApproveRejectActionPayload
+    | RetryDecisionActionPayload
+    | RecoveryActionPayload
+    | DirectAssignActionPayload
+    | DelegateTasksActionPayload
+    | ApproveDelegationActionPayload
+    | CancelDelegationActionPayload
+    | CancelTaskActionPayload
+    | RetryTaskActionPayload
+    | None
+):
     raw_payload = envelope.payload
     if raw_payload is None:
-        payload: dict[str, Any] = {}
+        payload: object = {}
     elif hasattr(raw_payload, "model_dump"):
         payload = raw_payload.model_dump(mode="json")
+    elif isinstance(raw_payload, RegistryJsonRecord):
+        payload = raw_payload.as_dict()
     else:
-        payload = dict(raw_payload)
+        payload = raw_payload
     if envelope.action in {"approve", "reject"}:
         return ApproveRejectActionPayload.model_validate(payload)
     if envelope.action in {"retry_allow", "retry_skip"}:
@@ -572,7 +304,7 @@ def validated_action_payload(envelope: CoordinationActionEnvelope) -> Any:
     raise ValueError(f"Unsupported action: {envelope.action}")
 
 
-def decode_json_field(value: Any, default: Any) -> Any:
+def decode_json_field(value: object, default: _DefaultT) -> _DefaultT | object:
     """Decode JSON text fields while tolerating already-decoded backend values."""
     if value in (None, ""):
         return default
@@ -616,7 +348,7 @@ def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str
     return effective_state
 
 
-def registry_scope_for_agent_row(agent_row: Any) -> str:
+def registry_scope_for_agent_row(agent_row: Mapping[str, object]) -> str:
     """Return the stored registry scope for an authenticated agent row."""
     try:
         scope = agent_row["registry_scope"]
@@ -626,9 +358,7 @@ def registry_scope_for_agent_row(agent_row: Any) -> str:
         return validated_registry_scope(scope)
     except ValueError as exc:
         raise PermissionError("Authenticated agent row has invalid registry_scope") from exc
-
-
-def require_registry_scope(agent_row: Any, required_scopes: set[str]) -> str:
+def require_registry_scope(agent_row: Mapping[str, object], required_scopes: set[str]) -> str:
     """Validate an agent row against the required registry scopes."""
     scope = registry_scope_for_agent_row(agent_row)
     if scope not in required_scopes:
@@ -646,15 +376,15 @@ def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | 
     return None
 
 
-def runtime_health_summary(value: Any) -> dict[str, Any]:
+def runtime_health_summary(value: object) -> RuntimeHealthSummaryRecord:
     """Return the canonical mirrored health summary, or an empty dict."""
     report = report_from_dict(decode_json_field(value, {}))
     if report is None:
-        return {}
-    return asdict(report.summary)
+        return RuntimeHealthSummaryRecord()
+    return RuntimeHealthSummaryRecord.model_validate(asdict(report.summary))
 
 
-def runtime_health_generated_at(value: Any) -> str:
+def runtime_health_generated_at(value: object) -> str:
     """Return the mirrored health timestamp, or empty string when absent."""
     report = report_from_dict(decode_json_field(value, {}))
     if report is None:
@@ -662,79 +392,83 @@ def runtime_health_generated_at(value: Any) -> str:
     return report.generated_at
 
 
-def runtime_health_detail(value: Any, workers: list[dict[str, Any]]) -> dict[str, Any] | None:
+def runtime_health_detail(
+    value: object,
+    workers: list[RuntimeWorkerRecord],
+) -> RuntimeHealthDetailRecord | None:
     """Return a UI-ready mirrored health detail payload."""
     report = report_from_dict(decode_json_field(value, {}))
     if report is None:
         return None
-    return {
-        "report": report_to_dict(report),
-        "workers": workers,
-        "last_mirrored_at": report.generated_at,
-    }
+    return RuntimeHealthDetailRecord(
+        report=RegistryJsonRecord.model_validate(report_to_dict(report)),
+        workers=workers,
+        last_mirrored_at=report.generated_at,
+    )
 
 
-def routed_task_created_event(request: dict[str, Any]) -> dict[str, Any]:
-    created_at = str(request.get("created_at") or utcnow_iso())
-    routed_task_id = str(request["routed_task_id"])
-    title = str(request.get("title") or routed_task_id)
-    return {
-        "event_id": f"routed-task:{routed_task_id}:queued:{created_at}",
-        "conversation_id": str(request["parent_conversation_id"]),
-        "kind": "task.status",
-        "content": title,
-        "metadata": {"routed_task_id": routed_task_id, "status": "queued"},
-        "created_at": created_at,
-    }
+def routed_task_created_event(request: RoutedTaskRequest) -> EventRecord:
+    created_at = str(request.created_at or utcnow_iso())
+    routed_task_id = str(request.routed_task_id)
+    title = str(request.title or routed_task_id)
+    return EventRecord(
+        event_id=f"routed-task:{routed_task_id}:queued:{created_at}",
+        conversation_id=str(request.parent_conversation_id),
+        kind="task.status",
+        content=title,
+        metadata=RegistryJsonRecord(
+            {"routed_task_id": routed_task_id, "status": "queued"}
+        ),
+        created_at=created_at,
+    )
 
 
 def routed_task_progress_event(
     *,
     routed_task_id: str,
     parent_conversation_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    created_at = str(payload.get("updated_at") or utcnow_iso())
-    metadata: dict[str, Any] = {
+    payload: RoutedTaskUpdate,
+) -> EventRecord:
+    created_at = str(payload.updated_at or utcnow_iso())
+    metadata: dict[str, object] = {
         "routed_task_id": routed_task_id,
-        "status": str(payload["status"]),
-        "transition_id": str(payload.get("transition_id", "")),
+        "status": str(payload.status),
+        "transition_id": str(payload.transition_id),
     }
-    if payload.get("progress") is not None:
-        metadata["progress"] = payload["progress"]
-    return {
-        "event_id": (
-            f"routed-task:{routed_task_id}:{payload['status']}:"
-            f"{created_at}"
-        ),
-        "conversation_id": parent_conversation_id,
-        "kind": "task.status",
-        "content": str(payload.get("summary") or payload["status"]),
-        "metadata": metadata,
-        "created_at": created_at,
-    }
+    if payload.progress is not None:
+        metadata["progress"] = payload.progress
+    return EventRecord(
+        event_id=f"routed-task:{routed_task_id}:{payload.status}:{created_at}",
+        conversation_id=parent_conversation_id,
+        kind="task.status",
+        content=str(payload.summary or payload.status),
+        metadata=RegistryJsonRecord.model_validate(metadata),
+        created_at=created_at,
+    )
 
 
 def routed_task_result_event(
     *,
     routed_task_id: str,
     parent_conversation_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    created_at = str(payload.get("completed_at") or utcnow_iso())
-    content = str(payload.get("summary") or payload.get("full_text") or payload["status"])
-    return {
-        "event_id": f"routed-task:{routed_task_id}:result:{created_at}",
-        "conversation_id": parent_conversation_id,
-        "kind": "task.status",
-        "content": content,
-        "metadata": {
-            "routed_task_id": routed_task_id,
-            "status": str(payload["status"]),
-            "transition_id": str(payload.get("transition_id", "")),
-        },
-        "created_at": created_at,
-    }
+    payload: RoutedTaskResult,
+) -> EventRecord:
+    created_at = str(payload.completed_at or utcnow_iso())
+    content = str(payload.summary or payload.full_text or payload.status)
+    return EventRecord(
+        event_id=f"routed-task:{routed_task_id}:result:{created_at}",
+        conversation_id=parent_conversation_id,
+        kind="task.status",
+        content=content,
+        metadata=RegistryJsonRecord(
+            {
+                "routed_task_id": routed_task_id,
+                "status": str(payload.status),
+                "transition_id": str(payload.transition_id),
+            }
+        ),
+        created_at=created_at,
+    )
 
 
 def delegation_event(
@@ -742,21 +476,27 @@ def delegation_event(
     kind: Literal["delegation.proposed", "delegation.submitted", "delegation.completed"],
     proposal_id: str,
     conversation_id: str,
-    tasks: list[dict[str, Any]],
+    tasks: list[Mapping[str, object] | RegistryJsonRecord],
     created_at: str,
     content: str = "",
-) -> dict[str, Any]:
-    return {
-        "event_id": f"{kind}:{proposal_id}",
-        "conversation_id": conversation_id,
-        "kind": kind,
-        "content": content,
-        "metadata": {
-            "proposal_id": proposal_id,
-            "tasks": tasks,
-        },
-        "created_at": created_at,
-    }
+) -> EventRecord:
+    normalized_tasks = [
+        task.as_dict() if isinstance(task, RegistryJsonRecord) else dict(task)
+        for task in tasks
+    ]
+    return EventRecord(
+        event_id=f"{kind}:{proposal_id}",
+        conversation_id=conversation_id,
+        kind=kind,
+        content=content,
+        metadata=RegistryJsonRecord(
+            {
+                "proposal_id": proposal_id,
+                "tasks": normalized_tasks,
+            }
+        ),
+        created_at=created_at,
+    )
 
 
 class AbstractRegistryStore(Protocol):
@@ -921,7 +661,7 @@ class AbstractRegistryStore(Protocol):
         """Return usage summary, filterable by agent/conversation/date range."""
 
     def export_conversation(self, conversation_id: str) -> str:
-        """Export conversation as markdown from events."""
+        """Export conversation as markdown events."""
 
     def purge_old_events(self, older_than_days: int = 30) -> int:
         """Delete events older than the given number of days. Return count deleted."""

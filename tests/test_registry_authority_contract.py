@@ -8,9 +8,11 @@ from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
     CoordinationActionEnvelope,
+    RegistryJsonRecord,
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
+    RuntimeHealthSummaryRecord,
     RuntimeHealthPayload,
 )
 
@@ -47,8 +49,8 @@ def test_store_backed_authority_passes_core_authority_profile(tmp_path: Path) ->
     heartbeat = authority.accept_heartbeat(
         enrollment.agent_id,
         RuntimeHealthPayload(
-            summary={"ok": True},
-            snapshot={"workers": [{"worker_id": "worker-1", "items_processed": 2}]},
+            summary=RuntimeHealthSummaryRecord(ok=True),
+            snapshot=RegistryJsonRecord({"workers": [{"worker_id": "worker-1", "items_processed": 2}]}),
         ),
     )
     assert heartbeat.agent is not None
@@ -69,7 +71,7 @@ def test_store_backed_authority_passes_core_authority_profile(tmp_path: Path) ->
 
     message = authority.add_message(
         conversation.conversation_id,
-        "hello from operator",
+        "hello operator",
         actor="telegram:operator",
     )
     assert message.accepted is True
@@ -81,7 +83,7 @@ def test_store_backed_authority_passes_core_authority_profile(tmp_path: Path) ->
         CoordinationActionEnvelope(
             action_id="cancel-1",
             action="cancel_conversation",
-            payload={},
+            payload=RegistryJsonRecord(),
         ),
     )
     assert action.accepted is True

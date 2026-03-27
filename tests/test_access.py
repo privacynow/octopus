@@ -90,10 +90,10 @@ def test_set_user_access_upserts_and_get_reads_latest_value():
     set_user_access(conn, telegram_actor_key(100), "blocked", "reversed", telegram_actor_key(2))
     rows = list_user_access(conn)
     assert len(rows) == 1
-    assert rows[0]["actor_key"] == telegram_actor_key(100)
-    assert rows[0]["access"] == "blocked"
-    assert rows[0]["reason"] == "reversed"
-    assert rows[0]["granted_by"] == telegram_actor_key(2)
+    assert rows[0].actor_key == telegram_actor_key(100)
+    assert rows[0].access == "blocked"
+    assert rows[0].reason == "reversed"
+    assert rows[0].granted_by == telegram_actor_key(2)
     conn.close()
 
 
@@ -104,9 +104,9 @@ def test_list_user_access_returns_rows_ordered_by_latest_grant():
     set_user_access(conn, telegram_actor_key(100), "allowed", "first", telegram_actor_key(1))
     set_user_access(conn, telegram_actor_key(200), "blocked", "second", telegram_actor_key(2))
     rows = list_user_access(conn)
-    assert {row["actor_key"] for row in rows} == {
+    assert {row.actor_key for row in rows} == {
         telegram_actor_key(100),
         telegram_actor_key(200),
     }
-    assert rows[0]["granted_at"] >= rows[-1]["granted_at"]
+    assert rows[0].granted_at >= rows[-1].granted_at
     conn.close()

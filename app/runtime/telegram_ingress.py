@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from app import access
 from app import user_messages as _msg
-from app.channels.telegram import presenters as telegram_presenters
+from app.presentation import telegram as telegram_presenters
 from app.config import BotConfig
 from octopus_sdk.identity import (
     parse_actor_key,
@@ -26,7 +26,7 @@ from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     extract_target_selector_message,
 )
-from app.channels.telegram.delegation_channel import (
+from app.workflows.delegation.telegram import (
     handle_delegation_approve,
     handle_delegation_cancel,
     parse_delegation_callback,
@@ -34,9 +34,8 @@ from app.channels.telegram.delegation_channel import (
     propose_delegation_plan,
     submit_direct_assignment,
 )
-from app.channels.telegram.execution import (
+from app.runtime.telegram_execution import (
     allowed_roots,
-    bind_execution_collaborators,
     build_conversation_runtime,
     build_execution_runtime,
     build_runtime_skill_runtime,
@@ -46,18 +45,10 @@ from app.channels.telegram.execution import (
     send_formatted_reply,
     send_path_to_chat,
 )
-from app.channels.telegram.progress import (
-    TelegramProgress,
-    heartbeat,
-    keep_typing,
-    progress_timeline_callback,
-    routed_task_progress_callback,
-)
-from app.channels.telegram import conversation as telegram_conversation
-from app.channels.telegram import normalization as telegram_normalization
-from app.channels.telegram import session_io as telegram_session_io
+from app.runtime import telegram_normalization
+from app.runtime import telegram_session_io as telegram_session_io
 from app.channels.telegram.state import TelegramRuntime
-from app.channels.telegram.runtime_skills import (
+from app.workflows.runtime_skills.telegram import (
     cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
     handle_skills_command as runtime_skill_handle_skills_command,
     handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
@@ -65,10 +56,11 @@ from app.channels.telegram.runtime_skills import (
     handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
 )
-from app.channels.telegram.guidance import (
-    handle_guidance_command as channel_handle_guidance_command,
+from app.workflows.conversation import telegram as telegram_conversation
+from app.runtime.telegram_shared_dispatch import (
+    handle_provider_guidance_command as channel_handle_guidance_command,
 )
-from app.channels.telegram.conversation import (
+from app.workflows.conversation.telegram import (
     cmd_approval as conversation_cmd_approval,
     cmd_cancel as conversation_cmd_cancel,
     cmd_compact as conversation_cmd_compact,
@@ -79,17 +71,18 @@ from app.channels.telegram.conversation import (
     cmd_role as conversation_cmd_role,
     cmd_settings as conversation_cmd_settings,
 )
-from app.channels.telegram.pending import (
+from app.workflows.pending.telegram import (
     approve_pending as pending_approve_pending,
     handle_pending_callback as pending_handle_callback,
     handle_recovery_action as pending_handle_recovery_action,
     handle_recovery_callback as pending_handle_recovery_callback,
     reject_pending as pending_reject_pending,
 )
-from app.channels.telegram.inbound_context import event_trust_tier
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
+from app.runtime.work_admission import trust_tier_for_ref
 from app.formatting import summarize_text
+from octopus_sdk.identity import resolve_event_conversation_ref
 from octopus_sdk.inbound_types import InboundUser
 from octopus_sdk.inbound_types import (
     InboundEnvelope,
@@ -118,6 +111,15 @@ def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRunti
             runtime = bot_data.get("telegram_runtime")
             if isinstance(runtime, TelegramRuntime):
                 return runtime
+
+
+def event_trust_tier(*, config, dispatcher, event) -> str:
+    return trust_tier_for_ref(
+        resolve_event_conversation_ref(config=config, event=event),
+        event.user,
+        config=config,
+        dispatcher=dispatcher,
+    )
     raise RuntimeError("Telegram runtime is not attached to the handler context")
 @contextlib.asynccontextmanager
 async def _chat_lock(
@@ -139,8 +141,6 @@ async def _chat_lock(
             yield False
         except work_queue.LeaveClaimed:
             raise
-        return
-
     lock = runtime.chat_locks[chat_id]
     sent_feedback = False
     # In-memory lock is the primary contention signal.  The durable check
@@ -197,8 +197,8 @@ async def _chat_lock(
             if work_queue.has_claimed_for_chat(data_dir, conversation_ref_key):
                 raise ClaimBlocked(conversation_ref_key)
 
-        item_id = item["id"] if item else None
-        claimed_update_id = telegram_numeric_id(item["event_id"]) if item else None
+        item_id = item.id if item else None
+        claimed_update_id = telegram_numeric_id(item.event_id) if item else None
         # Fresh message supersedes any pending_recovery for this chat.
         # Only handle_message passes supersede_recovery=True; commands
         # like /approval and /new must NOT supersede recovery items.
@@ -231,12 +231,7 @@ def _chat_lock_adapter(runtime: TelegramRuntime):
 
 
 def _bound_execution_runtime(runtime: TelegramRuntime):
-    collaborators = bind_execution_collaborators(
-        runtime,
-        progress_timeline_callback_fn=progress_timeline_callback,
-        routed_task_progress_callback_fn=routed_task_progress_callback,
-    )
-    return build_execution_runtime(runtime, collaborators=collaborators)
+    return build_execution_runtime(runtime)
 
 
 def _dedup_update(

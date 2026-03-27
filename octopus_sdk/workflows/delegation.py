@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Protocol
+from typing import Awaitable, Callable, Protocol
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.identity import normalize_conversation_id
@@ -682,7 +682,7 @@ def build_delegation_completion_message(delegation: PendingDelegation | None) ->
 
 async def send_delegation_completion_message(
     delegation: PendingDelegation | None,
-    send_text: Callable[[str], Any],
+    send_text: Callable[[str], Awaitable[None]],
 ) -> None:
     message = build_delegation_completion_message(delegation)
     if not message:

@@ -11,7 +11,13 @@ from typing import Any, Callable
 
 from psycopg.rows import dict_row
 
-from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
+from octopus_sdk.work_queue import (
+    QueueSnapshot,
+    UsageRecord,
+    UserAccessRecord,
+    WorkItemRecord,
+    WorkerHeartbeat,
+)
 from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
 from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
@@ -482,14 +488,14 @@ def claim_for_update(
     conversation_key: str,
     event_id: str,
     worker_id: str,
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
         if row is None:
             return None
         if row["state"] == "claimed" and row.get("worker_id") == worker_id:
-            return dict(row)
+            return WorkItemRecord.from_mapping(row)
         if row["state"] != "queued":
             return None
         with _cur(conn) as cur:
@@ -513,10 +519,9 @@ def claim_for_update(
         if u:
             out["kind"] = u["kind"]
             out["payload"] = _payload_json_text(u["payload"])
-        return out
+        return WorkItemRecord.from_mapping(out)
 
-
-def claim_next(conn, conversation_key: str, worker_id: str) -> dict[str, Any] | None:
+def claim_next(conn, conversation_key: str, worker_id: str) -> WorkItemRecord | None:
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         with _cur(conn) as cur:
@@ -538,10 +543,9 @@ def claim_next(conn, conversation_key: str, worker_id: str) -> dict[str, Any] | 
             conn, item_id=row["id"], worker_id=worker_id,
             has_other_claimed_for_chat=False, event_name="claim_worker",
         )
-        return out
+        return None if out is None else WorkItemRecord.from_mapping(out)
 
-
-def claim_next_any(conn, worker_id: str) -> dict[str, Any] | None:
+def claim_next_any(conn, worker_id: str) -> WorkItemRecord | None:
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
@@ -810,7 +814,7 @@ def is_cancel_requested(conn, item_id: str) -> bool:
     return bool(row and row["cancel_requested_at"])
 
 
-def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]:
+def get_work_items_for_chat(conn, conversation_key: str) -> list[WorkItemRecord]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     with _cur(conn) as cur:
         cur.execute(
@@ -821,7 +825,7 @@ def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]
             (conversation_key,),
         )
         rows = cur.fetchall()
-    return [dict(r) for r in rows]
+    return [WorkItemRecord.from_mapping(dict(r)) for r in rows]
 
 
 def get_queue_snapshot(conn) -> QueueSnapshot:
@@ -971,14 +975,14 @@ def get_pending_recovery_for_update(
     conn,
     conversation_key: str,
     event_id: str,
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
     if row is None or row["state"] != "pending_recovery":
         return None
-    return row
+    return WorkItemRecord.from_mapping(row)
 
 
-def get_latest_pending_recovery(conn, conversation_key: str) -> dict[str, Any] | None:
+def get_latest_pending_recovery(conn, conversation_key: str) -> WorkItemRecord | None:
     _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     with _cur(conn) as cur:
         cur.execute(
@@ -996,7 +1000,7 @@ def get_latest_pending_recovery(conn, conversation_key: str) -> dict[str, Any] |
             r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, r["id"])
         if r["state"] == "pending_recovery":
-            return r
+            return WorkItemRecord.from_mapping(r)
     return None
 
 
@@ -1052,7 +1056,7 @@ def reclaim_for_replay(
     worker_id: str,
     *,
     ignore_claimed_item_id: str = "",
-) -> dict[str, Any] | None:
+) -> WorkItemRecord | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
@@ -1096,12 +1100,12 @@ def reclaim_for_replay(
         if "payload" in r:
             r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, item_id)
-        return r
+        return WorkItemRecord.from_mapping(r)
 
 
-def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 300) -> int:
+def recover_stale_claims(conn, lease_ttl_seconds: int = 300) -> int:
     now = datetime.now(timezone.utc)
-    stale_before = now - timedelta(seconds=max_age_seconds)
+    stale_before = now - timedelta(seconds=lease_ttl_seconds)
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
@@ -1162,8 +1166,8 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
         return requeued
 
 
-def purge_old(conn, older_than_hours: int = 24) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+def purge_old(conn, older_than_seconds: int = 7 * 24 * 3600) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)).isoformat()
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
@@ -1188,8 +1192,8 @@ def purge_old(conn, older_than_hours: int = 24) -> int:
         return deleted_items
 
 
-def purge_old_usage(conn, older_than_hours: int = 168) -> int:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+def purge_old_usage(conn, older_than_seconds: int = 30 * 24 * 3600) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
@@ -1237,7 +1241,7 @@ def set_user_access(
             )
 
 
-def list_user_access(conn) -> list[dict]:
+def list_user_access(conn) -> list[UserAccessRecord]:
     """Return all user access overrides ordered by most recent grant first."""
     with _cur(conn) as cur:
         cur.execute(
@@ -1245,10 +1249,7 @@ def list_user_access(conn) -> list[dict]:
             "FROM bot_runtime.user_access ORDER BY granted_at DESC"
         )
         rows = cur.fetchall()
-    results: list[dict[str, Any]] = []
-    for row in rows:
-        results.append(dict(row))
-    return results
+    return [UserAccessRecord.from_mapping(dict(row)) for row in rows]
 
 
 def record_usage(
@@ -1279,7 +1280,7 @@ def record_usage(
             )
 
 
-def get_usage_since(conn, *, since_epoch: float) -> list[dict]:
+def get_usage_since(conn, *, since_epoch: float) -> list[UsageRecord]:
     since_dt = datetime.fromtimestamp(since_epoch, tz=timezone.utc)
     with _cur(conn) as cur:
         cur.execute(
@@ -1293,4 +1294,4 @@ def get_usage_since(conn, *, since_epoch: float) -> list[dict]:
             (since_dt,),
         )
         rows = cur.fetchall()
-    return [dict(row) for row in rows]
+    return [UsageRecord.from_mapping(dict(row)) for row in rows]

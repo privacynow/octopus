@@ -1,11 +1,11 @@
 import asyncio
-from dataclasses import dataclass
+import ast
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 from octopus_sdk.authorization import AuthorizationPort
+from octopus_sdk.agent_directory import AgentSearchResult
 from octopus_sdk.bot_runtime import (
     BotRuntime,
     ConversationWorkflows,
@@ -25,14 +25,28 @@ from octopus_sdk.execution import execute_request
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.execution_context import resolve_execution_context
 from octopus_sdk.inbound_types import InboundAction, InboundEnvelope, InboundMessage, InboundUser
-from octopus_sdk.providers import PreflightContext
-from octopus_sdk.providers import Provider
-from octopus_sdk.providers import RunContext
-from octopus_sdk.providers import RunResult
+from octopus_sdk.inbound_types import InboundActionParamsRecord
+from octopus_sdk.providers import (
+    CredentialEnvRecord,
+    DenialRecord,
+    PreflightContext,
+    Provider,
+    ProviderConfigRecord,
+    ProviderStateRecord,
+    RunContext,
+    RunResult,
+)
+from octopus_sdk.registry.models import DiscoveredAgentRef
+from octopus_sdk.registry.models import CoordinationActionResult
+from octopus_sdk.registry.models import EnrollmentResult
+from octopus_sdk.registry.models import MirrorOutcome
+from octopus_sdk.registry.models import TargetResolutionPreview
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.sessions import default_session
 from octopus_sdk.sessions import session_from_dict
 from octopus_sdk.sessions import session_to_dict
+from octopus_sdk.sessions import AwaitingSkillSetup
+from octopus_sdk.skill_types import CredentialValidationSpec, SkillRequirement
 from octopus_sdk.work_queue import WorkQueuePort
 from octopus_sdk.workflows.conversation import (
     ConversationCancelOutcome,
@@ -47,32 +61,36 @@ from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidancePreview,
 )
 from octopus_sdk.workflows.recovery import RecoveryActionOutcome
+from octopus_sdk.workflows.recovery import WorkerRecoveryOutcome
 from octopus_sdk.workflows.skills import (
     ConversationSkillListing,
     ConversationSkillMutationOutcome,
+    RuntimeSkillCredentialClearOutcome,
     RuntimeSkillCatalogItem,
     RuntimeSkillCredentialSatisfactionOutcome,
     RuntimeSkillLifecycleMutation,
     RuntimeSkillMutationOutcome,
+    RuntimeSkillDraftRecord,
     RuntimeSkillSearchResults,
+    RuntimeSkillSetupAdvanceOutcome,
+    RuntimeSkillSetupCancellationOutcome,
+    RuntimeSkillSetupState,
 )
 from octopus_sdk.transport import EditableHandle
+from octopus_sdk.transport import TransportBindingRecord
 from octopus_sdk.transport import TransportCapabilities
 from octopus_sdk.transport import TransportDescriptor
 from octopus_sdk.transport import TransportEgress
+from octopus_sdk.transport import TransportHealthRecord
 from octopus_sdk.transport import TransportImplementation
 from octopus_sdk.config import BotConfigBase
 
 
-async def _no_op(*args: Any, **kwargs: Any) -> None:
-    del args, kwargs
-
-
 class _StubEditableHandle(EditableHandle):
-    async def edit_text(self, text: str, **kwargs: Any) -> None:
+    async def edit_text(self, text: str, **kwargs: object) -> None:
         del text, kwargs
 
-    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+    async def edit_reply_markup(self, reply_markup: object | None = None, **kwargs: object) -> None:
         del reply_markup, kwargs
 
 
@@ -80,10 +98,15 @@ class _StubEgress(TransportEgress):
     def __init__(self) -> None:
         self.sent_texts: list[str] = []
         self.status_labels: list[str] = []
-        self.retry_prompts: list[tuple[tuple[dict[str, Any], ...], str]] = []
-        self.approval_prompts: list[str] = []
-        self.foreign_setups: list[Any] = []
-        self.setup_prompts: list[tuple[str, dict[str, object]]] = []
+        self.recovery_notices: list[tuple[str, str]] = []
+        self.retry_prompts: list[tuple[tuple[DenialRecord, ...], str]] = []
+        self.approval_tokens: list[str] = []
+        self.foreign_setups: list[AwaitingSkillSetup] = []
+        self.setup_prompts: list[tuple[str, SkillRequirement]] = []
+        self.directives: list[tuple[str, list[tuple[str, str]]]] = []
+        self.delegation_requests: list[tuple[str, str]] = []
+        self.binding = TransportBindingRecord()
+        self.bound_title = ""
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -98,15 +121,20 @@ class _StubEgress(TransportEgress):
             channel_name="stub",
         )
 
-    async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
+    async def send_text(self, text: str, **kwargs: object) -> EditableHandle:
         del kwargs
         self.sent_texts.append(text)
         return _StubEditableHandle()
 
-    async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
+    async def send_status(self, text: str, **kwargs: object) -> EditableHandle:
+        del kwargs
+        self.status_labels.append(text)
+        return _StubEditableHandle()
+
+    async def send_photo(self, photo: Path | str | bytes, **kwargs: object) -> None:
         del photo, kwargs
 
-    async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
+    async def send_document(self, document: Path | str | bytes, **kwargs: object) -> None:
         del document, kwargs
 
     async def send_action(self, action: str) -> None:
@@ -115,26 +143,60 @@ class _StubEgress(TransportEgress):
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         del text, show_alert
 
-    async def send_status(self, text: str, **kwargs: Any) -> EditableHandle:
-        del kwargs
-        self.status_labels.append(text)
-        return _StubEditableHandle()
+    async def sync_binding(self, binding: TransportBindingRecord) -> None:
+        self.binding = binding
 
-    async def show_foreign_setup(self, foreign_setup: Any) -> None:
+    async def bind(self, *, title: str, config: BotConfigBase) -> None:
+        del config
+        self.bound_title = title
+
+    async def send_recovery_notice(
+        self,
+        *,
+        preview: str,
+        prompt: str,
+        run_again_label: str,
+        skip_label: str,
+        update_id: int,
+    ) -> None:
+        del run_again_label, skip_label, update_id
+        self.recovery_notices.append((preview, prompt))
+
+    def typing_target(self) -> TransportEgress:
+        return self
+
+    async def show_foreign_setup(self, foreign_setup: AwaitingSkillSetup) -> None:
         self.foreign_setups.append(foreign_setup)
 
-    async def show_setup_prompt(self, missing_skill: str, first_requirement: dict[str, object]) -> None:
+    async def show_setup_prompt(self, missing_skill: str, first_requirement: SkillRequirement) -> None:
         self.setup_prompts.append((missing_skill, first_requirement))
 
     async def send_retry_prompt(
         self,
-        denials: tuple[dict[str, Any], ...],
+        denials: tuple[DenialRecord, ...],
         callback_token: str,
     ) -> None:
         self.retry_prompts.append((denials, callback_token))
 
     async def send_approval_prompt(self, callback_token: str) -> None:
-        self.approval_prompts.append(callback_token)
+        self.approval_tokens.append(callback_token)
+
+    async def send_formatted_reply(self, text: str) -> None:
+        await self.send_text(text)
+
+    async def send_directed_artifacts(
+        self,
+        conversation_key_value: str,
+        directives: list[tuple[str, str]],
+        *,
+        resolved_ctx: ResolvedExecutionContext | None = None,
+    ) -> None:
+        del resolved_ctx
+        self.directives.append((conversation_key_value, list(directives)))
+
+    async def send_compact_reply(self, text: str, conversation_key_value: str, slot: int) -> None:
+        del conversation_key_value, slot
+        await self.send_formatted_reply(text)
 
     async def propose_delegation_plan(
         self,
@@ -142,10 +204,11 @@ class _StubEgress(TransportEgress):
         session: SessionState,
         *,
         conversation_ref: str,
-        result: Any,
-    ) -> RequestExecutionOutcome:
-        del conversation_key_value, session, conversation_ref, result
-        return RequestExecutionOutcome(status="completed")
+        result: RunResult,
+    ) -> RequestExecutionOutcome | None:
+        del session, result
+        self.delegation_requests.append((conversation_key_value, conversation_ref))
+        return RequestExecutionOutcome(status="delegation_proposed")
 
 
 class _StubTransport(TransportImplementation):
@@ -170,7 +233,7 @@ class _StubTransport(TransportImplementation):
     def ref_prefix(self) -> str:
         return "stub:"
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         del conversation_ref, config, kw
         return self._egress
 
@@ -181,13 +244,13 @@ class _StubTransport(TransportImplementation):
 class _StubProvider(Provider):
     name = "stub"
 
-    def new_provider_state(self, conversation_key: str) -> dict[str, Any]:
+    def new_provider_state(self, conversation_key: str) -> ProviderStateRecord:
         del conversation_key
-        return {}
+        return ProviderStateRecord()
 
     async def run(
         self,
-        provider_state: dict[str, Any],
+        provider_state: ProviderStateRecord,
         prompt: str,
         image_paths: list[str],
         progress,
@@ -219,6 +282,10 @@ class _StubProvider(Provider):
         return []
 
 
+def _provider_state_factory(_conversation_key: str) -> ProviderStateRecord:
+    return ProviderStateRecord()
+
+
 class _StubGuidance:
     def check_prompt_size_cross_chat(
         self,
@@ -235,7 +302,7 @@ class _StubGuidance:
         self,
         role: str,
         active_skills: list[str],
-        available_agents: list[dict[str, str]] | None = None,
+        available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int:
         del role, active_skills, available_agents
         return 0
@@ -247,11 +314,11 @@ class _StubGuidance:
         extra_dirs: list[str],
         *,
         provider_name: str,
-        credential_env: dict[str, str] | None = None,
+        credential_env: CredentialEnvRecord | None = None,
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
-        available_agents: list[dict[str, str]] | None = None,
+        available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
         del role, active_skills, provider_name, available_agents
         return RunContext(
@@ -261,7 +328,8 @@ class _StubGuidance:
             working_dir=working_dir,
             file_policy=file_policy,
             effective_model=effective_model,
-            credential_env=credential_env or {},
+            credential_env=credential_env or CredentialEnvRecord(),
+            provider_config=ProviderConfigRecord(),
         )
 
     def build_preflight_context(
@@ -308,10 +376,10 @@ class _StubSkillActivation:
 @dataclass
 class _StubSkillSetupOutcome:
     status: str
-    credential_env: dict[str, str] | None = None
-    foreign_setup: Any = None
-    setup_state: Any = None
-    first_requirement: dict[str, object] | None = None
+    credential_env: CredentialEnvRecord | None = None
+    foreign_setup: object | None = None
+    setup_state: object | None = None
+    first_requirement: SkillRequirement | None = None
     missing_skill: str = ""
 
 
@@ -324,7 +392,7 @@ class _StubRuntimeSkillSetup:
         active_skills: list[str],
     ) -> _StubSkillSetupOutcome:
         del session, actor_key, active_skills
-        return _StubSkillSetupOutcome(status="satisfied", credential_env={})
+        return _StubSkillSetupOutcome(status="satisfied", credential_env=CredentialEnvRecord())
 
 
 class _StubSessions:
@@ -395,7 +463,7 @@ class _StubArtifacts:
 
 
 class _StubProgress:
-    def __init__(self, status_message: Any, config: BotConfigBase, timeline_callback=None) -> None:
+    def __init__(self, status_message: object, config: BotConfigBase, timeline_callback: object | None = None) -> None:
         del config
         self.status_message = status_message
         self.timeline_callback = timeline_callback
@@ -467,6 +535,28 @@ def _make_config(tmp_path: Path) -> BotConfigBase:
     )
 
 
+def test_sdk_reference_transport_source_has_no_app_imports_or_callback_scaffolding() -> None:
+    source = Path(__file__).read_text()
+    tree = ast.parse(source, filename=str(Path(__file__)))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(not alias.name.startswith("app") for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module is None or not node.module.startswith("app")
+        elif isinstance(node, ast.Lambda):
+            raise AssertionError(f"lambda callback scaffolding still present in {__file__}")
+
+
+def test_sdk_reference_transport_uses_callback_free_dispatch_runtime() -> None:
+    assert [field.name for field in fields(ProviderDispatchRuntime)] == [
+        "config",
+        "provider",
+        "boot_id",
+        "cancellations",
+    ]
+
+
 async def test_sdk_only_transport_can_execute_request(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     transport_impl = _StubTransport()
@@ -495,14 +585,17 @@ async def test_sdk_only_transport_can_execute_request(tmp_path: Path) -> None:
     transport = TransportIdentity(
         conversation_key="stub:conversation:1",
         origin_channel=transport_impl.transport_id,
-        external_conversation_ref="1",
-        conversation_ref="stub:conversation:1",
         actor="stub:user:1",
+        external_conversation_ref="1",
+        target_agent_id="",
+        conversation_ref="stub:conversation:1",
+        routed_task_id="",
+        authority_ref="",
     )
 
     outcome = await execute_request(
         transport,
-        "Say hello from the SDK proof transport.",
+        "Say hello the SDK proof transport.",
         [],
         egress,
         runtime=runtime,
@@ -514,16 +607,16 @@ async def test_sdk_only_transport_can_execute_request(tmp_path: Path) -> None:
     assert artifacts.saved_items == [
         (
             "stub:conversation:1",
-            "Say hello from the SDK proof transport.",
+            "Say hello the SDK proof transport.",
             "sdk response",
             "request",
         )
     ]
 class _WorkflowRecorder:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    def record(self, name: str, *args: Any, **kwargs: Any) -> None:
+    def record(self, name: str, *args: object, **kwargs: object) -> None:
         self.calls.append((name, args, kwargs))
 
 
@@ -531,11 +624,11 @@ class _StubConversationControl:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def reset_session(self, session: SessionState, **kwargs: Any) -> ConversationResetOutcome:
+    def reset_session(self, session: SessionState, **kwargs: object) -> ConversationResetOutcome:
         self._recorder.record("conversation.reset_session", session, **kwargs)
         return ConversationResetOutcome(status="reset")
 
-    def cancel_conversation(self, session: SessionState, **kwargs: Any) -> ConversationCancelOutcome:
+    def cancel_conversation(self, session: SessionState, **kwargs: object) -> ConversationCancelOutcome:
         self._recorder.record("conversation.cancel_conversation", session, **kwargs)
         return ConversationCancelOutcome(status="cancelled", mutated=True)
 
@@ -560,15 +653,15 @@ class _StubConversationSettings:
         self._recorder.record("conversation.set_role", session, value=value, default_role=default_role)
         return SettingMutationOutcome(status="updated", mutated=True, message=value)
 
-    def set_model_profile(self, session: SessionState, profile: str, **kwargs: Any) -> SettingMutationOutcome:
+    def set_model_profile(self, session: SessionState, profile: str, **kwargs: object) -> SettingMutationOutcome:
         self._recorder.record("conversation.set_model_profile", session, profile=profile, **kwargs)
         return SettingMutationOutcome(status="updated", mutated=True, current_profile=profile)
 
-    def set_project(self, session: SessionState, value: str, **kwargs: Any) -> SettingMutationOutcome:
+    def set_project(self, session: SessionState, value: str, **kwargs: object) -> SettingMutationOutcome:
         self._recorder.record("conversation.set_project", session, value=value, **kwargs)
         return SettingMutationOutcome(status="updated", mutated=True, message=value)
 
-    def set_file_policy(self, session: SessionState, value: str, **kwargs: Any) -> SettingMutationOutcome:
+    def set_file_policy(self, session: SessionState, value: str, **kwargs: object) -> SettingMutationOutcome:
         self._recorder.record("conversation.set_file_policy", session, value=value, **kwargs)
         return SettingMutationOutcome(status="updated", mutated=True, effective_policy=value)
 
@@ -577,7 +670,7 @@ class _StubPendingRequests:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def approve(self, session: SessionState, **kwargs: Any) -> PendingRequestOutcome:
+    def approve(self, session: SessionState, **kwargs: object) -> PendingRequestOutcome:
         self._recorder.record("pending.approve", session, **kwargs)
         return PendingRequestOutcome(
             status="approved",
@@ -599,7 +692,7 @@ class _StubPendingRequests:
         self._recorder.record("pending.retry_skip", session)
         return PendingRequestOutcome(status="retry_skipped", mutated=True)
 
-    def retry_allow(self, session: SessionState, **kwargs: Any) -> PendingRequestOutcome:
+    def retry_allow(self, session: SessionState, **kwargs: object) -> PendingRequestOutcome:
         self._recorder.record("pending.retry_allow", session, **kwargs)
         return PendingRequestOutcome(status="retry_allowed", mutated=True)
 
@@ -637,7 +730,7 @@ class _StubProviderGuidancePreview:
             effective_guidance="guidance",
             system_prompt="system",
             capability_summary="summary",
-            provider_config={},
+            provider_config=ProviderConfigRecord(),
             prompt_weight=1,
         )
 
@@ -646,31 +739,31 @@ class _StubProviderGuidanceManagement:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def detail(self, provider_name: str, **kwargs: Any) -> None:
+    def detail(self, provider_name: str, **kwargs: object) -> None:
         self._recorder.record("provider_guidance.detail", provider_name, **kwargs)
         return None
 
-    def edit_draft(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def edit_draft(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.edit_draft", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="edited", ok=True, message="edited")
 
-    def submit(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def submit(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.submit", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="submitted", ok=True, message="submitted")
 
-    def approve(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def approve(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.approve", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="approved", ok=True, message="approved")
 
-    def reject(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def reject(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.reject", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="rejected", ok=True, message="rejected")
 
-    def publish(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def publish(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.publish", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="published", ok=True, message="published")
 
-    def archive(self, provider_name: str, **kwargs: Any) -> ProviderGuidanceLifecycleMutation:
+    def archive(self, provider_name: str, **kwargs: object) -> ProviderGuidanceLifecycleMutation:
         self._recorder.record("provider_guidance.archive", provider_name, **kwargs)
         return ProviderGuidanceLifecycleMutation(status="archived", ok=True, message="archived")
 
@@ -716,17 +809,21 @@ class _StubRuntimeSkillCatalog:
         self._recorder.record("skills.filter_resolvable", tuple(names))
         return names
 
-    def requirements(self, skill_name: str) -> tuple[Any, ...]:
+    def requirements(self, skill_name: str) -> tuple[SkillRequirement, ...]:
         self._recorder.record("skills.requirements", skill_name)
         return ()
 
-    def missing_requirements(self, skill_name: str, credential_values: dict[str, str]) -> tuple[Any, ...]:
+    def missing_requirements(
+        self,
+        skill_name: str,
+        credential_values: dict[str, str],
+    ) -> tuple[SkillRequirement, ...]:
         self._recorder.record("skills.missing_requirements", skill_name, credential_values=credential_values)
         return ()
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = ""):
         self._recorder.record("skills.create_custom_draft", skill_name, owner_actor=owner_actor)
-        return SimpleNamespace(name=skill_name, visibility="private")
+        return RuntimeSkillDraftRecord(name=skill_name, visibility="private")
 
 
 class _StubRuntimeSkillActivation:
@@ -737,7 +834,7 @@ class _StubRuntimeSkillActivation:
         self._recorder.record("skills.list_conversation_skills", tuple(active_skills))
         return ConversationSkillListing(active_skills=tuple(active_skills), active_skill_details=())
 
-    def begin_activate(self, session: SessionState, **kwargs: Any) -> ConversationSkillMutationOutcome:
+    def begin_activate(self, session: SessionState, **kwargs: object) -> ConversationSkillMutationOutcome:
         self._recorder.record("skills.begin_activate", session, **kwargs)
         return ConversationSkillMutationOutcome(status="activated", mutated=True)
 
@@ -745,15 +842,15 @@ class _StubRuntimeSkillActivation:
         self._recorder.record("skills.confirm_activate", session, skill_name=skill_name)
         return ConversationSkillMutationOutcome(status="activated", mutated=True)
 
-    def begin_setup(self, session: SessionState, **kwargs: Any) -> ConversationSkillMutationOutcome:
+    def begin_setup(self, session: SessionState, **kwargs: object) -> ConversationSkillMutationOutcome:
         self._recorder.record("skills.begin_setup", session, **kwargs)
         return ConversationSkillMutationOutcome(status="setup_started", mutated=True)
 
-    def deactivate(self, session: SessionState, **kwargs: Any) -> ConversationSkillMutationOutcome:
+    def deactivate(self, session: SessionState, **kwargs: object) -> ConversationSkillMutationOutcome:
         self._recorder.record("skills.deactivate", session, **kwargs)
         return ConversationSkillMutationOutcome(status="deactivated", mutated=True)
 
-    def clear(self, session: SessionState, **kwargs: Any) -> ConversationSkillMutationOutcome:
+    def clear(self, session: SessionState, **kwargs: object) -> ConversationSkillMutationOutcome:
         self._recorder.record("skills.clear", session, **kwargs)
         return ConversationSkillMutationOutcome(status="cleared", mutated=True)
 
@@ -766,19 +863,19 @@ class _StubRuntimeSkillImport:
         self._recorder.record("skills.search", query, registry_url=registry_url)
         return RuntimeSkillSearchResults(catalog=(), registry=())
 
-    def install_from_registry(self, skill_name: str, registry_url: str, **kwargs: Any) -> RuntimeSkillMutationOutcome:
+    def install_from_registry(self, skill_name: str, registry_url: str, **kwargs: object) -> RuntimeSkillMutationOutcome:
         self._recorder.record("skills.install_from_registry", skill_name, registry_url=registry_url, **kwargs)
         return RuntimeSkillMutationOutcome(name=skill_name, ok=True, message="installed")
 
-    def uninstall(self, skill_name: str, **kwargs: Any) -> RuntimeSkillMutationOutcome:
+    def uninstall(self, skill_name: str, **kwargs: object) -> RuntimeSkillMutationOutcome:
         self._recorder.record("skills.uninstall", skill_name, **kwargs)
         return RuntimeSkillMutationOutcome(name=skill_name, ok=True, message="uninstalled")
 
-    def update(self, skill_name: str, **kwargs: Any) -> RuntimeSkillMutationOutcome:
+    def update(self, skill_name: str, **kwargs: object) -> RuntimeSkillMutationOutcome:
         self._recorder.record("skills.update", skill_name, **kwargs)
         return RuntimeSkillMutationOutcome(name=skill_name, ok=True, message="updated")
 
-    def update_all(self, **kwargs: Any) -> tuple[RuntimeSkillMutationOutcome, ...]:
+    def update_all(self, **kwargs: object) -> tuple[RuntimeSkillMutationOutcome, ...]:
         self._recorder.record("skills.update_all", **kwargs)
         return ()
 
@@ -786,7 +883,7 @@ class _StubRuntimeSkillImport:
         self._recorder.record("skills.diff", skill_name)
         return RuntimeSkillMutationOutcome(name=skill_name, ok=True, message="diff")
 
-    def list_updates(self) -> tuple[Any, ...]:
+    def list_updates(self) -> tuple[object, ...]:
         self._recorder.record("skills.list_updates")
         return ()
 
@@ -795,29 +892,45 @@ class _StubRuntimeSkillSetup:
     def __init__(self, recorder: _WorkflowRecorder | None = None) -> None:
         self._recorder = recorder or _WorkflowRecorder()
 
-    def begin_setup(self, session: SessionState, **kwargs: Any) -> RuntimeSkillCredentialSatisfactionOutcome:
+    def begin_setup(self, session: SessionState, **kwargs: object) -> RuntimeSkillCredentialSatisfactionOutcome:
         self._recorder.record("skills_setup.begin_setup", session, **kwargs)
-        return RuntimeSkillCredentialSatisfactionOutcome(status="setup_started", mutated=True, credential_env={})
+        return RuntimeSkillCredentialSatisfactionOutcome(
+            status="setup_started",
+            mutated=True,
+            credential_env=CredentialEnvRecord(),
+        )
 
-    def foreign_setup(self, session: SessionState, **kwargs: Any):
+    def foreign_setup(self, session: SessionState, **kwargs: object):
         self._recorder.record("skills_setup.foreign_setup", session, **kwargs)
-        return SimpleNamespace(status="none", setup=None)
+        return RuntimeSkillSetupState(status="none", setup=None)
 
-    def cancel(self, session: SessionState, **kwargs: Any):
+    def cancel(self, session: SessionState, **kwargs: object):
         self._recorder.record("skills_setup.cancel", session, **kwargs)
-        return SimpleNamespace(status="cancelled", mutated=True, foreign_setup=None)
+        return RuntimeSkillSetupCancellationOutcome(
+            status="cancelled",
+            mutated=True,
+            foreign_setup=None,
+        )
 
-    def check_satisfaction(self, session: SessionState, **kwargs: Any) -> RuntimeSkillCredentialSatisfactionOutcome:
+    def check_satisfaction(self, session: SessionState, **kwargs: object) -> RuntimeSkillCredentialSatisfactionOutcome:
         self._recorder.record("skills_setup.check_satisfaction", session, **kwargs)
-        return RuntimeSkillCredentialSatisfactionOutcome(status="satisfied", mutated=False, credential_env={})
+        return RuntimeSkillCredentialSatisfactionOutcome(
+            status="satisfied",
+            mutated=False,
+            credential_env=CredentialEnvRecord(),
+        )
 
-    async def submit_credential_value(self, session: SessionState, **kwargs: Any):
+    async def submit_credential_value(self, session: SessionState, **kwargs: object):
         self._recorder.record("skills_setup.submit_credential_value", session, **kwargs)
-        return SimpleNamespace(status="advanced", mutated=True)
+        return RuntimeSkillSetupAdvanceOutcome(status="advanced", mutated=True)
 
-    def apply_cleared_credentials(self, session: SessionState, **kwargs: Any):
+    def apply_cleared_credentials(self, session: SessionState, **kwargs: object):
         self._recorder.record("skills_setup.apply_cleared_credentials", session, **kwargs)
-        return SimpleNamespace(mutated=True, setup_cleared=True, deactivated_skills=())
+        return RuntimeSkillCredentialClearOutcome(
+            mutated=True,
+            setup_cleared=True,
+            deactivated_skills=(),
+        )
 
 
 class _StubRuntimeSkillAuthoring:
@@ -832,19 +945,19 @@ class _StubRuntimeSkillAuthoring:
         self._recorder.record("skills_authoring.create_draft", skill_name, owner_actor=owner_actor)
         return RuntimeSkillLifecycleMutation(status="drafted", ok=True, message="drafted")
 
-    def edit_draft(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def edit_draft(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_authoring.edit_draft", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="edited", ok=True, message="edited")
 
-    def submit(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def submit(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_authoring.submit", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="submitted", ok=True, message="submitted")
 
-    def publish(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def publish(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_authoring.publish", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="published", ok=True, message="published")
 
-    def archive(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def archive(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_authoring.archive", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="archived", ok=True, message="archived")
 
@@ -853,11 +966,11 @@ class _StubRuntimeSkillApproval:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def approve(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def approve(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_approval.approve", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="approved", ok=True, message="approved")
 
-    def reject(self, skill_name: str, **kwargs: Any) -> RuntimeSkillLifecycleMutation:
+    def reject(self, skill_name: str, **kwargs: object) -> RuntimeSkillLifecycleMutation:
         self._recorder.record("skills_approval.reject", skill_name, **kwargs)
         return RuntimeSkillLifecycleMutation(status="rejected", ok=True, message="rejected")
 
@@ -866,57 +979,193 @@ class _StubRecovery:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def prepare_action(self, **kwargs: Any) -> RecoveryActionOutcome:
+    def prepare_action(self, **kwargs: object) -> RecoveryActionOutcome:
         self._recorder.record("recovery.prepare_action", **kwargs)
         return RecoveryActionOutcome(status="ready")
 
-    def complete_replay(self, **kwargs: Any) -> None:
+    def complete_replay(self, **kwargs: object) -> None:
         self._recorder.record("recovery.complete_replay", **kwargs)
 
-    def fail_replay(self, **kwargs: Any) -> None:
+    def fail_replay(self, **kwargs: object) -> None:
         self._recorder.record("recovery.fail_replay", **kwargs)
 
-    async def dispatch_worker_recovery(self, **kwargs: Any):
+    async def dispatch_worker_recovery(self, **kwargs: object):
         self._recorder.record("recovery.dispatch_worker_recovery", **kwargs)
-        return SimpleNamespace(status="dispatched", notice=None)
+        return WorkerRecoveryOutcome(status="dispatched", notice=None)
 
 
 class _StubAuthorization:
     def __init__(self, recorder: _WorkflowRecorder) -> None:
         self._recorder = recorder
 
-    def is_allowed(self, config: BotConfigBase, user: Any | None, *, override: str | None = None) -> bool:
+    def is_allowed(self, config: BotConfigBase, user: object | None, *, override: str | None = None) -> bool:
         self._recorder.record("authorization.is_allowed", config, user, override=override)
         return True
 
-    def is_admin(self, config: BotConfigBase, user: Any | None) -> bool:
+    def is_admin(self, config: BotConfigBase, user: object | None) -> bool:
         self._recorder.record("authorization.is_admin", config, user)
         return True
 
-    def trust_tier(self, config: BotConfigBase, user: Any | None) -> str:
+    def trust_tier(self, config: BotConfigBase, user: object | None) -> str:
         self._recorder.record("authorization.trust_tier", config, user)
         return "trusted"
 
-    def access_policy(self, config: BotConfigBase, user: Any | None, *, override: str | None = None) -> str:
+    def access_policy(self, config: BotConfigBase, user: object | None, *, override: str | None = None) -> str:
         self._recorder.record("authorization.access_policy", config, user, override=override)
         return "allow"
 
 
 class _StubWorkQueue:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    def record_and_admit_message(self, *args: Any, **kwargs: Any) -> tuple[str, str]:
+    def record_and_admit_message(self, *args: object, **kwargs: object) -> tuple[str, str]:
         self.calls.append(("record_and_admit_message", args, kwargs))
         return "admitted", "work-1"
 
-    def record_and_enqueue(self, *args: Any, **kwargs: Any) -> tuple[bool, str]:
+    def record_and_enqueue(self, *args: object, **kwargs: object) -> tuple[bool, str]:
         self.calls.append(("record_and_enqueue", args, kwargs))
         return True, "work-2"
 
-    def record_update(self, *args: Any, **kwargs: Any) -> bool:
+    def record_update(self, *args: object, **kwargs: object) -> bool:
         self.calls.append(("record_update", args, kwargs))
         return True
+
+
+class _StubRegistryParticipant:
+    async def enroll(self) -> EnrollmentResult:
+        return EnrollmentResult(
+            agent_id="stub-agent",
+            agent_token="stub-token",
+            slug="stub-agent",
+            poll_cursor="0",
+        )
+
+    async def heartbeat(self) -> None:
+        return None
+
+    def is_enrolled(self, authority: str) -> bool:
+        return authority == "stub"
+
+    def local_agent_id(self, authority: str) -> str:
+        return "stub-agent" if authority == "stub" else ""
+
+
+class _StubRegistryMirror:
+    async def create_conversation(self, conversation_key: str, *, origin_channel: str, external_ref: object) -> str:
+        del conversation_key, origin_channel, external_ref
+        return "conv-1"
+
+    async def publish_events(self, conversation_id: str, events: list[object]) -> list[MirrorOutcome]:
+        del conversation_id, events
+        return []
+
+    async def submit_message(self, conversation_id: str, *, text: str, actor: str) -> list[MirrorOutcome]:
+        del conversation_id, text, actor
+        return []
+
+    async def submit_action(self, conversation_id: str, *, envelope: object) -> list[MirrorOutcome]:
+        del conversation_id, envelope
+        return []
+
+
+class _StubRegistryCoordination:
+    async def ensure_conversation_id(
+        self,
+        conversation_key: str,
+        *,
+        conversation_ref: str,
+        origin_channel: str,
+        external_ref: object,
+        title: str,
+    ) -> str:
+        del conversation_key, conversation_ref, origin_channel, external_ref, title
+        return "conv-1"
+
+    async def direct_assign(self, conversation_id: str, *, selector: object, title: str, instructions: str, message_text: str = "") -> CoordinationActionResult:
+        del conversation_id, selector, title, instructions, message_text
+        return CoordinationActionResult(
+            conversation_id="conv-1",
+            action_id="action-1",
+            action="direct_assign",
+            accepted=False,
+            status="unavailable",
+        )
+
+    async def delegate_tasks(self, conversation_id: str, *, intent: object) -> CoordinationActionResult:
+        del conversation_id, intent
+        return CoordinationActionResult(
+            conversation_id="conv-1",
+            action_id="action-2",
+            action="delegate_tasks",
+            accepted=False,
+            status="unavailable",
+        )
+
+    async def approve_delegation(self, conversation_id: str, *, proposal_id: str) -> CoordinationActionResult:
+        del conversation_id, proposal_id
+        return CoordinationActionResult(
+            conversation_id="conv-1",
+            action_id="action-3",
+            action="approve_delegation",
+            accepted=False,
+            status="unavailable",
+        )
+
+    async def cancel_delegation(self, conversation_id: str, *, proposal_id: str) -> CoordinationActionResult:
+        del conversation_id, proposal_id
+        return CoordinationActionResult(
+            conversation_id="conv-1",
+            action_id="action-4",
+            action="cancel_delegation",
+            accepted=False,
+            status="unavailable",
+        )
+
+    async def preview_target_resolution(self, selector: object) -> TargetResolutionPreview:
+        del selector
+        return TargetResolutionPreview(status="unavailable")
+
+
+class _StubRegistryDiscovery:
+    async def search_agents(self, *, query: object) -> AgentSearchResult:
+        del query
+        return AgentSearchResult(status="unavailable")
+
+    async def resolve_authority(self, *, selector: object) -> str:
+        del selector
+        return "stub"
+
+
+class _StubRegistryHealth:
+    def enrollment_state(self) -> dict[str, EnrollmentResult]:
+        return {
+            "stub": EnrollmentResult(
+                agent_id="stub-agent",
+                agent_token="stub-token",
+                slug="stub-agent",
+                poll_cursor="0",
+            )
+        }
+
+    def connectivity_state(self, authority: str) -> str:
+        del authority
+        return "connected"
+
+    def current_local_agent_ids(self) -> dict[str, str]:
+        return {"stub": "stub-agent"}
+
+    def live_local_agent_ids(self) -> dict[str, str]:
+        return {"stub": "stub-agent"}
+
+
+@dataclass
+class _StubRegistryParticipantImplementation:
+    enrollment: _StubRegistryParticipant
+    mirror: _StubRegistryMirror
+    coordination: _StubRegistryCoordination
+    discovery: _StubRegistryDiscovery
+    health: _StubRegistryHealth
 
 
 def _sdk_workflows(recorder: _WorkflowRecorder) -> WorkflowComposition:
@@ -953,8 +1202,14 @@ def _sdk_runtime(tmp_path: Path, recorder: _WorkflowRecorder | None = None, work
     config = _make_config(tmp_path)
     return BotRuntime(
         config=config,
-        transport=SimpleNamespace(start_all_transports=_no_op, stop_all_transports=_no_op),
-        registry=SimpleNamespace(),
+        transport=_StubTransport(),
+        registry=_StubRegistryParticipantImplementation(
+            enrollment=_StubRegistryParticipant(),
+            mirror=_StubRegistryMirror(),
+            coordination=_StubRegistryCoordination(),
+            discovery=_StubRegistryDiscovery(),
+            health=_StubRegistryHealth(),
+        ),
         provider=_StubProvider(),
         sessions=_StubSessions(config),
         workflows=_sdk_workflows(recorder or _WorkflowRecorder()),
@@ -985,7 +1240,7 @@ async def test_sdk_only_runtime_submit_uses_work_queue_contract(tmp_path: Path) 
         user=InboundUser(id="stub:user:1", username="sdk"),
         conversation_key="stub:conversation:1",
         action="approve_pending",
-        params={},
+        params=InboundActionParamsRecord(),
         source="stub",
     )
     action_envelope = InboundEnvelope(
@@ -1017,7 +1272,7 @@ def test_sdk_only_runtime_exposes_full_operator_workflow_surface(tmp_path: Path)
     session = _StubSessions(runtime.config).load(
         "stub:conversation:1",
         provider_name="stub",
-        provider_state_factory=lambda _key: {},
+        provider_state_factory=_provider_state_factory,
         approval_mode="off",
     )
 
@@ -1025,7 +1280,7 @@ def test_sdk_only_runtime_exposes_full_operator_workflow_surface(tmp_path: Path)
         session,
         actor_key="sdk:actor",
         provider_name="stub",
-        provider_state_factory=lambda _key: {},
+        provider_state_factory=_provider_state_factory,
         approval_mode_default="off",
         default_role="",
         default_skills=(),

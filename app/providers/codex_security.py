@@ -16,7 +16,7 @@ ALLOWED_CODEX_SANDBOXES = frozenset(
     }
 )
 
-# This allowlist is derived from current repo usage plus the security
+# This allowlist is derived current repo usage plus the security
 # requirement that skills must not be able to weaken execution policy.
 ALLOWED_CODEX_CONFIG_OVERRIDE_KEYS = frozenset(
     {

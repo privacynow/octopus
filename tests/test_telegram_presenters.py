@@ -1,6 +1,7 @@
 from telegram.constants import ParseMode
 
-from app.channels.telegram.presenters import (
+from octopus_sdk.work_queue import UserAccessRecord
+from app.presentation.telegram import (
     access_overrides_message,
     admin_sessions_summary_message,
     approval_prompt,
@@ -41,6 +42,7 @@ from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
 )
+from octopus_sdk.providers import ProviderConfigRecord
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from octopus_sdk.workflows.delegation import DelegationTargetPreview
 from octopus_sdk.workflows.skills import (
@@ -126,7 +128,7 @@ def test_provider_guidance_preview_message_renders_expected_html():
         effective_guidance="Use careful guidance",
         system_prompt="",
         capability_summary="",
-        provider_config={},
+        provider_config=ProviderConfigRecord(),
         prompt_weight=1,
     )
 
@@ -402,8 +404,8 @@ def test_discover_results_message_renders_matching_agents():
 def test_access_overrides_message_renders_expected_html():
     rendered = access_overrides_message(
         [
-            {"actor_key": "telegram:42", "access": "allowed", "reason": "trusted"},
-            {"actor_key": "telegram:99", "access": "blocked", "reason": ""},
+            UserAccessRecord(actor_key="telegram:42", access="allowed", reason="trusted"),
+            UserAccessRecord(actor_key="telegram:99", access="blocked", reason=""),
         ]
     )
 

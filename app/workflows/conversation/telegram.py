@@ -7,11 +7,10 @@ from typing import Any, Awaitable, Callable
 from telegram import Update
 
 from app import access
-from app.channels.telegram.cancellation import TelegramCancellationRegistry
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.state import TelegramRuntime
+from app.presentation import telegram as telegram_presenters
+from app.channels.telegram.state import TelegramCancellationRegistry, TelegramRuntime
 from octopus_sdk.execution_context import ResolvedExecutionContext
-from app.channels.telegram.session_io import (
+from app.runtime.telegram_session_io import (
     conversation_key as _conversation_key,
     actor_key as _actor_key,
     event_key as _event_key,
@@ -665,7 +664,7 @@ async def handle_worker_conversation_action(
             runtime_chat,
             runtime=runtime,
             actor_key=_actor_key(event.user.id),
-            cancel_request_event_id=str(item.get("event_id", "")),
+            cancel_request_event_id=str(item.event_id),
             allow_override=(source != "telegram" or _is_admin(runtime, event.user)),
         )
         if live_outcome is not None:
@@ -678,7 +677,7 @@ async def handle_worker_conversation_action(
             data_dir=runtime.state.config.data_dir,
             conversation_key=_conversation_key(runtime_chat),
             actor_key=_actor_key(event.user.id),
-            cancel_request_event_id=str(item.get("event_id", "")),
+            cancel_request_event_id=str(item.event_id),
             allow_override=(source != "telegram" or _is_admin(runtime, event.user)),
         )
         if outcome.mutated:

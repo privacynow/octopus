@@ -1,8 +1,9 @@
 """Tests for /admin sessions handler."""
 
-import app.channels.telegram.ingress as th
+import app.runtime.telegram_ingress as th
 from app.storage import default_session, save_session
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from octopus_sdk.providers import ProviderStateRecord
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -12,6 +13,7 @@ from tests.support.handler_support import (
     FakeUser,
     last_reply,
     make_config,
+    pending_approval_dict,
     seed_runtime_skill,
     send_command,
     setup_globals,
@@ -50,12 +52,12 @@ async def test_admin_sessions_summary():
 
         seed_runtime_skill("peer-review", body="Review code.")
 
-        s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s1 = default_session("claude", ProviderStateRecord({"session_id": "a", "started": False}), "on")
         s1["active_skills"] = ["peer-review"]
         save_session(data_dir, telegram_conversation_key(111), s1)
 
-        s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
-        s2["pending_approval"] = {"prompt": "test", "created_at": 0}
+        s2 = default_session("claude", ProviderStateRecord({"session_id": "b", "started": False}), "off")
+        s2["pending_approval"] = pending_approval_dict(prompt="test", created_at=0)
         save_session(data_dir, telegram_conversation_key(222), s2)
 
         chat = FakeChat()
@@ -82,7 +84,7 @@ async def test_admin_sessions_detail():
         seed_runtime_skill("peer-review", body="Review code.")
         seed_runtime_skill("deploy", body="Deploy code.")
 
-        s = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s = default_session("claude", ProviderStateRecord({"session_id": "a", "started": False}), "on")
         s["active_skills"] = ["peer-review", "deploy"]
         save_session(data_dir, telegram_conversation_key(555), s)
 
@@ -110,7 +112,7 @@ async def test_admin_sessions_detail_not_found():
         setup_globals(cfg, prov)
 
         # Need at least one session so we pass the "no sessions" check
-        s = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s = default_session("claude", ProviderStateRecord({"session_id": "a", "started": False}), "on")
         save_session(data_dir, telegram_conversation_key(111), s)
 
         chat = FakeChat()

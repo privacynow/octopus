@@ -1,7 +1,7 @@
 """Handler integration tests for Codex-specific session and script behavior."""
 
 from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
-from octopus_sdk.providers import RunContext, RunResult
+from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext, RunResult
 from octopus_sdk.sessions import session_from_dict
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
@@ -23,6 +23,7 @@ from tests.support.handler_support import (
     last_run_call,
     load_session_disk,
     make_config,
+    pending_retry_dict,
     setup_globals,
     fresh_data_dir,
 )
@@ -32,17 +33,17 @@ async def test_codex_context_hash_invalidation():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
-        prov.run_results = [RunResult(text="ok", provider_state_updates={"thread_id": "new-thread"})]
+        prov.run_results = [RunResult(text="ok", provider_state_updates=ProviderStateRecord({"thread_id": "new-thread"}))]
         setup_globals(cfg, prov)
 
-        session = default_session("codex", {"thread_id": "old-thread", "context_hash": "stale_hash"}, "off")
+        session = default_session("codex", ProviderStateRecord({"thread_id": "old-thread", "context_hash": "stale_hash"}), "off")
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         msg = FakeMessage(chat=chat, text="do something")
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
@@ -70,7 +71,7 @@ async def test_codex_script_staging():
         msg = FakeMessage(chat=chat, text="use github")
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
@@ -89,7 +90,7 @@ async def test_codex_script_staging():
 
 def _default_hash(cfg):
     """Compute the correct context hash for a default session with no project."""
-    raw = default_session("codex", {}, "off")
+    raw = default_session("codex", ProviderStateRecord(), "off")
     return resolve_execution_context(session_from_dict(raw), cfg, "codex").context_hash
 
 
@@ -101,14 +102,17 @@ async def test_codex_retry_clears_thread():
         setup_globals(cfg, prov)
 
         current_hash = _default_hash(cfg)
-        session = default_session("codex", {"thread_id": "thread-xyz", "context_hash": current_hash}, "off")
-        session["pending_retry"] = {
-            "actor_key": 42,
-            "prompt": "test",
-            "image_paths": [],
-            "context_hash": current_hash,
-            "denials": [{"tool_name": "Write", "tool_input": {"file_path": "/tmp/x.txt"}}],
-        }
+        session = default_session(
+            "codex",
+            ProviderStateRecord({"thread_id": "thread-xyz", "context_hash": current_hash}),
+            "off",
+        )
+        session["pending_retry"] = pending_retry_dict(
+            actor_key=telegram_actor_key(42),
+            prompt="test",
+            context_hash=current_hash,
+            denials=[DenialRecord({"tool_name": "Write", "tool_input": {"file_path": "/tmp/x.txt"}})],
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
@@ -116,7 +120,7 @@ async def test_codex_retry_clears_thread():
         query = FakeCallbackQuery("retry_allow", message=cb_msg)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         update = FakeUpdate(user=user, chat=chat, callback_query=query)
         update.effective_message = cb_msg
@@ -133,14 +137,18 @@ async def test_codex_failed_resume_clears_thread():
         setup_globals(cfg, prov)
 
         current_hash = _default_hash(cfg)
-        session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
+        session = default_session(
+            "codex",
+            ProviderStateRecord({"thread_id": "thread-abc", "context_hash": current_hash}),
+            "off",
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: thread not found]", returncode=1)]
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
@@ -159,14 +167,18 @@ async def test_codex_timed_out_resume_preserves_thread():
         setup_globals(cfg, prov)
 
         current_hash = _default_hash(cfg)
-        session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
+        session = default_session(
+            "codex",
+            ProviderStateRecord({"thread_id": "thread-abc", "context_hash": current_hash}),
+            "off",
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
@@ -184,14 +196,14 @@ async def test_codex_new_exec_failure_preserves_no_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", {"thread_id": None}, "off")
+        session = default_session("codex", ProviderStateRecord({"thread_id": None}), "off")
         save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: model overloaded]", returncode=1)]
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="do something"), user=user, chat=chat),
@@ -220,7 +232,7 @@ async def test_codex_error_text_is_html_escaped():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", {"thread_id": None}, "off")
+        session = default_session("codex", ProviderStateRecord({"thread_id": None}), "off")
         save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: Usage: <MODEL>]", returncode=2)]
 
@@ -228,7 +240,7 @@ async def test_codex_error_text_is_html_escaped():
         user = FakeUser(42)
         msg = CaptureReplyMessage(chat=chat, text="do something")
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=msg, user=user, chat=chat),
@@ -253,7 +265,7 @@ async def test_codex_error_output_redacts_paths_and_secrets():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        session = default_session("codex", {"thread_id": None}, "off")
+        session = default_session("codex", ProviderStateRecord({"thread_id": None}), "off")
         save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [
             RunResult(
@@ -269,7 +281,7 @@ async def test_codex_error_output_redacts_paths_and_secrets():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="do something")
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=msg, user=user, chat=chat),
@@ -304,7 +316,7 @@ async def test_codex_boot_id_clears_stale_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -324,14 +336,18 @@ async def test_codex_same_boot_preserves_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov, boot_id="same-boot")
 
-        session = default_session("codex", {"thread_id": "my-thread", "boot_id": "same-boot"}, "off")
+        session = default_session(
+            "codex",
+            ProviderStateRecord({"thread_id": "my-thread", "boot_id": "same-boot"}),
+            "off",
+        )
         save_session(data_dir, telegram_conversation_key(12345), session)
-        prov.run_results = [RunResult(text="done", provider_state_updates={"thread_id": "my-thread"})]
+        prov.run_results = [RunResult(text="done", provider_state_updates=ProviderStateRecord({"thread_id": "my-thread"}))]
 
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -356,7 +372,7 @@ async def test_scripts_dir_in_run_context():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="use github"), user=user, chat=chat),
@@ -396,12 +412,12 @@ async def test_context_hash_role_sensitivity():
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         prov.run_results = [
-            RunResult(text="ok1", provider_state_updates={"thread_id": "thread-1"}),
-            RunResult(text="ok2", provider_state_updates={"thread_id": "thread-2"}),
+            RunResult(text="ok1", provider_state_updates=ProviderStateRecord({"thread_id": "thread-1"})),
+            RunResult(text="ok2", provider_state_updates=ProviderStateRecord({"thread_id": "thread-2"})),
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.runtime.telegram_ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)

@@ -33,7 +33,7 @@ _MISSING_OBJECT_SQLSTATES = ("42P01", "3F000")  # undefined_table, invalid_schem
 
 
 def _get_max_applied_version(conn: Any) -> int | None:
-    """Return max version from schema_migrations, or None only if schema/table is missing.
+    """Return max version schema_migrations, or None only if schema/table is missing.
     Permission errors, connection failures, and other catalog problems are not swallowed."""
     try:
         with conn.cursor() as cur:

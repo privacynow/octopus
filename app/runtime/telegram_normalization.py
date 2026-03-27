@@ -48,7 +48,7 @@ class TelegramAttachmentTooLarge(ValueError):
 # ---------------------------------------------------------------------------
 
 def normalize_user(tg_user) -> InboundUser | None:
-    """Extract identity from a python-telegram-bot User object.
+    """Extract identity a python-telegram-bot User object.
 
     Returns None if tg_user is None (e.g. channel posts, system messages).
     """
@@ -76,7 +76,7 @@ def _validate_attachment_size(original_name: str, file_size: object) -> None:
 async def download_attachments(
     update, conversation_key: str, data_dir: Path,
 ) -> list[InboundAttachment]:
-    """Download photos/documents from a Telegram Update to local disk.
+    """Download photos/documents a Telegram Update to local disk.
 
     Returns a list of InboundAttachment with local paths.
     """
@@ -159,7 +159,7 @@ def normalize_command(update, context) -> InboundCommand | None:
     if user is None:
         return None
     chat_id = update.effective_chat.id
-    # Extract command name from message text (e.g. "/help topic" → "help")
+    # Extract command name message text (e.g. "/help topic" → "help")
     raw = (update.effective_message.text or "").split()[0] if update.effective_message.text else ""
     command = raw.lstrip("/").split("@")[0]  # strip leading / and @botname suffix
     args = tuple(context.args or [])

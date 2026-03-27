@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 
 import pytest
 
@@ -15,7 +14,6 @@ from app.channels.registry.channel import (
 )
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from octopus_sdk.providers import RunResult
 from app.runtime.transport_dispatcher import TransportDispatcher
 from app.runtime.services import (
     BotServices,
@@ -23,13 +21,14 @@ from app.runtime.services import (
 )
 from app.runtime import composition
 import app.runtime_backend as runtime_backend
-from app.runtime.registry_participant import build_noop_registry_participant
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.config_support import make_config, make_registry_connection
+from tests.support.registry_participant_support import build_noop_registry_participant
 from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.transport import TransportBindingRecord
 
 
 @dataclass
@@ -108,53 +107,16 @@ async def test_registry_channel_sync_binding_no_started_event(tmp_path):
     )
 
     await channel_egress.sync_binding(
-        {
-            "conversation_ref": registry_conversation_ref("default", "conv-sync"),
-            "title": "Delegated task",
-            "origin_channel": "registry",
-            "external_id": "task-1",
-        }
+        TransportBindingRecord(
+            conversation_ref=registry_conversation_ref("default", "conv-sync"),
+            title="Delegated task",
+            origin_channel="registry",
+            external_id="task-1",
+        )
     )
 
     assert channel_egress.title == "Delegated task"
     assert channel_egress.external_id == "task-1"
-    assert projection.event_calls == []
-
-
-async def test_registry_channel_publishes_completed_event_on_outcome(tmp_path):
-    cfg = make_config(
-        data_dir=tmp_path,
-        agent_mode="registry",
-        agent_registries=(make_registry_connection(),),
-    )
-    projection = _ProjectionRecorder()
-    channel_egress = RegistryChannelEgress(
-        cfg,
-        conversation_ref=registry_conversation_ref("default", "conv-2"),
-        services=_services(projection),
-    )
-
-    await channel_egress.on_outcome(RunResult(text="done", returncode=0))
-
-    assert [call["kind"] for call in projection.event_calls] == ["task.status"]
-    assert projection.event_calls[0]["status"] == "completed"
-
-
-async def test_registry_channel_ignores_delegation_submission_outcome(tmp_path):
-    cfg = make_config(
-        data_dir=tmp_path,
-        agent_mode="registry",
-        agent_registries=(make_registry_connection(),),
-    )
-    projection = _ProjectionRecorder()
-    channel_egress = RegistryChannelEgress(
-        cfg,
-        conversation_ref=registry_conversation_ref("default", "conv-delegation"),
-        services=_services(projection),
-    )
-
-    await channel_egress.on_outcome(SimpleNamespace(status="delegation_submitted"))
-
     assert projection.event_calls == []
 
 
@@ -227,8 +189,6 @@ async def test_registry_channel_swallows_projection_failures(tmp_path):
 
     await channel_egress.bind(title="No bind", config=cfg)
     await channel_egress.send_text("hello")
-    await channel_egress.on_outcome(SimpleNamespace(status="completed", reply_text="done"))
-
     assert output_log == [{"type": "send", "text": "hello"}]
     assert channel_egress.sent_messages == ["hello"]
     # Events are attempted but failures are swallowed
@@ -250,7 +210,7 @@ async def test_registry_channel_rejects_unqualified_refs(tmp_path):
         )
 
 
-async def test_registry_channels_build_scoped_egress_from_qualified_refs(tmp_path):
+async def test_registry_channels_build_scoped_egress__qualified_refs(tmp_path):
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -339,7 +299,6 @@ async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path
     await task_egress.bind(title="Task", config=cfg)
     handle = await task_egress.send_text("working...")
     await handle.edit_text("<b>still working</b>")
-    await task_egress.on_outcome(RunResult(text="done", returncode=0))
     await task_egress.send_recovery_notice(
         preview="preview",
         prompt="prompt",

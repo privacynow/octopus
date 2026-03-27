@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable
 from pathlib import Path
 
-from app.agents.runtime import AgentRuntime
+from app.runtime.registry_participant import AgentRuntime
 from tests.support.config_support import make_config, make_registry_connection
 
 
@@ -37,7 +37,7 @@ async def test_run_forever_backoff_doubles_on_consecutive_failures(monkeypatch, 
 
     monkeypatch.setattr(runtime, "sync_once", fake_sync_once)
     monkeypatch.setattr("random.uniform", lambda low, high: high)
-    monkeypatch.setattr("app.agents.runtime.asyncio.wait_for", fake_wait_for)
+    monkeypatch.setattr("app.runtime.registry_participant.asyncio.wait_for", fake_wait_for)
 
     await runtime.run_forever(stop_event)
 
@@ -77,7 +77,7 @@ async def test_run_forever_backoff_resets_after_reconnect(monkeypatch, tmp_path:
     monkeypatch.setattr(runtime, "sync_once", fake_sync_once)
     monkeypatch.setattr(runtime, "poll_once", fake_poll_once)
     monkeypatch.setattr("random.uniform", lambda low, high: high)
-    monkeypatch.setattr("app.agents.runtime.asyncio.wait_for", fake_wait_for)
+    monkeypatch.setattr("app.runtime.registry_participant.asyncio.wait_for", fake_wait_for)
 
     await runtime.run_forever(stop_event)
 
@@ -112,7 +112,7 @@ async def test_run_forever_polls_only_when_connected(monkeypatch, tmp_path: Path
     monkeypatch.setattr(runtime, "sync_once", fake_sync_once)
     monkeypatch.setattr(runtime, "poll_once", fake_poll_once)
     monkeypatch.setattr("random.uniform", lambda low, high: high)
-    monkeypatch.setattr("app.agents.runtime.asyncio.wait_for", fake_wait_for)
+    monkeypatch.setattr("app.runtime.registry_participant.asyncio.wait_for", fake_wait_for)
 
     await runtime.run_forever(stop_event)
 

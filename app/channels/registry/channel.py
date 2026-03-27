@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
 )
@@ -13,6 +11,7 @@ from app.channels.registry.refs import binding_external_id_for_ref, parse_regist
 from app.config import BotConfig
 from app.runtime.services import BotServices
 from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.identity import conversation_key_for_ref, parse_actor_key
 from octopus_sdk.transport import TransportDescriptor
 from octopus_sdk.transport import TransportEgress
@@ -62,7 +61,7 @@ class _RegistryChannel(TransportImplementation):
     def ref_prefix(self) -> str:
         return f"registry:{self._registry.registry_id}:{self._ref_kind}:"
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         del config
         parsed = parse_registry_ref(conversation_ref)
         external_id = str(kw.get("external_id", "") or "").strip() or binding_external_id_for_ref(conversation_ref)

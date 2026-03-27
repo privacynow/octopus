@@ -1,5 +1,7 @@
 """Provider protocol and shared result dataclass."""
 
+from __future__ import annotations
+
 import asyncio
 
 from collections.abc import Iterator, Mapping, MutableMapping

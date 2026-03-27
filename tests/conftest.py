@@ -62,12 +62,12 @@ def reset_handler_runtime():
 # ---------------------------------------------------------------------------
 # Phase 12: Postgres test harness
 # ---------------------------------------------------------------------------
-# Postgres URL comes only from a test container we start (never BOT_DATABASE_URL
+# Postgres URL comes only a test container we start (never BOT_DATABASE_URL
 # or env), so truncate/bootstrap never touch dev/staging/production.
 
 @pytest.fixture(scope="session")
 def postgres_base_url(request):
-    """Base Postgres URL from a harness-started test container. Skips only when Docker unavailable.
+    """Base Postgres URL a harness-started test container. Skips only when Docker unavailable.
 
     When Docker is available but container start/readiness fails, we fail loudly (P1), not skip.
     Run-scoped container name/port (P2) avoid collisions across parallel pytest invocations.

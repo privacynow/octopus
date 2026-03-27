@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
-from typing import Any, Literal, NewType
+from typing import Literal, NewType
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, field_validator
@@ -31,10 +31,10 @@ class RegistryRecordModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         return getattr(self, key)
 
     def __eq__(self, other: object) -> bool:
@@ -103,12 +103,12 @@ class RoutedTaskConstraintsRecord(RegistryJsonRecord):
     pass
 
 
-class AgentCard(BaseModel):
+class AgentCard(RegistryRecordModel):
     """Agent identity and capability declaration sent during enrollment/registration."""
 
     model_config = ConfigDict(extra="forbid")
 
-    bot_key: str = Field(..., min_length=1)
+    bot_key: str = ""
     display_name: str = ""
     slug: str = ""
     role: str = ""
@@ -121,11 +121,11 @@ class AgentCard(BaseModel):
     connectivity_state: str = "standalone"
     current_capacity: int = 0
     max_capacity: int = 1
-    channel_capabilities: list[str] = Field(default_factory=lambda: ["telegram"])
+    channel_capabilities: list[str] = Field(default_factory=list)
     version: str = "dev"
 
 
-class ConversationCreate(BaseModel):
+class ConversationCreate(RegistryRecordModel):
     """Request body for POST /v1/conversations (get-or-create)."""
 
     model_config = ConfigDict(extra="forbid")
@@ -143,7 +143,7 @@ class ConversationCreate(BaseModel):
         return v.strip()
 
 
-class AgentDiscoveryQuery(BaseModel):
+class AgentDiscoveryQuery(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = ""
@@ -154,7 +154,7 @@ class AgentDiscoveryQuery(BaseModel):
     required_state: str = "connected"
 
 
-class DiscoveredAgentRef(BaseModel):
+class DiscoveredAgentRef(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     authority_ref: str
@@ -177,21 +177,21 @@ class EnrollmentResult(RegistryRecordModel):
     poll_cursor: str = "0"
 
 
-class AgentRegisterRequest(BaseModel):
+class AgentRegisterRequest(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_card: AgentCard
     connectivity_state: str = ""
-    current_capacity: int = 0
-    max_capacity: int = 1
+    current_capacity: int | None = None
+    max_capacity: int | None = None
 
 
-class AgentHeartbeatRequest(BaseModel):
+class AgentHeartbeatRequest(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     connectivity_state: str = ""
-    current_capacity: int = 0
-    max_capacity: int = 1
+    current_capacity: int | None = None
+    max_capacity: int | None = None
     runtime_health: "RuntimeHealthPayload | None" = None
 
 
@@ -323,6 +323,8 @@ class TargetResolutionPreview(RegistryRecordModel):
 
 
 class RuntimeHealthPayload(RegistryRecordModel):
+    schema_version: int = 1
+    generated_at: str = Field(default_factory=utcnow_iso, min_length=1)
     summary: RuntimeHealthSummaryRecord = Field(default_factory=RuntimeHealthSummaryRecord)
     snapshot: RegistryJsonRecord | None = None
     diagnostics: list[RuntimeHealthDiagnosticRecord] = Field(default_factory=list)
@@ -413,7 +415,7 @@ class AgentStatusRecord(AgentRecord):
     recent_errors: int = 0
 
 
-class RoutedTaskRequest(BaseModel):
+class RoutedTaskRequest(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     routed_task_id: str
@@ -430,11 +432,27 @@ class RoutedTaskRequest(BaseModel):
 
     @field_validator("created_at", mode="before")
     @classmethod
-    def default_created_at(cls, value: Any) -> str:
+    def default_created_at(cls, value: object) -> str:
         return utcnow_iso() if not str(value or "").strip() else str(value)
 
+    @field_validator(
+        "routed_task_id",
+        "parent_conversation_id",
+        "origin_agent_id",
+        "target_agent_id",
+        "title",
+        "instructions",
+        mode="before",
+    )
+    @classmethod
+    def require_non_blank_fields(cls, value: object, info) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return text
 
-class TargetSelector(BaseModel):
+
+class TargetSelector(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["agent", "capability", "role"] = "agent"
@@ -443,7 +461,7 @@ class TargetSelector(BaseModel):
 
     @field_validator("value", mode="before")
     @classmethod
-    def normalize_value(cls, value: Any) -> str:
+    def normalize_value(cls, value: object) -> str:
         text = str(value or "").strip()
         if not text:
             raise ValueError("value must not be blank")
@@ -479,7 +497,7 @@ def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | No
     return (selector, instructions) if instructions else None
 
 
-class DelegationTaskDraft(BaseModel):
+class DelegationTaskDraft(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     draft_id: str = Field(default_factory=lambda: uuid4().hex, min_length=1)
@@ -492,7 +510,7 @@ class DelegationTaskDraft(BaseModel):
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
 
 
-class DelegationIntent(BaseModel):
+class DelegationIntent(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = ""
@@ -500,7 +518,7 @@ class DelegationIntent(BaseModel):
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 
-class DirectAssignmentRequest(BaseModel):
+class DirectAssignmentRequest(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     selector: TargetSelector
@@ -512,19 +530,19 @@ class DirectAssignmentRequest(BaseModel):
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
 
 
-class ApproveRejectActionPayload(BaseModel):
+class ApproveRejectActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(..., min_length=1)
 
 
-class RetryDecisionActionPayload(BaseModel):
+class RetryDecisionActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(..., min_length=1)
 
 
-class RecoveryActionPayload(BaseModel):
+class RecoveryActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     update_id: int = Field(..., gt=0)
@@ -534,7 +552,7 @@ class DirectAssignActionPayload(DirectAssignmentRequest):
     pass
 
 
-class DelegateTasksActionPayload(BaseModel):
+class DelegateTasksActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = ""
@@ -542,31 +560,31 @@ class DelegateTasksActionPayload(BaseModel):
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 
-class ApproveDelegationActionPayload(BaseModel):
+class ApproveDelegationActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_id: str = Field(..., min_length=1)
 
 
-class CancelDelegationActionPayload(BaseModel):
+class CancelDelegationActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_id: str = Field(..., min_length=1)
 
 
-class CancelTaskActionPayload(BaseModel):
+class CancelTaskActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     routed_task_id: str = Field(..., min_length=1)
 
 
-class RetryTaskActionPayload(BaseModel):
+class RetryTaskActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     routed_task_id: str = Field(..., min_length=1)
 
 
-class CoordinationActionEnvelope(BaseModel):
+class CoordinationActionEnvelope(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     action_id: str = Field(..., min_length=1)
@@ -609,10 +627,10 @@ class RoutedTaskRef(BaseModel):
     title: str = ""
     status: str = ""
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         return getattr(self, key)
 
 
@@ -630,14 +648,14 @@ class CoordinationActionResult(BaseModel):
     inserted_events: list[EventRecord] = Field(default_factory=list)
     event: EventRecord | None = None
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         return getattr(self, key)
 
 
-class TimelineEventPayload(BaseModel):
+class TimelineEventPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str = Field(..., min_length=1)
@@ -651,7 +669,7 @@ class TimelineEventPayload(BaseModel):
     created_at: str = Field(..., min_length=1)
 
 
-class RoutedTaskUpdate(BaseModel):
+class RoutedTaskUpdate(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     routed_task_id: str
@@ -664,11 +682,19 @@ class RoutedTaskUpdate(BaseModel):
 
     @field_validator("updated_at", mode="before")
     @classmethod
-    def default_updated_at(cls, value: Any) -> str:
+    def default_updated_at(cls, value: object) -> str:
         return utcnow_iso() if not str(value or "").strip() else str(value)
 
+    @field_validator("routed_task_id", "status", mode="before")
+    @classmethod
+    def require_non_blank_update_fields(cls, value: object, info) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return text
 
-class RoutedTaskResult(BaseModel):
+
+class RoutedTaskResult(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     routed_task_id: str
@@ -686,5 +712,13 @@ class RoutedTaskResult(BaseModel):
 
     @field_validator("completed_at", mode="before")
     @classmethod
-    def default_completed_at(cls, value: Any) -> str:
+    def default_completed_at(cls, value: object) -> str:
         return utcnow_iso() if not str(value or "").strip() else str(value)
+
+    @field_validator("routed_task_id", "status", mode="before")
+    @classmethod
+    def require_non_blank_result_fields(cls, value: object, info) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return text

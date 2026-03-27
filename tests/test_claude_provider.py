@@ -7,8 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from octopus_sdk.providers import RunContext
-from octopus_sdk.providers import RunResult
+from octopus_sdk.providers import (
+    CredentialEnvRecord,
+    ProviderConfigRecord,
+    ProviderStateRecord,
+    RunContext,
+    RunResult,
+)
 from app.providers.claude import ClaudeProvider
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProgress
@@ -61,7 +66,7 @@ def test_command_building_extra_dirs():
     assert "/extra/dir" in cmd4
 
 
-def test_command_building_extra_dirs_from_retry():
+def test_command_building_extra_dirs__retry():
     p = ClaudeProvider(make_config())
     state_new = {"session_id": "abc-123", "started": False}
     cmd5 = p._build_run_cmd(state_new, "test", extra_dirs=["/etc"])
@@ -142,7 +147,7 @@ async def test_check_runtime_health_short_circuits_when_auth_fails():
 
 
 def test_effective_model_overrides_config_model():
-    """effective_model from RunContext should override config.model in the command."""
+    """effective_model RunContext should override config.model in the command."""
     p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))
     state = {"session_id": "abc-123", "started": False}
     # _base_cmd with effective_model should use it, not config.model
@@ -184,7 +189,9 @@ def test_file_policy_inspect_appends_system_prompt():
     cmd = p._build_run_cmd(state, "analyze the code")
     context = RunContext(
         extra_dirs=[], system_prompt="You are a reviewer.",
-        capability_summary="", provider_config={}, credential_env={},
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
         file_policy="inspect",
     )
     # Simulate what run() does: apply system prompt with file_policy
@@ -225,7 +232,7 @@ async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(
-        {"session_id": "abc-123", "started": False},
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
         "hello",
         [],
         progress,
@@ -233,15 +240,15 @@ async def test_mcp_temp_file_exists_during_run_and_is_removed_after_success():
             extra_dirs=[],
             system_prompt="",
             capability_summary="",
-            provider_config={
+            provider_config=ProviderConfigRecord({
                 "mcp_servers": {
                     "github": {
                         "command": "npx",
                         "args": ["-y", "@modelcontextprotocol/server-github"],
                     }
                 }
-            },
-            credential_env={},
+            }),
+            credential_env=CredentialEnvRecord(),
         ),
     )
 
@@ -264,7 +271,7 @@ async def test_mcp_temp_file_is_removed_after_timeout_result():
 
     provider._run_process = fake_run_process  # type: ignore[method-assign]
     result = await provider.run(
-        {"session_id": "abc-123", "started": False},
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
         "hello",
         [],
         progress,
@@ -272,8 +279,8 @@ async def test_mcp_temp_file_is_removed_after_timeout_result():
             extra_dirs=[],
             system_prompt="",
             capability_summary="",
-            provider_config={"mcp_servers": {"github": {"command": "npx", "args": []}}},
-            credential_env={},
+            provider_config=ProviderConfigRecord({"mcp_servers": {"github": {"command": "npx", "args": []}}}),
+            credential_env=CredentialEnvRecord(),
         ),
     )
 
@@ -298,7 +305,7 @@ async def test_mcp_temp_file_is_removed_after_run_exception():
 
     with pytest.raises(RuntimeError, match="boom"):
         await provider.run(
-            {"session_id": "abc-123", "started": False},
+            ProviderStateRecord({"session_id": "abc-123", "started": False}),
             "hello",
             [],
             progress,
@@ -306,15 +313,15 @@ async def test_mcp_temp_file_is_removed_after_run_exception():
                 extra_dirs=[],
                 system_prompt="",
                 capability_summary="",
-                provider_config={"mcp_servers": {"github": {"command": "npx", "args": []}}},
-                credential_env={},
+                provider_config=ProviderConfigRecord({"mcp_servers": {"github": {"command": "npx", "args": []}}}),
+                credential_env=CredentialEnvRecord(),
             ),
         )
 
     assert not os.path.exists(seen["path"])
 
 
-# -- Claude command safety (from test_high_risk.py) --
+# -- Claude command safety (test_high_risk.py) --
 
 
 def test_claude_retry_no_extra_dirs():
@@ -351,12 +358,12 @@ def test_claude_preflight_hardening():
 
 
 def test_claude_error_state():
-    """RunResult distinguishes success (started=True) from error (empty updates)."""
+    """RunResult distinguishes success (started=True) error (empty updates)."""
     p = ClaudeProvider(make_config(provider_name="claude"))
     fresh = p.new_provider_state("tg:test")
     assert fresh["started"] is False
 
-    success_result = RunResult(text="ok", provider_state_updates={"started": True})
+    success_result = RunResult(text="ok", provider_state_updates=ProviderStateRecord({"started": True}))
     assert success_result.provider_state_updates.get("started") is True
 
     error_result = RunResult(text="error", returncode=1)

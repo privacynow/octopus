@@ -7,8 +7,9 @@ import json
 import secrets
 import uuid
 from contextlib import contextmanager
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Literal
 
 from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
@@ -87,8 +88,11 @@ from octopus_sdk.registry.models import (
     MessagePageRecord,
     PublishEventsResult,
     RegistryRecordModel,
+    RegistryJsonRecord,
     RegistrySummaryRecord,
+    RuntimeHealthPayload,
     RuntimeHealthDetailRecord,
+    RuntimeWorkerRecord,
     TargetSelector,
     TaskRecord,
     UsageSummaryRecord,
@@ -102,9 +106,17 @@ from octopus_sdk.task_protocol import (
 _SCHEMA = "agent_registry"
 
 
-def _json_ready(value: Any) -> Any:
+def _json_ready(value: object) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, RegistryJsonRecord):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, RegistryRecordModel):
+        return _json_ready(value.model_dump(mode="json"))
+    if hasattr(value, "model_dump"):
+        return _json_ready(value.model_dump(mode="json"))
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
     if isinstance(value, dict):
         return {key: _json_ready(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -141,8 +153,8 @@ def _write_tx(conn):
         raise
 
 
-def _jsonb(value: Any) -> Jsonb:
-    return Jsonb(value)
+def _jsonb(value: object) -> Jsonb:
+    return Jsonb(_json_ready(value))
 
 
 class RegistryPostgresStore(AbstractRegistryStore):
@@ -168,7 +180,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def _offline_before(self) -> str:
         return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
 
-    def _token_row(self, conn, token: str) -> dict[str, Any] | None:
+    def _token_row(self, conn, token: str) -> dict[str, object] | None:
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT * FROM {_SCHEMA}.agents WHERE agent_token = %s",
@@ -195,7 +207,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 slug = f"{requested}-{suffix}"
                 suffix += 1
 
-    def _row_to_agent(self, row: dict[str, Any]) -> AgentRecord:
+    def _row_to_agent(self, row: dict[str, object]) -> AgentRecord:
         effective_state = row.get("effective_state") or effective_connectivity_state(
             row["connectivity_state"], row["last_heartbeat_at"]
         )
@@ -226,15 +238,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
         conn,
         *,
         agent_id: str,
-        runtime_health_payload: dict[str, Any],
+        runtime_health_payload: RuntimeHealthPayload,
         mirrored_at: str,
     ) -> None:
-        workers = []
-        snapshot = runtime_health_payload.get("snapshot")
-        if isinstance(snapshot, dict):
+        workers: list[RuntimeWorkerRecord] = []
+        snapshot = runtime_health_payload.snapshot
+        if snapshot is not None:
             raw_workers = snapshot.get("workers") or []
             if isinstance(raw_workers, list):
-                workers = [worker for worker in raw_workers if isinstance(worker, dict)]
+                for worker in raw_workers:
+                    try:
+                        workers.append(RuntimeWorkerRecord.model_validate(worker))
+                    except Exception:
+                        continue
         with _cur(conn) as cur:
             cur.execute(
                 f"DELETE FROM {_SCHEMA}.agent_runtime_workers WHERE agent_id = %s",
@@ -251,21 +267,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """,
                     (
                         agent_id,
-                        str(worker.get("worker_id", "")),
-                        str(worker.get("process_role", "")),
-                        str(worker.get("started_at", "")),
-                        str(worker.get("last_seen_at", "")),
-                        str(worker.get("current_item_id", "")),
-                        str(worker.get("current_conversation_key", "")),
-                        str(worker.get("current_kind", "")),
-                        int(worker.get("items_processed", 0) or 0),
-                        int(worker.get("stale_recoveries_seen", 0) or 0),
-                        str(worker.get("last_error", "")),
+                        worker.worker_id,
+                        worker.process_role,
+                        worker.started_at,
+                        worker.last_seen_at,
+                        worker.current_item_id,
+                        worker.current_conversation_key,
+                        worker.current_kind,
+                        worker.items_processed,
+                        worker.stale_recoveries_seen,
+                        worker.last_error,
                         mirrored_at,
                     ),
                 )
 
-    def _runtime_worker_rows(self, conn, agent_id: str) -> list[dict[str, Any]]:
+    def _runtime_worker_rows(self, conn, agent_id: str) -> list[dict[str, object]]:
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -384,16 +400,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def register(self, agent_token: str, payload: AgentRegisterRequest) -> AgentRecord:
         now = utcnow_iso()
-        register_payload = validated_register_payload(
-            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
-        )
-        card = register_payload["agent_card"]
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            requested_bot_key = str(card.get("bot_key", "") or "").strip()
+            register_payload = validated_register_payload(
+                payload.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+                if hasattr(payload, "model_dump")
+                else payload
+            )
+            card = register_payload.agent_card
+            requested_bot_key = str(card.bot_key or "").strip()
             current_bot_key = str(row["bot_key"] or "").strip()
             if requested_bot_key and requested_bot_key != current_bot_key:
                 raise ValueError("bot_key must match the enrolled agent identity")
@@ -414,19 +432,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     WHERE agent_token = %s
                     """,
                     (
-                        card.get("display_name", row["display_name"]),
-                        card.get("role", row["role"]),
-                        card.get("registry_scope", row["registry_scope"]),
-                        _jsonb(card.get("capabilities", current_skills)),
-                        _jsonb(card.get("tags", current_tags)),
-                        card.get("description", row["description"]),
-                        card.get("provider", row["provider"]),
-                        card.get("mode", row["mode"]),
-                        register_payload.get("connectivity_state", row["connectivity_state"]),
-                        register_payload.get("current_capacity", row["current_capacity"]),
-                        register_payload.get("max_capacity", row["max_capacity"]),
-                        _jsonb(card.get("channel_capabilities", current_channel_capabilities)),
-                        card.get("version", row["version"]),
+                        card.display_name or row["display_name"],
+                        card.role or row["role"],
+                        card.registry_scope or row["registry_scope"],
+                        _jsonb(card.capabilities or current_skills),
+                        _jsonb(card.tags or current_tags),
+                        card.description or row["description"],
+                        card.provider or row["provider"],
+                        card.mode or row["mode"],
+                        register_payload.connectivity_state or row["connectivity_state"],
+                        row["current_capacity"] if register_payload.current_capacity is None else register_payload.current_capacity,
+                        row["max_capacity"] if register_payload.max_capacity is None else register_payload.max_capacity,
+                        _jsonb(card.channel_capabilities or current_channel_capabilities),
+                        card.version or row["version"],
                         now,
                         now,
                         agent_token_hash,
@@ -439,18 +457,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         now = utcnow_iso()
         agent_token_hash = hash_agent_token(agent_token)
-        heartbeat_payload = validated_heartbeat_payload(
-            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
-        )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            heartbeat_payload = validated_heartbeat_payload(
+                payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
+            )
             previous_effective_state = effective_connectivity_state(
                 row["connectivity_state"],
                 row["last_heartbeat_at"],
             )
-            runtime_health_payload = heartbeat_payload.get("runtime_health")
+            runtime_health_payload = heartbeat_payload.runtime_health
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -460,20 +478,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     WHERE agent_token = %s
                     """,
                     (
-                        heartbeat_payload.get("connectivity_state", row["connectivity_state"]),
-                        heartbeat_payload.get("current_capacity", row["current_capacity"]),
-                        heartbeat_payload.get("max_capacity", row["max_capacity"]),
+                        heartbeat_payload.connectivity_state or row["connectivity_state"],
+                        row["current_capacity"] if heartbeat_payload.current_capacity is None else heartbeat_payload.current_capacity,
+                        row["max_capacity"] if heartbeat_payload.max_capacity is None else heartbeat_payload.max_capacity,
                         now,
                         now,
                         (
                             _jsonb(runtime_health_payload)
-                            if isinstance(runtime_health_payload, dict)
+                            if runtime_health_payload is not None
                             else _jsonb(decode_json_field(row.get("runtime_health_json"), {}))
                         ),
                         agent_token_hash,
                     ),
                 )
-            if isinstance(runtime_health_payload, dict):
+            if runtime_health_payload is not None:
                 self._replace_runtime_health_workers(
                     conn,
                     agent_id=row["agent_id"],
@@ -555,7 +573,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """
                 )
                 override_rows = cur.fetchall()
-        merged: dict[str, dict[str, Any]] = {}
+        merged: dict[str, dict[str, object]] = {}
         for row in declared_rows:
             merged[row["capability_key"]] = {
                 "capability_name": row["capability_name"],
@@ -587,7 +605,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
         return {str(row["skill_name"]).lower() for row in rows}
 
     def search_agents(self, query: AgentDiscoveryQuery) -> list[AgentRecord]:
-        validated_query = validated_search_query(query.model_dump(mode="json"))
+        validated_query = validated_search_query(
+            query.model_dump(mode="json") if hasattr(query, "model_dump") else query
+        )
         role = validated_query.get("role", "").strip().lower()
         required_state = validated_query.get("required_state", "connected")
         capabilities = query_capabilities(validated_query)
@@ -617,7 +637,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 WHERE 1 = 1
                 """
             ]
-            params: list[Any] = [self._offline_before()]
+            params: list[object] = [self._offline_before()]
             if exclude:
                 sql.append(" AND agent_id != ALL(%s)")
                 params.append(exclude)
@@ -722,7 +742,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         target_agent_id: str,
         kind: str,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         now: str,
         delivery_id: str,
     ) -> DeliveryRecord:
@@ -744,7 +764,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         self,
         conn,
         selector: TargetSelector,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -766,7 +786,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             )
             rows = cur.fetchall()
         value = selector.value.strip().lower()
-        matches: list[dict[str, Any]] = []
+        matches: list[dict[str, object]] = []
         for row in rows:
             if selector.kind == "agent":
                 slug = str(row["slug"] or "").strip().lower()
@@ -797,7 +817,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         self,
         conn,
         selector: TargetSelector,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         matches = self._selector_candidates(conn, selector)
         preferred = selector.preferred_agent_id.strip()
         if preferred:
@@ -828,7 +848,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         status: str,
         target_agent_id: str = "",
         routed_task_id: str = "",
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         return {
             "draft_id": task.draft_id,
             "title": task.title,
@@ -853,9 +873,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
         kind: str,
         actor: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: dict[str, object],
         created_at: str,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -891,7 +911,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         })
 
     @staticmethod
-    def _task_row_to_summary(row: dict[str, Any]) -> TaskRecord:
+    def _task_row_to_summary(row: dict[str, object]) -> TaskRecord:
         return _record(TaskRecord, {
             "routed_task_id": row["routed_task_id"],
             "parent_conversation_id": row["parent_conversation_id"],
@@ -905,7 +925,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         })
 
     @staticmethod
-    def _task_snapshot_from_row(row: dict[str, Any]) -> RoutedTaskSnapshot:
+    def _task_snapshot__row(row: dict[str, object]) -> RoutedTaskSnapshot:
         return RoutedTaskSnapshot(
             status=str(row["status"] or "queued"),
             queued_at=str(row["created_at"] or ""),
@@ -914,13 +934,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def _create_routed_task_in_tx(
         self,
         conn,
-        request: dict[str, Any],
+        request: dict[str, object],
         *,
         now: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         validated_request = validated_routed_task_request(request)
         disabled_capabilities = self._disabled_capabilities(conn)
-        for capability in requested_routed_capabilities(validated_request):
+        request_payload = validated_request.model_dump(mode="json")
+        for capability in requested_routed_capabilities(request_payload):
             if capability.lower() in disabled_capabilities:
                 raise CapabilityDisabledError(capability)
         with _cur(conn) as cur:
@@ -941,41 +962,41 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
-                    validated_request["routed_task_id"],
-                    validated_request["parent_conversation_id"],
-                    validated_request["origin_agent_id"],
-                    validated_request["target_agent_id"],
-                    validated_request["title"],
-                    _jsonb(validated_request),
+                    validated_request.routed_task_id,
+                    validated_request.parent_conversation_id,
+                    validated_request.origin_agent_id,
+                    validated_request.target_agent_id,
+                    validated_request.title,
+                    _jsonb(request_payload),
                     now,
                     now,
                 ),
             )
         delivery = self._create_delivery(
             conn,
-            target_agent_id=validated_request["target_agent_id"],
+            target_agent_id=validated_request.target_agent_id,
             kind="routed_task",
-            payload=validated_request,
+            payload=request_payload,
             now=now,
             delivery_id=uuid.uuid4().hex,
         )
         mirrored_event = routed_task_created_event(validated_request)
         inserted_event = self._insert_event(
             conn,
-            event_id=mirrored_event["event_id"],
-            conversation_id=mirrored_event["conversation_id"],
-            agent_id=validated_request["target_agent_id"],
-            kind=mirrored_event["kind"],
+            event_id=mirrored_event.event_id,
+            conversation_id=mirrored_event.conversation_id,
+            agent_id=validated_request.target_agent_id,
+            kind=mirrored_event.kind,
             actor="",
-            content=mirrored_event["content"],
-            metadata=mirrored_event["metadata"],
-            created_at=mirrored_event["created_at"],
+            content=mirrored_event.content,
+            metadata=mirrored_event.metadata,
+            created_at=mirrored_event.created_at,
         )
         if inserted_event is not None:
             with _cur(conn) as cur:
                 cur.execute(
                     f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                    (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+                    (mirrored_event.created_at, mirrored_event.conversation_id),
                 )
         return {
             "request": validated_request,
@@ -992,13 +1013,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
             with _cur(conn) as cur:
                 cur.execute(
                     f"SELECT conversation_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (validated_request["parent_conversation_id"],),
+                    (validated_request.parent_conversation_id,),
                 )
                 conversation_row = cur.fetchone()
             if conversation_row is None:
-                raise KeyError(validated_request["parent_conversation_id"])
+                raise KeyError(validated_request.parent_conversation_id)
             disabled_capabilities = self._disabled_capabilities(conn)
-            for capability in requested_routed_capabilities(validated_request):
+            request_payload = validated_request.model_dump(mode="json")
+            for capability in requested_routed_capabilities(request_payload):
                 if capability.lower() in disabled_capabilities:
                     raise CapabilityDisabledError(capability)
             with _cur(conn) as cur:
@@ -1019,21 +1041,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
-                        validated_request["routed_task_id"],
-                        validated_request["parent_conversation_id"],
-                        validated_request["origin_agent_id"],
-                        validated_request["target_agent_id"],
-                        validated_request["title"],
-                        _jsonb(validated_request),
+                        validated_request.routed_task_id,
+                        validated_request.parent_conversation_id,
+                        validated_request.origin_agent_id,
+                        validated_request.target_agent_id,
+                        validated_request.title,
+                        _jsonb(request_payload),
                         now,
                         now,
                     ),
                 )
             delivery = self._create_delivery(
                 conn,
-                target_agent_id=validated_request["target_agent_id"],
+                target_agent_id=validated_request.target_agent_id,
                 kind="routed_task",
-                payload=validated_request,
+                payload=request_payload,
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
@@ -1046,14 +1068,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     ON CONFLICT(event_id) DO NOTHING
                     """,
                     (
-                        mirrored_event["event_id"],
-                        mirrored_event["conversation_id"],
-                        validated_request["target_agent_id"],
-                        mirrored_event["kind"],
+                        mirrored_event.event_id,
+                        mirrored_event.conversation_id,
+                        validated_request.target_agent_id,
+                        mirrored_event.kind,
                         "",
-                        mirrored_event["content"],
-                        _jsonb(mirrored_event["metadata"]),
-                        mirrored_event["created_at"],
+                        mirrored_event.content,
+                        _jsonb(mirrored_event.metadata),
+                        mirrored_event.created_at,
                     ),
                 )
                 inserted = cur.rowcount > 0
@@ -1062,33 +1084,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 with _cur(conn) as cur:
                     cur.execute(
                         f"SELECT seq FROM {_SCHEMA}.events WHERE event_id = %s",
-                        (mirrored_event["event_id"],),
+                        (mirrored_event.event_id,),
                     )
                     seq_row = cur.fetchone()
                 inserted_events.append(_record(EventRecord, {
                     "seq": int(seq_row["seq"]) if seq_row is not None else 0,
-                    "event_id": mirrored_event["event_id"],
-                    "conversation_id": mirrored_event["conversation_id"],
-                    "agent_id": validated_request["target_agent_id"],
-                    "kind": mirrored_event["kind"],
+                    "event_id": mirrored_event.event_id,
+                    "conversation_id": mirrored_event.conversation_id,
+                    "agent_id": validated_request.target_agent_id,
+                    "kind": mirrored_event.kind,
                     "actor": "",
-                    "content": mirrored_event["content"],
-                    "metadata": mirrored_event["metadata"],
-                    "created_at": mirrored_event["created_at"],
+                    "content": mirrored_event.content,
+                    "metadata": mirrored_event.metadata,
+                    "created_at": mirrored_event.created_at,
                 }))
                 with _cur(conn) as cur:
                     cur.execute(
                         f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (mirrored_event["created_at"], mirrored_event["conversation_id"]),
+                        (mirrored_event.created_at, mirrored_event.conversation_id),
                     )
         return _record(TaskRecord, {
-            "routed_task_id": validated_request["routed_task_id"],
+            "routed_task_id": validated_request.routed_task_id,
             "delivery_id": delivery["delivery_id"],
             "events_written": bool(inserted_events),
             "inserted_events": inserted_events,
-            "parent_conversation_id": validated_request["parent_conversation_id"],
-            "origin_agent_id": validated_request["origin_agent_id"],
-            "target_agent_id": validated_request["target_agent_id"],
+            "parent_conversation_id": validated_request.parent_conversation_id,
+            "origin_agent_id": validated_request.origin_agent_id,
+            "target_agent_id": validated_request.target_agent_id,
         })
 
     def poll(self, agent_token: str, *, cursor: int, limit: int) -> DeliveryPollResult:
@@ -1156,7 +1178,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     if task_row is None:
                         continue
                     decision = apply_task_transition(
-                        self._task_snapshot_from_row(task_row),
+                        self._task_snapshot__row(task_row),
                         TaskTransitionRequest(
                             transition="lease",
                             actor_role="system",
@@ -1227,8 +1249,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
+        payload_data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
+        if isinstance(payload_data, dict):
+            payload_task_id = str(payload_data.pop("routed_task_id", "") or "")
+            if payload_task_id and payload_task_id != routed_task_id:
+                raise ValueError("routed_task_id must match the requested task")
+            payload_data = {"routed_task_id": routed_task_id, **payload_data}
         validated_payload = validated_routed_task_status_payload(
-            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+            payload_data
         )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
@@ -1260,7 +1288,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             else:
                 raise ValueError(f"Unsupported routed task status: {requested_status}")
             decision = apply_task_transition(
-                self._task_snapshot_from_row(task_row),
+                self._task_snapshot__row(task_row),
                 TaskTransitionRequest(
                     transition=transition,
                     actor_role="target_bot",
@@ -1353,8 +1381,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
+        usage_fields = {"prompt_tokens", "completion_tokens", "cost_usd"}
+        if hasattr(payload, "model_fields_set"):
+            include_usage_fields = bool(
+                set(getattr(payload, "model_fields_set", set())) & usage_fields
+            )
+        elif isinstance(payload, Mapping):
+            include_usage_fields = bool(set(payload) & usage_fields)
+        else:
+            include_usage_fields = False
+        payload_data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
+        if isinstance(payload_data, dict):
+            payload_task_id = str(payload_data.pop("routed_task_id", "") or "")
+            if payload_task_id and payload_task_id != routed_task_id:
+                raise ValueError("routed_task_id must match the requested task")
+            payload_data = {"routed_task_id": routed_task_id, **payload_data}
         validated_payload = validated_routed_task_result_payload(
-            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+            payload_data
         )
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
@@ -1382,7 +1425,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise ValueError(f"Unsupported routed task result status: {requested_status}")
             completed_at = now
             decision = apply_task_transition(
-                self._task_snapshot_from_row(task),
+                self._task_snapshot__row(task),
                 TaskTransitionRequest(
                     transition=transition,
                     actor_role="target_bot",
@@ -1407,7 +1450,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 parent_conversation = cur.fetchone()
             inserted_events: list[EventRecord] = []
             if not duplicate:
-                persisted_result = dict(validated_payload)
+                persisted_result = validated_payload.model_dump(mode="json", exclude_none=True)
                 persisted_result["completed_at"] = completed_at
                 persisted_result["status"] = decision.new_state
                 with _cur(conn) as cur:
@@ -1445,16 +1488,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 event_metadata = {
                     "routed_task_id": routed_task_id,
                     "status": decision.new_state,
-                    "transition_id": validated_payload["transition_id"],
+                    "transition_id": validated_payload.transition_id,
                 }
-                if "prompt_tokens" in validated_payload:
-                    event_metadata["prompt_tokens"] = int(validated_payload.get("prompt_tokens") or 0)
-                if "completion_tokens" in validated_payload:
-                    event_metadata["completion_tokens"] = int(validated_payload.get("completion_tokens") or 0)
-                if "cost_usd" in validated_payload:
-                    event_metadata["cost_usd"] = float(validated_payload.get("cost_usd") or 0.0)
-                if "provider" in validated_payload:
-                    event_metadata["provider"] = str(validated_payload.get("provider") or "")
+                if include_usage_fields:
+                    event_metadata["prompt_tokens"] = int(validated_payload.prompt_tokens or 0)
+                    event_metadata["completion_tokens"] = int(validated_payload.completion_tokens or 0)
+                    event_metadata["cost_usd"] = float(validated_payload.cost_usd or 0.0)
+                if validated_payload.provider:
+                    event_metadata["provider"] = validated_payload.provider
                 mirrored_event = self._insert_event(
                     conn,
                     event_id=primary_event_id,
@@ -1463,8 +1504,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     kind="task.status",
                     actor="",
                     content=str(
-                        validated_payload.get("summary")
-                        or validated_payload.get("full_text")
+                        validated_payload.summary
+                        or validated_payload.full_text
                         or decision.new_state
                     ),
                     metadata=event_metadata,
@@ -1638,7 +1679,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 with _cur(conn) as cur:
                     placeholders = ",".join(["%s"] * len(hit_ids))
                     where_clauses = [f"c.conversation_id IN ({placeholders})"]
-                    params: list[Any] = list(hit_ids)
+                    params: list[object] = list(hit_ids)
                     if for_agent_id is not None:
                         where_clauses.append("c.target_agent_id = %s")
                         params.append(for_agent_id)
@@ -1674,7 +1715,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                         LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
                     """
-                    params_list: list[Any] = []
+                    params_list: list[object] = []
                     where_clauses_list: list[str] = []
                     if for_agent_id is not None:
                         where_clauses_list.append("c.target_agent_id = %s")
@@ -1933,7 +1974,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             AND e2.kind IN ('approval.requested', 'approval.decided')
                       )
                 """
-                params: list[Any] = []
+                params: list[object] = []
                 if for_agent_id is not None:
                     sql += " AND c.target_agent_id = %s"
                     params.append(for_agent_id)
@@ -2098,10 +2139,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
             now = utcnow_iso()
             inserted_event = None
-            routed_tasks: list[dict[str, Any]] = []
+            routed_tasks: list[dict[str, object]] = []
             duplicate = False
 
-            def _event_from_row(event_id: str) -> EventRecord | None:
+            def _event__row(event_id: str) -> EventRecord | None:
                 with _cur(conn) as cur:
                     cur.execute(
                         f"SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM {_SCHEMA}.events WHERE event_id = %s",
@@ -2186,7 +2227,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         )
                 duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event_from_row(validated_envelope.action_id)
+                    inserted_event = _event__row(validated_envelope.action_id)
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2228,7 +2269,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                 duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event_from_row(delegation_evt["event_id"])
+                    inserted_event = _event__row(delegation_evt["event_id"])
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2331,7 +2372,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                 duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event_from_row(f"delegation.submitted:{validated_envelope.action_id}")
+                    inserted_event = _event__row(f"delegation.submitted:{validated_envelope.action_id}")
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2429,7 +2470,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                 duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event_from_row(f"delegation.submitted:{validated_envelope.action_id}")
+                    inserted_event = _event__row(f"delegation.submitted:{validated_envelope.action_id}")
                 elif inserted_event is not None:
                     inserted_events.append(inserted_event)
                 return CoordinationActionResult(
@@ -2468,7 +2509,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         )
                     duplicate = inserted_event is None
                     if inserted_event is None:
-                        inserted_event = _event_from_row(validated_envelope.action_id)
+                        inserted_event = _event__row(validated_envelope.action_id)
                     return CoordinationActionResult(
                         conversation_id=conversation_id,
                         action_id=validated_envelope.action_id,
@@ -2503,7 +2544,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     inserted_event = created.get("event")
                 else:
                     decision = apply_task_transition(
-                        self._task_snapshot_from_row(task_row),
+                        self._task_snapshot__row(task_row),
                         TaskTransitionRequest(
                             transition="cancel",
                             actor_role="operator",
@@ -2547,7 +2588,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                 duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event_from_row(validated_envelope.action_id)
+                    inserted_event = _event__row(validated_envelope.action_id)
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2578,7 +2619,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     LEFT JOIN {_SCHEMA}.agents origin ON origin.agent_id = t.origin_agent_id
                     LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
                 """
-                params: list[Any] = []
+                params: list[object] = []
                 where_clauses: list[str] = []
                 if for_agent_id is not None:
                     where_clauses.append("(t.origin_agent_id = %s OR t.target_agent_id = %s)")
@@ -2752,7 +2793,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             raise ValueError("before_seq and after_seq cannot both be set")
         kinds = [item.strip() for item in kind.split(",") if item.strip()]
         clauses = ["conversation_id = %s"]
-        params: list[Any] = [conversation_id]
+        params: list[object] = [conversation_id]
         if kinds:
             placeholders = ", ".join(["%s"] * len(kinds))
             clauses.append(f"kind IN ({placeholders})")
@@ -2921,7 +2962,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 f"LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id "
                 f"WHERE (e.kind = 'provider.response' OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens'))"
             )
-            params: list[Any] = []
+            params: list[object] = []
             if agent_id:
                 sql += " AND e.agent_id = %s"
                 params.append(agent_id)
@@ -2992,7 +3033,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_json(raw: Any, default: Any) -> Any:
+    def _parse_json(raw: object, default: object) -> object:
         if raw is None:
             return default
         if isinstance(raw, (list, dict)):
@@ -3003,7 +3044,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return default
 
     @staticmethod
-    def _stable_json(value: Any) -> str:
+    def _stable_json(value: object) -> str:
         return json.dumps(value, sort_keys=True)
 
     def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
@@ -3137,7 +3178,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(f"DELETE FROM {_SCHEMA}.runtime_skills WHERE slug = %s", (slug,))
                 return cur.rowcount > 0
 
-    def _skill_row_to_track(self, row: dict[str, Any]) -> RuntimeSkillTrackRecord:
+    def _skill_row_to_track(self, row: dict[str, object]) -> RuntimeSkillTrackRecord:
         files_data = self._parse_json(row.get("files_json", "[]"), [])
         files = tuple(
             SkillFileRecord(
@@ -3176,7 +3217,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             published_revision_id=row.get("published_revision_id", ""),
         )
 
-    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[dict[str, Any]]:
+    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[dict[str, object]]:
         revision_ref = (
             "CASE WHEN s.published_revision_id != '' THEN s.published_revision_id ELSE s.active_revision_id END"
             if runtime_only else "s.active_revision_id"

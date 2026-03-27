@@ -1,113 +1,95 @@
-"""Runtime-owned shared service containers."""
+"""Runtime composition builders."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
 from dataclasses import dataclass
 
-import app.runtime_backend as runtime_backend
-from app.agents.registry_capabilities import registry_id_from_authority_ref
-from app.agents.state import load_runtime_registry_connection_state
-from app.access import get_authorization
+from app.agents.registry_capabilities import (
+    registry_authority_capabilities,
+    registry_id_from_authority_ref,
+)
+from app.agents.state import runtime_registry_agent_id
 from app.control_plane.bus import ControlPlaneBus
-from app.control_plane.directory import ControlPlaneDirectory
+from app.control_plane.directory import build_control_plane_directory
 from app.config import BotConfig
-from app.runtime.composition import workflows
-from octopus_sdk.agent_directory import AgentDirectoryPort
-from octopus_sdk.authorization import AuthorizationPort
-from octopus_sdk.bot_runtime import WorkflowComposition
-from octopus_sdk.conversation_projection import ConversationProjectionPort
-from octopus_sdk.health_publication import HealthPublicationPort
-from octopus_sdk.registry_participant import RegistryParticipantImplementation
-from octopus_sdk.task_routing import TaskRoutingPort
-from octopus_sdk.work_queue import WorkQueuePort
+from app.runtime.bot_services import BotServices, ControlPlaneServices, build_bus_bot_services
+from app.runtime.startup import runs_registry_transport
+from app.runtime.session_runtime import LocalSessionRuntime
+from octopus_sdk.bot_runtime import BotRuntime
+from octopus_sdk.providers import Provider
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ControlPlaneServices:
-    conversation_projection: ConversationProjectionPort
-    task_routing: TaskRoutingPort
-    agent_directory: AgentDirectoryPort
-    health_publication: HealthPublicationPort
+class RuntimeBuild:
+    boot_id: str
+    services: BotServices
+    bot_runtime: BotRuntime
 
 
-@dataclass(frozen=True)
-class BotServices:
-    control_plane: ControlPlaneServices
-    registry: RegistryParticipantImplementation
-    workflows: WorkflowComposition
-    authorization: AuthorizationPort
-    work_queue: WorkQueuePort
+def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
+    from app.runtime.transport_builders import build_runtime_transport_stack
 
-
-def build_bus_control_plane_services(
-    bus: ControlPlaneBus,
-    directory: ControlPlaneDirectory,
-    *,
-    config: BotConfig,
-    agent_id_for_authority: Callable[[str], str] | None = None,
-) -> ControlPlaneServices:
-    from app.control_plane.adapters import (
-        BusAgentDirectory,
-        BusConversationProjection,
-        BusHealthPublication,
-        BusTaskRouting,
+    bus = ControlPlaneBus(config.data_dir)
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
     )
+    directory = build_control_plane_directory(authority_capabilities)
 
-    def _connectivity_state_for_authority(authority_ref: str) -> str:
+    def _agent_id_for_authority(authority_ref: str) -> str:
         try:
             registry_id = registry_id_from_authority_ref(authority_ref)
         except ValueError:
-            return "offline"
+            return ""
         registry = next(
             (item for item in config.agent_registries if item.registry_id == registry_id),
             None,
         )
-        if registry is None:
-            return "offline"
-        state = load_runtime_registry_connection_state(
+        return runtime_registry_agent_id(
             config.data_dir,
             registry_id,
-            registry_scope=registry.registry_scope,
+            registry_scope=registry.registry_scope if registry is not None else "full",
         )
-        return str(state.connectivity_state or "offline")
 
-    return ControlPlaneServices(
-        conversation_projection=BusConversationProjection(
-            bus, directory, agent_id_for_authority=agent_id_for_authority,
-        ),
-        task_routing=BusTaskRouting(bus, directory),
-        agent_directory=BusAgentDirectory(bus, directory),
-        health_publication=BusHealthPublication(
-            bus,
-            directory,
-            connectivity_state_for_authority=_connectivity_state_for_authority,
-        ),
-    )
-
-
-def build_bus_bot_services(
-    bus: ControlPlaneBus,
-    directory: ControlPlaneDirectory,
-    *,
-    config,
-    agent_id_for_authority: Callable[[str], str] | None = None,
-) -> BotServices:
-    from app.runtime.registry_participant import build_control_plane_registry_participant
-
-    control_plane = build_bus_control_plane_services(
+    services = build_bus_bot_services(
         bus,
         directory,
         config=config,
-        agent_id_for_authority=agent_id_for_authority,
+        agent_id_for_authority=_agent_id_for_authority,
     )
-    return BotServices(
-        control_plane=control_plane,
-        registry=build_control_plane_registry_participant(
-            config,
-            control_plane,
-        ),
-        workflows=workflows(),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
+    if authority_capabilities and not services.registry.health.live_local_agent_ids():
+        log.warning(
+            "Registry capabilities configured but no agent enrollment found. "
+            "Event publishing and delegation will not work until bots enroll."
+        )
+
+    transport_build = build_runtime_transport_stack(
+        config,
+        provider,
+        services=services,
+        bus=bus,
+        directory=directory,
+    )
+
+    bot_runtime = BotRuntime(
+        config=config,
+        transport=transport_build.dispatcher,
+        registry=services.registry,
+        provider=provider,
+        sessions=LocalSessionRuntime(config),
+        workflows=services.workflows,
+        authorization=services.authorization,
+        work_queue=services.work_queue,
+        boot_id=transport_build.boot_id,
+        worker_processor=transport_build.worker_processor,
+    )
+
+    return RuntimeBuild(
+        boot_id=transport_build.boot_id,
+        services=services,
+        bot_runtime=bot_runtime,
     )

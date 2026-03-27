@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
-from typing import Any
+
+from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
+from octopus_sdk.skill_types import SkillRequirement, coerce_validation_spec
 
 
-def _stable_json(value: Any) -> str:
+def _stable_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
@@ -35,8 +37,8 @@ class SkillFileRecord:
 @dataclass(frozen=True)
 class SkillRevisionRecord:
     instruction_body: str
-    requirements: list[dict[str, Any]] = field(default_factory=list)
-    provider_config: dict[str, Any] = field(default_factory=dict)
+    requirements: list[SkillRequirement] = field(default_factory=list)
+    provider_config: ProviderConfigRecord = field(default_factory=ProviderConfigRecord)
     files: tuple[SkillFileRecord, ...] = ()
     version_label: str = ""
     changelog: str = ""
@@ -45,6 +47,28 @@ class SkillRevisionRecord:
     revision_id: str = ""
     status: str = "published"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "requirements",
+            [
+                item
+                if isinstance(item, SkillRequirement)
+                else SkillRequirement(
+                    key=str(item.get("key", "") or ""),
+                    prompt=str(item.get("prompt", "") or ""),
+                    help_url=(
+                        None
+                        if item.get("help_url") in (None, "")
+                        else str(item.get("help_url"))
+                    ),
+                    validate=coerce_validation_spec(item.get("validate")),
+                )
+                for item in self.requirements
+            ],
+        )
+        object.__setattr__(self, "provider_config", coerce_provider_config(self.provider_config))
+
     @property
     def digest(self) -> str:
         payload = "\n".join(
@@ -52,8 +76,8 @@ class SkillRevisionRecord:
                 self.version_label,
                 self.instruction_body,
                 self.changelog,
-                _stable_json(self.requirements),
-                _stable_json(self.provider_config),
+                _stable_json([item.to_dict() for item in self.requirements]),
+                _stable_json(self.provider_config.to_dict()),
                 _stable_json(
                     [
                         {

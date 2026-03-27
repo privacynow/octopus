@@ -10,11 +10,11 @@ from typing import Any, Awaitable, Callable
 from telegram.error import BadRequest
 
 from app import work_queue
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.conversation import TelegramConversationRuntime
-from app.channels.telegram.pending import TelegramPendingRuntime
-from app.channels.telegram.runtime_skills import TelegramRuntimeSkillsRuntime
-from app.channels.telegram.session_io import conversation_key, telegram_chat_id
+from app.presentation import telegram as telegram_presenters
+from app.workflows.conversation.telegram import TelegramConversationRuntime
+from app.workflows.pending.telegram import TelegramPendingRuntime
+from app.workflows.runtime_skills.telegram import TelegramRuntimeSkillsRuntime
+from app.runtime.telegram_session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
@@ -44,43 +44,6 @@ from octopus_sdk.execution import (
     execute_request as execution_execute_request,
     request_approval as execution_request_approval,
 )
-
-
-@dataclass(frozen=True)
-class TelegramExecutionCollaborators:
-    """Bound Telegram runtime collaborators for execution runtime builders."""
-
-    build_conversation_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
-    build_routed_task_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
-
-
-def bind_execution_collaborators(
-    runtime: TelegramRuntime,
-    *,
-    progress_timeline_callback_fn: Callable[..., Awaitable[None]],
-    routed_task_progress_callback_fn: Callable[..., Awaitable[None]],
-) -> TelegramExecutionCollaborators:
-    return TelegramExecutionCollaborators(
-        build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
-            lambda html_text, force=False: progress_timeline_callback_fn(
-                runtime,
-                conversation_ref,
-                routed_task_id,
-                html_text,
-                force=force,
-            )
-        ),
-        build_routed_task_progress_callback=lambda routed_task_id, authority_ref: (
-            lambda html_text, force=False: routed_task_progress_callback_fn(
-                runtime,
-                routed_task_id,
-                authority_ref,
-                html_text,
-                force=force,
-            )
-        ),
-    )
-
 
 @dataclass(frozen=True)
 class _TelegramSessionRuntime:
@@ -223,7 +186,7 @@ class TelegramExecutionMessage:
         conversation_ref: str,
         result,
     ) -> RequestExecutionOutcome:
-        from app.channels.telegram.delegation_channel import propose_delegation_plan
+        from app.workflows.delegation.telegram import propose_delegation_plan
 
         return await propose_delegation_plan(
             self.runtime,
@@ -414,10 +377,7 @@ def build_runtime_skill_runtime(
 
 def build_dispatch_runtime(
     runtime: TelegramRuntime,
-    *,
-    collaborators: TelegramExecutionCollaborators,
 ) -> ProviderDispatchRuntime:
-    del collaborators
     return ProviderDispatchRuntime(
         config=runtime.config,
         provider=runtime.provider,
@@ -466,9 +426,9 @@ def execution_channel_metadata(
 
     actor = actor_key
     if not actor:
-        from_user = getattr(message, "from_user", None)
-        if from_user is not None:
-            actor = telegram_actor_key(getattr(from_user, "id", 0))
+        _user = getattr(message, "_user", None)
+        if _user is not None:
+            actor = telegram_actor_key(getattr(_user, "id", 0))
 
     external_conversation_ref = str(chat_id)
     if origin == "registry":
@@ -480,21 +440,19 @@ def execution_channel_metadata(
 
     return ExecutionChannelMetadata(
         conversation_key=conv_key,
+        origin_channel=origin,
+        actor=actor,
         descriptor=descriptor,
         message_conversation_ref=resolved_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
         authority_ref=getattr(message, "authority_ref", ""),
-        origin_channel=origin,
         external_conversation_ref=external_conversation_ref,
         target_agent_id=target_agent_id,
-        actor=actor,
     )
 
 
 def build_execution_runtime(
     runtime: TelegramRuntime,
-    *,
-    collaborators: TelegramExecutionCollaborators,
 ) -> ExecutionRuntime:
     projection = runtime.services.control_plane.conversation_projection
     services = ExecutionServices(
@@ -508,7 +466,7 @@ def build_execution_runtime(
     )
 
     return ExecutionRuntime(
-        dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
+        dispatch=build_dispatch_runtime(runtime),
         services=services,
         interrupted_exc=work_queue.LeaveClaimed,
     )
@@ -520,26 +478,32 @@ def build_transport_identity(
     chat_id: int | str,
     *,
     actor_key: str = "",
-    collaborators: TelegramExecutionCollaborators | None = None,
 ) -> TransportIdentity:
-    if collaborators is None:
-        from app.channels.telegram.progress import (
-            TelegramProgress,
-            heartbeat,
-            keep_typing,
-            progress_timeline_callback,
-            routed_task_progress_callback,
-        )
+    from app.runtime.telegram_progress import (
+        progress_timeline_callback,
+        routed_task_progress_callback,
+    )
 
-        collaborators = bind_execution_collaborators(
-            runtime,
-            progress_timeline_callback_fn=progress_timeline_callback,
-            routed_task_progress_callback_fn=routed_task_progress_callback,
-        )
     return build_transport_identity_from_metadata(
         execution_channel_metadata(runtime, message, chat_id, actor_key=actor_key),
-        conversation_callback_factory=collaborators.build_conversation_progress_callback,
-        routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
+        conversation_callback_factory=lambda conversation_ref, routed_task_id: (
+            lambda html_text, force=False: progress_timeline_callback(
+                runtime,
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        routed_task_callback_factory=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: routed_task_progress_callback(
+                runtime,
+                routed_task_id,
+                authority_ref,
+                html_text,
+                force=force,
+            )
+        ),
     )
 
 

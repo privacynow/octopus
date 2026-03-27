@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from telegram.error import TelegramError
 
@@ -15,12 +14,12 @@ from app.config import BotMode
 from app.config import ProcessRole
 from app.runtime.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices
-from app.worker import poll_interval_for_runtime
-from app.worker import start_worker_task
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
 from octopus_sdk.providers import Provider
 from octopus_sdk.transport import TransportDescriptor
 from octopus_sdk.transport import TransportEgress
+from octopus_sdk.transport import TransportHealthRecord
 from octopus_sdk.transport import TransportIdentityResolver
 from octopus_sdk.transport import TransportImplementation
 
@@ -46,24 +45,24 @@ class TelegramTransport(TransportImplementation):
         services: BotServices,
         *,
         dispatcher: TransportDispatcher | None = None,
+        bootstrap: TelegramBootstrap | None = None,
     ) -> None:
         self._config = config
         self._provider = provider
         self._services = services
-        self._bootstrap: TelegramBootstrap = build_bootstrap(
+        self._bootstrap = bootstrap or build_bootstrap(
             self._config,
             self._provider,
             services=self._services,
+            dispatcher=dispatcher,
         )
-        if dispatcher is not None:
-            self._bootstrap.runtime.transport_dispatcher = dispatcher
+        if dispatcher is not None and self._bootstrap.runtime.transport_dispatcher is None:
+            raise RuntimeError("Telegram bootstrap requires a transport dispatcher")
         self._stop_requested = asyncio.Event()
         self._cleanup_lock = asyncio.Lock()
         self._bootstrapped = False
         self._app_started = False
         self._updater_started = False
-        self._worker_task: asyncio.Task[None] | None = None
-        self._worker_stop: asyncio.Event | None = None
 
     @property
     def transport_id(self) -> str:
@@ -117,7 +116,7 @@ class TelegramTransport(TransportImplementation):
         suffix = conversation_ref.rsplit(":", 1)[-1]
         return int(suffix) if suffix.isdigit() else None
 
-    def can_build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> bool:
+    def can_build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> bool:
         del config
         if kw.get("bot") is None:
             return False
@@ -129,7 +128,7 @@ class TelegramTransport(TransportImplementation):
             chat_id=chat_id,
         ) is not None
 
-    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> TransportEgress:
+    def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         bot = kw.get("bot")
         if bot is None:
             raise RuntimeError("Telegram transport requires a bot instance")
@@ -170,7 +169,6 @@ class TelegramTransport(TransportImplementation):
             self._bootstrapped = True
             if application.post_init:
                 await application.post_init(application)
-            await self._start_worker_task()
 
             if telegram_runtime.config.process_role != ProcessRole.WORKER.value:
                 await self._start_live_updates()
@@ -187,19 +185,18 @@ class TelegramTransport(TransportImplementation):
     async def stop(self) -> None:
         self._stop_requested.set()
 
-    async def health_check(self) -> dict[str, Any]:
+    async def health_check(self) -> TransportHealthRecord:
         telegram_runtime = self._bootstrap.runtime
-        return {
-            "transport_id": self.transport_id,
-            "transport_type": self.descriptor.transport_type,
-            "boot_id": telegram_runtime.boot_id,
-            "bot_mode": telegram_runtime.config.bot_mode,
-            "process_role": telegram_runtime.config.process_role,
-            "inbound_model": self.descriptor.inbound_model,
-            "accepts_transport_input": self.descriptor.accepts_transport_input,
-            "app_started": self._app_started,
-            "updater_started": self._updater_started,
-        }
+        return TransportHealthRecord(
+            transport_id=self.transport_id,
+            transport_type=self.descriptor.transport_type,
+            inbound_model=self.descriptor.inbound_model,
+            bot_mode=telegram_runtime.config.bot_mode,
+            ok=(
+                telegram_runtime.config.process_role == ProcessRole.WORKER.value
+                or self._app_started
+            ),
+        )
 
     async def _start_live_updates(self) -> None:
         application = self._bootstrap.application
@@ -224,36 +221,6 @@ class TelegramTransport(TransportImplementation):
         await application.start()
         self._app_started = True
 
-    async def _start_worker_task(self) -> None:
-        if self._worker_task is not None:
-            return
-        process_role = self._bootstrap.runtime.config.process_role
-        if process_role not in {ProcessRole.ALL.value, ProcessRole.WORKER.value}:
-            return
-        self._worker_task, self._worker_stop = start_worker_task(
-            self._bootstrap.runtime.config.data_dir,
-            self._bootstrap.runtime.boot_id,
-            self._bootstrap.worker_dispatch,
-            deserialize_failure_notifier=self._bootstrap.worker_deserialize_failure_notifier,
-            poll_interval=poll_interval_for_runtime(self._bootstrap.runtime.config.runtime_mode),
-            lease_ttl=self._bootstrap.runtime.config.claim_lease_ttl_seconds,
-            sweep_interval=self._bootstrap.runtime.config.claim_sweep_interval_seconds,
-            process_role=process_role,
-            heartbeat_enabled=(self._bootstrap.runtime.config.runtime_mode == "shared"),
-        )
-
-    async def _stop_worker_task(self) -> None:
-        if self._worker_stop is not None:
-            self._worker_stop.set()
-        if self._worker_task is not None:
-            try:
-                await asyncio.wait_for(self._worker_task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                self._worker_task.cancel()
-            finally:
-                self._worker_task = None
-                self._worker_stop = None
-
     async def _wait_for_stop(self, stop_event: asyncio.Event) -> None:
         external_wait = asyncio.create_task(stop_event.wait())
         local_wait = asyncio.create_task(self._stop_requested.wait())
@@ -271,7 +238,6 @@ class TelegramTransport(TransportImplementation):
         application = self._bootstrap.application
         async with self._cleanup_lock:
             try:
-                await self._stop_worker_task()
                 if self._updater_started and application.updater is not None:
                     await application.updater.stop()
                 if self._app_started:

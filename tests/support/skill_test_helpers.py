@@ -26,7 +26,12 @@ from app.credential_validation import validate_credential
 from octopus_sdk.identity import filesystem_component_for_key, parse_actor_key
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
-from octopus_sdk.providers import PreflightContext, RunContext
+from octopus_sdk.providers import (
+    CredentialEnvRecord,
+    PreflightContext,
+    ProviderConfigRecord,
+    RunContext,
+)
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
 from octopus_sdk.skill_types import SkillMeta, SkillRequirement
 
@@ -99,7 +104,7 @@ _PROVIDER_DOCUMENT_ADAPTER = TypeAdapter(dict[str, Any])
 # ---------------------------------------------------------------------------
 
 def _resolve_skill(name: str) -> tuple[Path, str] | None:
-    """Resolve a compatibility skill directory from custom or built-in assets."""
+    """Resolve a compatibility skill directory custom or built-in assets."""
 
     # 1. Custom compatibility override
     custom = CUSTOM_DIR / name
@@ -179,7 +184,7 @@ def _parse_requires_yaml(text: str) -> list[SkillRequirement]:
 
 
 def get_skill_requirements(name: str) -> list[SkillRequirement]:
-    """Load credential requirements from the compatibility filesystem view."""
+    """Load credential requirements the compatibility filesystem view."""
     skill = _skill_dir(name)
     if not skill:
         return []
@@ -201,7 +206,7 @@ def check_credentials(name: str, user_credentials: dict[str, dict[str, str]]) ->
 # ---------------------------------------------------------------------------
 
 def derive_fernet_key(telegram_token: str) -> bytes:
-    """Derive a Fernet-compatible key from the bot token using HKDF."""
+    """Derive a Fernet-compatible key the bot token using HKDF."""
     return derive_credential_encryption_key(telegram_token)
 
 
@@ -339,7 +344,7 @@ def load_catalog() -> dict[str, SkillMeta]:
 
 
 def get_skill_instructions(name: str) -> str:
-    """Read the markdown body (minus YAML frontmatter) from a skill's skill.md."""
+    """Read the markdown body (minus YAML frontmatter) a skill's skill.md."""
     skill = _skill_dir(name)
     if not skill:
         return ""
@@ -403,7 +408,7 @@ def get_skill_digests(skill_names: list[str]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _resolve_placeholders(obj, env: dict[str, str]):
-    """Recursively replace ${VAR} placeholders in strings with values from env."""
+    """Recursively replace ${VAR} placeholders in strings with values env."""
     if isinstance(obj, str):
         def replacer(m):
             return env.get(m.group(1), m.group(0))
@@ -504,7 +509,7 @@ def build_capability_summary(provider: str, skill_names: list[str]) -> str:
                 servers = raw["mcp_servers"]
                 if isinstance(servers, dict):
                     for sname in servers:
-                        lines.append(f"MCP server: {sname} (from {name})")
+                        lines.append(f"MCP server: {sname} ({name})")
             if "allowed_tools" in raw:
                 for t in raw["allowed_tools"]:
                     lines.append(f"Allowed tool: {t}")
@@ -512,7 +517,7 @@ def build_capability_summary(provider: str, skill_names: list[str]) -> str:
             if "scripts" in raw:
                 for s in raw["scripts"]:
                     sname = s if isinstance(s, str) else s.get("name", "?")
-                    lines.append(f"Script: {sname} (from {name})")
+                    lines.append(f"Script: {sname} ({name})")
     return "\n".join(lines)
 
 
@@ -639,14 +644,18 @@ def build_run_context(
     active_skills: list[str],
     extra_dirs: list[str],
     provider_name: str = "",
-    credential_env: dict[str, str] | None = None,
+    credential_env: CredentialEnvRecord | dict[str, str] | None = None,
     working_dir: str = "",
     file_policy: str = "",
     effective_model: str = "",
 ) -> RunContext:
     """Convenience builder for RunContext."""
-    cred_env = credential_env or {}
-    provider_config = build_provider_config(provider_name, active_skills, cred_env) if provider_name else {}
+    cred_env = CredentialEnvRecord(dict(credential_env or {}))
+    provider_config = (
+        ProviderConfigRecord(build_provider_config(provider_name, active_skills, cred_env.to_dict()))
+        if provider_name
+        else ProviderConfigRecord()
+    )
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return RunContext(
         extra_dirs=extra_dirs,
@@ -690,14 +699,14 @@ def stage_codex_scripts(
     conversation_key: str,
     active_skills: list[str],
 ) -> Path | None:
-    """Stage helper scripts from codex.yaml into a conversation-scoped directory.
+    """Stage helper scripts codex.yaml into a conversation-scoped directory.
 
     Returns the scripts directory path if any scripts were staged, None otherwise.
     Syncs scripts to match active skills — removes stale, adds new.
     """
     scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
 
-    # Collect all scripts from active skills
+    # Collect all scripts active skills
     all_scripts: dict[str, list[dict]] = {}  # skill_name → list of script defs
     for name in active_skills:
         raw = load_provider_yaml(name, "codex")

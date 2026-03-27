@@ -9,6 +9,7 @@ import pytest
 
 from app.config import BotConfig, validate_config
 from octopus_sdk.identity import telegram_actor_key
+from octopus_sdk.providers import ProviderStateRecord
 from app.octopus_cli.core import OctopusManager
 from tests.support.config_support import make_config
 
@@ -143,7 +144,7 @@ async def test_autonomous_grants_skip_permissions():
 
     session = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="off",
     )
     cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
@@ -164,7 +165,7 @@ async def test_autonomous_respects_approval_on_override():
 
     session = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="on",
         approval_mode_explicit=True,
     )
@@ -181,7 +182,7 @@ async def test_non_autonomous_no_grant():
 
     session = SessionState(
         provider="claude",
-        provider_state={},
+        provider_state=ProviderStateRecord(),
         approval_mode="off",
     )
     cfg = make_config(autonomous=False)

@@ -31,7 +31,7 @@ def test_setup_machine_start_creates_setup_state() -> None:
     assert decision.ok is True
     assert decision.effects.set_setup is not None
     assert decision.setup_state is not None
-    assert decision.next_requirement == {"key": "GITHUB_TOKEN", "prompt": "Enter GITHUB_TOKEN", "help_url": None, "validate": None}
+    assert decision.next_requirement == _requirement("GITHUB_TOKEN")
 
 
 def test_setup_machine_advance_moves_to_next_requirement() -> None:
@@ -54,7 +54,12 @@ def test_setup_machine_advance_moves_to_next_requirement() -> None:
     assert decision.ok is True
     assert decision.effects.set_setup is not None
     assert decision.effects.activate_skill == ""
-    assert decision.next_requirement == {"key": "TOKEN_B", "prompt": "Enter B", "help_url": None, "validate": None}
+    assert decision.next_requirement == SkillRequirement(
+        key="TOKEN_B",
+        prompt="Enter B",
+        help_url=None,
+        validate=None,
+    )
 
 
 def test_setup_machine_advance_last_requirement_becomes_ready() -> None:
@@ -153,7 +158,7 @@ def test_setup_machine_start_replaces_stale_foreign_setup() -> None:
     assert decision.effects.set_setup is not None
     assert decision.setup_state is not None
     assert decision.setup_state.actor_key == "tg:42"
-    assert decision.next_requirement == {"key": "TOKEN_NEW", "prompt": "Enter TOKEN_NEW", "help_url": None, "validate": None}
+    assert decision.next_requirement == _requirement("TOKEN_NEW")
 
 
 def test_setup_machine_clear_skill_clears_stale_foreign_setup() -> None:

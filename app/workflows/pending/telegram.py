@@ -11,10 +11,10 @@ from telegram import Update
 
 from app import access
 from app import user_messages as _msg
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.normalization import normalize_user
+from app.presentation import telegram as telegram_presenters
+from app.runtime.telegram_normalization import normalize_user
 from app.channels.telegram.state import TelegramRuntime
-from app.channels.telegram.session_io import (
+from app.runtime.telegram_session_io import (
     actor_key as _actor_key,
     conversation_key as _conversation_key,
     event_key as _event_key,
@@ -416,7 +416,7 @@ async def handle_worker_pending_action(
             await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         if event.action == "recovery_replay":
-            work_queue.complete_work_item(runtime.state.config.data_dir, str(item.get("id", "")))
+            work_queue.complete_work_item(runtime.state.config.data_dir, str(item.id))
         await channel_message.edit_reply_markup(reply_markup=None)
         await handle_recovery_action(
             runtime_chat,

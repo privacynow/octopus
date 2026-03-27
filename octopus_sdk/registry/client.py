@@ -1,4 +1,4 @@
-"""HTTP client for bot → registry communication.
+"""HTTP client for bot -> registry communication.
 
 Methods are async (HTTP I/O). This does not imply the registry store should be
 async — the client and store run in different processes.
@@ -6,8 +6,7 @@ async — the client and store run in different processes.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from typing import TypeVar
 
 import httpx
 from pydantic import BaseModel
@@ -33,6 +32,8 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     RoutedTaskUpdate,
 )
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class RegistryClientError(RuntimeError):
@@ -63,9 +64,9 @@ def _registry_http_error_code(status_code: int) -> str:
 
 
 def _validated_model(
-    value: BaseModel | Mapping[str, Any],
-    schema: type[BaseModel],
-) -> BaseModel:
+    value: ModelT | Mapping[str, object],
+    schema: type[ModelT],
+) -> ModelT:
     if isinstance(value, schema):
         return value
     return schema.model_validate(dict(value))
@@ -105,11 +106,11 @@ class RegistryClient:
         path: str,
         *,
         require_auth: bool = True,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: object,
+    ) -> object:
         headers = self._headers(require_auth=require_auth)
 
-        async def _do(client: httpx.AsyncClient) -> Any:
+        async def _do(client: httpx.AsyncClient) -> object:
             try:
                 response = await client.request(
                     method,
@@ -182,7 +183,7 @@ class RegistryClient:
     async def submit_action(
         self,
         conversation_id: str,
-        envelope: CoordinationActionEnvelope | Mapping[str, Any],
+        envelope: CoordinationActionEnvelope,
     ) -> CoordinationActionResult:
         payload = _validated_model(envelope, CoordinationActionEnvelope)
         result = await self._request(
@@ -215,7 +216,7 @@ class RegistryClient:
     async def publish_progress(
         self,
         conversation_id: str,
-        progress: ConversationProgressUpdate | Mapping[str, Any],
+        progress: ConversationProgressUpdate,
     ) -> None:
         payload = _validated_model(progress, ConversationProgressUpdate)
         await self._request(
@@ -227,7 +228,7 @@ class RegistryClient:
     async def enroll(
         self,
         enrollment_token: str,
-        card: AgentCard | Mapping[str, Any],
+        card: AgentCard,
     ) -> EnrollmentResult:
         """Enroll a new agent. No bearer token needed — uses enrollment_token in body."""
         agent_card = _validated_model(card, AgentCard)
@@ -244,7 +245,7 @@ class RegistryClient:
 
     async def register(
         self,
-        card: AgentCard | Mapping[str, Any],
+        card: AgentCard,
         *,
         connectivity_state: str,
         current_capacity: int,
@@ -266,9 +267,9 @@ class RegistryClient:
         connectivity_state: str,
         current_capacity: int,
         max_capacity: int,
-        runtime_health: RuntimeHealthPayload | Mapping[str, Any] | None = None,
+        runtime_health: RuntimeHealthPayload | None = None,
     ) -> HealthSummary:
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "connectivity_state": connectivity_state,
             "current_capacity": current_capacity,
             "max_capacity": max_capacity,
@@ -283,7 +284,7 @@ class RegistryClient:
 
     async def search(
         self,
-        query: AgentDiscoveryQuery | Mapping[str, Any],
+        query: AgentDiscoveryQuery,
     ) -> list[AgentRecord]:
         payload = _validated_model(query, AgentDiscoveryQuery)
         result = await self._request(
@@ -295,7 +296,7 @@ class RegistryClient:
 
     async def submit_routed_task(
         self,
-        request: RoutedTaskRequest | Mapping[str, Any],
+        request: RoutedTaskRequest,
     ) -> TaskRecord:
         payload = _validated_model(request, RoutedTaskRequest)
         body = payload.model_dump(exclude_unset=True)
@@ -312,7 +313,7 @@ class RegistryClient:
     async def routed_task_status(
         self,
         routed_task_id: str,
-        update: RoutedTaskUpdate | Mapping[str, Any],
+        update: RoutedTaskUpdate,
     ) -> TaskRecord:
         payload = _validated_model(update, RoutedTaskUpdate)
         body = payload.model_dump(exclude_unset=True)
@@ -330,7 +331,7 @@ class RegistryClient:
     async def routed_task_result(
         self,
         routed_task_id: str,
-        result: RoutedTaskResult | Mapping[str, Any],
+        result: RoutedTaskResult,
     ) -> TaskRecord:
         payload = _validated_model(result, RoutedTaskResult)
         body = payload.model_dump(exclude_unset=True)
@@ -353,7 +354,7 @@ class RegistryClient:
         wait_seconds: int = 1,
         kind_filter: list[str] | tuple[str, ...] | None = None,
     ) -> DeliveryPollResult:
-        params: dict[str, Any] = {
+        params: dict[str, object] = {
             "cursor": cursor,
             "limit": limit,
             "wait_seconds": wait_seconds,
@@ -377,7 +378,7 @@ class RegistryClient:
     async def renew_enrollment(
         self,
         agent_id: str,
-        card: AgentCard | Mapping[str, Any],
+        card: AgentCard,
     ) -> EnrollmentResult:
         del agent_id
         agent_card = _validated_model(card, AgentCard)

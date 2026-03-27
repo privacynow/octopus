@@ -38,7 +38,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             return None
         return track
 
-    def _detail_from_track(self, track: RuntimeSkillTrackRecord) -> RuntimeSkillLifecycleDetail:
+    def _detail__track(self, track: RuntimeSkillTrackRecord) -> RuntimeSkillLifecycleDetail:
         revisions = tuple(
             RuntimeSkillLifecycleRevision(
                 revision_id=item.revision_id,
@@ -97,10 +97,10 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         if decision.status == "approval_required":
             return f"Skill '{skill_name}' must be approved before publishing."
         if action == "submit":
-            return f"Cannot submit skill '{skill_name}' from state '{track.revision.status}'."
+            return f"Cannot submit skill '{skill_name}' state '{track.revision.status}'."
         if action == "publish":
-            return f"Cannot publish skill '{skill_name}' from state '{track.revision.status}'."
-        return f"Cannot {action} skill '{skill_name}' from state '{track.revision.status}'."
+            return f"Cannot publish skill '{skill_name}' state '{track.revision.status}'."
+        return f"Cannot {action} skill '{skill_name}' state '{track.revision.status}'."
 
     def _apply_transition(
         self,
@@ -116,7 +116,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 status=decision.status,
                 ok=False,
                 message=self._transition_message(track.slug, action, decision, track),
-                detail=self._detail_from_track(track),
+                detail=self._detail__track(track),
             )
         effects = decision.effects
         if effects.set_status is not None or effects.published_pointer != "unchanged" or effects.approval_action is not None:
@@ -141,7 +141,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         track = self._mutable_track(skill_name)
         if track is None:
             return None
-        return self._detail_from_track(track)
+        return self._detail__track(track)
 
     def create_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillLifecycleMutation:
         if not skill_name or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in skill_name):

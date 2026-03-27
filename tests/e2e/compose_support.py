@@ -56,7 +56,7 @@ def docker_skip_message(reason: str, detail: str) -> str:
     if reason == "timeout":
         return "docker info timed out"
     if reason == "daemon_permission_denied":
-        return "Docker daemon not accessible from this test process: " + (detail or "permission denied")
+        return "Docker daemon not accessible this test process: " + (detail or "permission denied")
     if reason == "daemon_unreachable":
         return "Docker daemon not reachable: " + (detail or "daemon not running or not reachable")
     return "Docker not available: " + (detail or reason)

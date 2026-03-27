@@ -239,7 +239,7 @@ class ClaudeProvider:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                log.warning("non-JSON from claude: %s", line[:200])
+                log.warning("non-JSON claude: %s", line[:200])
                 continue
 
             etype = event.get("type", "")

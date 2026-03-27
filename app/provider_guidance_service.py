@@ -179,7 +179,7 @@ class ProviderGuidanceService:
                 servers = raw.get("mcp_servers")
                 if isinstance(servers, dict):
                     for server_name in servers:
-                        lines.append(f"MCP server: {server_name} (from {record.slug})")
+                        lines.append(f"MCP server: {server_name} ({record.slug})")
                 tools = raw.get("allowed_tools")
                 if isinstance(tools, list):
                     for tool_name in tools:
@@ -192,7 +192,7 @@ class ProviderGuidanceService:
                             script_name = str(item.get("name", item.get("source", "?")))
                         else:
                             script_name = str(item)
-                        lines.append(f"Script: {script_name} (from {record.slug})")
+                        lines.append(f"Script: {script_name} ({record.slug})")
         return "\n".join(lines)
 
     def prompt_size_warning(self, role: str, active_skills: list[str]) -> str | None:

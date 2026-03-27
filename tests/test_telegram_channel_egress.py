@@ -1,5 +1,4 @@
 """Focused Telegram channel egress tests."""
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,9 +11,9 @@ from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from app.runtime import composition
-from app.runtime.registry_participant import build_noop_registry_participant
 import app.runtime_backend as runtime_backend
 from tests.support.handler_support import MinimalFakeBot
+from tests.support.registry_participant_support import build_noop_registry_participant
 
 
 def _services(*, publish=None) -> BotServices:
@@ -67,7 +66,7 @@ async def test_send_recovery_notice_uses_presenter_markup_shape():
 
 
 @pytest.mark.asyncio
-async def test_bind_is_noop_for_telegram():
+async def test_bind_updates_telegram_egress_binding_state():
     bot = MinimalFakeBot()
     channel_egress = TelegramChannelEgress(
         bot,
@@ -77,33 +76,5 @@ async def test_bind_is_noop_for_telegram():
     )
 
     await channel_egress.bind(title="Conversation", config=SimpleNamespace())
-    # Telegram egress bind is a no-op (no projection)
-
-
-@pytest.mark.asyncio
-async def test_on_message_received_is_noop_for_telegram():
-    bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(
-        bot,
-        chat_id=12345,
-        conversation_ref="telegram:bot-1:12345",
-        services=_services(),
-    )
-
-    await channel_egress.on_message_received("hello")
-    # Telegram egress on_message_received is a no-op
-
-
-@pytest.mark.asyncio
-async def test_on_outcome_is_noop_for_telegram():
-    bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(
-        bot,
-        chat_id=12345,
-        conversation_ref="telegram:bot-1:12345",
-        services=_services(),
-    )
-    outcome = SimpleNamespace(status="completed", reply_text="done", error_text="")
-
-    await channel_egress.on_outcome(outcome)
-    # Telegram egress on_outcome is a no-op
+    assert channel_egress.title == "Conversation"
+    assert channel_egress.external_id == "12345"

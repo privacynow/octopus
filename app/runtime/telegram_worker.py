@@ -10,18 +10,18 @@ from typing import Any, AsyncIterator
 
 from app import work_queue
 from app.agents.state import runtime_registry_agent_id
-from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.conversation import handle_worker_conversation_action
-from app.channels.telegram.execution import (
+from app.presentation import telegram as telegram_presenters
+from app.workflows.conversation.telegram import handle_worker_conversation_action
+from app.runtime.telegram_execution import (
     build_conversation_runtime,
     build_pending_runtime,
     build_runtime_skill_runtime,
     build_transport_identity,
     build_user_prompt,
 )
-from app.channels.telegram.pending import handle_worker_pending_action
-from app.channels.telegram.runtime_skills import handle_worker_skill_action
-from app.channels.telegram.session_io import (
+from app.workflows.pending.telegram import handle_worker_pending_action
+from app.workflows.runtime_skills.telegram import handle_worker_skill_action
+from app.runtime.telegram_session_io import (
     actor_key as _actor_key,
     conversation_key,
     load as load_session,
@@ -50,6 +50,7 @@ from octopus_sdk.workflows.delegation import (
     cancel_participant_delegation,
     expire_stale_delegations,
 )
+from octopus_sdk.work_queue import WorkItemRecord
 
 log = logging.getLogger(__name__)
 
@@ -68,10 +69,10 @@ async def _noop_async(*args: Any, **kwargs: Any) -> None:
     del args, kwargs
 
 
-def _item_conversation_key(item: dict[str, Any]) -> str:
-    conversation_key_value = str(item.get("conversation_key", "")).strip()
+def _item_conversation_key(item: WorkItemRecord) -> str:
+    conversation_key_value = item.conversation_key.strip()
     if not conversation_key_value:
-        raise RuntimeError(f"worker item missing conversation_key: {item.get('id')}")
+        raise RuntimeError(f"worker item missing conversation_key: {item.id}")
     return conversation_key_value
 
 
@@ -120,8 +121,6 @@ async def _worker_chat_lock(
             yield False
         except work_queue.LeaveClaimed:
             raise
-        return
-
     lock = runtime.chat_locks[chat_id]
     async with lock:
         work_queue.supersede_pending_recovery(data_dir, conversation_ref_key)
@@ -150,15 +149,15 @@ async def _poll_cancel_requested(
 
 async def _run_with_cancel_watch(
     runtime: TelegramRuntime,
-    item: dict[str, Any],
+    item: WorkItemRecord,
     runner,
 ):
     if runtime.config.runtime_mode != "shared":
         return await runner(None)
     cancel_event = asyncio.Event()
     watcher = asyncio.create_task(
-        _poll_cancel_requested(runtime, item["id"], cancel_event),
-        name=f"cancel-watch:{item['id']}",
+        _poll_cancel_requested(runtime, item.id, cancel_event),
+        name=f"cancel-watch:{item.id}",
     )
     try:
         return await runner(cancel_event)
@@ -168,11 +167,11 @@ async def _run_with_cancel_watch(
 
 
 async def notify_deserialize_failure(
-    item: dict[str, object],
+    item: WorkItemRecord,
     *,
     runtime: TelegramRuntime,
 ) -> None:
-    conversation_key_value = str(item.get("conversation_key", ""))
+    conversation_key_value = item.conversation_key
     chat_id = telegram_numeric_id(conversation_key_value)
     bot = runtime.bot_instance
     if chat_id is None or bot is None:
@@ -194,7 +193,7 @@ def _build_action_channel_egress(
     runtime: TelegramRuntime,
     event: InboundAction,
     *,
-    item: dict[str, Any],
+    item: WorkItemRecord,
 ):
     action_conversation_key = _item_conversation_key(item)
     return _build_channel_egress(
@@ -206,7 +205,7 @@ def _build_action_channel_egress(
         authority_ref=event.authority_ref,
         routed_task_id="",
         target_message_id=_action_target_message_id(event),
-        item_id=str(item.get("id", "")),
+        item_id=item.id,
     )
 
 
@@ -251,7 +250,7 @@ def _build_channel_egress(
 async def _execute_worker_action(
     runtime: TelegramRuntime,
     event: InboundAction,
-    item: dict[str, Any],
+    item: WorkItemRecord,
     *,
     execution_runtime: ExecutionRuntime,
     cancel_event: asyncio.Event | None,
@@ -334,27 +333,27 @@ async def _execute_worker_action(
             return
         return
 
-    log.warning("Worker dispatch: unknown semantic action %s for item %s", action, item.get("id"))
+    log.warning("Worker dispatch: unknown semantic action %s for item %s", action, item.id)
 
 
 async def worker_dispatch(
     kind: str,
     event,
-    item: dict,
+    item: WorkItemRecord,
     *,
     runtime: TelegramRuntime,
     execution_runtime: ExecutionRuntime,
 ) -> None:
-    """Dispatch a deserialized inbound event from the worker loop.
+    """Dispatch a deserialized inbound event the worker loop.
 
     Completion ownership:
-    - `worker_loop()` marks the item done after normal return from this function.
+    - `worker_loop()` marks the item done after normal return this function.
     - `admit_worker_message()` marks rejected items failed at the admission boundary.
     - `dispatch_worker_recovery()` moves claimed recovery items to `pending_recovery`;
       this function then raises `PendingRecovery` so `worker_loop()` does not mark done.
     - execution workflows raise `LeaveClaimed` for interrupted provider runs; the
       caller leaves the item claimed for later recovery.
-    - any uncaught exception from this function bubbles to `worker_loop()`, which
+    - any uncaught exception this function bubbles to `worker_loop()`, which
       marks the item failed.
     """
     bot = runtime.bot_instance
@@ -386,12 +385,12 @@ async def worker_dispatch(
             external_conversation_ref=getattr(event, "external_conversation_ref", ""),
             authority_ref=authority_ref,
             routed_task_id=routed_task_id,
-            item_id=str(item.get("id", "")),
+            item_id=item.id,
         )
 
         admission = admit_worker_message(
             data_dir=data_dir,
-            item_id=item["id"],
+            item_id=item.id,
             conversation_ref=admission_conversation_ref,
             user=event.user,
             config=runtime.config,
@@ -400,13 +399,13 @@ async def worker_dispatch(
         if not admission.allowed:
             return
 
-        if item.get("dispatch_mode") == "recovery":
-            raw_event_id = str(item.get("event_id", ""))
+        if item.dispatch_mode == "recovery":
+            raw_event_id = item.event_id
             numeric_event_id = telegram_numeric_id(raw_event_id)
             update_id = 0 if numeric_event_id is None else numeric_event_id
             recovery_outcome = await _recovery_runtime(runtime).dispatch_worker_recovery(
                 data_dir=data_dir,
-                item_id=item["id"],
+                item_id=item.id,
                 original_text=_normalized_event_text(event.text),
                 update_id=update_id,
                 bind_egress=(
@@ -429,7 +428,7 @@ async def worker_dispatch(
                 ),
             )
             if recovery_outcome.status == "pending_recovery":
-                raise work_queue.PendingRecovery(item["id"])
+                raise work_queue.PendingRecovery(item.id)
             raise RuntimeError(
                 f"Unexpected recovery outcome: {recovery_outcome.status}"
             )
@@ -438,7 +437,6 @@ async def worker_dispatch(
         user_id = _actor_key(event.user.id)
         if not is_routed_task:
             await channel_egress.bind(title=title, config=runtime.config)
-            await channel_egress.on_message_received(event.text)
         try:
             async with _worker_chat_lock(runtime, runtime_chat, worker_item=item):
                 outcome = None
@@ -479,14 +477,11 @@ async def worker_dispatch(
             raise
         if is_routed_task and outcome is None:
             outcome = _routed_task_requires_interactive_failure()
-        if outcome is not None:
-            if not is_routed_task:
-                await channel_egress.on_outcome(outcome)
         finalization = await finalize_execution(
             outcome,
             context=FinalizationContext(
                 config=cfg,
-                item_id=str(item["id"]),
+                item_id=item.id,
                 conversation_key=message_conversation_key,
                 runtime_chat=runtime_chat,
                 conversation_ref=conversation_ref,
@@ -518,16 +513,14 @@ async def worker_dispatch(
             )
         except work_queue.LeaveClaimed:
             raise
-        return
-
     if isinstance(event, (InboundCommand, InboundCallback)):
-        conversation_ref_key = str(item.get("conversation_key", ""))
+        conversation_ref_key = item.conversation_key
         chat_id = telegram_numeric_id(conversation_ref_key)
         log.info(
             "Worker recovered orphaned %s for conversation %s (event %s)",
             kind,
             conversation_ref_key,
-            item.get("event_id"),
+            item.event_id,
         )
         if chat_id is None or bot is None:
             return
@@ -543,4 +536,4 @@ async def worker_dispatch(
             )
         return
 
-    log.warning("Worker dispatch: unknown event type for item %s", item.get("id"))
+    log.warning("Worker dispatch: unknown event type for item %s", item.id)

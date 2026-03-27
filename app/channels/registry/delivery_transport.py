@@ -233,6 +233,14 @@ def build_registry_action_envelope(
     )
 
 
+def _routed_task_text(request: dict[str, Any]) -> str:
+    title = str(request.get("title", "")).strip()
+    instructions = str(request.get("instructions", "")).strip()
+    if title and instructions and title != instructions:
+        return f"{title}\n\n{instructions}".strip()
+    return instructions or title
+
+
 async def admit_registry_delivery(
     config: BotConfig,
     delivery: dict[str, Any],
@@ -293,9 +301,7 @@ async def admit_registry_delivery(
             context_lines.append(
                 "Requested capabilities: " + ", ".join(request.get("requested_capabilities", []))
             )
-        text = request.get("instructions", "").strip()
-        if request.get("title"):
-            text = f"{request['title']}\n\n{text}".strip()
+        text = _routed_task_text(request)
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])

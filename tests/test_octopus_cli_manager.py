@@ -196,3 +196,38 @@ def test_clean_all_removes_registry_image_and_prunes_storage(tmp_path: Path) -> 
     assert "docker image rm octopus-registry-service:latest" in logged
     assert "docker volume prune -f" in logged
     assert "docker builder prune -af" in logged
+
+
+def test_read_bot_registry_state_uses_exec_against_running_bot(tmp_path: Path) -> None:
+    _write_registry_bot_env(tmp_path, "m1", "M1")
+    docker = _ComposeDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+
+    def _bot_compose(slug, *args, **kwargs):  # noqa: ANN001
+        del kwargs
+        docker.commands.append((slug, *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(["docker"], 0, '{"connectivity_state":"connected","agent_id":"a1","agent_token":"t1"}', "")
+
+    docker.bot_compose = _bot_compose  # type: ignore[method-assign]
+
+    state = manager.read_bot_registry_state("m1", "local")
+
+    assert state == {"connectivity_state": "connected", "agent_id": "a1", "agent_token": "t1"}
+    assert docker.commands == [
+        (
+            "m1",
+            "exec",
+            "-T",
+            "-e",
+            "OCTOPUS_REGISTRY_ID=local",
+            "bot",
+            "python",
+            "-c",
+            docker.commands[0][-1],
+        )
+    ]
+    script = docker.commands[0][-1]
+    assert "from pathlib import Path" in script
+    assert "agent' / 'registries'" in script

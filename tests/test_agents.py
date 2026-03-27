@@ -1032,6 +1032,43 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
     ]
 
 
+async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_and_instructions(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["text"] = envelope.event.text
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-dup-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-dup-1",
+                "title": "what is 2 + 3",
+                "instructions": "what is 2 + 3",
+                "origin_agent_id": "origin-1",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+        dispatcher=None,
+    )
+
+    assert outcome == "accepted"
+    assert captured["text"] == "what is 2 + 3"
+
+
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 

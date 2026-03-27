@@ -502,23 +502,22 @@ class OctopusManager:
 
     def read_bot_registry_state(self, slug: str, registry_id: str) -> dict[str, str]:
         script = (
-            "pathlib import Path\n"
+            "from pathlib import Path\n"
             "import json, os\n"
             "data_dir = Path(os.environ.get('BOT_DATA_DIR', '/home/bot/data')) / 'agent' / 'registries'\n"
             "path = data_dir / f\"{os.environ.get('OCTOPUS_REGISTRY_ID','')}.json\"\n"
             "if not path.exists():\n"
             "    raise SystemExit(2)\n"
-            "data = json.loads(path.read_text())\n"
-            "print(json.dumps(data))\n"
+            "print(path.read_text())\n"
         )
         try:
             result = self.docker.bot_compose(
                 slug,
-                "run",
-                "--rm",
+                "exec",
+                "-T",
                 "-e",
                 f"OCTOPUS_REGISTRY_ID={registry_id}",
-                "bot-provider",
+                "bot",
                 "python",
                 "-c",
                 script,

@@ -324,11 +324,11 @@ sequenceDiagram
     participant Bolt as Bolt
     participant Transport as Slack transport
     participant Runtime as BotRuntime
-    participant Participant as Registry participant
+    participant RegPart as Registry participant
     participant Provider as Provider
     participant Registry as Registry service
 
-    Note over Bolt,Participant: Slack bot process
+    Note over Bolt,RegPart: Slack bot process
     S->>Bolt: events / commands
     Bolt->>Transport: incoming Slack event
     Transport->>Runtime: submit inbound envelope
@@ -336,8 +336,8 @@ sequenceDiagram
     Runtime->>Transport: reply / progress / actions
     Transport->>Bolt: outbound requests
     Bolt->>S: messages / files / updates
-    Runtime->>Participant: publish / search / route
-    Participant->>Registry: authority client requests
+    Runtime->>RegPart: publish / search / route
+    RegPart->>Registry: authority client requests
 ```
 
 That keeps Slack-specific code in `app/channels/slack/` while reusing the SDK

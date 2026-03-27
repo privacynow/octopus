@@ -2949,10 +2949,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
                 error_count_row = cur.fetchone()
                 recent_errors = int(error_count_row["cnt"]) if error_count_row else 0
-        agent["workers"] = workers
-        agent["active_conversations"] = active_conversations
-        agent["recent_errors"] = recent_errors
-        return _record(AgentStatusRecord, agent)
+        return AgentStatusRecord(
+            **agent.model_dump(mode="json"),
+            workers=workers,
+            active_conversations=active_conversations,
+            recent_errors=recent_errors,
+        )
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:

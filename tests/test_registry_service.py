@@ -1904,3 +1904,21 @@ def test_create_conversation_idempotent_on_same_agent(monkeypatch, tmp_path: Pat
     assert conv1["conversation_id"] == conv2["conversation_id"]
     # Title should be updated by the second call
     assert conv2["title"] == "Updated title"
+
+
+def test_agent_status_endpoint_returns_typed_agent_status(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Status Bot", "status-bot")
+
+    response = client.get(
+        f"/v1/agents/{agent_id}/status",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["agent_id"] == agent_id
+    assert payload["workers"] == []
+    assert payload["active_conversations"] == 0
+    assert payload["recent_errors"] == 0

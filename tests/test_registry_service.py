@@ -29,7 +29,12 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, save_session
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from octopus_sdk.registry.management import ManagementRequest
+from octopus_sdk.registry.management import (
+    ListCatalogSkillsRequest,
+    ListCatalogSkillsResult,
+    ManagementRequest,
+    ManagementResult,
+)
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -1658,6 +1663,152 @@ def test_agent_token_cannot_submit_action_for_other_agents_conversation(monkeypa
     )
 
     assert response.status_code == 403
+
+
+def test_agent_resource_endpoints_round_trip(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Endpoint Bot", "endpoint-bot")
+    conv = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "conv-endpoint-1",
+        title="Endpoint audit conversation",
+    )
+    conversation_id = conv["conversation_id"]
+
+    _login_ui(client)
+    csrf_token = _ui_csrf_token(client)
+    add_message = client.post(
+        f"/v1/conversations/{conversation_id}/messages",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"text": "Operator note"},
+    )
+    assert add_message.status_code == 200
+
+    publish = client.post(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-endpoint-1",
+                    "kind": "message.bot",
+                    "content": "Bot reply",
+                    "created_at": "2026-03-28T07:00:00+00:00",
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    task_create = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "routed_task_id": "endpoint-task-1",
+            "parent_conversation_id": conversation_id,
+            "origin_agent_id": agent_id,
+            "target_agent_id": agent_id,
+            "title": "Endpoint task",
+            "instructions": "Verify detail route",
+        },
+    )
+    assert task_create.status_code == 200
+
+    agent_status = client.get(
+        f"/v1/agents/{agent_id}/status",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert agent_status.status_code == 200
+    assert agent_status.json()["agent_id"] == agent_id
+
+    agent_conversations = client.get(
+        f"/v1/agents/{agent_id}/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert agent_conversations.status_code == 200
+    assert [item["conversation_id"] for item in agent_conversations.json()["conversations"]] == [
+        conversation_id
+    ]
+
+    listed_events = client.get(
+        f"/v1/conversations/{conversation_id}/events",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed_events.status_code == 200
+    assert any(item["event_id"] == "evt-endpoint-1" for item in listed_events.json()["events"])
+
+    listed_messages = client.get(
+        f"/v1/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert listed_messages.status_code == 200
+    assert listed_messages.json()["events"][0]["content"] == "Operator note"
+
+    exported = client.get(
+        f"/v1/conversations/{conversation_id}/export",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("text/markdown")
+    assert "Endpoint audit conversation" in exported.text
+    assert "Operator note" in exported.text
+
+    task_detail = client.get(
+        "/v1/tasks/endpoint-task-1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert task_detail.status_code == 200
+    assert task_detail.json()["routed_task_id"] == "endpoint-task-1"
+
+
+def test_management_result_endpoint_and_ui_logout(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Management Bot", "management-bot")
+    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    request = store.create_management_request(
+        ManagementRequest(
+            agent_id=agent_id,
+            payload=ListCatalogSkillsRequest(query="github"),
+            timeout_seconds=5,
+        )
+    )
+
+    report = client.post(
+        f"/v1/agents/management-requests/{request.request_id}/result",
+        headers={"Authorization": f"Bearer {token}"},
+        json=ManagementResult(
+            request_id=request.request_id,
+            agent_id=agent_id,
+            success=True,
+            payload=ListCatalogSkillsResult(items=()),
+        ).model_dump(mode="json", by_alias=True),
+    )
+    assert report.status_code == 200
+    assert report.json()["request_id"] == request.request_id
+
+    stored = store.get_management_result(request.request_id)
+    assert stored is not None
+    assert stored.success is True
+    assert stored.payload is not None
+    assert stored.payload.operation == "list_catalog_skills"
+
+    _login_ui(client)
+    shell = client.get("/ui")
+    assert shell.status_code == 200
+
+    logout = client.get("/ui/logout", follow_redirects=False)
+    assert logout.status_code == 303
+    assert logout.headers["location"] == "/ui/login"
+
+    logged_out_shell = client.get("/ui", follow_redirects=False)
+    assert logged_out_shell.status_code == 302
+    assert logged_out_shell.headers["location"] == "/ui/login"
 
 
 def test_publish_events_rejects_foreign_conversation(monkeypatch, tmp_path: Path):

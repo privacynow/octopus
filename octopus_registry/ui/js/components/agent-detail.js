@@ -351,7 +351,7 @@ function renderAgentDetail(container, params) {
         convosReload = setTimeout(() => loadConversations({ soft: true }), 350);
     }));
 
-    void loadDetail();
+    container.__routeReady = loadDetail();
     cleanups.add(() => clearTimeout(detailReload));
     cleanups.add(() => clearTimeout(convosReload));
 }

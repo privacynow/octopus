@@ -217,7 +217,7 @@ function renderSkillCatalog(container) {
         loadSkills();
     });
 
-    void loadAgents();
+    container.__routeReady = loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

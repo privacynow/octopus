@@ -264,6 +264,6 @@ function renderDashboard(container) {
         }));
     });
 
-    void loadSummary();
+    container.__routeReady = loadSummary();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

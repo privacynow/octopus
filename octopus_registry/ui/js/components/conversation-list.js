@@ -357,8 +357,7 @@ function renderConversationList(container) {
 
     syncStatusButtons();
     syncTypeButtons();
-    void loadQuickStart();
-    void loadPage();
+    container.__routeReady = Promise.allSettled([loadQuickStart(), loadPage()]);
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(quickStartReload));

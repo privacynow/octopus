@@ -573,14 +573,15 @@ Important SPA primitives:
   - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
     segmented controls
 - `octopus_registry/ui/js/router.js`
-  - renders the next route shell off-DOM, then swaps it into `#content` in one
-    `replaceChildren(...)` operation
+  - renders the next route shell off-DOM and waits for an initial route-ready
+    promise before swapping it into `#content`
   - runs route cleanup after the new shell mounts, not before
-  - keeps route rendering synchronous at the shell level; components hydrate
-    their data after mounting
-  - route components do not paint first-mount skeleton cards/rows during route
-    transitions; static structure mounts first and local API data fills the
-    content regions as it arrives
+  - keeps the previous route visible while the next route prepares
+  - shows only a delayed nav-level loading spinner when route preparation is
+    slow enough to notice
+- route components
+  - publish an initial route-ready promise for their first real data load
+  - do not paint first-mount skeleton cards/rows during route transitions
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app

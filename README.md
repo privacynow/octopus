@@ -195,11 +195,10 @@ Conversation work now happens in one flow:
 - use **Full activity** for the full stored event stream when you need
   diagnostics
 
-Route changes now render the next route shell off-DOM and then swap it into
-`#content` in one operation, with old-route cleanup deferred until after the
-new shell mounts. Route components mount their static shell immediately and let
-the data regions fill in as the local registry responses arrive, instead of
-painting route-transition skeletons.
+Route changes now prepare the next route off-DOM and wait for its initial
+local-registry data before swapping it into `#content`. The previous route
+stays visible until the next one is ready, and only a small delayed nav
+spinner appears if the fetch takes long enough to be noticeable.
 
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.

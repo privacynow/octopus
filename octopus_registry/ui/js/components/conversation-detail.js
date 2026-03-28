@@ -1021,7 +1021,7 @@ function renderConversationDetail(container, params) {
     }
     cleanups.add(() => clearTimeout(progressTimer));
     updateComposerAssist();
-    void Promise.all(initialLoads);
+    container.__routeReady = Promise.allSettled(initialLoads);
 
     function syncConversationDensity(compact) {
         page.classList.toggle('conversation-page-compact', Boolean(compact));

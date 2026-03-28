@@ -187,6 +187,6 @@ function renderApprovalList(container) {
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));
 
-    void loadPage();
+    container.__routeReady = loadPage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

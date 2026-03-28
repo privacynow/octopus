@@ -434,8 +434,7 @@ function renderTaskList(container) {
     }));
 
     syncStatusButtons();
-    void loadSummary();
-    void loadList();
+    container.__routeReady = Promise.allSettled([loadSummary(), loadList()]);
 
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

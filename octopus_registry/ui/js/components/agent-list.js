@@ -219,7 +219,7 @@ function renderAgentList(container) {
     }));
 
     syncStateButtons();
-    void loadPage();
+    container.__routeReady = loadPage();
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(reloadDebounce));

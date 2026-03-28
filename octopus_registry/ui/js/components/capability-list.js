@@ -91,7 +91,7 @@ function renderCapabilityList(container) {
         }
     }
 
-    void loadCapabilities();
+    container.__routeReady = loadCapabilities();
 
     let reloadDebounce = null;
     const unsub = WS.subscribe('agents', () => {

@@ -310,7 +310,7 @@ function renderGuidanceEditor(container) {
         loadGuidance();
     });
 
-    void loadAgents();
+    container.__routeReady = loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

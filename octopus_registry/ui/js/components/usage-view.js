@@ -175,6 +175,6 @@ function renderUsageView(container) {
     }));
 
     syncRangeButtons();
-    void loadUsage();
+    container.__routeReady = loadUsage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

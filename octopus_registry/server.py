@@ -900,19 +900,28 @@ async def resource_add_message(
 async def resource_add_action(
     conversation_id: str,
     payload: CoordinationActionEnvelope,
-    auth: AuthContext = Depends(require_operator_session),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     conversation_id = normalize_conversation_id(conversation_id)
     try:
-        result = authority.submit_action(conversation_id, payload)
+        conv = store.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    if auth.is_agent:
+        try:
+            store.assert_agent_scope(str(auth.agent_token or ""), {"coordination", "full"})
+        except PermissionError as exc:
+            raise _agent_permission_http_error(exc) from exc
+        _require_own_resource(auth, str(conv.get("target_agent_id", "") or ""))
+        if auth.agent_id and auth.agent_token:
+            authority.remember_agent_token(auth.agent_id, auth.agent_token)
+    try:
+        result = authority.submit_action(conversation_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # Broadcast action via WebSocket (full stored event)
-    conv = store.get_conversation(conversation_id)
     agent_id = conv.get("target_agent_id", "")
     inserted_events = result.inserted_events or []
     if inserted_events:

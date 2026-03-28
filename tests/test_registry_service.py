@@ -1618,6 +1618,48 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
     assert conversation.json()["status"] == "cancelling"
 
 
+def test_agent_token_can_submit_action_for_own_conversation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Product Bot", "product-bot-actions")
+    conv = _create_conversation(client, token, agent_id, "conv-action-1", title="Actionable work")
+
+    response = client.post(
+        f"/v1/conversations/{conv['conversation_id']}/actions",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"action_id": "cancel-action-agent", "action": "cancel_conversation", "payload": {}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["action"] == "cancel_conversation"
+
+
+def test_agent_token_cannot_submit_action_for_other_agents_conversation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    owner_agent_id, owner_token = _enroll_and_register(client, "Owner Bot", "owner-bot-actions")
+    _other_agent_id, other_token = _enroll_and_register(client, "Other Bot", "other-bot-actions")
+    conv = _create_conversation(
+        client,
+        owner_token,
+        owner_agent_id,
+        "conv-action-foreign",
+        title="Foreign conversation",
+    )
+
+    response = client.post(
+        f"/v1/conversations/{conv['conversation_id']}/actions",
+        headers={"Authorization": f"Bearer {other_token}"},
+        json={"action_id": "cancel-action-foreign", "action": "cancel_conversation", "payload": {}},
+    )
+
+    assert response.status_code == 403
+
+
 def test_publish_events_rejects_foreign_conversation(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

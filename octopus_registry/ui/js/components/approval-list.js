@@ -84,6 +84,17 @@ function renderApprovalList(container) {
             const card = document.createElement('article');
             card.className = 'approval-card';
             card.dataset.key = item.request_id || item.approval_id || item.conversation_id;
+            card.dataset.signature = UI.dataSignature({
+                id: String(item.request_id || item.approval_id || item.conversation_id || ''),
+                title: String(item.conversation_title || ''),
+                target: String(item.target_display_name || item.target_agent_id || ''),
+                requestKind: String(item.request_kind || ''),
+                actor: String(item.actor || ''),
+                trust: String(item.trust_tier || ''),
+                createdAt: String(item.created_at || ''),
+                expiresAt: String(item.expires_at || ''),
+                content: String(item.content || ''),
+            });
 
             const headerRow = document.createElement('div');
             headerRow.className = 'approval-card-header';

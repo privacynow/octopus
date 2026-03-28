@@ -1526,6 +1526,16 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
     const card = document.createElement('article');
     card.className = `conversation-task-card${compact ? ' compact' : ''}`;
     card.dataset.key = `${compact ? 'compact:' : 'full:'}${task.routed_task_id}`;
+    card.dataset.signature = UI.dataSignature({
+        id: String(task.routed_task_id || ''),
+        compact: Boolean(compact),
+        status: String(task.status || ''),
+        updatedAt: String(task.updated_at || ''),
+        createdAt: String(task.created_at || ''),
+        title: String(task.title || task.routed_task_id || ''),
+        summary: String(task.summary || task.result_summary || task.result_text || task.instructions || ''),
+        target: String(task.target_display_name || task.target_agent_id || ''),
+    });
 
     const header = document.createElement('div');
     header.className = 'conversation-task-card-header';

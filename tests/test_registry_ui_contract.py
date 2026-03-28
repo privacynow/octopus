@@ -76,3 +76,21 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "Task thread" in agent_detail
     assert "No direct conversations." in agent_detail
     assert "agent-task-threads-list" in agent_detail
+
+
+def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "onBeforeElUpdated" in helper
+    assert "fromEl.dataset.signature === toEl.dataset.signature" in helper
+    assert "signature: rowSignature" in conversation_list
+    assert "item.dataset.signature" in task_list

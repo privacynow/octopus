@@ -171,6 +171,14 @@ function renderAgentList(container) {
             const shell = document.createElement('div');
             shell.className = 'list-row-shell';
             shell.dataset.key = agent.agent_id;
+            shell.dataset.signature = UI.dataSignature({
+                id: String(agent.agent_id || ''),
+                display: String(agent.display_name || agent.slug || ''),
+                state: String(agent.connectivity_state || ''),
+                heartbeat: String(agent.last_heartbeat_at || ''),
+                role: String(agent.role || ''),
+                provider: String(agent.provider || ''),
+            });
 
             const sub = document.createElement('span');
             sub.textContent = [

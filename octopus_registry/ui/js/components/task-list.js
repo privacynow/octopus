@@ -235,6 +235,17 @@ function renderTaskList(container) {
         const item = document.createElement('article');
         item.className = 'task-item';
         item.dataset.key = task.routed_task_id;
+        item.dataset.signature = UI.dataSignature({
+            id: String(task.routed_task_id || ''),
+            status: String(task.status || ''),
+            updatedAt: String(task.updated_at || ''),
+            createdAt: String(task.created_at || ''),
+            title: String(_taskLabel(task) || ''),
+            summary: String(_taskSummary(task) || ''),
+            origin: String(task.origin_display_name || task.origin_agent_id || ''),
+            target: String(task.target_display_name || task.target_agent_id || ''),
+            conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
+        });
 
         const row = document.createElement('button');
         row.type = 'button';

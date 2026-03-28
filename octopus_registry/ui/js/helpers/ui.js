@@ -193,11 +193,14 @@ window.UI = (() => {
         });
     }
 
-    function renderListRow({ href, label, sublabel, sublabelNode, badgeText, badgeClass, onClick, trailing, className }) {
+    function renderListRow({ href, label, sublabel, sublabelNode, badgeText, badgeClass, onClick, trailing, className, signature }) {
         const isLink = !!href;
         const isAction = !href && typeof onClick === 'function';
         const row = document.createElement(isLink ? 'a' : isAction ? 'button' : 'div');
         row.className = ['list-row', className || ''].join(' ').trim();
+        if (signature) {
+            row.dataset.signature = signature;
+        }
         if (isLink) {
             row.href = href;
         } else if (isAction) {
@@ -410,6 +413,19 @@ window.UI = (() => {
             getNodeKey(node) {
                 if (!(node instanceof Element)) return undefined;
                 return (node.dataset && node.dataset.key) || node.id || undefined;
+            },
+            onBeforeElUpdated(fromEl, toEl) {
+                if (
+                    fromEl instanceof Element
+                    && toEl instanceof Element
+                    && fromEl.dataset
+                    && toEl.dataset
+                    && fromEl.dataset.signature
+                    && fromEl.dataset.signature === toEl.dataset.signature
+                ) {
+                    return false;
+                }
+                return true;
             },
         });
     }

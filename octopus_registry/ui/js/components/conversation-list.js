@@ -336,6 +336,16 @@ function renderConversationList(container) {
         }
 
         const rows = conversations.map((item) => {
+            const rowSignature = UI.dataSignature({
+                id: String(item.conversation_id || ''),
+                type: String(item.conversation_type || 'conversation'),
+                status: String(item.status || ''),
+                updatedAt: String(item.updated_at || ''),
+                createdAt: String(item.created_at || ''),
+                title: String(item.title || ''),
+                target: String(item.target_display_name || item.target_agent_id || ''),
+                origin: String(item.origin_channel || ''),
+            });
             const sub = document.createElement('span');
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
@@ -353,6 +363,7 @@ function renderConversationList(container) {
                 badgeClass: 'badge-' + (item.status || 'open'),
                 trailing: buildConversationTypeBadge(item),
                 className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
+                signature: rowSignature,
             });
             row.dataset.key = item.conversation_id;
             return row;

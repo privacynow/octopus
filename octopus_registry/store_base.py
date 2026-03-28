@@ -627,7 +627,7 @@ class AbstractRegistryStore(Protocol):
     ) -> ConversationRecord:
         """Create a new registry-originated conversation."""
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
         """Return the registry conversation index with offset-based pagination."""
 
     def get_conversation(self, conversation_id: str) -> ConversationRecord:
@@ -691,7 +691,7 @@ class AbstractRegistryStore(Protocol):
     def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         """Return paginated message events (message.user, message.bot) for a conversation."""
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[ConversationRecord]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
         """Return paginated conversations for a specific agent."""
 
     def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:

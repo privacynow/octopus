@@ -706,10 +706,20 @@ select {
     color: var(--text-muted);
 }
 
+.badge-task-thread {
+    background: rgba(32, 63, 108, 0.1);
+    border-color: rgba(32, 63, 108, 0.2);
+    color: #385e94;
+}
+
 [data-theme="dark"] .badge-completed,
 [data-theme="dark"] .badge-enabled,
 [data-theme="dark"] .badge-installed {
     color: #d9ece0;
+}
+
+[data-theme="dark"] .badge-task-thread {
+    color: #c8dcff;
 }
 
 .card,
@@ -779,6 +789,15 @@ select {
 .task-item-row:focus-visible,
 .settings-row:focus-within {
     background: var(--surface-hover);
+}
+
+.list-row-task-thread {
+    background: linear-gradient(90deg, rgba(32, 63, 108, 0.06), transparent 45%);
+}
+
+.list-row-task-thread .list-row-label::before {
+    content: "↳ ";
+    color: var(--text-muted);
 }
 
 .list-row-main,

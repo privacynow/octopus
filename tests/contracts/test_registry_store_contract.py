@@ -473,9 +473,39 @@ def test_create_routed_task_creates_recipient_conversation_projection(store):
     assert len(deliveries) == 1
     assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-recipient-projection"
     assert recipient_conversation.origin_channel == "registry"
+    assert recipient_conversation.conversation_type == "task_thread"
     assert events
     assert events[0].kind == "task.status"
     assert events[0].metadata["status"] == "queued"
+
+
+def test_list_conversations_can_filter_by_conversation_type(store):
+    _routed, origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id="task-filter-task-thread",
+    )
+    regular = store.create_conversation(
+        target_agent_id=target_id,
+        title="Regular conversation",
+        origin_channel="telegram",
+        external_conversation_ref="telegram:bot-filter:12345",
+    )
+
+    task_threads = store.list_conversations(
+        for_agent_id=target_id,
+        limit=25,
+        conversation_type="task_thread",
+    )
+    regular_only = store.list_conversations(
+        for_agent_id=target_id,
+        limit=25,
+        conversation_type="conversation",
+    )
+
+    assert all(item.conversation_type == "task_thread" for item in task_threads)
+    assert all(item.conversation_type == "conversation" for item in regular_only)
+    assert any(item.external_conversation_ref == "routed-task:task-filter-task-thread" for item in task_threads)
+    assert any(item.conversation_id == regular.conversation_id for item in regular_only)
 
 
 def test_create_routed_task_mirrors_parent_conversation_event(store):

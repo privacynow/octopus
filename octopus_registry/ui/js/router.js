@@ -48,13 +48,22 @@ const Router = (() => {
             }
         }
         // 404
-        _cleanup();
         if (!contentEl) contentEl = document.getElementById('content');
-        contentEl.textContent = '';
+        contentEl.classList.add('loading-route');
+        const inner = document.createElement('div');
+        inner.className = 'content-inner route-enter';
         const msg = document.createElement('div');
         msg.className = 'empty-state';
         msg.textContent = 'Page not found';
-        contentEl.appendChild(msg);
+        inner.appendChild(msg);
+        _cleanup();
+        contentEl.replaceChildren(inner);
+        requestAnimationFrame(() => {
+            contentEl.classList.remove('loading-route');
+            inner.classList.add('route-enter-active');
+            const main = document.getElementById('content');
+            if (main) main.focus();
+        });
     }
 
     function _cleanup() {
@@ -65,16 +74,14 @@ const Router = (() => {
     }
 
     function _render(renderFn, params) {
-        _cleanup();
         if (!contentEl) contentEl = document.getElementById('content');
         contentEl.classList.add('loading-route');
-        contentEl.textContent = '';
         const inner = document.createElement('div');
         inner.className = 'content-inner route-enter';
-        contentEl.appendChild(inner);
         const renderCleanup = window.UI && typeof UI.createCleanupBag === 'function'
             ? UI.createCleanupBag()
             : null;
+        let nextCleanup = null;
         try {
             if (renderCleanup && typeof UI.setActiveCleanupBag === 'function') {
                 UI.setActiveCleanupBag(renderCleanup);
@@ -82,9 +89,9 @@ const Router = (() => {
             const result = renderFn(inner, params);
             if (renderCleanup) {
                 if (typeof result === 'function') renderCleanup.add(result);
-                currentCleanup = () => renderCleanup.flush();
+                nextCleanup = () => renderCleanup.flush();
             } else if (typeof result === 'function') {
-                currentCleanup = result;
+                nextCleanup = result;
             }
         } catch (e) {
             if (renderCleanup) renderCleanup.flush();
@@ -109,6 +116,9 @@ const Router = (() => {
                 UI.setActiveCleanupBag(null);
             }
         }
+        _cleanup();
+        currentCleanup = nextCleanup;
+        contentEl.replaceChildren(inner);
         requestAnimationFrame(() => {
             contentEl.classList.remove('loading-route');
             inner.classList.add('route-enter-active');

@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     conversation_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
+    conversation_type TEXT NOT NULL DEFAULT 'conversation',
     origin_channel TEXT NOT NULL DEFAULT '',
     external_conversation_ref TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open',
@@ -392,6 +393,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if "management_capabilities_json" not in agent_columns:
                 conn.execute(
                     "ALTER TABLE agents ADD COLUMN management_capabilities_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            conversation_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+            }
+            if "conversation_type" not in conversation_columns:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN conversation_type TEXT NOT NULL DEFAULT 'conversation'"
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
@@ -1177,6 +1186,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         *,
         target_agent_id: str,
         title: str,
+        conversation_type: str = "conversation",
         origin_channel: str,
         external_conversation_ref: str,
         now: str,
@@ -1197,14 +1207,24 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         conn.execute(
             """
             INSERT INTO conversations (
-                conversation_id, target_agent_id, title, origin_channel,
+                conversation_id, target_agent_id, title, conversation_type, origin_channel,
                 external_conversation_ref, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
             ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
                 title = excluded.title,
+                conversation_type = excluded.conversation_type,
                 updated_at = excluded.updated_at
             """,
-            (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
+            (
+                conversation_id,
+                target_agent_id,
+                title,
+                conversation_type,
+                origin_channel,
+                external_conversation_ref,
+                now,
+                now,
+            ),
         )
         row = conn.execute(
             """
@@ -1229,6 +1249,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn,
             target_agent_id=request.target_agent_id,
             title=request.title,
+            conversation_type="task_thread",
             origin_channel="registry",
             external_conversation_ref=external_conversation_ref,
             now=now,
@@ -2014,13 +2035,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 conn,
                 target_agent_id=target_agent_id,
                 title=title,
+                conversation_type="conversation",
                 origin_channel=origin_channel,
                 external_conversation_ref=external_conversation_ref,
                 now=now,
             )
         return self.get_conversation(actual_id)
 
-    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
+    def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
         # When a search query is provided (>= 3 chars), use FTS-based search
         if q and len(q) >= 3:
@@ -2039,6 +2061,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 if status:
                     where_clauses.append("c.status = ?")
                     params.append(status)
+                if conversation_type:
+                    where_clauses.append("c.conversation_type = ?")
+                    params.append(conversation_type)
                 where_sql = " WHERE " + " AND ".join(where_clauses)
                 sql = f"""
                     SELECT
@@ -2074,6 +2099,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 if status:
                     where_clauses_list.append("c.status = ?")
                     params_list.append(status)
+                if conversation_type:
+                    where_clauses_list.append("c.conversation_type = ?")
+                    params_list.append(conversation_type)
                 if where_clauses_list:
                     sql += " WHERE " + " AND ".join(where_clauses_list)
                 sql += """
@@ -2089,6 +2117,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "target_agent_id": row["target_agent_id"],
                 "target_display_name": row["target_name"] or "",
                 "title": row["title"],
+                "conversation_type": row["conversation_type"] or "conversation",
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -2150,6 +2179,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "target_display_name": row["target_name"] or "",
             "target_name": row["target_name"] or "",
             "title": row["title"],
+            "conversation_type": row["conversation_type"] or "conversation",
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -3210,27 +3240,33 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             {"events": _records(EventRecord, events_list), "next_cursor": next_cursor},
         )
 
-    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50) -> list[ConversationRecord]:
+    def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
         effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT c.*, a.display_name AS target_name
                 FROM conversations c
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 WHERE c.target_agent_id = ?
+            """
+            params: list[object] = [effective_agent_id]
+            if conversation_type:
+                sql += " AND c.conversation_type = ?"
+                params.append(conversation_type)
+            sql += """
                 ORDER BY c.updated_at DESC
                 LIMIT ? OFFSET ?
-                """,
-                (effective_agent_id, fetch_limit, cursor),
-            ).fetchall()
+            """
+            params.extend([fetch_limit, cursor])
+            rows = conn.execute(sql, params).fetchall()
         return _records(ConversationRecord, [
             {
                 "conversation_id": row["conversation_id"],
                 "target_agent_id": row["target_agent_id"],
                 "target_display_name": row["target_name"] or "",
                 "title": row["title"],
+                "conversation_type": row["conversation_type"] or "conversation",
                 "origin_channel": row["origin_channel"],
                 "status": row["status"],
                 "created_at": row["created_at"],

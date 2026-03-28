@@ -39,6 +39,7 @@ from octopus_sdk.identity import (
     conversation_key_for_ref,
     delegation_session_key,
     resolve_delegation_parent_identity,
+    telegram_chat_id_from_ref,
 )
 from octopus_sdk.inbound_types import (
     InboundAction,
@@ -149,6 +150,7 @@ def build_registry_message_delivery(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    source_transport: str = "registry",
 ) -> tuple[str, str, str, str]:
     envelope = build_registry_message_envelope(
         conversation_ref=conversation_ref,
@@ -161,6 +163,7 @@ def build_registry_message_delivery(
         skip_approval=skip_approval,
         conversation_key_override=conversation_key_override,
         authorized_actor_key=authorized_actor_key,
+        source_transport=source_transport,
     )
     payload = serialize_inbound(envelope.event)
     return envelope.conversation_key, envelope.actor_key, envelope.event_id, payload
@@ -178,9 +181,11 @@ def build_registry_message_envelope(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    source_transport: str = "registry",
 ) -> InboundEnvelope:
     if not registry_id:
         raise ValueError("Registry message delivery requires an explicit registry_id")
+    source_transport = str(source_transport or "registry").strip() or "registry"
     conversation_key = conversation_key_override or conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
@@ -189,8 +194,8 @@ def build_registry_message_envelope(
         conversation_key=conversation_key,
         text=text,
         attachments=(),
-        source="registry",
-        transport="registry",
+        source=source_transport,
+        transport=source_transport,
         conversation_ref=conversation_ref,
         external_conversation_ref=external_conversation_ref,
         routed_task_id=routed_task_id,
@@ -199,7 +204,7 @@ def build_registry_message_envelope(
         skip_approval=skip_approval,
     )
     return InboundEnvelope(
-        transport="registry",
+        transport=source_transport,
         event_id=event_id,
         conversation_key=conversation_key,
         actor_key=actor_key,
@@ -207,6 +212,13 @@ def build_registry_message_envelope(
         event=event,
         conversation_ref=conversation_ref,
     )
+
+
+def _transport_for_conversation_ref(conversation_ref: str) -> str:
+    token = str(conversation_ref or "").strip()
+    if not token or ":" not in token:
+        return "registry"
+    return token.split(":", 1)[0] or "registry"
 
 
 def build_registry_action_envelope(
@@ -271,6 +283,8 @@ async def admit_registry_delivery(
         conversation_ref = qualify_registry_conversation_ref(registry_id, str(payload["conversation_id"]))
         stable_event_id = str(payload.get("stable_event_id", "") or "")
         effective_delivery_id = stable_event_id if stable_event_id else delivery_id
+        # Registry UI input originates from the registry surface, so these remain
+        # registry envelopes even when the conversation later mirrors elsewhere.
         envelope = build_registry_message_envelope(
             conversation_ref=conversation_ref,
             text=payload.get("text", ""),
@@ -324,6 +338,8 @@ async def admit_registry_delivery(
             shared_key = delegation_session_key(origin_agent_id, parent_conversation_id)
         else:
             shared_key = ""
+        # Routed task deliveries originate from the registry and intentionally
+        # enter the worker through the registry transport.
         envelope = build_registry_message_envelope(
             conversation_ref=conversation_ref,
             conversation_key_override=shared_key,
@@ -513,7 +529,7 @@ async def handle_registry_delivery(
             config=config,
             bot=runtime.bot,
             conversation_key=parent_conversation_key,
-            source="registry",
+            source=_transport_for_conversation_ref(parent_target_ref),
         ):
             return "retry_later"
         applied = apply_runtime_delegation_result(
@@ -538,6 +554,7 @@ async def handle_registry_delivery(
         resume_delivery_id = (
             f"delegation-resume:{parent_target_ref}:{int(applied.pending.created_at * 1000)}"
         )
+        resume_transport = _transport_for_conversation_ref(parent_target_ref)
         envelope = build_registry_message_envelope(
             conversation_ref=parent_target_ref,
             text=continuation_text,
@@ -547,6 +564,7 @@ async def handle_registry_delivery(
             registry_id=registry_id,
             skip_approval=True,
             conversation_key_override=parent_conversation_key,
+            source_transport=resume_transport,
         )
         submission = await submitter.admit_message(envelope)
         admit_status = submission.status
@@ -558,8 +576,9 @@ async def handle_registry_delivery(
                 config=config,
                 bot=runtime.bot,
                 conversation_key=parent_conversation_key,
-                source="registry",
+                source=resume_transport,
                 external_id=parent_external_conversation_ref or parent_target_ref,
+                chat_id=telegram_chat_id_from_ref(parent_target_ref),
             )
             if not parent_target_ref.startswith("registry:"):
                 try:

@@ -657,6 +657,7 @@ def resource_agent_conversations(
     agent_id: str,
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    conversation_type: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -666,6 +667,7 @@ def resource_agent_conversations(
         for_agent_id=_scoped_agent_id(auth),
         cursor=cursor,
         limit=limit,
+        conversation_type=conversation_type,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 
@@ -677,6 +679,7 @@ def resource_list_conversations(
     limit: int = Query(default=25, ge=1, le=100),
     q: str = Query(default=""),
     status: str = Query(default=""),
+    conversation_type: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -686,6 +689,7 @@ def resource_list_conversations(
         limit=limit,
         q=q,
         status=status,
+        conversation_type=conversation_type,
     )
     return _json_payload(_paginated_response("conversations", conversations, cursor, limit))
 

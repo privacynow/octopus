@@ -12,6 +12,16 @@ function renderAgentDetail(container, params) {
     let agentDisplayName = '';
     let openConversationBusy = false;
 
+    function buildConversationTypeBadge(item) {
+        if (String(item.conversation_type || 'conversation') !== 'task_thread') {
+            return null;
+        }
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-task-thread';
+        badge.textContent = 'Task thread';
+        return badge;
+    }
+
     const header = document.createElement('header');
     header.className = 'workspace-header workspace-header-compact';
     container.appendChild(header);
@@ -200,15 +210,18 @@ function renderAgentDetail(container, params) {
         const rows = conversations.map((item) => {
             const sub = document.createElement('span');
             sub.textContent = [
+                item.conversation_type === 'task_thread' ? 'task thread' : '',
                 item.origin_channel || 'registry',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].filter(Boolean).join(' · ');
             const row = UI.renderListRow({
                 href: '/ui/conversations/' + item.conversation_id,
-                label: item.title || 'Conversation',
+                label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : 'Conversation'),
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
+                trailing: buildConversationTypeBadge(item),
+                className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
             });
             row.dataset.key = item.conversation_id;
             return row;

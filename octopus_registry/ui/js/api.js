@@ -143,6 +143,7 @@ const API = (() => {
                 const conversations = existing.conversations || existing || [];
                 const registryOpen = conversations.find((item) =>
                     ['open', 'running'].includes(String(item.status || ''))
+                    && String(item.conversation_type || 'conversation') === 'conversation'
                     && String(item.origin_channel || '') === 'registry'
                 );
                 if (registryOpen) {
@@ -150,6 +151,7 @@ const API = (() => {
                 }
                 const anyOpen = conversations.find((item) =>
                     ['open', 'running'].includes(String(item.status || ''))
+                    && String(item.conversation_type || 'conversation') === 'conversation'
                 );
                 if (anyOpen) {
                     return anyOpen;

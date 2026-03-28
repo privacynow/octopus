@@ -4,6 +4,11 @@
 function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
     const QUICK_START_INLINE_LIMIT = 8;
+    const CONVERSATION_TYPES = [
+        ['all', '', 'All'],
+        ['conversation', 'conversation', 'Conversations'],
+        ['task_thread', 'task_thread', 'Task threads'],
+    ];
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
@@ -14,6 +19,7 @@ function renderConversationList(container) {
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
+    let currentType = UI.readQueryParam('type', '');
     let searchTimeout = null;
     let hasLoaded = false;
     let quickStartLoaded = false;
@@ -50,6 +56,12 @@ function renderConversationList(container) {
     statusBar.setAttribute('aria-label', 'Conversation status filter');
     controls.appendChild(statusBar);
 
+    const typeBar = document.createElement('div');
+    typeBar.className = 'segmented-control';
+    typeBar.setAttribute('role', 'tablist');
+    typeBar.setAttribute('aria-label', 'Conversation type filter');
+    controls.appendChild(typeBar);
+
     const statuses = [
         ['all', '', 'All'],
         ['open', 'open', 'Open'],
@@ -63,7 +75,16 @@ function renderConversationList(container) {
         cursor = 0;
         cursorStack = [];
         syncStatusButtons();
-        UI.updateQueryParams({ q: currentQ, status: currentStatus });
+        UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
+        loadPage();
+    }
+
+    function applyType(value) {
+        currentType = value;
+        cursor = 0;
+        cursorStack = [];
+        syncTypeButtons();
+        UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
         loadPage();
     }
 
@@ -82,6 +103,22 @@ function renderConversationList(container) {
         statusBar.appendChild(btn);
     });
     UI.bindSegmentedControlKeyboard(statusBar, (target) => applyStatus(target.dataset.value || ''));
+
+    CONVERSATION_TYPES.forEach(([key, value, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'segmented-control-btn';
+        btn.dataset.key = key;
+        btn.dataset.value = value;
+        btn.textContent = label;
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', String(currentType === value));
+        btn.tabIndex = currentType === value ? 0 : -1;
+        if (currentType === value) btn.classList.add('active');
+        btn.addEventListener('click', () => applyType(value));
+        typeBar.appendChild(btn);
+    });
+    UI.bindSegmentedControlKeyboard(typeBar, (target) => applyType(target.dataset.value || ''));
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
@@ -103,7 +140,7 @@ function renderConversationList(container) {
             currentQ = searchInput.value.trim();
             cursor = 0;
             cursorStack = [];
-            UI.updateQueryParams({ q: currentQ, status: currentStatus });
+            UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
             loadPage();
         }, 250);
     });
@@ -116,6 +153,26 @@ function renderConversationList(container) {
             btn.setAttribute('aria-selected', String(active));
             btn.tabIndex = active ? 0 : -1;
         });
+    }
+
+    function syncTypeButtons() {
+        typeBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+            const match = CONVERSATION_TYPES.find(([key]) => key === btn.dataset.key);
+            const active = !!match && currentType === match[1];
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-selected', String(active));
+            btn.tabIndex = active ? 0 : -1;
+        });
+    }
+
+    function buildConversationTypeBadge(item) {
+        if (String(item.conversation_type || 'conversation') !== 'task_thread') {
+            return null;
+        }
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-task-thread';
+        badge.textContent = 'Task thread';
+        return badge;
     }
 
     function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
@@ -236,16 +293,19 @@ function renderConversationList(container) {
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
             if (targetLabel) parts.push(targetLabel);
+            if (item.conversation_type === 'task_thread') parts.push('task thread');
             if (item.origin_channel) parts.push(item.origin_channel);
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
             sub.textContent = parts.join(' · ');
 
             const row = UI.renderListRow({
                 href: '/ui/conversations/' + item.conversation_id,
-                label: item.title || targetLabel || 'Untitled conversation',
+                label: item.title || (item.conversation_type === 'task_thread' ? 'Task thread' : targetLabel) || 'Untitled conversation',
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
+                trailing: buildConversationTypeBadge(item),
+                className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
             });
             row.dataset.key = item.conversation_id;
             return row;
@@ -276,6 +336,7 @@ function renderConversationList(container) {
         const params = { cursor, limit };
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;
+        if (currentType) params.conversation_type = currentType;
         API.listConversations(params).then((data) => {
             renderRows(data.conversations || data || [], data);
         }).catch((err) => {
@@ -300,6 +361,7 @@ function renderConversationList(container) {
     }));
 
     syncStatusButtons();
+    syncTypeButtons();
     loadQuickStart();
     loadPage();
 

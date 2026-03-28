@@ -274,6 +274,7 @@ class ConversationRecord(RegistryRecordModel):
     conversation_id: str = ""
     target_agent_id: str = ""
     title: str = ""
+    conversation_type: str = "conversation"
     origin_channel: str = ""
     external_conversation_ref: str = ""
     status: str = ""

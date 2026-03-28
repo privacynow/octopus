@@ -139,6 +139,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "conversation_id",
             "target_agent_id",
             "title",
+            "conversation_type",
             "origin_channel",
             "external_conversation_ref",
             "status",
@@ -281,6 +282,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
     assert defaults[("agents", "registry_scope")].startswith("'full'")
     assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
+    assert defaults[("conversations", "conversation_type")].startswith("'conversation'")
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")
     assert "jsonb" in defaults[("events", "metadata_json")]
 

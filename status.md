@@ -223,6 +223,34 @@ Rules followed:
 - [x] 12F-3: `WorkflowComposition.deferred_notifications` is structurally non-None through composition/build paths
 - [x] 12F-4: Full end-to-end deferred-notification integration coverage proves enqueue → next interaction flush → consume-once
 
+## Phase 12G: Resume envelope transport identity
+
+- [x] 12G-1: `build_registry_message_envelope()` accepts `source_transport` and preserves target transport identity on the envelope
+- [x] 12G-2: Routed-result resume builds transport-native envelopes from `parent_transport_ref` and only falls back to registry for registry parents
+- [x] 12G-3: `telegram_execution.py` treats envelope transport/source as authoritative and resolves Telegram resumes even when `chat_id` arrives as a string
+- [x] 12G-4: Registry-origin `channel_input` / `routed_task` admissions remain registry envelopes and are explicitly documented as such in the delivery transport
+- [x] 12G-5: Automated tests prove Telegram-originated routed-result resume envelopes carry `source="telegram"`, `transport="telegram"`, numeric chat identity, and route to Telegram egress
+- [x] 12G-6: Automated tests preserve registry/non-Telegram resume behavior with transport-matched envelopes and no registry-only regression
+- [ ] 12G-7: Manual live Telegram acceptance test: operator sends delegation from M1 Telegram chat → M2 completes → M1 Telegram chat receives the resumed reply in the same thread
+
+## Phase 12H: Recipient task thread UI presentation
+
+- [x] 12H-1: Add `conversation_type` to SQLite, Postgres, and Postgres migration SQL
+- [x] 12H-2: Recipient routed-task projection is stored with `conversation_type="task_thread"`
+- [x] 12H-3: Store list/get serialization returns `conversation_type`
+- [x] 12H-4: Conversation list renders task threads with a distinct badge/visual treatment
+- [x] 12H-5: Agent detail conversation list renders task threads distinctly
+- [x] 12H-6: Conversation list filter exists for `All` / `Conversations` / `Task threads`
+- [x] 12H-7: Store/service/UI contract tests prove typed recipient projections, filtering, and distinct rendering markers
+
+## Phase 12I: Router route-transition smoothness
+
+- [x] 12I-1: Router no longer clears `#content` before mounting the next route shell; it atomically swaps with `replaceChildren`
+- [x] 12I-2: 404 path uses the same atomic swap pattern
+- [x] 12I-3: `loading-route` is applied while the old content remains mounted, not to a blank container
+- [x] 12I-4: View skeletons render inside a stable route shell instead of replacing the shell
+- [ ] 12I-5: Visual/manual route-transition check (dashboard → tasks → conversations → agent detail) confirms no blank flash between views
+
 ## Hard exit criteria
 
 - [x] 1. Three packages exist: `octopus_sdk/`, `octopus_registry/`, `app/`.
@@ -266,26 +294,31 @@ Rules followed:
 - [x] 39. Full direct-assign round-trip integration test exists and passes.
 - [x] 40. `WorkflowComposition.deferred_notifications` cannot be `None` through any construction path.
 - [x] 41. Full end-to-end deferred notification integration test exists and passes.
-- [x] 42. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
-- [x] 43. Every file moved from `app/` is deleted in the same change.
-- [x] 44. No exit criterion was weakened, qualified, or removed in this execution pass.
+- [x] 42. Resume envelope for cross-transport delegation has `source` and `transport` matching the parent transport; Telegram execution routes the resume to Telegram egress.
+- [x] 43. Recipient task threads are visually distinguishable from regular conversations in the registry UI. `conversation_type` exists and filters separate them.
+- [x] 44. Router code no longer blanks the content container before route mount; route shells swap atomically via `replaceChildren`.
+- [x] 45. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
+- [x] 46. Every file moved from `app/` is deleted in the same change.
+- [x] 47. No exit criterion was weakened, qualified, or removed in this execution pass.
 
 ## Review log
 
-- [x] Review pass 1: audited Phase 12A-12F SDK/store/runtime/delivery changes against the updated immutable plan before final verification
-- [x] Review pass 2: audited hard exits 1-44 against the final tree after verification, reconciled stale `status.md` numbering with the current plan, and rechecked the new cursor/validation/deferred-notification gates against code plus tests
+- [x] Review pass 1: audited the updated 12G/12H/12I plan sections against the live code paths before making changes; confirmed the remaining gaps were transport-native resume identity, conversation typing through store/API/UI, and router atomic swaps.
+- [x] Review pass 2: audited the modified tree after focused verification; rechecked delivery transport, Telegram execution, store/schema propagation, UI rendering/filtering, and router transitions against hard exits 42-47.
 
 ## Current verification
 
-- Focused Phase 12E/12F slice:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/contracts/test_registry_store_contract.py tests/test_orchestration.py octopus_sdk/tests/test_wiring_verification.py tests/test_sdk_composition.py`
-  - Result: `176 passed`
-- Broader registry/SDK verification:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_service.py tests/test_agents.py tests/contracts/test_registry_store_contract.py tests/test_orchestration.py octopus_sdk/tests/test_wiring_verification.py tests/test_sdk_composition.py tests/test_telegram_delegation_channel.py tests/test_registry_sdk_contract.py tests/test_registry_authority_contract.py tests/test_registry_management_protocol.py`
-  - Result: `273 passed`
+- Focused Phase 12G/12H/12I slice:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_runtime_dispatch_boundary.py tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_db_postgres.py tests/test_registry_ui_contract.py`
+  - Result: `237 passed`
 - Registry/API audit:
   - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_service.py tests/test_registry_management_protocol.py tests/test_registry_authority_contract.py tests/test_registry_sdk_contract.py tests/test_registry_adapter.py tests/test_registry_mirroring.py tests/contracts/test_registry_store_contract.py`
-  - Result: `213 passed`
+  - Result: `216 passed`
+- UI asset syntax checks:
+  - `node --check octopus_registry/ui/js/router.js`
+  - `node --check octopus_registry/ui/js/components/conversation-list.js`
+  - `node --check octopus_registry/ui/js/components/agent-detail.js`
+  - Result: all passed
 - Full suite:
   - `./.venv/bin/python -m pytest -q -n 0 tests octopus_sdk/tests`
-  - Result: `2154 passed, 1 skipped`
+  - Result: `2160 passed, 1 skipped`

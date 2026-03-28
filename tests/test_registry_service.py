@@ -1952,6 +1952,62 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert routed_result["payload"]["parent_external_conversation_ref"] == "conv-1"
 
 
+def test_registry_conversation_endpoints_expose_and_filter_conversation_type(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot")
+    target_id, target_token = _enroll_and_register(client, "Target Bot", "target-bot")
+    regular = _create_conversation(
+        client,
+        target_token,
+        target_id,
+        "registry-conversation",
+        title="Regular conversation",
+        origin_channel="telegram",
+        external_conversation_ref="telegram:origin:12345",
+    )
+    routed = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-type-filter",
+            "parent_conversation_id": regular["conversation_id"],
+            "origin_transport_ref": "telegram:origin:12345",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Task projection",
+            "instructions": "Inspect routing.",
+        },
+    )
+    assert routed.status_code == 200
+
+    all_conversations = client.get(
+        "/v1/conversations",
+        headers={"Authorization": f"Bearer {target_token}"},
+    )
+    assert all_conversations.status_code == 200
+    assert any(item["conversation_type"] == "task_thread" for item in all_conversations.json()["conversations"])
+
+    task_threads = client.get(
+        "/v1/conversations",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"conversation_type": "task_thread"},
+    )
+    assert task_threads.status_code == 200
+    assert task_threads.json()["conversations"]
+    assert all(item["conversation_type"] == "task_thread" for item in task_threads.json()["conversations"])
+
+    agent_conversations = client.get(
+        f"/v1/agents/{target_id}/conversations",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"conversation_type": "task_thread"},
+    )
+    assert agent_conversations.status_code == 200
+    assert agent_conversations.json()["conversations"]
+    assert all(item["conversation_type"] == "task_thread" for item in agent_conversations.json()["conversations"])
+
+
 def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

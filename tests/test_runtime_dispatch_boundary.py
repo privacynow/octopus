@@ -492,6 +492,25 @@ def test_execution_channel_metadata_uses_registry_external_conversation_ref__bou
     assert metadata.external_conversation_ref == "registry-ui-conv-1"
 
 
+def test_execution_channel_metadata_honors_telegram_transport_for_string_chat_id() -> None:
+    with fresh_env():
+        runtime = current_runtime()
+        message = FakeMessage(chat=FakeChat(12345), text="hello")
+        message.transport = "telegram"
+        message.source = "telegram"
+        message.conversation_ref = "telegram:test-bot:12345"
+
+        metadata = execution_channel_metadata(
+            runtime,
+            message,
+            "12345",
+        )
+
+    assert metadata.origin_channel == "telegram"
+    assert metadata.conversation_key == "tg:12345"
+    assert metadata.external_conversation_ref == "12345"
+
+
 @pytest.mark.asyncio
 async def test_format_provider_error_returns_plain_text() -> None:
     text = await format_provider_error("<boom>", 1)

@@ -1793,7 +1793,7 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
             def __init__(self, egress: _FakeEgress) -> None:
                 self.egress = egress
                 self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str]] = []
+                self.created_refs: list[tuple[str, str, str, str]] = []
 
             def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
                 del config
@@ -1809,6 +1809,7 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
                         str(conversation_ref),
                         str(kwargs.get("conversation_key", "")),
                         str(kwargs.get("external_id", "")),
+                        str(kwargs.get("source", "")),
                     )
                 )
                 return self.egress
@@ -1875,7 +1876,7 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
 
         assert outcome == "accepted"
         assert dispatcher.ready_refs == [(parent_ref, parent_ref)]
-        assert dispatcher.created_refs == [(parent_ref, parent_ref, parent_ref)]
+        assert dispatcher.created_refs == [(parent_ref, parent_ref, parent_ref, "slack")]
         assert submitter.envelopes
         assert submitter.envelopes[0].conversation_ref == parent_ref
         assert submitter.envelopes[0].conversation_key == parent_ref
@@ -1911,7 +1912,7 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
             def __init__(self, egress: _FakeEgress) -> None:
                 self.egress = egress
                 self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str]] = []
+                self.created_refs: list[tuple[str, str, str, str]] = []
 
             def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
                 del config
@@ -1927,6 +1928,7 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
                         str(conversation_ref),
                         str(kwargs.get("conversation_key", "")),
                         str(kwargs.get("external_id", "")),
+                        str(kwargs.get("source", "")),
                     )
                 )
                 return self.egress
@@ -1993,10 +1995,14 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
 
         assert outcome == "accepted"
         assert dispatcher.ready_refs == [(parent_ref, parent_key)]
-        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref)]
+        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref, "telegram")]
         assert submitter.envelopes
         assert submitter.envelopes[0].conversation_ref == parent_ref
         assert submitter.envelopes[0].conversation_key == parent_key
+        assert submitter.envelopes[0].transport == "telegram"
+        assert submitter.envelopes[0].event.transport == "telegram"
+        assert submitter.envelopes[0].event.source == "telegram"
+        assert submitter.envelopes[0].event.chat_id == 12345
         assert egress.sent_texts
         assert "All delegated tasks completed" in egress.sent_texts[0]
         session = load_runtime_session(
@@ -2145,7 +2151,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             def __init__(self, egress: _FakeEgress) -> None:
                 self.egress = egress
                 self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str]] = []
+                self.created_refs: list[tuple[str, str, str, str]] = []
 
             def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
                 del config
@@ -2161,6 +2167,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
                         str(conversation_ref),
                         str(kwargs.get("conversation_key", "")),
                         str(kwargs.get("external_id", "")),
+                        str(kwargs.get("source", "")),
                     )
                 )
                 return self.egress
@@ -2190,10 +2197,14 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
 
         assert outcome == "accepted"
         assert dispatcher.ready_refs == [(parent_ref, parent_key)]
-        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref)]
+        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref, "telegram")]
         assert submitter.envelopes
         assert submitter.envelopes[0].conversation_ref == parent_ref
         assert submitter.envelopes[0].conversation_key == parent_key
+        assert submitter.envelopes[0].transport == "telegram"
+        assert submitter.envelopes[0].event.transport == "telegram"
+        assert submitter.envelopes[0].event.source == "telegram"
+        assert submitter.envelopes[0].event.chat_id == 12345
         assert egress.sent_texts
         assert "All delegated tasks completed" in egress.sent_texts[0]
 

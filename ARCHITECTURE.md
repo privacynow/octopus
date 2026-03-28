@@ -4,6 +4,14 @@ This document describes the current system shape in code: the deployment CLI,
 the application/runtime, the registry service and SPA, and the shared SDK that
 binds them together.
 
+The SDK-4 shape is now explicit:
+
+- `app/` is the shipped Telegram bot runtime and deployment CLI
+- `octopus_registry/` is the standalone management plane
+- `octopus_sdk/` is the shared runtime, workflow, transport, participant,
+  management, and authority layer
+- `octopus_sdk/testing/` is fenced test-only support for SDK wiring tests
+
 ## System Map
 
 Octopus is four cooperating systems:
@@ -55,11 +63,15 @@ flowchart TB
     sdk_runtime["sdk bot runtime"]
     sdk_transport["sdk transport contracts"]
     sdk_participant["sdk registry participant"]
+    sdk_management["sdk management protocol"]
+    sdk_composer["sdk workflow composer"]
     sdk_ports["sdk workflow and support ports"]
     sdk_provider["sdk provider contracts"]
     sdk_models["sdk registry and realtime models"]
+    sdk_testing["sdk testing fixtures"]
 
     registry_api["registry api and websocket"]
+    registry_management["registry management ingress"]
     registry_store["registry store"]
 
     cli --> main
@@ -74,14 +86,20 @@ flowchart TB
     bot_services --> app_workflows
     bot_services --> app_control
     bot_services --> app_providers
+    bot_services --> sdk_composer
     app_workflows --> sdk_ports
     app_control --> sdk_participant
     app_providers --> sdk_provider
     telegram_transport --> sdk_transport
     registry_transport --> sdk_transport
+    registry_api --> registry_management
+    registry_management --> sdk_management
+    registry_management --> registry_store
     registry_api --> registry_store
     registry_api --> sdk_models
     registry_store --> sdk_models
+    sdk_composer --> sdk_ports
+    sdk_testing -.-> sdk_composer
 ```
 
 ## Deployment And Process Model
@@ -148,10 +166,18 @@ split by responsibility:
   - service graph composition
   - registry participant composition
   - `BotRuntime` construction
+- `app/runtime/composition.py`
+  - app-side port wiring for the SDK-owned `WorkflowComposer`
 - `app/runtime/transport_builders.py`
   - Telegram transport registration
   - registry channel registration
   - registry delivery transport registration
+- `octopus_registry/main.py`
+  - standalone registry server entrypoint
+
+The registry server and bot runtime are separate deployable processes. The bot
+does not expose its own management HTTP API; the registry is the management
+plane and talks to connected bots over the SDK management protocol.
 
 ## SDK Surface
 
@@ -166,6 +192,7 @@ logic. Import direction is one-way:
 | Module | Owns |
 |---|---|
 | `octopus_sdk.registry.client` | async registry HTTP client |
+| `octopus_sdk.registry.management` | typed registry-management request/response protocol between the registry server and connected bots |
 | `octopus_sdk.registry.models` | agent enrollment, discovery, conversation create, routed-task, and timeline wire models |
 | `octopus_sdk.events` | stored conversation event contracts and metadata schemas |
 | `octopus_sdk.realtime` | websocket envelopes, collection invalidation topics, and progress payloads |
@@ -190,6 +217,8 @@ server does not define its own private wire types for these surfaces.
 | `octopus_sdk.health_publication` | live runtime health publication port |
 | `octopus_sdk.task_protocol` | routed-task lifecycle states, transitions, and idempotent transition validation |
 | `octopus_sdk.providers` | provider protocol and execution result/tool models |
+| `octopus_sdk.composition` | `WorkflowComposer` and SDK-owned workflow graph composition |
+| `octopus_sdk.testing` | fenced test-only in-memory queue/session implementations for SDK wiring verification |
 
 The architecture is intentionally split into three first-class SDK surfaces:
 
@@ -207,6 +236,26 @@ The registry server and bot runtime both consume SDK-owned contracts. The
 registry server does not define a second private wire model for participant
 flows, and transport implementations do not define their own coordination
 contract outside the SDK.
+
+### Workflow Composition And Testing Fence
+
+The SDK now owns workflow composition directly.
+
+- `octopus_sdk.composition.WorkflowComposer`
+  - assembles the full workflow graph from injected ports
+  - `build()` is for real runtimes and rejects test-only implementations
+  - `build_for_testing()` is the explicit SDK wiring-test path
+- `app/runtime/composition.py`
+  - remains as the app-side wrapper that supplies concrete app ports to the
+    SDK composer
+- `octopus_sdk/testing/`
+  - contains deliberately non-durable in-memory fixtures for SDK-only tests
+  - these are not runtime defaults and are not re-exported from
+    `octopus_sdk.__init__`
+- `octopus_sdk/tests/test_wiring_verification.py`
+  - proves that SDK workflows can be composed and exercised without importing
+    `app/` or `octopus_registry/`
+  - is a test harness, not a production runtime template
 
 Current ref families remain:
 
@@ -371,6 +420,7 @@ flowchart TD
     validate["startup validation and doctor checks"]
     build["build_runtime"]
     bot_services["build_bus_bot_services"]
+    workflow_comp["compose_workflows via WorkflowComposer"]
     transport_stack["build_runtime_transport_stack"]
     runtime["BotRuntime"]
     run["BotRuntime.run"]
@@ -383,8 +433,10 @@ flowchart TD
     load --> validate
     validate --> build
     build --> bot_services
+    build --> workflow_comp
     build --> transport_stack
     build --> runtime
+    workflow_comp --> runtime
     transport_stack --> dispatcher
     dispatcher --> telegram
     dispatcher --> registry_delivery
@@ -399,11 +451,11 @@ flowchart TD
 |---|---|---|
 | Telegram transport | `app/channels/telegram` | Telegram transport implementation, presenters, Telegram ingress normalization, and Telegram-specific rendering |
 | Registry bot transport | `app/channels/registry` | bot-side registry conversation/task transport implementations, registry egress, registry delivery transport |
-| Registry server | `octopus_registry` | registry HTTP routes, websocket manager, presenters, store/authority layer, management ingress, and the operator SPA |
+| Registry server | `octopus_registry` | standalone management-plane process: registry HTTP routes, websocket manager, presenters, store/authority layer, management ingress, and the operator SPA |
 | Agent runtime | `app/agents` | registry enrollment/state loops, delivery handling, delegation helpers, registry authority clients |
-| Runtime composition | `app/runtime` | profile validation, shared service composition, participant runtime, dispatcher, admission, runtime health |
+| Runtime composition | `app/runtime` | profile validation, shared service composition, participant runtime, transport stack assembly, runtime health, app-side workflow port wiring |
 | Providers | `app/providers` | Codex and Claude implementations over the SDK provider protocol |
-| Shared workflows | `octopus_sdk/workflows` | backend-neutral workflow implementations, workflow composition, and runtime/test utilities |
+| Shared workflows | `octopus_sdk/workflows` | backend-neutral workflow implementations used by both the bot runtime and registry management plane |
 | App workflows | `app/workflows` | Telegram-specific handlers only |
 | Control plane | `app/control_plane` | bus, adapters, processor runner, authority directory |
 | Registry persistence | `octopus_registry` | typed authority facade plus agent/event/task/approval/guidance/query stores |
@@ -436,12 +488,17 @@ The registry service spans:
 - `octopus_registry/store*.py`
 - `octopus_registry/ui/`
 
+The registry is the management plane. It is deployable on its own, and its
+management surfaces become meaningful when compatible bots connect to it. Bots
+do not expose their own browser UI or management API.
+
 ### API Surfaces
 
 | Surface | Purpose |
 |---|---|
 | Agent API | enroll/register/heartbeat/delivery/search/task flows for bots and processor/runtime code |
 | Resource API | `/v1/summary`, `/v1/agents`, `/v1/conversations`, `/v1/tasks`, `/v1/approvals`, `/v1/capabilities`, `/v1/usage`, skill catalog, guidance |
+| Management bridge | `octopus_registry.ingress` translates UI/API management requests into typed `octopus_sdk.registry.management` operations against connected bots |
 | Realtime API | `WS /v1/ws` for typed `event`, `heartbeat`, `progress`, and `invalidate` envelopes |
 | Operator SPA | browser UI under `/ui` |
 

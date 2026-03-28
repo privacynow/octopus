@@ -27,6 +27,23 @@ local registry.
 - Claude or Codex provider runtimes
 - SQLite by default, with optional Postgres for runtime and registry stores
 
+## Repo Layout
+
+The current codebase is split into four primary packages:
+
+- `app/`
+  - the shipped Telegram bot runtime and the `./octopus` deployment CLI
+- `octopus_registry/`
+  - the standalone registry management plane: API, websocket server, store,
+    presenters, and browser UI
+- `octopus_sdk/`
+  - shared runtime contracts, workflow implementations, registry protocols,
+    and composition helpers used by both the bot runtime and registry server
+- `octopus_sdk/testing/`
+  - test-only in-memory SDK fixtures used by wiring verification tests; these
+    are deliberately fenced away from runtime defaults and rejected by
+    `WorkflowComposer.build()`
+
 ## Quick Start
 
 1. Create a Telegram bot with `@BotFather` and copy the token.
@@ -133,10 +150,15 @@ CLI is intentionally local-first:
 
 ## Registry UI
 
-The operator UI under `octopus_registry/ui/` is a vanilla SPA with no framework or build step.
-It is designed as an operator console, not a generic admin panel: one left rail,
-one main work surface per route, compact metadata, and the same conversation
-and task model on desktop and mobile.
+The operator UI under `octopus_registry/ui/` is a vanilla SPA with no framework
+or build step. It is designed as an operator console, not a generic admin
+panel: one left rail, one main work surface per route, compact metadata, and
+the same conversation and task model on desktop and mobile.
+
+The registry is the management plane. Bots in `app/` do not expose their own
+operator HTTP API. Instead, the registry talks to connected bots over the typed
+management protocol in `octopus_sdk.registry.management`, and management
+capabilities light up when a compatible bot is connected.
 
 Current main routes:
 
@@ -193,10 +215,16 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
   - workflow composition
   - transport stack builders
   - `octopus_sdk.bot_runtime.BotRuntime`
+- `app/runtime/composition.py` is the app-side wrapper over
+  `octopus_sdk.composition.WorkflowComposer`; app code provides concrete ports,
+  the SDK owns the workflow graph
 - `app/runtime/transport_builders.py` registers Telegram plus registry-scoped
   delivery transports behind one dispatcher
 - once composition is complete, `BotRuntime.run()` owns transport startup,
   worker admission, claim processing, and shutdown
+- `octopus_registry/main.py` is the standalone registry server entrypoint
+- `octopus_registry/ingress.py` is the registry-side management adapter over
+  the typed bot-management protocol in `octopus_sdk.registry.management`
 - `.deploy/bots/<slug>/.env` and `.deploy/registry/.env` are operator-owned
   deployment state
 - runtime-owned bot identity and per-registry state live under
@@ -217,6 +245,20 @@ Delegation and routed work are now structured end to end:
   conversation actions
 - routed tasks use explicit lifecycle transitions such as `queued`, `leased`,
   `running`, `completed`, `failed`, `cancelled`, and `timed_out`
+
+## SDK Wiring Verification
+
+The SDK includes a dedicated wiring-verification test under
+`octopus_sdk/tests/test_wiring_verification.py`. It proves that SDK-owned
+workflow implementations can be composed without importing `app/` or
+`octopus_registry/`, but it is deliberately not a production template.
+
+- `WorkflowComposer.build()` rejects test-only implementations
+- `WorkflowComposer.build_for_testing()` is the explicit test-only path
+- `octopus_sdk/testing/` contains non-durable in-memory fixtures such as
+  `InMemoryWorkQueue` and `InMemorySessionStore`
+- those fixtures are not re-exported from `octopus_sdk/__init__.py`
+- app/runtime and registry code must not import `octopus_sdk.testing`
 
 ## Shared Workspaces
 

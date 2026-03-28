@@ -791,9 +791,6 @@ function renderConversationDetail(container, params) {
     }
 
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
-        if (activeView === 'tasks' && (!soft || !tasksLoaded)) {
-            UI.reconcileChildren(taskBoard, UI.createSkeletonNodes(4, 'card'));
-        }
         try {
             const data = await API.listTasks({
                 parent_conversation_id: convoId,
@@ -820,7 +817,6 @@ function renderConversationDetail(container, params) {
         hasMoreBefore = false;
         loadingOlder = false;
         historyStatus.textContent = '';
-        UI.reconcileChildren(eventList, UI.createSkeletonNodes(4, 'card'));
     }
 
     function updateHistoryStatus() {

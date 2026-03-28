@@ -53,6 +53,7 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         ).read_text(encoding="utf-8")
         assert marker in text, f"{name} must use sync shell rendering"
         assert "async function render" not in text, f"{name} must not use async route rendering"
+        assert "createSkeletonNodes" not in text, f"{name} must not render route-transition skeletons"
 
 
 def test_conversation_views_distinguish_task_threads() -> None:

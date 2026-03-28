@@ -29,11 +29,6 @@ function renderApprovalList(container) {
     pagEl.className = 'pagination-shell';
     shell.appendChild(pagEl);
 
-    function setLoading() {
-        UI.reconcileChildren(listEl, UI.createSkeletonNodes(4, 'card'));
-        UI.reconcileChildren(pagEl, []);
-    }
-
     function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
         const wrapper = document.createElement('div');
         UI.renderPagination(wrapper, {
@@ -173,7 +168,6 @@ function renderApprovalList(container) {
     }
 
     async function loadPage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) setLoading();
         try {
             const data = await API.listApprovals({ cursor, limit });
             renderRows(data);

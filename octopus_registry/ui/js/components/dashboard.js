@@ -233,9 +233,6 @@ function renderDashboard(container) {
     let hasLoaded = false;
 
     async function loadSummary({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(content, UI.createSkeletonNodes(5, 'card'));
-        }
         try {
             const [summary, approvals, conversations, failedTasks, runningTasks, agents] = await Promise.all([
             API.getSummary(),

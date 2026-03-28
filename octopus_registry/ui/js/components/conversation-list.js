@@ -262,9 +262,6 @@ function renderConversationList(container) {
     }
 
     async function loadQuickStart({ soft = false } = {}) {
-        if (!soft || !quickStartLoaded) {
-            UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
-        }
         try {
             const data = await API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 });
             const agents = data.agents || data || [];
@@ -330,10 +327,6 @@ function renderConversationList(container) {
     }
 
     async function loadPage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
-            UI.reconcileChildren(pagEl, []);
-        }
         const params = { cursor, limit };
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;

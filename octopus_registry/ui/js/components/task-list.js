@@ -395,9 +395,6 @@ function renderTaskList(container) {
     }
 
     async function loadSummary({ soft = false } = {}) {
-        if (!soft || !summaryLoaded) {
-            UI.reconcileChildren(summaryRail, UI.createSkeletonNodes(3, 'card'));
-        }
         try {
             const summary = await API.getSummary();
             renderSummary(summary);
@@ -412,10 +409,6 @@ function renderTaskList(container) {
     }
 
     async function loadList({ soft = false } = {}) {
-        if (!soft || !listLoaded) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'card'));
-            UI.reconcileChildren(pagEl, []);
-        }
         const params = { cursor, limit };
         if (currentStatus) params.status = currentStatus;
         try {

@@ -197,8 +197,9 @@ Conversation work now happens in one flow:
 
 Route changes now render the next route shell off-DOM and then swap it into
 `#content` in one operation, with old-route cleanup deferred until after the
-new shell mounts. That avoids intentional pre-clearing of the main content
-region.
+new shell mounts. Route components mount their static shell immediately and let
+the data regions fill in as the local registry responses arrive, instead of
+painting route-transition skeletons.
 
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.

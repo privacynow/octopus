@@ -151,10 +151,6 @@ function renderUsageView(container) {
     }
 
     async function loadUsage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(summaryEl, UI.createSkeletonNodes(3, 'card'));
-            UI.reconcileChildren(tableEl, UI.createSkeletonNodes(4, 'row'));
-        }
         try {
             const usage = await API.getUsage(_rangeToParams(currentRange));
             const daily = usage.daily_total || {};

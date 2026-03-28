@@ -198,10 +198,6 @@ function renderAgentList(container) {
     }
 
     async function loadPage({ soft = false } = {}) {
-        if (!soft || !hasLoaded) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
-            UI.reconcileChildren(pagEl, []);
-        }
         try {
             const data = await API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter });
             renderRows(data.agents || data || [], data.has_more, data.next_cursor);

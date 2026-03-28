@@ -132,7 +132,6 @@ function renderGuidanceEditor(container) {
             ]);
             return;
         }
-        UI.reconcileChildren(contentEl, UI.createSkeletonNodes(2, 'card'));
         try {
             const data = await API.getGuidance(currentAgentId, currentProvider);
             renderGuidanceContent(data.guidance || data);
@@ -144,7 +143,6 @@ function renderGuidanceEditor(container) {
     async function loadAgents({ soft = false } = {}) {
         if (!soft) {
             agentSelect.disabled = true;
-            UI.reconcileChildren(contentEl, UI.createSkeletonNodes(2, 'card'));
         }
         try {
             const data = await API.listAgents({ limit: 200 });

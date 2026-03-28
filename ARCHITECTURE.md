@@ -578,6 +578,9 @@ Important SPA primitives:
   - runs route cleanup after the new shell mounts, not before
   - keeps route rendering synchronous at the shell level; components hydrate
     their data after mounting
+  - route components do not paint first-mount skeleton cards/rows during route
+    transitions; static structure mounts first and local API data fills the
+    content regions as it arrives
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app

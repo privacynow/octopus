@@ -176,9 +176,6 @@ function renderSkillCatalog(container) {
             renderList();
             return;
         }
-        if (!soft || !allSkills.length) {
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
-        }
         try {
             const data = await API.listSkills(currentAgentId);
             allSkills = Array.isArray(data) ? data : (data.skills || []);
@@ -191,7 +188,6 @@ function renderSkillCatalog(container) {
     async function loadAgents({ soft = false } = {}) {
         if (!soft) {
             agentSelect.disabled = true;
-            UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
         }
         try {
             const data = await API.listAgents({ limit: 200 });

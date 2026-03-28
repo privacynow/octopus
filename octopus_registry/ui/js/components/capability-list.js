@@ -22,7 +22,6 @@ function renderCapabilityList(container) {
     listWrap.appendChild(listEl);
 
     async function loadCapabilities() {
-        UI.reconcileChildren(listEl, UI.createSkeletonNodes(4, 'row'));
         try {
             const caps = await API.listCapabilities();
             if (!caps || caps.length === 0) {

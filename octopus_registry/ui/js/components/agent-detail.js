@@ -29,7 +29,6 @@ function renderAgentDetail(container, params) {
     const content = document.createElement('div');
     content.className = 'agent-detail-grid';
     container.appendChild(content);
-    UI.reconcileChildren(content, UI.createSkeletonNodes(3, 'card'));
 
     function buildHeader(agent) {
         const titleRow = document.createElement('div');
@@ -303,10 +302,6 @@ function renderAgentDetail(container, params) {
         const list = document.getElementById('agent-conversations-list');
         const pag = document.getElementById('agent-conversations-pagination');
         if (!list || !pag) return;
-        if (!soft || !conversationsLoaded) {
-            UI.reconcileChildren(list, UI.createSkeletonNodes(4, 'row'));
-            UI.reconcileChildren(pag, []);
-        }
         try {
             const data = await API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit });
             renderConversationRows(data.conversations || data || [], data);
@@ -321,9 +316,6 @@ function renderAgentDetail(container, params) {
     }
 
     async function loadDetail({ soft = false } = {}) {
-        if (!soft || !detailLoaded) {
-            UI.reconcileChildren(content, UI.createSkeletonNodes(3, 'card'));
-        }
         try {
             const status = await API.getAgentStatus(agentId);
             if (!status) {

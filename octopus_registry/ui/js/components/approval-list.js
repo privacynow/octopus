@@ -7,6 +7,7 @@ function renderApprovalList(container) {
     let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let hasLoaded = false;
+    let lastApprovalSignature = '';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -43,9 +44,39 @@ function renderApprovalList(container) {
 
     function renderRows(data) {
         const approvals = data.approvals || data || [];
+        const signature = UI.dataSignature({
+            cursor,
+            hasMore: !!data.has_more,
+            nextCursor: data.next_cursor || 0,
+            approvals: approvals.map((item) => ({
+                id: String(item.request_id || item.approval_id || item.conversation_id || ''),
+                title: String(item.conversation_title || ''),
+                target: String(item.target_display_name || item.target_agent_id || ''),
+                requestKind: String(item.request_kind || ''),
+                createdAt: String(item.created_at || ''),
+                expiresAt: String(item.expires_at || ''),
+            })),
+        });
+        if (hasLoaded && signature === lastApprovalSignature) {
+            renderPaginationState({
+                hasPrev: cursorStack.length > 0,
+                hasNext: !!data.has_more,
+                onPrev: () => {
+                    cursor = cursorStack.pop() || 0;
+                    loadPage();
+                },
+                onNext: () => {
+                    cursorStack.push(cursor);
+                    cursor = data.next_cursor;
+                    loadPage();
+                },
+            });
+            return;
+        }
         if (!approvals.length) {
             UI.reconcileChildren(listEl, [UI.renderEmptyState('No approvals waiting.', true)]);
             UI.reconcileChildren(pagEl, []);
+            lastApprovalSignature = signature;
             return;
         }
 
@@ -165,6 +196,7 @@ function renderApprovalList(container) {
             },
         });
         hasLoaded = true;
+        lastApprovalSignature = signature;
     }
 
     async function loadPage({ soft = false } = {}) {
@@ -183,6 +215,7 @@ function renderApprovalList(container) {
 
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('approvals', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));

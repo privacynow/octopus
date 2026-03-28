@@ -542,7 +542,9 @@ Current realtime envelope types:
 
 The SPA is a vanilla JS application in `octopus_registry/ui/` and subscribes to explicit topics
 through `octopus_registry/ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
-topics; conversation detail also renders progress updates.
+topics; conversation detail also renders progress updates. Mounted routes debounce websocket
+bursts, skip unchanged payloads with view-level signatures, and suppress background-tab refresh
+churn instead of rebuilding visible DOM on every invalidate event.
 
 ### SPA Shell And Route Model
 
@@ -577,11 +579,12 @@ Important SPA primitives:
     promise before swapping it into `#content`
   - runs route cleanup after the new shell mounts, not before
   - keeps the previous route visible while the next route prepares
-  - shows only a delayed nav-level loading spinner when route preparation is
-    slow enough to notice
+  - updates nav state only after the new route is ready to mount
 - route components
   - publish an initial route-ready promise for their first real data load
   - do not paint first-mount skeleton cards/rows during route transitions
+  - keep initial shells static until real data is ready
+  - reconcile only the sections whose data actually changed during live refresh
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app

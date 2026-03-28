@@ -8,7 +8,6 @@ const Router = (() => {
     let contentEl = null;
     let currentCleanup = null;
     let renderSequence = 0;
-    let pendingRouteTimer = null;
 
     function register(pattern, render) {
         const paramNames = [];
@@ -44,8 +43,7 @@ const Router = (() => {
                 route.paramNames.forEach((name, i) => {
                     params[name] = decodeURIComponent(match[i + 1]);
                 });
-                _updateActiveNav(normalized);
-                void _render(route.render, params);
+                void _render(route.render, params, normalized);
                 return;
             }
         }
@@ -58,7 +56,7 @@ const Router = (() => {
         msg.className = 'empty-state';
         msg.textContent = 'Page not found';
         inner.appendChild(msg);
-        _swapMountedRoute(inner, renderId, null);
+        _swapMountedRoute(inner, renderId, null, normalized);
     }
 
     function _cleanup(cleanup = currentCleanup) {
@@ -82,37 +80,12 @@ const Router = (() => {
         inner.__routeCleanup = nextCleanup;
     }
 
-    function _setRoutePendingIndicator(active) {
-        document.querySelectorAll('.nav-links a.loading').forEach((link) => {
-            link.classList.remove('loading');
-            link.removeAttribute('aria-busy');
-        });
-        if (!active) {
-            if (contentEl) contentEl.removeAttribute('aria-busy');
-            return;
-        }
-        if (contentEl) contentEl.setAttribute('aria-busy', 'true');
-        const activeLink = document.querySelector('.nav-links a.active');
-        if (activeLink) {
-            activeLink.classList.add('loading');
-            activeLink.setAttribute('aria-busy', 'true');
-        }
-    }
-
-    function _clearPendingRouteIndicator() {
-        if (pendingRouteTimer) {
-            clearTimeout(pendingRouteTimer);
-            pendingRouteTimer = null;
-        }
-        _setRoutePendingIndicator(false);
-    }
-
     function _routeReadyPromise(inner) {
         const ready = inner.__routeReady;
         return ready && typeof ready.then === 'function' ? ready : Promise.resolve();
     }
 
-    function _swapMountedRoute(inner, renderId, nextCleanup) {
+    function _swapMountedRoute(inner, renderId, nextCleanup, activePath) {
         _prepareShell(inner, nextCleanup);
         if (!contentEl || renderId !== renderSequence) {
             _cleanup(nextCleanup);
@@ -122,10 +95,8 @@ const Router = (() => {
             ? contentEl.firstElementChild
             : null;
         contentEl.replaceChildren(inner);
-        contentEl.removeAttribute('aria-busy');
         currentCleanup = nextCleanup;
-        const main = document.getElementById('content');
-        if (main) main.focus();
+        _updateActiveNav(activePath);
         if (!previousShell) return;
         requestAnimationFrame(() => {
             if (renderId !== renderSequence) return;
@@ -152,10 +123,9 @@ const Router = (() => {
         inner.appendChild(errCard);
     }
 
-    async function _render(renderFn, params) {
+    async function _render(renderFn, params, activePath) {
         if (!contentEl) contentEl = document.getElementById('content');
         const renderId = ++renderSequence;
-        _clearPendingRouteIndicator();
         const inner = document.createElement('div');
         inner.className = 'content-inner';
         const renderCleanup = window.UI && typeof UI.createCleanupBag === 'function'
@@ -181,22 +151,12 @@ const Router = (() => {
                 UI.setActiveCleanupBag(null);
             }
         }
-        pendingRouteTimer = window.setTimeout(() => {
-            if (renderId !== renderSequence) return;
-            _setRoutePendingIndicator(true);
-        }, 500);
-        try {
-            await _routeReadyPromise(inner);
-        } finally {
-            if (renderId === renderSequence) {
-                _clearPendingRouteIndicator();
-            }
-        }
+        await _routeReadyPromise(inner);
         if (renderId !== renderSequence) {
             _cleanup(nextCleanup);
             return;
         }
-        _swapMountedRoute(inner, renderId, nextCleanup);
+        _swapMountedRoute(inner, renderId, nextCleanup, activePath);
     }
 
     function _updateActiveNav(path) {

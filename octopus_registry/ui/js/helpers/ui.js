@@ -384,6 +384,18 @@ window.UI = (() => {
         container.appendChild(nav);
     }
 
+    function dataSignature(value) {
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+
+    function isBackgrounded() {
+        return typeof document !== 'undefined' && Boolean(document.hidden);
+    }
+
     function reconcileChildren(container, nextNodes) {
         const target = container.cloneNode(false);
         Array.from(nextNodes || []).forEach((node) => {
@@ -551,6 +563,8 @@ window.UI = (() => {
         createSkeletonNodes,
         renderSkeletons,
         renderPagination,
+        dataSignature,
+        isBackgrounded,
         reconcileChildren,
         bindSegmentedControlKeyboard,
         createErrorCard,

@@ -24,6 +24,8 @@ function renderConversationList(container) {
     let hasLoaded = false;
     let quickStartLoaded = false;
     let openingConversationFor = '';
+    let lastQuickStartSignature = '';
+    let lastListSignature = '';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -188,6 +190,17 @@ function renderConversationList(container) {
     }
 
     function renderQuickStart(agents, { hasOverflow = false } = {}) {
+        const signature = UI.dataSignature({
+            hasOverflow: !!hasOverflow,
+            agents: (agents || []).map((agent) => ({
+                id: String(agent.agent_id || ''),
+                label: String(agent.display_name || agent.slug || agent.agent_id || ''),
+                state: String(agent.connectivity_state || ''),
+            })),
+        });
+        if (quickStartLoaded && signature === lastQuickStartSignature) {
+            return;
+        }
         const shell = document.createElement('div');
         shell.className = 'quickstart-shell';
         shell.dataset.key = 'quickstart-shell';
@@ -259,6 +272,7 @@ function renderConversationList(container) {
 
         shell.appendChild(row);
         UI.reconcileChildren(quickStart, [shell]);
+        lastQuickStartSignature = signature;
     }
 
     async function loadQuickStart({ soft = false } = {}) {
@@ -279,10 +293,45 @@ function renderConversationList(container) {
     }
 
     function renderRows(conversations, data) {
+        const signature = UI.dataSignature({
+            q: currentQ,
+            status: currentStatus,
+            type: currentType,
+            cursor,
+            hasMore: !!data.has_more,
+            nextCursor: data.next_cursor || 0,
+            conversations: (conversations || []).map((item) => ({
+                id: String(item.conversation_id || ''),
+                type: String(item.conversation_type || 'conversation'),
+                status: String(item.status || ''),
+                updatedAt: String(item.updated_at || ''),
+                createdAt: String(item.created_at || ''),
+                title: String(item.title || ''),
+                target: String(item.target_display_name || item.target_agent_id || ''),
+            })),
+        });
+        if (hasLoaded && signature === lastListSignature) {
+            renderPaginationState({
+                hasPrev: cursorStack.length > 0,
+                hasNext: !!data.has_more,
+                onPrev: () => {
+                    cursor = cursorStack.pop() || 0;
+                    loadPage();
+                },
+                onNext: () => {
+                    cursorStack.push(cursor);
+                    cursor = data.next_cursor;
+                    loadPage();
+                },
+            });
+            return;
+        }
+
         if (!conversations.length) {
             const emptyMessage = currentQ || currentStatus ? 'No conversations match this view.' : 'No conversations yet.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
             UI.reconcileChildren(pagEl, []);
+            lastListSignature = signature;
             return;
         }
 
@@ -324,6 +373,7 @@ function renderConversationList(container) {
             },
         });
         hasLoaded = true;
+        lastListSignature = signature;
     }
 
     async function loadPage({ soft = false } = {}) {
@@ -347,10 +397,12 @@ function renderConversationList(container) {
     let quickStartReload = null;
     let listReload = null;
     cleanups.add(WS.subscribe('agents', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(quickStartReload);
         quickStartReload = setTimeout(() => loadQuickStart({ soft: true }), 350);
     }));
     cleanups.add(WS.subscribe('conversations', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(listReload);
         listReload = setTimeout(() => loadPage({ soft: true }), 350);
     }));

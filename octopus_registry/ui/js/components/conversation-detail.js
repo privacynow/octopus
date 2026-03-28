@@ -32,9 +32,12 @@ function renderConversationDetail(container, params) {
     let relatedTasks = [];
     let tasksLoaded = false;
     let lastRelatedTaskSignature = '';
+    let lastTaskSummarySignature = '';
+    let lastMetaSignature = '';
     let suggestionMatches = [];
     let suggestionIndex = -1;
     let suggestionEngine = null;
+    let relatedTasksReloadDebounce = null;
 
     const page = document.createElement('section');
     page.className = 'conversation-page';
@@ -602,6 +605,21 @@ function renderConversationDetail(container, params) {
 
     function renderMetaCard(data) {
         meta = data;
+        const conversationWith = _visibleOperatorLabel(data.target_display_name, data.target_agent_id);
+        const assignedTo = _conversationAssignedTargetLabel(relatedTasks, conversationWith);
+        const metaSignature = UI.dataSignature({
+            title: String(data.title || convoId),
+            status: String(data.status || 'open'),
+            eventCount: Number(data.event_count || 0),
+            externalRef: String(data.external_conversation_ref || ''),
+            target: String(conversationWith || ''),
+            assignedTo: String(assignedTo || ''),
+            origin: String(data.origin_channel || 'registry'),
+            updatedAt: String(data.updated_at || ''),
+        });
+        if (metaSignature === lastMetaSignature) {
+            return;
+        }
         const title = data.title || convoId;
         const titleRow = document.createElement('div');
         titleRow.className = 'workspace-header-main';
@@ -626,8 +644,6 @@ function renderConversationDetail(container, params) {
         statements.className = 'meta-inline meta-inline-quiet';
 
         const metaParts = [];
-        const conversationWith = _visibleOperatorLabel(data.target_display_name, data.target_agent_id);
-        const assignedTo = _conversationAssignedTargetLabel(relatedTasks, conversationWith);
         if (conversationWith) {
             metaParts.push(`With ${conversationWith}`);
         }
@@ -705,6 +721,7 @@ function renderConversationDetail(container, params) {
         }
 
         UI.reconcileChildren(metaCard, [titleRow, metaRow, toolbar]);
+        lastMetaSignature = metaSignature;
     }
 
     function renderTaskSummaryStrip(tasks) {
@@ -715,8 +732,13 @@ function renderConversationDetail(container, params) {
             attention: tasks.filter((task) => ['failed', 'cancelled', 'timed_out'].includes(task.status || '')).length,
             done: tasks.filter((task) => task.status === 'completed').length,
         };
+        const summarySignature = UI.dataSignature(counts);
+        if (summarySignature === lastTaskSummarySignature) {
+            return;
+        }
         if (!tasks.length) {
             UI.reconcileChildren(taskSummaryStrip, []);
+            lastTaskSummarySignature = summarySignature;
             return;
         }
         const chips = [
@@ -733,10 +755,11 @@ function renderConversationDetail(container, params) {
             return chip;
         });
         UI.reconcileChildren(taskSummaryStrip, chips);
+        lastTaskSummarySignature = summarySignature;
     }
 
     function renderRelatedTasks(tasks) {
-        const nextSignature = JSON.stringify((tasks || []).map((task) => ({
+        const nextSignature = UI.dataSignature((tasks || []).map((task) => ({
             id: String(task.routed_task_id || ''),
             status: String(task.status || ''),
             updatedAt: String(task.updated_at || ''),
@@ -801,14 +824,20 @@ function renderConversationDetail(container, params) {
             if (meta) renderMetaCard(meta);
             if (activeView === 'tasks') {
                 renderRelatedTasks(relatedTasks);
-            } else if (eventList.childElementCount) {
-                reloadEvents();
             }
         } catch (err) {
             if (activeView === 'tasks' && !silent) {
                 UI.reconcileChildren(taskBoard, [UI.createErrorCard('Failed to load conversation tasks: ' + err.message, loadRelatedTasks)]);
             }
         }
+    }
+
+    function scheduleRelatedTasksRefresh() {
+        if (UI.isBackgrounded()) return;
+        clearTimeout(relatedTasksReloadDebounce);
+        relatedTasksReloadDebounce = setTimeout(() => {
+            void loadRelatedTasks({ soft: true, silent: true });
+        }, 350);
     }
 
     function clearTimelineForLoad() {
@@ -952,6 +981,7 @@ function renderConversationDetail(container, params) {
     }
 
     const unsub = WS.subscribe(`conversation:${convoId}`, (msg) => {
+        if (UI.isBackgrounded()) return;
         if (msg.type === 'progress' && msg.data) {
             showProgressBanner(msg.data.content || '');
             liveRegion.textContent = 'Agent progress update';
@@ -960,7 +990,7 @@ function renderConversationDetail(container, params) {
         if (msg.type !== 'event' || !msg.data) return;
         const event = msg.data;
         if (['delegation.proposed', 'delegation.submitted', 'delegation.completed', 'task.status'].includes(event.kind || '')) {
-            loadRelatedTasks({ soft: true });
+            scheduleRelatedTasksRefresh();
         }
         if (activeView === 'tasks') {
             if (meta) {
@@ -994,9 +1024,6 @@ function renderConversationDetail(container, params) {
         ) {
             liveRegion.textContent = `${_eventKindLabel(event.kind)} ${event.actor ? `from ${event.actor}` : ''}`;
         }
-        if (['delegation.submitted', 'delegation.completed', 'task.status'].includes(event.kind || '')) {
-            loadRelatedTasks({ soft: true, silent: true });
-        }
         if (
             event.kind === 'message.bot'
             || event.kind === 'error'
@@ -1020,6 +1047,7 @@ function renderConversationDetail(container, params) {
         initialLoads.push(reloadEvents());
     }
     cleanups.add(() => clearTimeout(progressTimer));
+    cleanups.add(() => clearTimeout(relatedTasksReloadDebounce));
     updateComposerAssist();
     container.__routeReady = Promise.allSettled(initialLoads);
 

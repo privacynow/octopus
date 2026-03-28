@@ -298,26 +298,6 @@ select {
     border-color: transparent;
 }
 
-.nav-links li a.loading::after {
-    content: "";
-    width: 12px;
-    height: 12px;
-    margin-left: auto;
-    border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--text-muted) 35%, transparent);
-    border-top-color: var(--accent);
-    animation: nav-route-spin 0.7s linear infinite;
-}
-
-@keyframes nav-route-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
 .sidebar-footer {
     padding: var(--space-4) var(--space-5) var(--space-5);
     border-top: 1px solid var(--border);

@@ -11,6 +11,7 @@ function renderAgentList(container) {
     let hasLoaded = false;
     let activeConversationOpen = '';
     let searchTimeout = null;
+    let lastListSignature = '';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -126,10 +127,43 @@ function renderAgentList(container) {
     }
 
     function renderRows(agents, hasMore, nextCursor) {
+        const signature = UI.dataSignature({
+            q: nameFilter,
+            state: stateFilter,
+            cursor,
+            hasMore: !!hasMore,
+            nextCursor: nextCursor || 0,
+            agents: (agents || []).map((agent) => ({
+                id: String(agent.agent_id || ''),
+                state: String(agent.connectivity_state || ''),
+                heartbeat: String(agent.last_heartbeat_at || ''),
+                display: String(agent.display_name || agent.slug || ''),
+                role: String(agent.role || ''),
+                provider: String(agent.provider || ''),
+            })),
+        });
+        if (hasLoaded && signature === lastListSignature) {
+            renderPaginationState({
+                hasPrev: cursorStack.length > 0,
+                hasNext: !!hasMore,
+                onPrev: () => {
+                    cursor = cursorStack.pop() || 0;
+                    loadPage();
+                },
+                onNext: () => {
+                    cursorStack.push(cursor);
+                    cursor = nextCursor;
+                    loadPage();
+                },
+            });
+            return;
+        }
+
         if (!agents.length) {
             const emptyMessage = nameFilter || stateFilter ? 'No agents match this view.' : 'No agents enrolled.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
             UI.reconcileChildren(pagEl, []);
+            lastListSignature = signature;
             return;
         }
 
@@ -195,6 +229,7 @@ function renderAgentList(container) {
                 loadPage();
             },
         });
+        lastListSignature = signature;
     }
 
     async function loadPage({ soft = false } = {}) {
@@ -214,6 +249,7 @@ function renderAgentList(container) {
 
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('agents', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));

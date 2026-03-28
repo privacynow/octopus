@@ -17,9 +17,11 @@ def test_router_waits_for_route_readiness_before_swapping_shells() -> None:
     assert "contentEl.replaceChildren(inner);" in text
     assert "requestAnimationFrame(() => {" in text
     assert "_cleanupShell(previousShell);" in text
-    assert "_setRoutePendingIndicator(true)" in text
-    assert "}, 500);" in text
     assert "route-shell" in text
+    assert "main.focus()" not in text
+    assert "loading').forEach" not in text
+    assert "_updateActiveNav(normalized);" not in text
+    assert "_updateActiveNav(activePath);" in text
     assert "incoming" not in text
     assert "outgoing" not in text
     assert "fade-in" not in text

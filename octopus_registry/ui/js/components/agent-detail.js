@@ -11,6 +11,8 @@ function renderAgentDetail(container, params) {
     let conversationsLoaded = false;
     let agentDisplayName = '';
     let openConversationBusy = false;
+    let lastDetailSignature = '';
+    let lastConversationSignature = '';
 
     function buildConversationTypeBadge(item) {
         if (String(item.conversation_type || 'conversation') !== 'task_thread') {
@@ -230,11 +232,46 @@ function renderAgentDetail(container, params) {
         const pag = document.getElementById('agent-conversations-pagination');
         if (!list || !taskList || !taskThreadsGroup || !pag) return;
 
+        const signature = UI.dataSignature({
+            cursor: convosCursor,
+            hasMore: !!data.has_more,
+            nextCursor: data.next_cursor || 0,
+            conversations: (conversations || []).map((item) => ({
+                id: String(item.conversation_id || ''),
+                type: String(item.conversation_type || 'conversation'),
+                status: String(item.status || ''),
+                updatedAt: String(item.updated_at || ''),
+                createdAt: String(item.created_at || ''),
+                title: String(item.title || ''),
+                origin: String(item.origin_channel || ''),
+            })),
+        });
+        if (conversationsLoaded && signature === lastConversationSignature) {
+            const wrapper = document.createElement('div');
+            UI.renderPagination(wrapper, {
+                hasPrev: convosCursorStack.length > 0,
+                hasNext: !!data.has_more,
+                info: '',
+                onPrev: () => {
+                    convosCursor = convosCursorStack.pop() || 0;
+                    loadConversations();
+                },
+                onNext: () => {
+                    convosCursorStack.push(convosCursor);
+                    convosCursor = data.next_cursor;
+                    loadConversations();
+                },
+            });
+            UI.reconcileChildren(pag, Array.from(wrapper.childNodes));
+            return;
+        }
+
         if (!conversations.length) {
             UI.reconcileChildren(list, [UI.renderEmptyState('No conversations.', true)]);
             UI.reconcileChildren(taskList, []);
             taskThreadsGroup.hidden = true;
             UI.reconcileChildren(pag, []);
+            lastConversationSignature = signature;
             return;
         }
 
@@ -296,6 +333,7 @@ function renderAgentDetail(container, params) {
         });
         UI.reconcileChildren(pag, Array.from(wrapper.childNodes));
         conversationsLoaded = true;
+        lastConversationSignature = signature;
     }
 
     async function loadConversations({ soft = false } = {}) {
@@ -324,8 +362,32 @@ function renderAgentDetail(container, params) {
             }
             const agent = status.agent || status;
             const workers = status.workers || [];
+            const signature = UI.dataSignature({
+                agent: {
+                    id: String(agent.agent_id || ''),
+                    display: String(agent.display_name || agent.slug || ''),
+                    slug: String(agent.slug || ''),
+                    role: String(agent.role || ''),
+                    provider: String(agent.provider || ''),
+                    connectivity: String(agent.connectivity_state || ''),
+                    heartbeat: String(agent.last_heartbeat_at || ''),
+                    scope: String(agent.registry_scope || ''),
+                    version: String(agent.version || ''),
+                    capabilities: (agent.capabilities || []).map((capability) => String(capability || '')),
+                },
+                workers: workers.map((worker) => ({
+                    id: String(worker.worker_id || ''),
+                    role: String(worker.process_role || ''),
+                    current: String(worker.current_item_id || ''),
+                    lastSeen: String(worker.last_seen_at || ''),
+                })),
+            });
             agentDisplayName = agent.display_name || agent.slug || 'Agent';
             openConversationBusy = false;
+
+            if (detailLoaded && signature === lastDetailSignature) {
+                return;
+            }
 
             buildHeader(agent);
             UI.reconcileChildren(content, [
@@ -334,6 +396,7 @@ function renderAgentDetail(container, params) {
                 buildConversationsSection(),
             ]);
             detailLoaded = true;
+            lastDetailSignature = signature;
             await loadConversations();
         } catch (err) {
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load agent: ' + err.message, loadDetail)]);
@@ -343,10 +406,12 @@ function renderAgentDetail(container, params) {
     let detailReload = null;
     let convosReload = null;
     cleanups.add(WS.subscribe(`agent:${agentId}`, () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(detailReload);
         detailReload = setTimeout(() => loadDetail({ soft: true }), 300);
     }));
     cleanups.add(WS.subscribe('conversations', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(convosReload);
         convosReload = setTimeout(() => loadConversations({ soft: true }), 350);
     }));

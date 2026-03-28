@@ -197,8 +197,9 @@ Conversation work now happens in one flow:
 
 Route changes now prepare the next route off-DOM and wait for its initial
 local-registry data before swapping it into `#content`. The previous route
-stays visible until the next one is ready, and only a small delayed nav
-spinner appears if the fetch takes long enough to be noticeable.
+stays visible until the next one is ready, so the swap is old real content to
+new real content without route-transition skeletons, spinners, or partial
+header-only shells.
 
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.
@@ -211,6 +212,10 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
 - `tasks`
 - `approvals`
 - `usage`
+
+Mounted routes debounce invalidation bursts, skip unchanged payloads, and avoid
+background-tab refresh churn so the operator UI does not keep repainting whole
+sections for no visible change.
 
 ## Runtime Notes
 

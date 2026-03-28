@@ -15,6 +15,7 @@ function renderTaskList(container) {
     let currentStatus = UI.readQueryParam('status', '');
     let summaryLoaded = false;
     let listLoaded = false;
+    let lastSummarySignature = '';
     let lastTaskListSignature = '';
     const expandedTaskIds = new Set();
 
@@ -140,11 +141,16 @@ function renderTaskList(container) {
                 href: '/ui/tasks?status=failed',
             },
         ];
+        const signature = UI.dataSignature(items);
+        if (summaryLoaded && signature === lastSummarySignature) {
+            return;
+        }
         UI.reconcileChildren(summaryRail, items.map((item) => {
             const card = UI.renderStatCard(item);
             card.dataset.key = item.key;
             return card;
         }));
+        lastSummarySignature = signature;
     }
 
     function _taskSummary(task) {
@@ -426,6 +432,7 @@ function renderTaskList(container) {
 
     let reloadDebounce = null;
     cleanups.add(WS.subscribe('tasks', () => {
+        if (UI.isBackgrounded()) return;
         clearTimeout(reloadDebounce);
         reloadDebounce = setTimeout(() => {
             loadSummary({ soft: true });

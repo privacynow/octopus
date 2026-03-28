@@ -398,13 +398,15 @@ flowchart TD
 | Subsystem | Package | Owns |
 |---|---|---|
 | Telegram transport | `app/channels/telegram` | Telegram transport implementation, presenters, Telegram ingress normalization, and Telegram-specific rendering |
-| Registry channels/service | `app/channels/registry` | registry HTTP routes, websocket manager, SPA egress, registry conversation/task transport implementations, registry delivery transport |
+| Registry bot transport | `app/channels/registry` | bot-side registry conversation/task transport implementations, registry egress, registry delivery transport |
+| Registry server | `octopus_registry` | registry HTTP routes, websocket manager, presenters, store/authority layer, management ingress, and the operator SPA |
 | Agent runtime | `app/agents` | registry enrollment/state loops, delivery handling, delegation helpers, registry authority clients |
 | Runtime composition | `app/runtime` | profile validation, shared service composition, participant runtime, dispatcher, admission, runtime health |
 | Providers | `app/providers` | Codex and Claude implementations over the SDK provider protocol |
-| Workflows | `app/workflows` | approvals, recovery, guidance, runtime skills, conversation/settings workflows |
+| Shared workflows | `octopus_sdk/workflows` | backend-neutral workflow implementations, workflow composition, and runtime/test utilities |
+| App workflows | `app/workflows` | Telegram-specific handlers only |
 | Control plane | `app/control_plane` | bus, adapters, processor runner, authority directory |
-| Registry persistence | `app/registry_service` | typed authority facade plus agent/event/task/approval/guidance/query stores |
+| Registry persistence | `octopus_registry` | typed authority facade plus agent/event/task/approval/guidance/query stores |
 
 ### Telegram As An SDK Consumer
 
@@ -429,9 +431,10 @@ runtime transport stack by `app/runtime/transport_builders.py`.
 
 The registry service spans:
 
-- `app/channels/registry/`
-- `app/registry_service/`
-- `ui/`
+- `octopus_registry/server.py`
+- `octopus_registry/ingress.py`
+- `octopus_registry/store*.py`
+- `octopus_registry/ui/`
 
 ### API Surfaces
 
@@ -456,7 +459,7 @@ Important current behavior:
 
 ### Realtime Model
 
-The websocket manager in `app/channels/registry/ws.py` uses typed SDK
+The websocket manager in `octopus_registry/ws.py` uses typed SDK
 envelopes from `octopus_sdk.realtime` and pushes explicit topics, not wildcard
 subscriptions.
 
@@ -473,8 +476,8 @@ Current realtime envelope types:
 - `progress`
 - `invalidate`
 
-The SPA is a vanilla JS application in `ui/` and subscribes to explicit topics
-through `ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
+The SPA is a vanilla JS application in `octopus_registry/ui/` and subscribes to explicit topics
+through `octopus_registry/ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
 topics; conversation detail also renders progress updates.
 
 ### SPA Shell And Route Model
@@ -501,12 +504,12 @@ Core browser routes today:
 
 Important SPA primitives:
 
-- `ui/js/helpers/ui.js`
+- `octopus_registry/ui/js/helpers/ui.js`
   - `UI.reconcileChildren(...)` wraps `morphdom` for keyed DOM reconciliation
   - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
     segmented controls
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
-- theme state is owned in `ui/js/app.js` and applies to both light and dark
+- theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app
 
 The current component split matches operator jobs rather than raw resource
@@ -520,7 +523,7 @@ types:
 - agents: health and direct entry into work
 - usage: cost/token accounting tied back to conversations
 
-Conversation detail in `ui/js/components/conversation-detail.js` is also the
+Conversation detail in `octopus_registry/ui/js/components/conversation-detail.js` is also the
 main operator entrypoint for structured coordination today:
 
 - normal conversation messages still go through `POST /v1/conversations/{id}/messages`

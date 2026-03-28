@@ -162,6 +162,19 @@ class SQLiteTransportStore:
         conn = self._transport_db(data_dir)
         return coerce_work_item_record(work_queue_sqlite_impl.claim_next_any(conn, worker_id))
 
+    def list_incomplete_work_items(self, data_dir: Path) -> list[WorkItemRecord]:
+        conn = self._transport_db(data_dir)
+        return coerce_work_item_records(work_queue_sqlite_impl.list_incomplete_work_items(conn))
+
+    def recover_after_crash(
+        self,
+        data_dir: Path,
+        *,
+        lease_ttl_seconds: int = 300,
+    ) -> int:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.recover_after_crash(conn, lease_ttl_seconds)
+
     def complete_work_item(self, data_dir: Path, item_id: str) -> None:
         conn = self._transport_db(data_dir)
         work_queue_sqlite_impl.complete_work_item(conn, item_id)

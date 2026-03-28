@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
-from app.channels.registry.http import app
-from app.registry_service.store import RegistrySQLiteStore
+from octopus_registry.server import app
+from octopus_registry.store import RegistrySQLiteStore
 from octopus_sdk.registry.models import AgentCard, AgentDiscoveryQuery, AgentRegisterRequest
 
 

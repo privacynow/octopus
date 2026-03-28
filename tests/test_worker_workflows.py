@@ -15,7 +15,7 @@ from octopus_sdk.identity import (
 from octopus_sdk.inbound_types import InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.work_queue import WorkItemRecord
 from app.runtime.work_admission import admit_worker_message
-from app.workflows.recovery.replay import get_recovery_use_cases
+from app.runtime import composition
 import app.runtime.telegram_worker as telegram_worker
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
@@ -162,11 +162,12 @@ def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch)
         captured_refs: list[str] = []
 
         monkeypatch.setattr(
-            "app.workflows.recovery.replay.trust_tier_for_ref",
+            "app.runtime.composition.trust_tier_for_ref",
             lambda conversation_ref, user, *, config, dispatcher: (
                 captured_refs.append(conversation_ref) or "trusted"
             ),
         )
+        composition.workflows.cache_clear()
 
         event = InboundMessage(
             user=InboundUser(id=telegram_actor_key(42), username="alice"),
@@ -183,7 +184,7 @@ def test_recovery_prepare_action_prefers_canonical_conversation_ref(monkeypatch)
             payload=serialize_inbound(event),
         )
 
-        outcome = get_recovery_use_cases().prepare_action(
+        outcome = composition.workflows().recovery.replay.prepare_action(
             data_dir=data_dir,
             conversation_key=telegram_conversation_key(12345),
             event_id=telegram_event_id(9201),
@@ -204,11 +205,12 @@ def test_recovery_prepare_action_recovers_telegram_ref__numeric_conversation_key
         captured_refs: list[str] = []
 
         monkeypatch.setattr(
-            "app.workflows.recovery.replay.trust_tier_for_ref",
+            "app.runtime.composition.trust_tier_for_ref",
             lambda conversation_ref, user, *, config, dispatcher: (
                 captured_refs.append(conversation_ref) or "trusted"
             ),
         )
+        composition.workflows.cache_clear()
 
         event = InboundMessage(
             user=InboundUser(id=telegram_actor_key(42), username="alice"),
@@ -224,7 +226,7 @@ def test_recovery_prepare_action_recovers_telegram_ref__numeric_conversation_key
             payload=serialize_inbound(event),
         )
 
-        outcome = get_recovery_use_cases().prepare_action(
+        outcome = composition.workflows().recovery.replay.prepare_action(
             data_dir=data_dir,
             conversation_key=telegram_conversation_key(12345),
             event_id=telegram_event_id(9202),
@@ -245,11 +247,12 @@ def test_recovery_prepare_action_uses_raw_conversation_key_for_non_telegram_payl
         captured_refs: list[str] = []
 
         monkeypatch.setattr(
-            "app.workflows.recovery.replay.trust_tier_for_ref",
+            "app.runtime.composition.trust_tier_for_ref",
             lambda conversation_ref, user, *, config, dispatcher: (
                 captured_refs.append(conversation_ref) or "trusted"
             ),
         )
+        composition.workflows.cache_clear()
 
         event = InboundMessage(
             user=InboundUser(id="future:actor:42", username="alice"),
@@ -265,7 +268,7 @@ def test_recovery_prepare_action_uses_raw_conversation_key_for_non_telegram_payl
             payload=serialize_inbound(event),
         )
 
-        outcome = get_recovery_use_cases().prepare_action(
+        outcome = composition.workflows().recovery.replay.prepare_action(
             data_dir=data_dir,
             conversation_key="future:workspace:room-1",
             event_id="future-event-9203",
@@ -337,7 +340,7 @@ async def test_recovery_workflow_binds_and_sends_notice_before_marking_pending_r
             assert notice.update_id == 8102
             assert "recover me" in notice.preview
 
-        result = await get_recovery_use_cases().dispatch_worker_recovery(
+        result = await composition.workflows().recovery.replay.dispatch_worker_recovery(
             data_dir=data_dir,
             item_id=item_id,
             original_text="recover me",
@@ -382,9 +385,9 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
             return SimpleNamespace(status="pending_recovery")
 
         monkeypatch.setattr(
-            telegram_worker,
-            "_recovery_runtime",
-            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            current_runtime().submitter.workflows.recovery.replay,
+            "dispatch_worker_recovery",
+            fake_dispatch_worker_recovery,
         )
 
         async def fake_bind(self, *, title, config):
@@ -446,9 +449,9 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
             return SimpleNamespace(status="pending_recovery")
 
         monkeypatch.setattr(
-            telegram_worker,
-            "_recovery_runtime",
-            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            current_runtime().submitter.workflows.recovery.replay,
+            "dispatch_worker_recovery",
+            fake_dispatch_worker_recovery,
         )
 
         async def fake_bind(self, *, title, config):
@@ -501,9 +504,9 @@ async def test_worker_recovery_raises_on_unexpected_recovery_outcome(monkeypatch
             return SimpleNamespace(status="handled")
 
         monkeypatch.setattr(
-            telegram_worker,
-            "_recovery_runtime",
-            lambda _runtime: SimpleNamespace(dispatch_worker_recovery=fake_dispatch_worker_recovery),
+            current_runtime().submitter.workflows.recovery.replay,
+            "dispatch_worker_recovery",
+            fake_dispatch_worker_recovery,
         )
 
         event = InboundMessage(

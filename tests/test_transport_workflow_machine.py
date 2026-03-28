@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
-from app.workflows.recovery.machine import (
+from octopus_sdk.workflows.recovery_machine import (
     ClaimInlineAction,
     ReclaimForReplayAction,
     TransportSnapshot,

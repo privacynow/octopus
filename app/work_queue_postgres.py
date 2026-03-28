@@ -124,6 +124,19 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return coerce_work_item_record(work_queue_postgres_impl.claim_next_any(conn, worker_id))
 
+    def list_incomplete_work_items(self, data_dir: Path) -> list[WorkItemRecord]:
+        with self._conn() as conn:
+            return coerce_work_item_records(work_queue_postgres_impl.list_incomplete_work_items(conn))
+
+    def recover_after_crash(
+        self,
+        data_dir: Path,
+        *,
+        lease_ttl_seconds: int = 300,
+    ) -> int:
+        with self._conn() as conn:
+            return work_queue_postgres_impl.recover_after_crash(conn, lease_ttl_seconds)
+
     def complete_work_item(self, data_dir: Path, item_id: str) -> None:
         with self._conn() as conn:
             work_queue_postgres_impl.complete_work_item(conn, item_id)

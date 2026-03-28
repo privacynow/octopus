@@ -50,7 +50,7 @@ def pytest_unconfigure(config):
 def reset_handler_runtime():
     """Reset handler globals and DB caches before and after each test (Priority 4)."""
     from tests.support.handler_support import reset_handler_test_runtime
-    from app.registry_service.backend import reset_for_test as reset_registry_store
+    from octopus_registry.backend import reset_for_test as reset_registry_store
 
     reset_registry_store()
     reset_handler_test_runtime()

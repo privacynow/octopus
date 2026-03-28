@@ -38,6 +38,7 @@ from octopus_sdk.transport import TransportBindingRecord
 from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
 from app.agents.state import (
     load_registry_connection_state,
     load_runtime_registry_connection_state,
@@ -1408,7 +1409,8 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "task-1",
-                    "parent_conversation_id": qualified_ref,
+                    "parent_conversation_id": "coord-slack-parent-1",
+                    "parent_transport_ref": qualified_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "task-1-complete",
@@ -1435,6 +1437,125 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             },
             runtime=runtime,
         ) == "rejected"
+
+
+async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_explicit_transport_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        class _FakeSubmitter:
+            def __init__(self) -> None:
+                self.envelopes = []
+
+            async def admit_message(self, envelope):
+                self.envelopes.append(envelope)
+                return InboundSubmissionResult(status="admitted", item_id="resume-item")
+
+        class _FakeEgress:
+            def __init__(self) -> None:
+                self.sent_texts: list[str] = []
+
+            async def send_text(self, text: str) -> None:
+                self.sent_texts.append(text)
+
+        class _FakeDispatcher:
+            def __init__(self, egress: _FakeEgress) -> None:
+                self.egress = egress
+                self.ready_refs: list[tuple[str, str]] = []
+                self.created_refs: list[tuple[str, str, str]] = []
+
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.ready_refs.append(
+                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+                )
+                return True
+
+            def create_egress(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.created_refs.append(
+                    (
+                        str(conversation_ref),
+                        str(kwargs.get("conversation_key", "")),
+                        str(kwargs.get("external_id", "")),
+                    )
+                )
+                return self.egress
+
+        submitter = _FakeSubmitter()
+        egress = _FakeEgress()
+        dispatcher = _FakeDispatcher(egress)
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_test_bot_services(),
+            submitter=submitter,
+            bot=None,
+            dispatcher=dispatcher,
+        )
+        parent_ref = "slack:workspace:channel-42"
+
+        monkeypatch.setattr(
+            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
+            lambda *args, **kwargs: DelegationUpdateOutcome(
+                status="completed",
+                matched=True,
+                ready_to_resume=True,
+                resume_prompt="Resume with the specialist output.",
+                pending=PendingDelegation(
+                    conversation_ref="coord-parent-1",
+                    origin_conversation_key=parent_ref,
+                    proposal_id="proposal-1",
+                    title="Ask the specialist",
+                    tasks=[
+                        DelegatedTask(
+                            routed_task_id="task-1",
+                            title="Investigate",
+                            status="completed",
+                            summary="Specialist finished.",
+                            full_text="Detailed specialist output.",
+                        )
+                    ],
+                    status="completed",
+                ),
+            ),
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-resume-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "coord-parent-1",
+                    "parent_transport_ref": parent_ref,
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "task-1-complete",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert dispatcher.ready_refs == [(parent_ref, parent_ref)]
+        assert dispatcher.created_refs == [(parent_ref, parent_ref, parent_ref)]
+        assert submitter.envelopes
+        assert submitter.envelopes[0].conversation_ref == parent_ref
+        assert submitter.envelopes[0].conversation_key == parent_ref
+        assert egress.sent_texts
+        assert "All delegated tasks completed" in egress.sent_texts[0]
 
 
 async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(
@@ -1476,7 +1597,8 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
                     "kind": "routed_result",
                     "payload": {
                         "routed_task_id": "task-1",
-                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "parent_conversation_id": "coord-telegram-parent-1",
+                        "parent_transport_ref": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
                             "transition_id": "task-1-complete",
@@ -1539,7 +1661,8 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
                     "kind": "routed_result",
                     "payload": {
                         "routed_task_id": "task-1",
-                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "parent_conversation_id": "coord-telegram-parent-2",
+                        "parent_transport_ref": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
                             "transition_id": "task-1-complete",

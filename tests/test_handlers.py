@@ -25,6 +25,7 @@ from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext, RunResult
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.inbound_types import InboundMessage, InboundUser
+from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.work_queue import WorkItemRecord
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
@@ -996,8 +997,8 @@ async def test_registry_routed_task_interactive_block_reports_failure(monkeypatc
             published.append((kind, title, body))
 
         monkeypatch.setattr(
-            telegram_worker,
-            "dispatch_message_request",
+            current_runtime().submitter,
+            "_execute_message_request",
             fake_dispatch_message_request,
         )
         monkeypatch.setattr(
@@ -1047,9 +1048,11 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-parent-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
             "resume_instruction": "Use the delegated result to finish the parent task.",
             "tasks": [
@@ -1070,7 +1073,8 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-1-complete",
@@ -1107,9 +1111,11 @@ async def test_delegation_completion_sends_final_message_all_completed():
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-complete-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
             "tasks": [
                 {
@@ -1129,7 +1135,8 @@ async def test_delegation_completion_sends_final_message_all_completed():
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-1-complete",
@@ -1221,9 +1228,11 @@ async def test_delegation_completion_sends_final_message_partial_failed():
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-partial-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
             "tasks": [
                 {
@@ -1248,7 +1257,8 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-1-complete",
@@ -1266,7 +1276,8 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-2",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "failed",
                         "transition_id": "child-task-2-fail",
@@ -1298,9 +1309,11 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-busy-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
             "tasks": [
                 {
@@ -1324,7 +1337,8 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-2",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-2-complete",
@@ -1357,9 +1371,11 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-dup-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
             "tasks": [
                 {
@@ -1371,10 +1387,11 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
         }
         save_session(data_dir, _conv(chat_id), session)
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.work_queue.record_and_admit_message",
-            lambda *args, **kwargs: ("duplicate", "item-dup"),
-        )
+        async def fake_admit_message(envelope):
+            del envelope
+            return InboundSubmissionResult(status="duplicate", item_id="item-dup")
+
+        monkeypatch.setattr(current_runtime().submitter, "admit_message", fake_admit_message)
 
         outcome = await handle_registry_delivery(
             cfg,
@@ -1383,7 +1400,8 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-dup",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-dup-complete",
@@ -1418,9 +1436,11 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
     ) as (data_dir, cfg, prov):
         chat_id = 12345
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        coordination_conversation_id = "coord-multi-12345"
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
+            "origin_conversation_key": _conv(chat_id),
             "title": "Two-child delegation",
             "resume_instruction": "Synthesize both child results before replying.",
             "tasks": [
@@ -1446,7 +1466,8 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-a",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-a-complete",
@@ -1474,7 +1495,8 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-b",
-                    "parent_conversation_id": conversation_ref,
+                    "parent_conversation_id": coordination_conversation_id,
+                    "parent_transport_ref": conversation_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "child-task-b-complete",

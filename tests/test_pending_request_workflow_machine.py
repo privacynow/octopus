@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.workflows.pending.machine import (
+from octopus_sdk.workflows.pending_machine import (
     ApproveExecuteAction,
     CreateApprovalAction,
     InvalidateStaleAction,

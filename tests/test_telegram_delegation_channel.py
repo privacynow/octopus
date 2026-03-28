@@ -7,6 +7,7 @@ import app.workflows.delegation.telegram as delegation_channel
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.agent_directory import AuthorityResolution
+from octopus_sdk.identity import telegram_conversation_ref
 from app.channels.telegram.state import build_telegram_runtime
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
@@ -114,7 +115,7 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
         "tg:12345",
         message,
         session,
-        conversation_ref="conv-1",
+        conversation_ref=telegram_conversation_ref(cfg, message.chat.id),
         result=result,
     )
 
@@ -124,9 +125,10 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
     assert session.pending_delegation.conversation_ref == "conversation-id"
     assert session.pending_delegation.title == "Delegate this"
     assert len(session.pending_delegation.tasks) == 1
-    assert created[0]["external_conversation_ref"] == "12345"
+    assert created[0]["external_conversation_ref"] == telegram_conversation_ref(cfg, message.chat.id)
     assert submitted[0][0] == "conversation-id"
     assert submitted[0][1].action == "delegate_tasks"
+    assert submitted[0][1].payload["origin_transport_ref"] == telegram_conversation_ref(cfg, message.chat.id)
     assert message.replies[-1]["reply_markup"] is not None
     assert "Delegation plan" in message.replies[-1]["text"]
     assert "ready via" in message.replies[-1]["text"]

@@ -84,6 +84,16 @@ def _approval_required() -> str:
     return "Review the plan below, then approve or reject."
 
 
+def interactive_followup_unavailable() -> RequestExecutionOutcome:
+    return RequestExecutionOutcome(
+        status="failed",
+        error_text=(
+            "Routed task could not continue because it requires an interactive "
+            "setup or approval step."
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class TransportIdentity:
     """Channel-supplied bundle for durable side effects."""

@@ -1,15 +1,8 @@
-"""Registry channel package.
+"""Bot-side registry transport package.
 
-Registry is one channel with both ingress and egress. The browser UI is a
-client of registry HTTP ingress, not a separate workflow path.
+This package is the bot client path to the registry management plane. It owns
+registry channel refs, registry-scoped transport wiring, delivery polling, and
+registry egress for connected bots.
 
-This package will own:
-
-- ingress translation registry-native requests into workflow calls
-- egress publication of registry-native outcomes/timeline updates
-- HTTP route registration and validation
-- UI shell/static serving
-- registry-specific presenters
-
-During Milestone 1 this package is structural only.
+The registry server itself now lives in ``octopus_registry/``.
 """

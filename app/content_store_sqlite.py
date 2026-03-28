@@ -143,6 +143,13 @@ class SQLiteContentStore(AbstractContentStore):
         self._local.conn = conn
         return conn
 
+    def close(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        conn.close()
+        self._local.conn = None
+
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(_CREATE_V1_SQL)
         conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")

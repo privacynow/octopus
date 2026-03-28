@@ -40,7 +40,10 @@ def _participant_runtime(runtime: TelegramRuntime):
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
         coordination=runtime.services.registry.coordination,
-        sessions=LocalSessionRuntime(runtime.config),
+        sessions=LocalSessionRuntime(
+            runtime.config,
+            catalog=lambda: runtime.services.workflows.runtime_skills.catalog,
+        ),
     )
 
 

@@ -12,9 +12,9 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
-from app.channels.registry.auth import reset_auth_attempt_limits_for_test
-from app.channels.registry import http as registry_http
-from app.channels.registry.http import app
+from octopus_registry.auth import reset_auth_attempt_limits_for_test
+import octopus_registry.server as registry_http
+from octopus_registry.server import app
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskUpdate, TimelineEventPayload, RegistryJsonRecord
 
 
@@ -375,7 +375,7 @@ def test_routed_task_status_broadcasts_task_status_event(
         target_id, target_token = _enroll_and_register(client, "ws-target-bot")
 
         # Create a routed task via the store directly
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         conversation = store.create_conversation(
             target_agent_id=origin_id,
@@ -467,7 +467,7 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
         assert _ws_recorder[0]["event_data"]["metadata"] == {"status": "queued", "routed_task_id": "ws-task-2"}
         assert _ws_recorder[0]["event_data"]["seq"] > 0
 
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         _advance_task_lifecycle(
             store,
@@ -597,7 +597,7 @@ def test_routed_task_running_status_without_timeline_events_does_not_broadcast_p
         _ws_recorder.clear()
         _ws_invalidation_recorder.clear()
 
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         _advance_task_lifecycle(
             store,

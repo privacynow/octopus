@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.workflows.lifecycle_machine import LifecycleSnapshot, build_lifecycle_snapshot, decide_lifecycle_action
+from octopus_sdk.workflows.lifecycle_machine import LifecycleSnapshot, build_lifecycle_snapshot, decide_lifecycle_action
 
 
 @dataclass(frozen=True)
@@ -124,9 +124,9 @@ def test_archive_repairs_pointer_and_history_when_already_archived():
 
 def test_runtime_skill_workflows_no_longer_duplicate_snapshot_builders() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    authoring_text = (repo_root / "app" / "workflows" / "runtime_skills" / "authoring.py").read_text()
-    approval_text = (repo_root / "app" / "workflows" / "runtime_skills" / "approval.py").read_text()
-    guidance_text = (repo_root / "app" / "workflows" / "provider_guidance" / "management.py").read_text()
+    authoring_text = (repo_root / "octopus_sdk" / "workflows" / "runtime_skill_authoring.py").read_text()
+    approval_text = (repo_root / "octopus_sdk" / "workflows" / "runtime_skill_approval.py").read_text()
+    guidance_text = (repo_root / "octopus_sdk" / "workflows" / "provider_guidance_management.py").read_text()
 
     assert "def _snapshot(" not in authoring_text
     assert "def _snapshot(" not in approval_text

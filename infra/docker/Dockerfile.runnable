@@ -13,7 +13,6 @@ COPY app ./app
 COPY octopus_sdk ./octopus_sdk
 COPY skills ./skills
 COPY scripts ./scripts
-COPY ui ./ui
 
 # Stub providers: satisfy config validation and doctor/startup so the container
 # can start. For real use, replace with an image that includes claude/codex CLI.

@@ -415,7 +415,15 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         run=AsyncMock(return_value=None),
         stop=AsyncMock(return_value=None),
     )
-    bootstrap = SimpleNamespace(worker_processor=MagicMock())
+    bootstrap = SimpleNamespace(
+        application=mock_app,
+        runtime=SimpleNamespace(
+            boot_id="test-boot",
+            transport_dispatcher=dispatcher,
+            cancellation_registry={},
+        ),
+        execution_runtime=MagicMock(),
+    )
     telegram_transport_instance = SimpleNamespace(
         transport_id="telegram",
         boot_id="test-boot",
@@ -512,10 +520,11 @@ def test_main_calls_run_polling_in_poll_mode():
     runtime.provider.check_auth_health.assert_awaited_once()
     runtime.provider.check_runtime_health.assert_not_awaited()
     _assert_dispatcher_runner_called(runtime)
-    call = runtime.telegram_bootstrap.call_args
+    call = runtime.build_bootstrap.call_args
     assert call is not None
     assert call.args[:2] == (cfg, runtime.provider)
-    assert isinstance(call.args[2], BotServices)
+    assert isinstance(call.kwargs["services"], BotServices)
+    assert call.kwargs["dispatcher"] is runtime.dispatcher
 
 
 def test_main_polling_invalid_token_exits_with_operator_message(capsys):
@@ -676,16 +685,18 @@ def test_main_registry_only_starts_without_telegram_ingress():
     )
     provider = _runtime_ok_provider()
     dispatcher = MagicMock()
-    worker_bundle = SimpleNamespace(
+    bootstrap = SimpleNamespace(
+        application=None,
         runtime=SimpleNamespace(
             boot_id="registry-only-boot",
-            transport_dispatcher=None,
+            transport_dispatcher=dispatcher,
+            cancellation_registry={},
         ),
-        worker_processor=MagicMock(),
+        execution_runtime=MagicMock(),
     )
     async def _run_runtime(bot_runtime):
-        assert bot_runtime.worker_processor is worker_bundle.worker_processor
         assert bot_runtime.boot_id == "registry-only-boot"
+        assert bot_runtime.transport is dispatcher
 
     with ExitStack() as stack:
         stack.enter_context(patch("app.main.load_config", return_value=cfg))
@@ -700,12 +711,17 @@ def test_main_registry_only_starts_without_telegram_ingress():
         register_registry_channels = stack.enter_context(
             patch("app.runtime.transport_builders.register_registry_channels")
         )
+        build_bootstrap_mock = stack.enter_context(
+            patch("app.runtime.transport_builders.build_bootstrap", return_value=bootstrap)
+        )
         telegram_bootstrap = stack.enter_context(
             patch("app.runtime.transport_builders.TelegramTransport")
         )
-        build_worker_bundle_mock = stack.enter_context(
-            patch("app.runtime.transport_builders.build_worker_bundle", return_value=worker_bundle)
+        telegram_transport_instance = SimpleNamespace(
+            transport_id="telegram",
+            boot_id="registry-only-boot",
         )
+        telegram_bootstrap.return_value = telegram_transport_instance
         build_registry_delivery_transport = stack.enter_context(
             patch(
                 "app.runtime.transport_builders.build_registry_delivery_transport",
@@ -725,12 +741,12 @@ def test_main_registry_only_starts_without_telegram_ingress():
 
         main()
 
-    telegram_bootstrap.assert_not_called()
-    build_worker_bundle_call = build_worker_bundle_mock.call_args
-    assert build_worker_bundle_call is not None
-    assert build_worker_bundle_call.args == (cfg, provider)
-    assert isinstance(build_worker_bundle_call.kwargs["services"], BotServices)
-    assert build_worker_bundle_call.kwargs["dispatcher"] is dispatcher
+    build_bootstrap_call = build_bootstrap_mock.call_args
+    assert build_bootstrap_call is not None
+    assert build_bootstrap_call.args == (cfg, provider)
+    assert isinstance(build_bootstrap_call.kwargs["services"], BotServices)
+    assert build_bootstrap_call.kwargs["dispatcher"] is dispatcher
+    telegram_bootstrap.assert_called_once()
     dispatcher.build_all_ingresses.assert_not_called()
     register_registry_channels.assert_called_once()
     register_call = register_registry_channels.call_args

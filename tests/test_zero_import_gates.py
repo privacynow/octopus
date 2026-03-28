@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import re
 
@@ -150,7 +151,7 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     app_root = repo_root / "app"
     allowed_paths = {
-        app_root / "registry_service" / "store.py",
+        repo_root / "octopus_registry" / "store.py",
     }
     forbidden_tokens = (
         "origin_surface",
@@ -175,7 +176,7 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
 def test_legacy_registry_column_tokens_are_limited_to_migration_owners() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     allowed_paths = {
-        repo_root / "app" / "registry_service" / "store.py",
+        repo_root / "octopus_registry" / "store.py",
         repo_root / "app" / "db" / "migrations" / "postgres" / "0004_registry.sql",
         repo_root / "app" / "db" / "migrations" / "postgres" / "0010_rename_registry_channel_columns.sql",
         repo_root / "tests" / "test_registry_service.py",
@@ -201,7 +202,7 @@ def test_legacy_registry_column_tokens_are_limited_to_migration_owners() -> None
 def test_legacy_delivery_kind_tokens_are_limited_to_migration_owners() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     allowed_paths = {
-        repo_root / "app" / "registry_service" / "store.py",
+        repo_root / "octopus_registry" / "store.py",
         repo_root / "app" / "db" / "migrations" / "postgres" / "0009_rename_delivery_kinds.sql",
         repo_root / "tests" / "test_agents.py",
         repo_root / "tests" / "test_db_postgres.py",
@@ -592,13 +593,12 @@ def test_telegram_bootstrap_owns_application_construction_and_handler_registrati
         "def build_bootstrap(",
         "from app.runtime import telegram_ingress as ingress",
         "from app.runtime import telegram_shared_dispatch as telegram_shared_mode_dispatch",
-        "from app.runtime import telegram_worker",
         "shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(",
         "shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(",
         "def _execution_runtime(runtime: TelegramRuntime):",
+        "execution_runtime: ExecutionRuntime",
         "execution_runtime=execution_runtime",
-        "class TelegramWorkerProcessor(WorkerDispatchPort):",
-        "worker_processor=TelegramWorkerProcessor(",
+        "application: Application | None",
     )
     for token in required:
         assert token in text, f"{token} missing {bootstrap_path}"
@@ -662,7 +662,7 @@ def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> No
 
 def test_execution_finalization_workflow_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    finalization_path = repo_root / "app" / "workflows" / "execution" / "finalization.py"
+    finalization_path = repo_root / "octopus_sdk" / "workflows" / "execution_finalization.py"
     text = finalization_path.read_text()
     assert "app.channels" not in text, f"channel import still referenced in {finalization_path}"
 
@@ -1060,11 +1060,11 @@ def test_deleted_skill_lifecycle_service_path_is_gone() -> None:
 
 def test_runtime_skill_setup_is_the_only_app_owner_of_awaiting_skill_setup_writes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    app_root = repo_root / "app"
-    allowed = {app_root / "workflows" / "runtime_skills" / "setup.py"}
+    sdk_root = repo_root / "octopus_sdk"
+    allowed = {sdk_root / "workflows" / "runtime_skill_setup.py"}
     hits: list[Path] = []
-    for path in sorted(app_root.rglob("*.py")):
-        if path.name == "session_state.py":
+    for path in sorted(sdk_root.rglob("*.py")):
+        if path.name == "sessions.py":
             continue
         text = path.read_text()
         if "session.awaiting_skill_setup =" in text:
@@ -1146,8 +1146,8 @@ def test_selected_telegram_and_workflow_modules_no_longer_import_bridge_helpers(
         repo_root / "app" / "runtime" / "telegram_normalization.py",
         repo_root / "app" / "runtime" / "telegram_worker.py",
         repo_root / "app" / "workflows" / "delegation" / "telegram.py",
-        repo_root / "app" / "workflows" / "execution" / "finalization.py",
-        repo_root / "app" / "workflows" / "recovery" / "replay.py",
+        repo_root / "octopus_sdk" / "workflows" / "execution_finalization.py",
+        repo_root / "octopus_sdk" / "workflows" / "recovery_replay.py",
     )
     for path in guarded_paths:
         text = path.read_text()
@@ -1166,7 +1166,6 @@ def _non_registry_orchestration_paths() -> list[Path]:
     }
     excluded_dirs = {
         app_root / "channels" / "registry",
-        app_root / "registry_service",
         app_root / "db" / "migrations",
     }
     paths: list[Path] = []
@@ -1406,3 +1405,134 @@ def test_test_suite_does_not_patch_deleted_main_runtime_setup_hooks() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def _package_python_files(root: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+
+
+def test_octopus_registry_package_has_no_app_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    registry_root = repo_root / "octopus_registry"
+    forbidden = ("from app.", "import app")
+    for path in _package_python_files(registry_root):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_octopus_sdk_package_has_no_app_or_registry_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sdk_root = repo_root / "octopus_sdk"
+    for path in _package_python_files(sdk_root):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(
+                    not alias.name.startswith("app") and not alias.name.startswith("octopus_registry")
+                    for alias in node.names
+                ), f"forbidden import still referenced in {path}"
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                assert not module.startswith("app"), f"forbidden app import still referenced in {path}"
+                assert not module.startswith("octopus_registry"), f"forbidden registry import still referenced in {path}"
+
+
+def test_app_package_has_no_octopus_registry_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    forbidden = ("from octopus_registry.", "import octopus_registry")
+    for path in _package_python_files(app_root):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_app_package_has_no_octopus_sdk_testing_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    forbidden = ("from octopus_sdk.testing", "import octopus_sdk.testing")
+    for path in _package_python_files(app_root):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_octopus_registry_package_has_no_octopus_sdk_testing_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    registry_root = repo_root / "octopus_registry"
+    forbidden = ("from octopus_sdk.testing", "import octopus_sdk.testing")
+    for path in _package_python_files(registry_root):
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_octopus_sdk_convenience_surfaces_do_not_reexport_testing_utilities() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sdk_root = repo_root / "octopus_sdk"
+    candidate_paths = sorted(
+        path
+        for path in sdk_root.rglob("__init__.py")
+        if "testing" not in path.parts and "tests" not in path.parts
+    )
+    forbidden = (
+        "from octopus_sdk.testing",
+        "import octopus_sdk.testing",
+        "InMemoryWorkQueue",
+        "InMemorySessionStore",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_deleted_registry_service_package_is_absent() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    assert not (repo_root / "app" / "registry_service").exists()
+
+
+def test_root_ui_directory_is_absent() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    assert not (repo_root / "ui").exists()
+
+
+def test_main_entrypoint_does_not_import_octopus_registry() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    main_path = repo_root / "app" / "main.py"
+    assert "octopus_registry" not in main_path.read_text()
+
+
+def test_main_entrypoint_has_no_registry_server_startup_logic() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    main_path = repo_root / "app" / "main.py"
+    text = main_path.read_text()
+    forbidden = (
+        "FastAPI(",
+        "uvicorn",
+        "REGISTRY_PORT",
+        "REGISTRY_UI_TOKEN",
+        "REGISTRY_BIND_HOST",
+        "octopus_registry.server",
+        "octopus_registry.main",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {main_path}"
+
+
+def test_bot_config_has_no_registry_server_fields() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    config_path = repo_root / "app" / "config.py"
+    text = config_path.read_text()
+    forbidden = (
+        "REGISTRY_PORT",
+        "REGISTRY_UI_TOKEN",
+        "REGISTRY_BIND_HOST",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {config_path}"

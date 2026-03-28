@@ -92,6 +92,15 @@ def get_content_store() -> AbstractContentStore:
 
 def reset_for_test() -> None:
     global _store, _store_key
+    close = getattr(_store, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as exc:
+            log.debug(
+                "Content-store cleanup failed during test reset: %s",
+                exc.__class__.__name__,
+            )
     _store = None
     _store_key = None
     try:

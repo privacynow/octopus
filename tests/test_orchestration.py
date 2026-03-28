@@ -31,9 +31,11 @@ def test_build_delegation_plan_sets_proposed_status():
                 "instructions": "Review correctness and test coverage.",
             },
         ],
+        origin_conversation_key="telegram:12345",
     )
 
     assert [task.status for task in plan.tasks] == ["proposed", "proposed"]
+    assert plan.origin_conversation_key == "telegram:12345"
 
 
 def test_build_delegation_plan_preserves_task_fields():

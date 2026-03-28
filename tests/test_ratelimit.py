@@ -3,7 +3,7 @@
 import time
 from unittest.mock import patch
 
-from app.ratelimit import RateLimiter
+from octopus_sdk.ratelimit import RateLimiter
 
 
 # --- disabled by default ---
@@ -86,7 +86,7 @@ def test_sliding_window_expiry():
     rl = RateLimiter(per_minute=1)
     # Fake time: first request at T=0, second at T=61
     base = time.monotonic()
-    with patch("app.ratelimit.time") as mock_time:
+    with patch("octopus_sdk.ratelimit.time") as mock_time:
         mock_time.monotonic.return_value = base
         rl.check(1)
         # Blocked at T=0

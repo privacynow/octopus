@@ -16,8 +16,8 @@ from octopus_sdk.registry.models import (
     RuntimeHealthPayload,
 )
 
-from app.registry_service.authority import StoreBackedRegistryAuthority
-from app.registry_service.store import RegistrySQLiteStore
+from octopus_registry.authority import StoreBackedRegistryAuthority
+from octopus_registry.store import RegistrySQLiteStore
 
 
 def _authority(tmp_path: Path) -> StoreBackedRegistryAuthority:

@@ -47,6 +47,7 @@ class BusTaskRouting:
         payload = SubmitRoutedTaskPayload(
             routed_task_id=request.routed_task_id,
             parent_conversation_id=request.parent_conversation_id,
+            origin_transport_ref=request.origin_transport_ref,
             origin_agent_id=request.origin_agent_id,
             target_agent_id=request.target_agent_id,
             title=request.title,

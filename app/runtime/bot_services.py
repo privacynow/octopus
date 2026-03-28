@@ -13,10 +13,10 @@ from app.agents.state import load_runtime_registry_connection_state
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.config import BotConfig
-from app.runtime.composition import workflows
+from app.runtime.composition import compose_workflows, workflows
 from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.authorization import AuthorizationPort
-from octopus_sdk.bot_runtime import WorkflowComposition
+from octopus_sdk.bot_runtime import SessionRuntimePort, WorkflowComposition
 from octopus_sdk.conversation_projection import ConversationProjectionPort
 from octopus_sdk.health_publication import HealthPublicationPort
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
@@ -97,6 +97,7 @@ def build_bus_bot_services(
     *,
     config: BotConfig,
     agent_id_for_authority: Callable[[str], str] | None = None,
+    sessions: SessionRuntimePort | None = None,
 ) -> BotServices:
     from app.runtime.registry_participant import build_control_plane_registry_participant
 
@@ -112,7 +113,11 @@ def build_bus_bot_services(
             config,
             control_plane,
         ),
-        workflows=workflows(),
+        workflows=(
+            compose_workflows(config=config, sessions=sessions)
+            if sessions is not None
+            else workflows()
+        ),
         authorization=get_authorization(),
         work_queue=runtime_backend.transport_store(),
     )

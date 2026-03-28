@@ -7,12 +7,12 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import CapabilityDisabledError
-from app.registry_service.store_base import PROTECTED_ROUTED_TASK_STATUSES
-from app.registry_service.store_base import RegistryScopeError
-from app.registry_service.store_base import conversation_status_for_event
-from app.registry_service.store_base import hash_agent_token
+from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_base import CapabilityDisabledError
+from octopus_registry.store_base import PROTECTED_ROUTED_TASK_STATUSES
+from octopus_registry.store_base import RegistryScopeError
+from octopus_registry.store_base import conversation_status_for_event
+from octopus_registry.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -27,9 +27,12 @@ from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     AgentHeartbeatRequest,
     AgentRegisterRequest,
+    ApproveDelegationActionPayload,
     ApproveRejectActionPayload,
     CancelTaskActionPayload,
     CoordinationActionEnvelope,
+    DelegateTasksActionPayload,
+    DelegationTaskDraft,
     DirectAssignActionPayload,
     EventRecord,
     RegistryJsonRecord,
@@ -167,7 +170,7 @@ def _stored_agent_token(store, agent_id: str) -> str:
         assert row is not None
         return str(row["agent_token"])
 
-    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -195,7 +198,7 @@ def _routed_task_row(store, routed_task_id: str):
         assert row is not None
         return row
 
-    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -230,6 +233,7 @@ def _create_routed_task(
         RoutedTaskRequest(
             routed_task_id=routed_task_id,
             parent_conversation_id=conversation.conversation_id,
+            origin_transport_ref=f"telegram:origin:{routed_task_id}",
             origin_agent_id=origin_id,
             target_agent_id=target_id,
             title="Review task",
@@ -270,7 +274,7 @@ def store(request, tmp_path: Path):
         return
 
     postgres_url = request.getfixturevalue("postgres_registry_truncated")
-    from app.registry_service.store_postgres import RegistryPostgresStore
+    from octopus_registry.store_postgres import RegistryPostgresStore
 
     yield RegistryPostgresStore(postgres_url)
 
@@ -399,11 +403,14 @@ def test_create_routed_task_and_lookup(store):
     routed, origin_id, target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-1"
     )
+    task = store.get_task("task-1")
 
     deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
 
     assert routed.routed_task_id == "task-1"
     assert routed.delivery_id
+    assert task.origin_transport_ref == "telegram:origin:task-1"
+    assert task.request["origin_transport_ref"] == "telegram:origin:task-1"
     assert len(deliveries) == 1
     assert deliveries[0].kind == "routed_task"
 
@@ -898,6 +905,53 @@ def test_direct_assign_persists_visible_operator_message(store):
         and event.metadata["routed_task_id"] == routed_task_id
         for event in events
     )
+
+
+def test_delegation_approval_prefers_explicit_origin_transport_ref_from_proposal(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Delegation transport identity",
+        origin_channel="telegram",
+        external_conversation_ref="telegram:bot-origin:12345",
+    )
+
+    proposed = store.add_conversation_action(
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="proposal-origin-transport-ref",
+            action="delegate_tasks",
+            payload=DelegateTasksActionPayload(
+                title="Ask the specialist",
+                resume_instruction="Resume in the parent chat.",
+                origin_transport_ref="slack:workspace:channel-42",
+                tasks=[
+                    DelegationTaskDraft(
+                        draft_id="draft-1",
+                        selector=TargetSelector(kind="agent", value="m2", preferred_agent_id=target_id),
+                        title="Investigate",
+                        instructions="Return the findings.",
+                    )
+                ],
+            ),
+        ),
+    )
+
+    approved = store.add_conversation_action(
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="approve-origin-transport-ref",
+            action="approve_delegation",
+            payload=ApproveDelegationActionPayload(proposal_id=proposed.proposal_id),
+        ),
+    )
+
+    task = store.get_task(approved.routed_tasks[0].routed_task_id)
+
+    assert task is not None
+    assert task.origin_transport_ref == "slack:workspace:channel-42"
+    assert task.request["origin_transport_ref"] == "slack:workspace:channel-42"
 
 
 def test_direct_assign_rejects_ambiguous_display_name_alias(store):

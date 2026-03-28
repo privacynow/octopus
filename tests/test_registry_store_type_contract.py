@@ -4,9 +4,9 @@ import inspect
 from collections.abc import Mapping
 from typing import Any, get_args, get_origin, get_type_hints
 
-from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import AbstractRegistryStore
-from app.registry_service.store_postgres import RegistryPostgresStore
+from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_base import AbstractRegistryStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 
 
 def _contains_forbidden_boundary(annotation: object) -> bool:

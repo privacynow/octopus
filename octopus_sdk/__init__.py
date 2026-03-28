@@ -31,8 +31,10 @@ from octopus_sdk.transport import (
     TransportEgress,
     TransportImplementation,
 )
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.authorization import AuthorizationPort
 from octopus_sdk.bot_runtime import BotServicesPort, WorkflowComposition
+from octopus_sdk.composition import WorkflowComposer, WorkflowComposerError, WorkflowNotConfiguredError
 from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
@@ -153,7 +155,10 @@ __all__ = [
     "HealthSummary",
     "MirrorOutcome",
     "BotServicesPort",
+    "WorkflowComposer",
+    "WorkflowComposerError",
     "WorkflowComposition",
+    "WorkflowNotConfiguredError",
     "AuthorizationPort",
     "WorkQueuePort",
     "QueueSnapshot",
@@ -202,6 +207,7 @@ __all__ = [
     "RegistryAuthorityDelivery",
     "TransportCapabilities",
     "TransportDescriptor",
+    "TransportDispatcher",
     "TransportEgress",
     "TransportImplementation",
 ]

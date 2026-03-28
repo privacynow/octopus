@@ -122,6 +122,7 @@ class AgentCard(RegistryRecordModel):
     current_capacity: int = 0
     max_capacity: int = 1
     channel_capabilities: list[str] = Field(default_factory=list)
+    management_capabilities: list[str] = Field(default_factory=list)
     version: str = "dev"
 
 
@@ -211,6 +212,7 @@ class AgentRecord(RegistryRecordModel):
     current_capacity: int = 0
     max_capacity: int = 1
     channel_capabilities: list[str] = Field(default_factory=list)
+    management_capabilities: list[str] = Field(default_factory=list)
     version: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -251,6 +253,7 @@ class TaskRecord(RegistryRecordModel):
     title: str = ""
     instructions: str = ""
     parent_conversation_id: str = ""
+    origin_transport_ref: str = ""
     origin_agent_id: str = ""
     origin_display_name: str = ""
     target_agent_id: str = ""
@@ -420,6 +423,7 @@ class RoutedTaskRequest(RegistryRecordModel):
 
     routed_task_id: str
     parent_conversation_id: str
+    origin_transport_ref: str = ""
     origin_agent_id: str
     target_agent_id: str
     title: str
@@ -515,6 +519,7 @@ class DelegationIntent(RegistryRecordModel):
 
     title: str = ""
     resume_instruction: str = ""
+    origin_transport_ref: str = ""
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 
@@ -557,6 +562,7 @@ class DelegateTasksActionPayload(RegistryRecordModel):
 
     title: str = ""
     resume_instruction: str = ""
+    origin_transport_ref: str = ""
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 

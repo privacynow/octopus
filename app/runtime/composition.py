@@ -1,59 +1,86 @@
-"""Workflow composition and channel-agnostic runtime helpers."""
+"""App wiring for SDK-owned workflow composition."""
 
 from __future__ import annotations
 
 from functools import lru_cache
-from octopus_sdk.bot_runtime import (
-    ConversationWorkflows,
-    CredentialWorkflows,
-    PendingWorkflows,
-    ProviderGuidanceWorkflows,
-    RecoveryWorkflows,
-    RuntimeSkillWorkflows,
-    WorkflowComposition,
+
+from app import runtime_backend
+from app import user_messages as _msg
+from app.config import BotConfig, load_config
+from app.content_store import get_content_store
+from app.credential_service import get_credential_service
+from app.credential_validation import validate_credential
+import app.formatting as formatting
+import app.webhook as webhook
+from app.provider_guidance_service import (
+    PROMPT_SIZE_WARNING_THRESHOLD,
+    get_provider_guidance_service,
 )
+from app.runtime.session_runtime import LocalSessionRuntime
+from app.skill_activation_service import get_skill_activation_service
+from app.skill_catalog_service import get_skill_catalog_service
+from app.skill_import_service import get_skill_import_service
+from app.runtime.work_admission import trust_tier_for_ref
+from octopus_sdk.bot_runtime import SessionRuntimePort, WorkflowComposition
+from octopus_sdk.composition import WorkflowComposer
+
+
+async def _send_completion_webhook(
+    url: str,
+    *,
+    chat_id: int,
+    conversation_ref: str,
+    status: str,
+    summary: str,
+    completed_at: str,
+) -> None:
+    await webhook.fire_completion_webhook(
+        url,
+        chat_id=chat_id,
+        conversation_ref=conversation_ref,
+        status=status,
+        summary=summary,
+        completed_at=completed_at,
+    )
+
+
+def compose_workflows(
+    *,
+    config: BotConfig,
+    sessions: SessionRuntimePort,
+) -> WorkflowComposition:
+    return (
+        WorkflowComposer()
+        .with_messages(_msg)
+        .with_config(config)
+        .with_sessions(sessions)
+        .with_catalog_service(get_skill_catalog_service())
+        .with_import_service(get_skill_import_service())
+        .with_skill_activation(get_skill_activation_service())
+        .with_credentials(get_credential_service())
+        .with_provider_guidance(get_provider_guidance_service())
+        .with_content_store(get_content_store())
+        .with_credential_validator(validate_credential)
+        .with_work_queue(runtime_backend.transport_store())
+        .with_trust_tier_resolver(trust_tier_for_ref)
+        .with_text_formatting(formatting)
+        .with_completion_webhook(_send_completion_webhook)
+        .with_prompt_size_warning_threshold(PROMPT_SIZE_WARNING_THRESHOLD)
+        .build()
+    )
 
 
 @lru_cache(maxsize=1)
 def workflows() -> WorkflowComposition:
-    from app.workflows.conversation.control import get_conversation_control_use_cases
-    from app.workflows.conversation.settings import get_conversation_settings_use_cases
-    from app.workflows.credentials.management import get_credential_management_use_cases
-    from app.workflows.pending.requests import get_pending_request_use_cases
-    from app.workflows.provider_guidance.management import get_provider_guidance_management_use_cases
-    from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases
-    from app.workflows.recovery.replay import get_recovery_use_cases
-    from app.workflows.runtime_skills.approval import get_runtime_skill_approval_use_cases
-    from app.workflows.runtime_skills.activation import get_runtime_skill_activation_use_cases
-    from app.workflows.runtime_skills.authoring import get_runtime_skill_authoring_use_cases
-    from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
-    from app.workflows.runtime_skills.importing import get_runtime_skill_import_use_cases
-    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
-
-    return WorkflowComposition(
-        runtime_skills=RuntimeSkillWorkflows(
-            catalog=get_runtime_skill_catalog_use_cases(),
-            activation=get_runtime_skill_activation_use_cases(),
-            imports=get_runtime_skill_import_use_cases(),
-            setup=get_runtime_skill_setup_use_cases(),
-            authoring=get_runtime_skill_authoring_use_cases(),
-            approval=get_runtime_skill_approval_use_cases(),
-        ),
-        credentials=CredentialWorkflows(
-            management=get_credential_management_use_cases(),
-        ),
-        conversation=ConversationWorkflows(
-            control=get_conversation_control_use_cases(),
-            settings=get_conversation_settings_use_cases(),
-        ),
-        pending=PendingWorkflows(
-            requests=get_pending_request_use_cases(),
-        ),
-        recovery=RecoveryWorkflows(
-            replay=get_recovery_use_cases(),
-        ),
-        provider_guidance=ProviderGuidanceWorkflows(
-            preview=get_provider_guidance_use_cases(),
-            management=get_provider_guidance_management_use_cases(),
-        ),
+    config = load_config()
+    holder: dict[str, WorkflowComposition] = {}
+    sessions = LocalSessionRuntime(
+        config,
+        catalog=lambda: holder["workflows"].runtime_skills.catalog,
     )
+    holder["workflows"] = compose_workflows(config=config, sessions=sessions)
+    return holder["workflows"]
+
+
+def reset_for_test() -> None:
+    workflows.cache_clear()

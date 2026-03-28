@@ -19,7 +19,7 @@ from octopus_sdk.work_queue import (
     WorkerHeartbeat,
 )
 from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
-from app.workflows.recovery.machine import (
+from octopus_sdk.workflows.recovery_machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,
     run_transport_event,
@@ -828,6 +828,26 @@ def get_work_items_for_chat(conn, conversation_key: str) -> list[WorkItemRecord]
     return [WorkItemRecord.from_mapping(dict(r)) for r in rows]
 
 
+def list_incomplete_work_items(conn) -> list[WorkItemRecord]:
+    """Return queued/claimed/recovery items that survive process restarts."""
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT w.*, u.kind, u.payload "
+            f"FROM {_SCHEMA}.work_items w "
+            f"JOIN {_SCHEMA}.updates u ON w.event_id = u.event_id "
+            f"WHERE w.state IN ('queued', 'claimed', 'pending_recovery') "
+            f"ORDER BY w.created_at ASC"
+        )
+        rows = cur.fetchall()
+    records: list[WorkItemRecord] = []
+    for row in rows:
+        record = dict(row)
+        if "payload" in record:
+            record["payload"] = _payload_json_text(record["payload"])
+        records.append(WorkItemRecord.from_mapping(record))
+    return records
+
+
 def get_queue_snapshot(conn) -> QueueSnapshot:
     """Return backend-neutral queue counts and oldest timestamps."""
     with _cur(conn) as cur:
@@ -1164,6 +1184,11 @@ def recover_stale_claims(conn, lease_ttl_seconds: int = 300) -> int:
         if requeued:
             log.info("Recovered %d stale work items", requeued)
         return requeued
+
+
+def recover_after_crash(conn, lease_ttl_seconds: int = 300) -> int:
+    """Recover durable queue state after a worker or process restart."""
+    return recover_stale_claims(conn, lease_ttl_seconds)
 
 
 def purge_old(conn, older_than_seconds: int = 7 * 24 * 3600) -> int:

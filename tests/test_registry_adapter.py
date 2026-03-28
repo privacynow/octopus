@@ -14,7 +14,7 @@ from app.channels.registry.channel import (
 )
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from app.runtime.services import (
     BotServices,
     ControlPlaneServices,

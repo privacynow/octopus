@@ -22,6 +22,7 @@ class TimelineEventPayload(BaseModel):
 class SubmitRoutedTaskPayload(BaseModel):
     routed_task_id: str = Field(..., min_length=1)
     parent_conversation_id: str = Field(..., min_length=1)
+    origin_transport_ref: str = ""
     origin_agent_id: str = Field(..., min_length=1)
     target_agent_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)

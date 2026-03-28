@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
+from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import (
     AckResult,
     AgentCard,
@@ -345,6 +346,20 @@ class RegistryClient:
             json=body,
         )
         return TaskRecord.model_validate(response)
+
+    async def management_result(
+        self,
+        request_id: str,
+        result: ManagementResult,
+    ) -> ManagementResult:
+        payload = _validated_model(result, ManagementResult)
+        body = payload.model_dump(exclude_unset=True, by_alias=True)
+        response = await self._request(
+            "POST",
+            f"/v1/agents/management-requests/{request_id}/result",
+            json=body,
+        )
+        return ManagementResult.model_validate(response)
 
     async def poll(
         self,

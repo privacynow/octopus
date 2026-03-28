@@ -402,7 +402,10 @@ class RegistryChannelEgress(TransportEgress):
                     provider_name=self.config.provider_name,
                     provider_state_factory=lambda _conversation_key: {},
                     coordination=self._services.registry.coordination,
-                    sessions=LocalSessionRuntime(self.config),
+                    sessions=LocalSessionRuntime(
+                        self.config,
+                        catalog=lambda: self._services.workflows.runtime_skills.catalog,
+                    ),
                 ),
                 conversation_key_value,
                 session,

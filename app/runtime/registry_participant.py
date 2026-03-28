@@ -86,6 +86,7 @@ class AgentRuntime:
         provider=None,
         registry: RegistryConnectionConfig | None = None,
         channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
+        management_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
@@ -93,6 +94,7 @@ class AgentRuntime:
             raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
         self._registry = registry
         self._channel_capabilities_resolver = channel_capabilities_resolver
+        self._management_capabilities_resolver = management_capabilities_resolver
         if self._registry is None:
             self._state = RegistryConnectionState(registry_id="", registry_scope="full")
         else:
@@ -129,6 +131,11 @@ class AgentRuntime:
             return ""
         return self._registry.enroll_token
 
+    def _management_capabilities(self) -> tuple[str, ...]:
+        if self._management_capabilities_resolver is not None:
+            return self._management_capabilities_resolver()
+        return ()
+
     def requested_card(self) -> AgentCard:
         capabilities = self._effective_capabilities()
         return AgentCard(
@@ -145,6 +152,7 @@ class AgentRuntime:
             current_capacity=0,
             max_capacity=1,
             channel_capabilities=list(self._channel_capabilities()),
+            management_capabilities=list(self._management_capabilities()),
             version="",
             bot_key=bot_identity(self.config.data_dir),
         )
@@ -669,6 +677,7 @@ class _ParticipantCoordination(RegistryCoordination):
             payload=DelegateTasksActionPayload(
                 title=intent.title,
                 resume_instruction=intent.resume_instruction,
+                origin_transport_ref=intent.origin_transport_ref,
                 tasks=intent.tasks,
             ).model_dump(exclude_unset=True),
         )

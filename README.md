@@ -133,7 +133,7 @@ CLI is intentionally local-first:
 
 ## Registry UI
 
-The operator UI under `ui/` is a vanilla SPA with no framework or build step.
+The operator UI under `octopus_registry/ui/` is a vanilla SPA with no framework or build step.
 It is designed as an operator console, not a generic admin panel: one left rail,
 one main work surface per route, compact metadata, and the same conversation
 and task model on desktop and mobile.

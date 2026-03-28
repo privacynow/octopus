@@ -834,16 +834,17 @@ def test_classify_pending_validation_accepts_iso_created_at():
 def test_credential_check_uses_resolved_skills_not_session():
     """Credential check with empty resolved skills skips all checks."""
     from app.credential_store import init_credential_store_for_config
-    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
+    from app.runtime import composition
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
+        composition.workflows.cache_clear()
         session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
         # Session has skills, but resolved list is empty (public user)
         session.active_skills = ["github-integration"]
         init_credential_store_for_config(make_config(data_dir=data_dir))
 
-        result = get_runtime_skill_setup_use_cases().check_satisfaction(
+        result = composition.workflows().runtime_skills.setup.check_satisfaction(
             session=session,
             actor_key=telegram_actor_key(999),
             active_skills=[],  # resolved: public user gets no skills
@@ -855,15 +856,16 @@ def test_credential_check_uses_resolved_skills_not_session():
 def test_credential_check_with_resolved_skills():
     """Credential check with non-empty resolved skills actually checks them."""
     from app.credential_store import init_credential_store_for_config
-    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
+    from app.runtime import composition
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
+        composition.workflows.cache_clear()
         session = SessionState(provider="claude", provider_state=ProviderStateRecord(), approval_mode="off")
         init_credential_store_for_config(make_config(data_dir=data_dir))
 
         # Use a fake skill name — check_credentials returns [] for unknown skills
-        result = get_runtime_skill_setup_use_cases().check_satisfaction(
+        result = composition.workflows().runtime_skills.setup.check_satisfaction(
             session=session,
             actor_key=telegram_actor_key(42),
             active_skills=["nonexistent-skill"],

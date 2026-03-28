@@ -10,15 +10,15 @@ import pytest
 
 import app.runtime_backend as runtime_backend
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
-from app.registry_service.authority import StoreBackedRegistryAuthority
-from app.registry_service.store import RegistrySQLiteStore
+from octopus_registry.authority import StoreBackedRegistryAuthority
+from octopus_registry.store import RegistrySQLiteStore
 from app.runtime.services import build_runtime
 from app.runtime.registry_participant import build_control_plane_registry_participant
 from app.runtime.services import ControlPlaneServices
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
-from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser
+from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import (
     AgentCard,
@@ -36,9 +36,10 @@ from octopus_sdk.registry.models import (
 )
 from octopus_sdk.task_routing import NoOpTaskRouting
 from octopus_sdk.workflows.pending import PendingRequestOutcome
+from octopus_sdk.sessions import PendingApproval
+from octopus_sdk.tests.support import RecordingWorkQueue, make_sdk_harness
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
-from tests.test_sdk_reference_transport import _StubWorkQueue, _WorkflowRecorder, _sdk_runtime
 
 
 def _noop_control_plane_services() -> ControlPlaneServices:
@@ -61,7 +62,9 @@ def _agent_card(*, slug: str, display_name: str) -> AgentCard:
 
 
 async def test_transport_profile_behavioral_suite_uses_sdk_transport_only_runtime(tmp_path: Path) -> None:
-    runtime = _sdk_runtime(tmp_path)
+    harness = make_sdk_harness(tmp_path)
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
     transport = runtime.transport
     assert transport.descriptor.transport_type == "stub"
 
@@ -156,13 +159,21 @@ def test_participant_profile_behavioral_suite_uses_live_state_and_degraded_behav
 
 
 def test_workflow_profile_behavioral_suite_exposes_full_operator_surface(tmp_path: Path) -> None:
-    recorder = _WorkflowRecorder()
-    runtime = _sdk_runtime(tmp_path, recorder=recorder)
+    harness = make_sdk_harness(tmp_path)
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
     session = runtime.sessions.load(
         "stub:conversation:1",
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
         approval_mode=runtime.config.approval_mode,
+    )
+    session.pending_approval = PendingApproval(
+        actor_key="sdk:actor",
+        prompt="run",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash="ctx",
     )
 
     reset = runtime.workflows.conversation.control.reset_session(
@@ -187,39 +198,59 @@ def test_workflow_profile_behavioral_suite_exposes_full_operator_surface(tmp_pat
         active_skills=[],
         compact_mode=False,
     )
+    skill_session = runtime.sessions.load(
+        "stub:conversation:skills",
+        provider_name=runtime.provider.name,
+        provider_state_factory=runtime.provider.new_provider_state,
+        approval_mode=runtime.config.approval_mode,
+    )
     satisfaction = runtime.workflows.runtime_skills.setup.check_satisfaction(
-        session,
+        skill_session,
         actor_key="sdk:actor",
         active_skills=[],
     )
+    recovery_payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id="sdk:actor", username="sdk"),
+            conversation_key="stub:conversation:1",
+            text="recover me",
+            source="stub",
+        ),
+        transport="stub",
+    )
+    payload = runtime.work_queue.record_and_enqueue(
+        runtime.config.data_dir,
+        "evt-cert-recovery",
+        "stub:conversation:1",
+        "sdk:actor",
+        "message",
+        payload=recovery_payload,
+    )
+    assert payload[0] is True
+    assert payload[1] is not None
+    runtime.work_queue.mark_pending_recovery(runtime.config.data_dir, payload[1])
     recovery = runtime.workflows.recovery.replay.prepare_action(
-        session=session,
-        action="replay",
-        update_id=501,
+        data_dir=runtime.config.data_dir,
+        conversation_key="stub:conversation:1",
+        event_id="evt-cert-recovery",
+        action="recovery_replay",
+        worker_id="worker-1",
+        config=runtime.config,
     )
 
     assert reset.status == "reset"
     assert isinstance(approval, PendingRequestOutcome)
-    assert credentials == {"API_KEY": "secret"}
+    assert credentials == {"docs": {"API_KEY": "secret"}}
     assert guidance.provider == runtime.provider.name
     assert satisfaction.status == "satisfied"
-    assert recovery.status == "ready"
-
-    recorded_names = {name for name, _args, _kwargs in recorder.calls}
-    assert {
-        "conversation.reset_session",
-        "pending.approve",
-        "credentials.load_credentials",
-        "provider_guidance.preview",
-        "skills_setup.check_satisfaction",
-        "recovery.prepare_action",
-    } <= recorded_names
+    assert recovery.status == "replay_ready"
 
 
 async def test_infrastructure_profile_behavioral_suite_uses_typed_work_queue_and_authorization(tmp_path: Path) -> None:
-    recorder = _WorkflowRecorder()
-    work_queue = _StubWorkQueue()
-    runtime = _sdk_runtime(tmp_path, recorder=recorder, work_queue=work_queue)
+    work_queue = RecordingWorkQueue()
+    harness = make_sdk_harness(tmp_path, work_queue=work_queue)
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
 
     envelope = InboundEnvelope(
         transport="stub",
@@ -237,7 +268,7 @@ async def test_infrastructure_profile_behavioral_suite_uses_typed_work_queue_and
     result = await runtime.submit(envelope)
     assert result.status == "admitted"
     assert runtime.authorization.access_policy(runtime.config, None) == "allow"
-    assert [name for name, _args, _kwargs in work_queue.calls] == ["record_and_admit_message"]
+    assert work_queue.calls == ["record_and_admit_message"]
 
 
 def test_authority_profile_behavioral_suite_round_trips_store_backed_authority(tmp_path: Path) -> None:

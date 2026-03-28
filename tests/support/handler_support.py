@@ -21,14 +21,20 @@ from app.agents.registry_capabilities import registry_authority_capabilities, re
 import app.runtime.telegram_execution as _telegram_execution
 import app.runtime.telegram_ingress as _th
 import app.runtime.telegram_worker as _telegram_worker
+from app.channels.telegram.bootstrap import TelegramBootstrap
 from app.channels.telegram.bootstrap import build_application
 from app.channels.registry.channel import register_registry_channels
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
+from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime.artifacts import RuntimeArtifactStore
+from app.runtime.session_runtime import LocalSessionRuntime
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
+from octopus_sdk.bot_runtime import BotRuntime, ExecutionServices
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunResult
 from octopus_sdk.sessions import PendingApproval, PendingRetry
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
+from app.skill_activation_service import get_skill_activation_service
 from app.runtime.services import build_bus_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
@@ -155,6 +161,8 @@ def reset_handler_test_runtime() -> None:
     _cs.reset_for_test()
     import app.credential_store as _creds
     _creds.reset_for_test()
+    import app.runtime.composition as _composition
+    _composition.reset_for_test()
 
     global _TEST_RUNTIME, _TEST_APPLICATION
     if _TEST_RUNTIME is not None:
@@ -474,6 +482,9 @@ def set_bot_instance(bot_instance) -> None:
 def set_provider(provider) -> None:
     """Set the current provider on the installed Telegram channel state."""
     current_runtime().provider = provider
+    submitter = current_runtime().submitter
+    if isinstance(submitter, BotRuntime):
+        submitter.provider = provider
 
 
 def current_bot_instance():
@@ -649,7 +660,18 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         services=services,
     )
     dispatcher = TransportDispatcher()
-    dispatcher.register(TelegramTransport(config, provider, services))
+    dispatcher.register(
+        TelegramTransport(
+            config,
+            provider,
+            services,
+            bootstrap=TelegramBootstrap(
+                application=None,
+                runtime=_TEST_RUNTIME,
+                execution_runtime=_telegram_execution.build_execution_runtime(_TEST_RUNTIME),
+            ),
+        )
+    )
     if config.agent_mode == "registry" and config.agent_registries:
         register_registry_channels(
             config,
@@ -658,6 +680,32 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             services=services,
         )
     _TEST_RUNTIME.transport_dispatcher = dispatcher
+    sessions = LocalSessionRuntime(
+        config,
+        catalog=lambda: services.workflows.runtime_skills.catalog,
+    )
+    _TEST_RUNTIME.submitter = BotRuntime(
+        config=config,
+        transport=dispatcher,
+        registry=services.registry,
+        provider=provider,
+        sessions=sessions,
+        workflows=services.workflows,
+        authorization=services.authorization,
+        work_queue=services.work_queue,
+        control_plane=services.control_plane,
+        execution_services=ExecutionServices(
+            guidance=get_provider_guidance_service(),
+            skill_activation=get_skill_activation_service(),
+            runtime_skill_setup=services.workflows.runtime_skills.setup,
+            sessions=sessions,
+            artifacts=RuntimeArtifactStore(config),
+            agent_directory=services.control_plane.agent_directory,
+            conversation_projection=services.control_plane.conversation_projection,
+        ),
+        boot_id=boot_id,
+        cancellations=_TEST_RUNTIME.cancellation_registry,
+    )
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 

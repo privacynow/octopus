@@ -27,7 +27,7 @@ from app.runtime.session_runtime import (
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.processor_runner import ProcessorRunner
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.runtime.registry_participant import AgentRuntime
@@ -35,7 +35,11 @@ from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.config import RegistryConnectionConfig
-from octopus_sdk.identity import conversation_key_for_ref, delegation_session_key
+from octopus_sdk.identity import (
+    conversation_key_for_ref,
+    delegation_session_key,
+    resolve_delegation_parent_identity,
+)
 from octopus_sdk.inbound_types import (
     InboundAction,
     InboundEnvelope,
@@ -45,6 +49,11 @@ from octopus_sdk.inbound_types import (
 )
 from octopus_sdk.providers import Provider
 from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.registry.management import ManagementRequest
+from octopus_sdk.registry.management_executor import (
+    ManagementExecutionContext,
+    execute_management_request,
+)
 from octopus_sdk.transport import (
     BotRuntimeHandle,
     TransportBindingRecord,
@@ -467,11 +476,19 @@ async def handle_registry_delivery(
             registry_id,
             str(payload.get("parent_conversation_id", "")),
         )
+        parent_transport_ref = str(payload.get("parent_transport_ref", "") or "")
         parent_external_conversation_ref = str(
             payload.get("parent_external_conversation_ref", "") or ""
         )
         result = payload.get("result", {})
         if not parent_conversation_id or not routed_task_id or not isinstance(result, dict):
+            return "rejected"
+        parent_target_ref, parent_conversation_key = resolve_delegation_parent_identity(
+            parent_transport_ref=parent_transport_ref,
+            parent_external_conversation_ref=parent_external_conversation_ref,
+            parent_conversation_id=parent_conversation_id,
+        )
+        if not parent_target_ref or not parent_conversation_key:
             return "rejected"
         routed_result = RoutedTaskResult(
             routed_task_id=routed_task_id,
@@ -486,17 +503,16 @@ async def handle_registry_delivery(
         if runtime.dispatcher is None:
             raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
         if not runtime.dispatcher.egress_ready_for_ref(
-            parent_conversation_id,
+            parent_target_ref,
             config=config,
             bot=runtime.bot,
-            conversation_key=conversation_key_for_ref(parent_conversation_id),
+            conversation_key=parent_conversation_key,
             source="registry",
         ):
             return "retry_later"
-        conversation_key = conversation_key_for_ref(parent_conversation_id)
         applied = apply_runtime_delegation_result(
             config.data_dir,
-            conversation_key,
+            parent_conversation_key,
             routed_task_id=routed_task_id,
             authority_ref=registry_authority_ref(registry_id),
             result=routed_result,
@@ -514,32 +530,32 @@ async def handle_registry_delivery(
             return "accepted"
         continuation_text = applied.resume_prompt
         resume_delivery_id = (
-            f"delegation-resume:{parent_conversation_id}:{int(applied.pending.created_at * 1000)}"
+            f"delegation-resume:{parent_target_ref}:{int(applied.pending.created_at * 1000)}"
         )
         envelope = build_registry_message_envelope(
-            conversation_ref=parent_conversation_id,
+            conversation_ref=parent_target_ref,
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
             delivery_id=resume_delivery_id,
-            external_conversation_ref=parent_external_conversation_ref,
+            external_conversation_ref=parent_external_conversation_ref or parent_target_ref,
             registry_id=registry_id,
             skip_approval=True,
+            conversation_key_override=parent_conversation_key,
         )
         submission = await submitter.admit_message(envelope)
         admit_status = submission.status
         if admit_status == "admitted":
             if runtime.dispatcher is None:
                 raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
-            conversation_key = envelope.conversation_key
             channel_egress = runtime.dispatcher.create_egress(
-                parent_conversation_id,
+                parent_target_ref,
                 config=config,
                 bot=runtime.bot,
-                conversation_key=conversation_key,
+                conversation_key=parent_conversation_key,
                 source="registry",
-                external_id=parent_external_conversation_ref,
+                external_id=parent_external_conversation_ref or parent_target_ref,
             )
-            if not parent_conversation_id.startswith("registry:"):
+            if not parent_target_ref.startswith("registry:"):
                 try:
                     await send_delegation_completion_message(applied.pending, channel_egress.send_text)
                 except Exception:
@@ -548,11 +564,11 @@ async def handle_registry_delivery(
             from octopus_sdk.execution import TransportIdentity
 
             transport = TransportIdentity(
-                conversation_key=conversation_key,
+                conversation_key=parent_conversation_key,
                 origin_channel="registry",
                 actor="registry:delegation-resume",
                 external_conversation_ref=(
-                    parent_external_conversation_ref or parent_conversation_id
+                    parent_external_conversation_ref or parent_target_ref
                 ),
                 target_agent_id=runtime_registry_agent_id(config.data_dir, registry_id),
                 conversation_ref="",
@@ -570,8 +586,43 @@ async def handle_registry_delivery(
             ]
             await sink.on_delegation_completed(
                 tasks_summary,
-                proposal_id=(applied.pending.proposal_id or f"delegation:{conversation_key}"),
+                proposal_id=(applied.pending.proposal_id or f"delegation:{parent_conversation_key}"),
             )
+        return "accepted"
+
+    if kind == "management_request":
+        if not registry_id:
+            return "rejected"
+        try:
+            request = ManagementRequest.model_validate(payload)
+        except Exception:
+            return "rejected"
+        registry = next(
+            (item for item in config.agent_registries if item.registry_id == registry_id),
+            None,
+        )
+        if registry is None:
+            return "rejected"
+        state = load_runtime_registry_connection_state(
+            config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if not state.agent_token:
+            return "retry_later"
+        result = await execute_management_request(
+            request,
+            context=ManagementExecutionContext(
+                config=config,
+                workflows=runtime.services.workflows,
+                provider_state_factory=runtime.provider_state_factory,
+            ),
+        )
+        client = AgentRegistryClient(registry.url, agent_token=state.agent_token)
+        try:
+            await client.management_result(request.request_id, result)
+        except Exception:
+            return "retry_later"
         return "accepted"
 
     return "rejected"
@@ -664,6 +715,7 @@ class RegistryDeliveryTransport(TransportImplementation):
                 provider=self._provider,
                 registry=registry,
                 channel_capabilities_resolver=self._dispatcher.active_transport_types,
+                management_capabilities_resolver=lambda: self._services.workflows.management_capabilities,
             )
             self._registry_runtimes[registry.registry_id] = runtime
             self._runtime_tasks[registry.registry_id] = asyncio.create_task(
@@ -759,7 +811,7 @@ class RegistryDeliveryTransport(TransportImplementation):
     @staticmethod
     def _kind_filter_for_scope(registry_scope: str):
         if registry_scope == "channel":
-            return ("channel_input", "channel_action")
+            return ("channel_input", "channel_action", "management_request")
         if registry_scope == "coordination":
             return ("routed_task", "routed_result")
         return None

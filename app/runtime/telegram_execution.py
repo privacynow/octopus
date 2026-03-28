@@ -85,6 +85,7 @@ class _TelegramSessionRuntime:
             config=config,
             provider_name=provider_name,
             trust_tier=trust_tier,
+            catalog=self.state.services.workflows.runtime_skills.catalog,
         )
 
 
@@ -218,6 +219,7 @@ def resolve_context(
         config=runtime.config,
         provider_name=runtime.provider.name,
         trust_tier=trust_tier,
+        catalog=runtime.services.workflows.runtime_skills.catalog,
     )
 
 

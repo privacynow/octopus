@@ -66,6 +66,7 @@ def _resolve_context(
         config=runtime.state.config,
         provider_name=runtime.state.provider.name,
         trust_tier=trust_tier,
+        catalog=_flows().runtime_skills.catalog,
     )
 
 

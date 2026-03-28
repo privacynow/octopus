@@ -27,6 +27,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     TargetSelector,
 )
+from octopus_sdk.registry.management import ManagementResult
 
 
 @runtime_checkable
@@ -92,3 +93,9 @@ class RegistryAuthorityClient(Protocol):
         routed_task_id: str,
         result: RoutedTaskResult,
     ) -> TaskRecord: ...
+
+    async def management_result(
+        self,
+        request_id: str,
+        result: ManagementResult,
+    ) -> ManagementResult: ...

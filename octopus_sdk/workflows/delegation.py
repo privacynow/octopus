@@ -188,6 +188,7 @@ class ProposeDelegationAction:
     title: str
     resume_instruction: str
     tasks: tuple[DelegationTaskDraft, ...]
+    origin_conversation_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         )
         pending = PendingDelegation(
             conversation_ref=action.conversation_ref,
+            origin_conversation_key=action.origin_conversation_key,
             title=action.title,
             resume_instruction=action.resume_instruction,
             tasks=list(tasks),
@@ -407,12 +409,14 @@ def build_delegation_plan(
     resume_instruction: str,
     tasks: list[dict[str, str]],
     *,
+    origin_conversation_key: str = "",
     proposal_id: str = "",
 ) -> PendingDelegation:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=None),
         ProposeDelegationAction(
             conversation_ref=conversation_ref,
+            origin_conversation_key=origin_conversation_key,
             title=title,
             resume_instruction=resume_instruction,
             tasks=tuple(
@@ -829,12 +833,15 @@ async def propose_participant_delegation(
     origin_channel: str,
     external_ref: str,
 ) -> ParticipantDelegationPlan:
+    coordination_external_ref = external_ref
+    if conversation_ref and not conversation_ref.startswith("registry:"):
+        coordination_external_ref = conversation_ref
     conversation_id = await _coordination_conversation_id(
         runtime,
         conversation_key,
         conversation_ref=conversation_ref,
         origin_channel=origin_channel,
-        external_ref=external_ref,
+        external_ref=coordination_external_ref,
         title=title,
     )
     proposal_result = await runtime.coordination.delegate_tasks(
@@ -842,6 +849,7 @@ async def propose_participant_delegation(
         intent=DelegationIntent(
             title=title,
             resume_instruction=intent.resume_instruction,
+            origin_transport_ref=conversation_ref,
             tasks=list(intent.tasks),
         ),
     )
@@ -864,6 +872,7 @@ async def propose_participant_delegation(
             }
             for item in intent.tasks
         ],
+        origin_conversation_key=conversation_key,
         proposal_id=proposal_result.proposal_id or proposal_result.action_id,
     )
     previews = await preview_participant_targets(

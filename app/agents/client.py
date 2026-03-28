@@ -8,6 +8,7 @@ from octopus_sdk.registry.models import AgentCard
 from octopus_sdk.registry.client import RegistryClient as SdkRegistryClient
 from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.registry.models import AckResult
+from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import AgentRecord
 from octopus_sdk.registry.models import AgentDiscoveryQuery
 from octopus_sdk.registry.models import CoordinationActionEnvelope
@@ -112,6 +113,13 @@ class AgentRegistryClient(SdkRegistryClient):
             routed_task_id,
             result,
         )
+
+    async def management_result(
+        self,
+        request_id: str,
+        result: ManagementResult,
+    ) -> ManagementResult:
+        return await super().management_result(request_id, result)
 
     async def poll(
         self,

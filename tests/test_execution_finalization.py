@@ -8,7 +8,7 @@ from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.execution import RequestExecutionOutcome
-from app.workflows.execution.finalization import FinalizationContext, finalize_execution
+from octopus_sdk.workflows.execution_finalization import FinalizationContext, finalize_execution
 
 
 @pytest.mark.asyncio

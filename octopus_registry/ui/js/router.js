@@ -4,7 +4,6 @@
  * a cleanup function that is called after the next route finishes mounting.
  */
 const Router = (() => {
-    const ROUTE_TRANSITION_MS = 220;
     const routes = [];
     let contentEl = null;
     let currentCleanup = null;
@@ -82,53 +81,23 @@ const Router = (() => {
         inner.__routeCleanup = nextCleanup;
     }
 
-    function _finalizeMount(inner, renderId) {
-        if (!contentEl || renderId !== renderSequence) return;
-        const shells = Array.from(contentEl.children);
-        shells.forEach((node) => {
-            if (node === inner) {
-                node.classList.remove('incoming', 'fade-in', 'outgoing', 'fade-out');
-                return;
-            }
-            _cleanupShell(node);
-            node.remove();
-        });
-        contentEl.classList.remove('route-transitioning');
-        currentCleanup = inner.__routeCleanup || null;
-        const main = document.getElementById('content');
-        if (main) main.focus();
-    }
-
     function _swapMountedRoute(inner, renderId, nextCleanup) {
         _prepareShell(inner, nextCleanup);
         if (!contentEl || renderId !== renderSequence) {
             _cleanup(nextCleanup);
             return;
         }
-        const existingShells = Array.from(contentEl.children).filter((node) => node instanceof HTMLElement);
-        if (!existingShells.length) {
-            contentEl.replaceChildren(inner);
-            currentCleanup = nextCleanup;
-            const main = document.getElementById('content');
-            if (main) main.focus();
-            return;
-        }
-        contentEl.classList.add('route-transitioning');
-        existingShells.forEach((node) => node.classList.add('outgoing'));
-        inner.classList.add('incoming');
-        contentEl.appendChild(inner);
+        const previousShell = contentEl.firstElementChild instanceof HTMLElement
+            ? contentEl.firstElementChild
+            : null;
+        contentEl.replaceChildren(inner);
+        currentCleanup = nextCleanup;
+        const main = document.getElementById('content');
+        if (main) main.focus();
+        if (!previousShell) return;
         requestAnimationFrame(() => {
-            if (!contentEl || renderId !== renderSequence) {
-                if (inner.isConnected) inner.remove();
-                _cleanup(nextCleanup);
-                return;
-            }
-            inner.classList.add('fade-in');
-            existingShells.forEach((node) => node.classList.add('fade-out'));
-            window.setTimeout(
-                () => _finalizeMount(inner, renderId),
-                ROUTE_TRANSITION_MS,
-            );
+            if (renderId !== renderSequence) return;
+            _cleanupShell(previousShell);
         });
     }
 

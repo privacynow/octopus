@@ -195,9 +195,10 @@ Conversation work now happens in one flow:
 - use **Full activity** for the full stored event stream when you need
   diagnostics
 
-Route changes now use a two-shell handoff in the SPA router: the old route
-shell stays mounted while the new route shell is mounted and faded in, so the
-UI does not intentionally blank the main content region between routes.
+Route changes now render the next route shell off-DOM and then swap it into
+`#content` in one operation, with old-route cleanup deferred until after the
+new shell mounts. That avoids intentional pre-clearing of the main content
+region.
 
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.

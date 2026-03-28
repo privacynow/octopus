@@ -372,18 +372,6 @@ select {
     position: relative;
 }
 
-#content.route-transitioning {
-    display: grid;
-}
-
-#content.route-transitioning > .content-inner.route-shell {
-    grid-area: 1 / 1;
-}
-
-#content.route-transitioning > .content-inner.route-shell.outgoing {
-    pointer-events: none;
-}
-
 #content > .content-inner {
     max-width: var(--content-max);
     margin: 0 auto;
@@ -391,24 +379,6 @@ select {
 
 #content > .content-inner.workspace-route-wide {
     max-width: var(--content-max-wide);
-}
-
-.route-shell.incoming {
-    opacity: 0;
-}
-
-.route-shell.incoming.fade-in,
-.route-shell.outgoing {
-    opacity: 1;
-}
-
-#content.route-transitioning > .content-inner.route-shell.incoming,
-#content.route-transitioning > .content-inner.route-shell.outgoing {
-    transition: opacity var(--transition-med);
-}
-
-#content.route-transitioning > .content-inner.route-shell.outgoing.fade-out {
-    opacity: 0;
 }
 
 .agent-detail-conversation-groups {

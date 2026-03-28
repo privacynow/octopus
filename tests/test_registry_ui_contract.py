@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_router_keeps_existing_route_visible_until_the_new_route_is_ready() -> None:
+def test_router_swaps_route_shells_without_preclearing_or_dual_shell_crossfade() -> None:
     router_path = (
         Path(__file__).resolve().parents[1]
         / "octopus_registry"
@@ -14,13 +14,14 @@ def test_router_keeps_existing_route_visible_until_the_new_route_is_ready() -> N
     assert "contentEl.textContent = ''" not in text
     assert "async function _render" not in text
     assert "Promise.race" not in text
-    assert "contentEl.appendChild(inner);" in text
-    assert "route-transitioning" in text
+    assert "contentEl.replaceChildren(inner);" in text
+    assert "requestAnimationFrame(() => {" in text
+    assert "_cleanupShell(previousShell);" in text
     assert "route-shell" in text
-    assert "incoming" in text
-    assert "outgoing" in text
-    assert "fade-in" in text
-    assert "fade-out" in text
+    assert "incoming" not in text
+    assert "outgoing" not in text
+    assert "fade-in" not in text
+    assert "fade-out" not in text
     assert "classList.add('loading-route')" not in text
     assert "route-enter" not in text
 

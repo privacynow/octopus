@@ -573,11 +573,11 @@ Important SPA primitives:
   - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
     segmented controls
 - `octopus_registry/ui/js/router.js`
-  - keeps the outgoing route shell mounted while the incoming shell is mounted
-    and faded in
-  - runs route cleanup after the old shell is removed, not before
+  - renders the next route shell off-DOM, then swaps it into `#content` in one
+    `replaceChildren(...)` operation
+  - runs route cleanup after the new shell mounts, not before
   - keeps route rendering synchronous at the shell level; components hydrate
-    their data after mounting rather than forcing a blank handoff
+    their data after mounting
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app

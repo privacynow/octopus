@@ -177,6 +177,9 @@ Current main routes:
 - **Tasks** — routed-task queue with compact summary cards, segmented status
   filters, expandable task rows that stay open across live task refreshes, and
   links back to the parent conversation
+- **Agent detail task threads** — recipient-side routed-task projections are
+  shown separately from direct conversations so delegated work does not blur
+  into ordinary chat history
 - **Usage** — per-conversation token/cost rollups
 - **Capabilities**, **Skills**, **Guidance** — operator configuration and
   catalog surfaces
@@ -191,6 +194,10 @@ Conversation work now happens in one flow:
   leaving the active conversation
 - use **Full activity** for the full stored event stream when you need
   diagnostics
+
+Route changes now use a two-shell handoff in the SPA router: the old route
+shell stays mounted while the new route shell is mounted and faded in, so the
+UI does not intentionally blank the main content region between routes.
 
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.
@@ -220,6 +227,10 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
   the SDK owns the workflow graph
 - `app/runtime/transport_builders.py` registers Telegram plus registry-scoped
   delivery transports behind one dispatcher
+- `octopus_sdk.transport.BotRuntimeHandle` now includes direct delegation
+  continuation; routed-task results resume the parent transport through
+  `BotRuntime.continue_delegation(...)` instead of re-entering the runtime as
+  a synthetic fresh inbound message
 - once composition is complete, `BotRuntime.run()` owns transport startup,
   worker admission, claim processing, and shutdown
 - `octopus_registry/main.py` is the standalone registry server entrypoint
@@ -243,8 +254,21 @@ Delegation and routed work are now structured end to end:
 
 - registry-origin direct assignment and delegation go through typed
   conversation actions
+- routed-task results resume the original parent transport through the SDK
+  continuation seam, preserving the parent transport ref/key instead of
+  fabricating a new inbound user message
 - routed tasks use explicit lifecycle transitions such as `queued`, `leased`,
   `running`, `completed`, `failed`, `cancelled`, and `timed_out`
+- recipient-side routed-task projections are typed as task threads in the
+  registry store and UI instead of being treated as ordinary conversations
+
+The serialized inbound contract also carries an explicit admission class:
+
+- `external` for normal Telegram or registry-origin user/operator ingress
+- `internal` for SDK-owned replay/recovery work
+
+That lets the runtime distinguish real external access control from internal
+replay/recovery flows without transport-specific hacks.
 
 ## SDK Wiring Verification
 

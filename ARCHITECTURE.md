@@ -204,8 +204,8 @@ server does not define its own private wire types for these surfaces.
 
 | Module | Owns |
 |---|---|
-| `octopus_sdk.transport` | unified bot-side transport contract: `TransportDescriptor`, `TransportImplementation`, `TransportEgress`, `BotRuntimeHandle` |
-| `octopus_sdk.inbound_types` | canonical `InboundEnvelope` taxonomy for normalized inbound work |
+| `octopus_sdk.transport` | unified bot-side transport contract: `TransportDescriptor`, `TransportImplementation`, `TransportEgress`, `BotRuntimeHandle`, and delegation continuation |
+| `octopus_sdk.inbound_types` | canonical inbound event and `InboundEnvelope` taxonomy for normalized inbound work, including serialized `admission_class` |
 | `octopus_sdk.bot_runtime` | provider-dispatch runtime collaborators and typed runtime support ports |
 | `octopus_sdk.identity` | actor/conversation key parsing, Telegram ref helpers, stable bot identity helpers |
 | `octopus_sdk.registry_participant` | bot-side registry participation: enrollment, discovery, mirroring, coordination, and health |
@@ -282,6 +282,13 @@ The current coordination model has two explicit lanes:
 
 The coordination lane is no longer based on provider-emitted XML. Registry and
 Telegram coordination go through typed SDK and registry contracts.
+
+One important consequence of the current SDK shape: routed-task completion does
+not resume the parent chat by fabricating a new inbound user message. The
+registry delivery transport resolves the original parent transport identity and
+calls the SDK continuation seam (`BotRuntime.continue_delegation(...)`) so the
+resume stays on the original transport/ref while reusing the stored parent
+session state.
 
 Current typed action family in `octopus_sdk.registry.models`:
 
@@ -565,6 +572,12 @@ Important SPA primitives:
   - `UI.reconcileChildren(...)` wraps `morphdom` for keyed DOM reconciliation
   - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
     segmented controls
+- `octopus_registry/ui/js/router.js`
+  - keeps the outgoing route shell mounted while the incoming shell is mounted
+    and faded in
+  - runs route cleanup after the old shell is removed, not before
+  - keeps route rendering synchronous at the shell level; components hydrate
+    their data after mounting rather than forcing a blank handoff
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app
@@ -579,6 +592,10 @@ types:
 - tasks: cross-conversation routed-task queue
 - agents: health and direct entry into work
 - usage: cost/token accounting tied back to conversations
+
+Recipient-side routed work is also projected as `task_thread` conversations and
+rendered separately from direct conversations in agent and conversation lists,
+so delegated work is visible without pretending it is ordinary chat history.
 
 Conversation detail in `octopus_registry/ui/js/components/conversation-detail.js` is also the
 main operator entrypoint for structured coordination today:
@@ -651,17 +668,22 @@ This is how one bot delegates work to another through the registry now.
 ```mermaid
 sequenceDiagram
     participant O as Origin runtime or UI
-    participant RP as Registry participant
+    participant RP as Origin registry participant
     participant R as Registry service
-    participant DT as Registry delivery transport
+    participant TD as Target delivery transport
     participant G as Target runtime
+    participant OD as Origin delivery transport
+    participant BR as Origin BotRuntime
+    participant PT as Parent transport egress
 
     O->>RP: direct assign or delegate tasks
     RP->>R: typed action and routed task request
-    R->>DT: delivery available
-    DT->>G: submit routed task envelope
+    R->>TD: delivery available
+    TD->>G: submit routed task envelope
     G->>R: task status / result
-    R->>O: mirrored task status and routed result
+    R->>OD: routed result delivery
+    OD->>BR: continue_delegation(request)
+    BR->>PT: resume on original parent transport ref
 ```
 
 Parent conversations also receive mirrored `task.status` events so delegated

@@ -1,7 +1,7 @@
 /**
  * Usage view — compact rollup with conversation table.
  */
-function renderUsageView(container) {
+async function renderUsageView(container) {
     const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
     let hasLoaded = false;
@@ -150,25 +150,26 @@ function renderUsageView(container) {
         UI.reconcileChildren(tableEl, [wrap]);
     }
 
-    function loadUsage({ soft = false } = {}) {
+    async function loadUsage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
             UI.reconcileChildren(summaryEl, UI.createSkeletonNodes(3, 'card'));
             UI.reconcileChildren(tableEl, UI.createSkeletonNodes(4, 'row'));
         }
-        API.getUsage(_rangeToParams(currentRange)).then((usage) => {
+        try {
+            const usage = await API.getUsage(_rangeToParams(currentRange));
             const daily = usage.daily_total || {};
             const rows = Array.isArray(usage) ? usage : (usage.by_conversation || []);
             renderSummary(daily);
             renderTable(rows);
             hasLoaded = true;
-        }).catch((err) => {
+        } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh usage', err, { context: 'Usage soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(summaryEl, []);
             UI.reconcileChildren(tableEl, [UI.createErrorCard('Failed to load usage: ' + err.message, loadUsage)]);
-        });
+        }
     }
 
     let reloadDebounce = null;
@@ -178,6 +179,6 @@ function renderUsageView(container) {
     }));
 
     syncRangeButtons();
-    loadUsage();
+    await loadUsage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

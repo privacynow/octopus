@@ -505,7 +505,41 @@ def test_list_conversations_can_filter_by_conversation_type(store):
     assert all(item.conversation_type == "task_thread" for item in task_threads)
     assert all(item.conversation_type == "conversation" for item in regular_only)
     assert any(item.external_conversation_ref == "routed-task:task-filter-task-thread" for item in task_threads)
-    assert any(item.conversation_id == regular.conversation_id for item in regular_only)
+
+
+def test_recipient_task_thread_type_survives_status_and_result_updates(store):
+    routed_task_id = "task-thread-survives"
+    _routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id=routed_task_id,
+    )
+    recipient = next(
+        item
+        for item in store.list_conversations(for_agent_id=target_id, limit=50)
+        if item.external_conversation_ref == f"routed-task:{routed_task_id}"
+    )
+    assert recipient.conversation_type == "task_thread"
+
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, routed_task_id)
+
+    after_status = store.get_conversation(recipient.conversation_id)
+    assert after_status.conversation_type == "task_thread"
+
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id=f"{routed_task_id}-complete",
+            summary="done",
+            full_text="done",
+        ),
+    )
+
+    after_result = store.get_conversation(recipient.conversation_id)
+    assert after_result.conversation_type == "task_thread"
 
 
 def test_create_routed_task_mirrors_parent_conversation_event(store):

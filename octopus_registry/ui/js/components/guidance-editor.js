@@ -1,7 +1,7 @@
 /**
  * Provider guidance editor — compact provider-scoped draft and publish workflow.
  */
-function renderGuidanceEditor(container) {
+async function renderGuidanceEditor(container) {
     const cleanups = UI.beginCleanupScope();
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -125,7 +125,7 @@ function renderGuidanceEditor(container) {
     });
     UI.bindSegmentedControlKeyboard(providerBar, (target) => applyProvider(target.dataset.value || 'claude'));
 
-    function loadGuidance() {
+    async function loadGuidance() {
         if (!currentAgentId) {
             UI.reconcileChildren(contentEl, [
                 UI.renderEmptyState('No connected bot advertises provider guidance management.', true),
@@ -133,29 +133,31 @@ function renderGuidanceEditor(container) {
             return;
         }
         UI.reconcileChildren(contentEl, UI.createSkeletonNodes(2, 'card'));
-        API.getGuidance(currentAgentId, currentProvider).then((data) => {
+        try {
+            const data = await API.getGuidance(currentAgentId, currentProvider);
             renderGuidanceContent(data.guidance || data);
-        }).catch((err) => {
+        } catch (err) {
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load guidance: ' + err.message, loadGuidance)]);
-        });
+        }
     }
 
-    function loadAgents({ soft = false } = {}) {
+    async function loadAgents({ soft = false } = {}) {
         if (!soft) {
             agentSelect.disabled = true;
             UI.reconcileChildren(contentEl, UI.createSkeletonNodes(2, 'card'));
         }
-        API.listAgents({ limit: 200 }).then((data) => {
+        try {
+            const data = await API.listAgents({ limit: 200 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
             if (requested) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            loadGuidance();
-        }).catch((err) => {
+            await loadGuidance();
+        } catch (err) {
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);
-        });
+        }
     }
 
     function renderGuidanceContent(guidance) {
@@ -310,7 +312,7 @@ function renderGuidanceEditor(container) {
         loadGuidance();
     });
 
-    loadAgents();
+    await loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

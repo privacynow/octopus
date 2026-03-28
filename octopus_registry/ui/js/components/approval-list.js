@@ -1,7 +1,7 @@
 /**
  * Approvals — compact decision queue.
  */
-function renderApprovalList(container) {
+async function renderApprovalList(container) {
     const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
@@ -172,16 +172,19 @@ function renderApprovalList(container) {
         hasLoaded = true;
     }
 
-    function loadPage({ soft = false } = {}) {
+    async function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) setLoading();
-        API.listApprovals({ cursor, limit }).then(renderRows).catch((err) => {
+        try {
+            const data = await API.listApprovals({ cursor, limit });
+            renderRows(data);
+        } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh approvals', err, { context: 'Approval list soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load approvals: ' + err.message, loadPage)]);
             UI.reconcileChildren(pagEl, []);
-        });
+        }
     }
 
     let reloadDebounce = null;
@@ -190,6 +193,6 @@ function renderApprovalList(container) {
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));
 
-    loadPage();
+    await loadPage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

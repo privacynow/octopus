@@ -1,7 +1,7 @@
 /**
  * Conversation list — direct work start plus active thread roster.
  */
-function renderConversationList(container) {
+async function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
     const QUICK_START_INLINE_LIMIT = 8;
     const CONVERSATION_TYPES = [
@@ -261,23 +261,24 @@ function renderConversationList(container) {
         UI.reconcileChildren(quickStart, [shell]);
     }
 
-    function loadQuickStart({ soft = false } = {}) {
+    async function loadQuickStart({ soft = false } = {}) {
         if (!soft || !quickStartLoaded) {
             UI.reconcileChildren(quickStart, UI.createSkeletonNodes(1, 'card'));
         }
-        API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 }).then((data) => {
+        try {
+            const data = await API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 });
             const agents = data.agents || data || [];
             renderQuickStart(agents.slice(0, QUICK_START_INLINE_LIMIT), {
                 hasOverflow: !!data.has_more || agents.length > QUICK_START_INLINE_LIMIT,
             });
             quickStartLoaded = true;
-        }).catch((err) => {
+        } catch (err) {
             if (soft && quickStartLoaded) {
                 UI.reportError('Failed to refresh connected agents', err, { context: 'Conversation quick start soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(quickStart, [UI.createErrorCard('Failed to load connected agents: ' + err.message, loadQuickStart)]);
-        });
+        }
     }
 
     function renderRows(conversations, data) {
@@ -328,7 +329,7 @@ function renderConversationList(container) {
         hasLoaded = true;
     }
 
-    function loadPage({ soft = false } = {}) {
+    async function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
             UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
             UI.reconcileChildren(pagEl, []);
@@ -337,16 +338,17 @@ function renderConversationList(container) {
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;
         if (currentType) params.conversation_type = currentType;
-        API.listConversations(params).then((data) => {
+        try {
+            const data = await API.listConversations(params);
             renderRows(data.conversations || data || [], data);
-        }).catch((err) => {
+        } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadPage)]);
             UI.reconcileChildren(pagEl, []);
-        });
+        }
     }
 
     let quickStartReload = null;
@@ -362,8 +364,7 @@ function renderConversationList(container) {
 
     syncStatusButtons();
     syncTypeButtons();
-    loadQuickStart();
-    loadPage();
+    await Promise.all([loadQuickStart(), loadPage()]);
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(quickStartReload));

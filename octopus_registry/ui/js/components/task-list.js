@@ -1,7 +1,7 @@
 /**
  * Task view — compact routed-work queue with status filters.
  */
-function renderTaskList(container) {
+async function renderTaskList(container) {
     const cleanups = UI.beginCleanupScope();
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -394,39 +394,41 @@ function renderTaskList(container) {
         lastTaskListSignature = nextSignature;
     }
 
-    function loadSummary({ soft = false } = {}) {
+    async function loadSummary({ soft = false } = {}) {
         if (!soft || !summaryLoaded) {
             UI.reconcileChildren(summaryRail, UI.createSkeletonNodes(3, 'card'));
         }
-        API.getSummary().then((summary) => {
+        try {
+            const summary = await API.getSummary();
             renderSummary(summary);
             summaryLoaded = true;
-        }).catch((err) => {
+        } catch (err) {
             if (soft && summaryLoaded) {
                 UI.reportError('Failed to refresh task summary', err, { context: 'Task summary soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(summaryRail, [UI.createErrorCard('Failed to load task summary: ' + err.message, loadSummary)]);
-        });
+        }
     }
 
-    function loadList({ soft = false } = {}) {
+    async function loadList({ soft = false } = {}) {
         if (!soft || !listLoaded) {
             UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'card'));
             UI.reconcileChildren(pagEl, []);
         }
         const params = { cursor, limit };
         if (currentStatus) params.status = currentStatus;
-        API.listTasks(params).then((data) => {
+        try {
+            const data = await API.listTasks(params);
             renderList(data.tasks || data || [], data);
-        }).catch((err) => {
+        } catch (err) {
             if (soft && listLoaded) {
                 UI.reportError('Failed to refresh tasks', err, { context: 'Task list soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load tasks: ' + err.message, loadList)]);
             UI.reconcileChildren(pagEl, []);
-        });
+        }
     }
 
     let reloadDebounce = null;
@@ -439,8 +441,7 @@ function renderTaskList(container) {
     }));
 
     syncStatusButtons();
-    loadSummary();
-    loadList();
+    await Promise.all([loadSummary(), loadList()]);
 
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

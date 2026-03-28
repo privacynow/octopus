@@ -88,6 +88,7 @@ class InboundMessage:
     authorized_actor_key: str = ""
     skip_approval: bool = False
     transport: str = ""
+    admission_class: str = "external"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source", _validated_source(self.source))
@@ -174,6 +175,7 @@ class InboundEnvelope:
     received_at: datetime
     event: InboundMessage | InboundCommand | InboundCallback | InboundAction
     conversation_ref: str = ""
+    admission_class: str = "external"
 
     @property
     def kind(self) -> str:
@@ -211,6 +213,7 @@ def serialize_inbound(
                 "authority_ref": event.authority_ref,
                 "authorized_actor_key": event.authorized_actor_key,
                 "skip_approval": event.skip_approval,
+                "admission_class": event.admission_class,
                 "attachments": [
                     {
                         "path": str(a.path),
@@ -268,6 +271,8 @@ def serialize_inbound(
 def deserialize_inbound(
     kind: str,
     payload_json: str,
+    *,
+    admission_class: str | None = None,
 ) -> InboundMessage | InboundCommand | InboundCallback | InboundAction:
     """Reconstruct a normalized inbound event from stored JSON."""
 
@@ -293,6 +298,9 @@ def deserialize_inbound(
     if source == "registry" and kind in {"message", "action"} and not authority_ref:
         raise ValueError("Registry inbound payload missing canonical authority_ref")
     if kind == "message":
+        resolved_admission_class = str(
+            admission_class or data.get("admission_class", "external") or "external"
+        ).strip() or "external"
         attachments = tuple(
             InboundAttachment(
                 path=Path(item["path"]),
@@ -315,6 +323,7 @@ def deserialize_inbound(
             authority_ref=authority_ref,
             authorized_actor_key=str(data.get("authorized_actor_key", "") or ""),
             skip_approval=bool(data.get("skip_approval", False)),
+            admission_class=resolved_admission_class,
         )
     if kind == "command":
         return InboundCommand(

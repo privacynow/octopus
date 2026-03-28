@@ -1212,7 +1212,6 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
             ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
                 title = excluded.title,
-                conversation_type = excluded.conversation_type,
                 updated_at = excluded.updated_at
             """,
             (
@@ -1637,6 +1636,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     conn,
                     target_agent_id=str(task_row["target_agent_id"] or ""),
                     title=str(task_row["title"] or routed_task_id),
+                    conversation_type="task_thread",
                     origin_channel="registry",
                     external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
                     now=occurred_at,
@@ -1837,6 +1837,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     conn,
                     target_agent_id=str(task["target_agent_id"] or ""),
                     title=str(task["title"] or routed_task_id),
+                    conversation_type="task_thread",
                     origin_channel="registry",
                     external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
                     now=completed_at,

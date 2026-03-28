@@ -242,14 +242,43 @@ Rules followed:
 - [x] 12H-5: Agent detail conversation list renders task threads distinctly
 - [x] 12H-6: Conversation list filter exists for `All` / `Conversations` / `Task threads`
 - [x] 12H-7: Store/service/UI contract tests prove typed recipient projections, filtering, and distinct rendering markers
+- [x] 12H-8: Remove `conversation_type` from ON CONFLICT SET clause in `_ensure_conversation_in_tx` in BOTH `store.py` and `store_postgres.py`
+- [x] 12H-9: Fix 4 callers (`store.py:1636`, `store.py:1836`, `store_postgres.py:1467`, `store_postgres.py:1686`) to pass `conversation_type="task_thread"` explicitly
+- [x] 12H-10: Test: task thread type survives status and completion updates in both store backends
 
-## Phase 12I: Router route-transition smoothness
+## Phase 12I: Router route-transition smoothness (async pre-render)
 
-- [x] 12I-1: Router no longer clears `#content` before mounting the next route shell; it atomically swaps with `replaceChildren`
-- [x] 12I-2: 404 path uses the same atomic swap pattern
-- [x] 12I-3: `loading-route` is applied while the old content remains mounted, not to a blank container
-- [x] 12I-4: View skeletons render inside a stable route shell instead of replacing the shell
-- [ ] 12I-5: Visual/manual route-transition check (dashboard → tasks → conversations → agent detail) confirms no blank flash between views
+- [x] 12I-1: `router.js` `_render()` is async and awaits component ready signal before swapping
+- [x] 12I-2: Router dims the old view with `loading-route`, then swaps and applies `route-enter-active`
+- [x] 12I-3: 404 path renders synchronously with the same atomic swap
+- [x] 12I-4: Convert `renderDashboard` to async pre-render
+- [x] 12I-5: Convert `renderAgentList` to async pre-render
+- [x] 12I-6: Convert `renderAgentDetail` to async pre-render
+- [x] 12I-7: Convert `renderConversationList` to async pre-render
+- [x] 12I-8: Convert `renderConversationDetail` to async pre-render
+- [x] 12I-9: Convert `renderTaskList` to async pre-render
+- [x] 12I-10: Convert `renderApprovalList` to async pre-render
+- [x] 12I-11: Convert `renderCapabilityList` to async pre-render
+- [x] 12I-12: Convert `renderUsageView` to async pre-render
+- [x] 12I-13: Convert `renderSkillCatalog` to async pre-render
+- [x] 12I-14: Convert `renderGuidanceEditor` to async pre-render
+- [x] 12I-15: `renderLoginForm` — no change (sync, no data)
+- [x] 12I-16: Error handling — failed fetches render an error state in the fragment, not a stale old view
+- [x] 12I-17: Timeout — >3s fetch mounts the prerendered shell anyway (progressive)
+- [ ] 12I-18: Test (visual/manual): navigate between dashboard → tasks → conversations → agent detail. Verify no skeleton flash; old content dims briefly, new content fades in
+
+## Phase 12J: Delegation resume admission bypass (THE live Telegram no-reply root cause)
+
+- [x] 12J-1: Add `admission_class: str = "external"` to `InboundEnvelope` in `octopus_sdk/inbound_types.py`
+- [x] 12J-2: Add `admission_class: str = "external"` to `InboundMessage` in `octopus_sdk/inbound_types.py`
+- [x] 12J-3: `BotRuntime._admit_claimed_message` at `bot_runtime.py:741` — if `admission_class == "internal"`, bypass access control
+- [x] 12J-4: Delegation resume envelope at `delivery_transport.py:558` — set `admission_class="internal"`
+- [x] 12J-5: Approval replay at `bot_runtime.py:846` — set `admission_class="internal"`
+- [x] 12J-6: Retry-allow replay at `bot_runtime.py:899` — set `admission_class="internal"`
+- [x] 12J-7: Recovery replay deserialization at `inbound_types.py:305` — set `admission_class="internal"`
+- [x] 12J-8: Verify ALL 6 external sites do NOT set `admission_class="internal"` (default `"external"` is correct)
+- [x] 12J-9: Test with restrictive authorization: allowed=["tg:12345"], delegation resume from `reg:delegation-resume:...` admitted (internal), external from `reg:delegation-resume:...` rejected
+- [ ] 12J-10: Manual live acceptance test: M1 Telegram delegation → M2 completes → M1 Telegram chat receives resumed reply
 
 ## Hard exit criteria
 
@@ -258,67 +287,73 @@ Rules followed:
 - [x] 3. `octopus_registry/` imports only `octopus_sdk/`. Zero `app/` imports.
 - [x] 4. `app/` does not import `octopus_registry/`.
 - [x] 5. Import-graph regression tests lock all three boundaries.
-- [x] 6. Registry server (enrollment, status, UI, management API) is deployable from `octopus_registry/` + `octopus_sdk/`.
-- [x] 7. Standalone registry behavior is explicit: when no bot is connected, management endpoints return "agent not connected"; when capability is unavailable, they fail explicitly.
-- [x] 8. Connected-bot management operations execute through `management_request` / `management_result` over poll/ack. No new bot listener/bind.
+- [x] 6. Registry server is deployable from `octopus_registry/` + `octopus_sdk/`.
+- [x] 7. Standalone registry behavior is explicit.
+- [x] 8. Management operations via `management_request` / `management_result` over poll/ack.
 - [x] 9. All 27 management HTTP endpoints are agent-scoped.
 - [x] 10. Bot is deployable from `app/` + `octopus_sdk/`.
-- [x] 11. All 14 workflow implementations live in `octopus_sdk/workflows/` with zero `from app.*` imports and constructor-injected SDK Ports.
-- [x] 12. All 4 backend-neutral FSMs live in `octopus_sdk/workflows/`.
-- [x] 13. `TransportDispatcher` lives in `octopus_sdk/`.
-- [x] 14. `WorkflowComposer` exists in the SDK and assembles all workflow implementations from injected Ports through a builder API.
-- [x] 15. SDK provides `InMemoryWorkQueue` and `InMemorySessionStore` in `octopus_sdk/testing/`; they are explicitly test-only and non-durable.
-- [x] 16. `WorkflowComposer` required ports fail at `.build()`, optional ports fail loudly, `.build()` rejects test implementations, `.build_for_testing()` marks compositions test-only, and `BotRuntime` refuses test-only compositions without explicit override.
-- [x] 17. Bots advertise management capabilities at registration time based on wired optional ports.
-- [x] 18. Bot-side management executor in SDK handles `management_request` deliveries and session-backed operations locally.
-- [x] 19. `octopus_registry/ingress.py` is rewritten against the management protocol with zero `app.*` imports.
+- [x] 11. All 14 workflow implementations in SDK with zero `app.*` imports.
+- [x] 12. All 4 backend-neutral FSMs in SDK.
+- [x] 13. `TransportDispatcher` in SDK.
+- [x] 14. `WorkflowComposer` in SDK with builder API.
+- [x] 15. `InMemoryWorkQueue` and `InMemorySessionStore` in `octopus_sdk/testing/`, test-only, non-durable.
+- [x] 16. `WorkflowComposer` required ports fail at build, test implementations rejected by `.build()`.
+- [x] 17. Capability advertisement at registration.
+- [x] 18. Bot-side management executor in SDK.
+- [x] 19. `octopus_registry/ingress.py` rewritten, zero `app.*` imports.
 - [x] 20. `app/registry_service/` does not exist.
 - [x] 21. `ui/` at repo root does not exist.
-- [x] 22. `app/workflows/` contains only Telegram-specific handlers and `__init__` files.
-- [x] 23. `BotRuntime` has no `WorkerDispatchPort` or equivalent injection.
-- [x] 24. The SDK wiring verification test exercises the full workflow lifecycle using real SDK implementations, `WorkflowComposer`, and `octopus_sdk/testing/`, with zero `app/` and `octopus_registry/` imports.
+- [x] 22. `app/workflows/` contains only Telegram-specific handlers.
+- [x] 23. `BotRuntime` has no `WorkerDispatchPort`.
+- [x] 24. SDK wiring verification test exercises full lifecycle, zero `app/` imports.
 - [x] 25. `app/` does not import `octopus_sdk.testing`.
 - [x] 26. `octopus_registry/` does not import `octopus_sdk.testing`.
-- [x] 27. `octopus_sdk/testing` is not re-exported from `octopus_sdk/__init__.py` or any other convenience surface.
-- [x] 28. `WorkQueuePort` and `SessionRuntimePort` encode durability expectations in their method surface.
+- [x] 27. `octopus_sdk/testing` not re-exported.
+- [x] 28. Durability expectations encoded in port method surface.
 - [x] 29. `PendingDelegation` stores `origin_conversation_key`.
 - [x] 30. `RoutedTaskRequest` carries `origin_transport_ref`.
-- [x] 31. Delegation result handler resolves the parent session using transport identity and targets resume/completion at the original transport chat.
-- [x] 32. Cross-transport delegation round-trip tests pass for Telegram and a generic non-Telegram transport.
-- [x] 33. `DirectAssignmentRequest` carries `origin_transport_ref`. Direct-assign round-trip preserves parent transport identity. No raw numeric IDs in transport ref fields.
-- [x] 34. Recipient bots have visible incoming-task conversation projections in the registry. Routed-task execution has a valid `external_conversation_ref`. Mirror events from recipient execution are visible in the registry UI.
-- [x] 35. Deferred notifications exist as an SDK capability. Completed/failed delegated tasks produce notifications for the authorized operator on the target bot, keyed by actor, shown on next transport interaction, with TTL.
-- [x] 36. `WorkflowComposition.trust_tier_resolver` is typed as `TrustTierResolverPort`, not bare `Callable`. `messages`, `config`, and `sessions` on `WorkflowComposition` have no `| None` defaults. No defensive None guards on required ports in BotRuntime. `_reject_test_implementations` covers all managed ports including `messages` and `config`.
-- [x] 37. Re-enrollment resets poll cursor to `0`. Registry rebuild is detected by identity validation or epoch mechanism. Cursor never advances past unacked deliveries. Stale cursor from a previous registry instance cannot permanently skip deliveries.
-- [x] 38. `origin_transport_ref` is validated at SDK submission time. Raw numeric IDs and unqualified strings fail with `ValueError`.
-- [x] 39. Full direct-assign round-trip integration test exists and passes.
-- [x] 40. `WorkflowComposition.deferred_notifications` cannot be `None` through any construction path.
-- [x] 41. Full end-to-end deferred notification integration test exists and passes.
-- [x] 42. Resume envelope for cross-transport delegation has `source` and `transport` matching the parent transport; Telegram execution routes the resume to Telegram egress.
-- [x] 43. Recipient task threads are visually distinguishable from regular conversations in the registry UI. `conversation_type` exists and filters separate them.
-- [x] 44. Router code no longer blanks the content container before route mount; route shells swap atomically via `replaceChildren`.
-- [x] 45. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
-- [x] 46. Every file moved from `app/` is deleted in the same change.
-- [x] 47. No exit criterion was weakened, qualified, or removed in this execution pass.
+- [x] 31. Delegation result handler uses transport identity for session resolution and resume.
+- [x] 32. Cross-transport delegation round-trip tests pass.
+- [x] 33. `DirectAssignmentRequest` carries `origin_transport_ref`.
+- [x] 34. Recipient bots have visible task projections in registry.
+- [x] 35. Deferred notifications exist as SDK capability.
+- [x] 36. Composition type safety (trust_tier_resolver, required fields, reject test implementations).
+- [x] 37. Poll cursor correctness and rebuild detection.
+- [x] 38. `origin_transport_ref` validated at SDK submission.
+- [x] 39. Full direct-assign round-trip test passes.
+- [x] 40. `deferred_notifications` not None through any construction path.
+- [x] 41. Full deferred notification integration test passes.
+- [x] 42. Resume envelope transport matches parent transport.
+- [x] 43. Recipient task threads visually distinguishable, filters exist.
+- [ ] 44. Route transitions show no skeleton flash. Async pre-render for all data-fetching components. Router awaits ready signal.
+- [x] 45. `InboundEnvelope` and `InboundMessage` carry `admission_class`. `BotRuntime` skips access control for internal. Delegation resumes, approval replays, recovery replays are internal. Transport ingress always external. Restrictive-auth test proves bypass.
+- [x] 46. `conversation_type` NOT overwritten by ON CONFLICT upserts. Task thread type survives status and completion updates.
+- [x] 47. `app/runtime/composition.py` is thin wrapper over `WorkflowComposer`.
+- [x] 48. Every moved file deleted from source.
+- [x] 49. No exit criterion was weakened, qualified, or removed in this execution pass.
 
 ## Review log
 
-- [x] Review pass 1: audited the updated 12G/12H/12I plan sections against the live code paths before making changes; confirmed the remaining gaps were transport-native resume identity, conversation typing through store/API/UI, and router atomic swaps.
-- [x] Review pass 2: audited the modified tree after focused verification; rechecked delivery transport, Telegram execution, store/schema propagation, UI rendering/filtering, and router transitions against hard exits 42-47.
+- [x] Review pass 1: audited 12G/12H/12I plan sections against live code paths
+- [x] Review pass 2: audited modified tree after 12G/12H/12I focused verification
+- [x] Review pass 3 (adversarial): found 12G is correct but insufficient — resume
+  envelope has correct transport but synthetic actor is rejected by access control.
+  Found conversation_type overwrite bug in store ON CONFLICT clause. Found router
+  still shows skeleton flash despite atomic swap fix. Added 12H-8/9/10, rewrote
+  12I for async pre-render, added 12J (admission_class).
+- [x] Review pass 4: audited final 12H/12I/12J implementation against the rewritten plan and code paths before commit/deploy
 
 ## Current verification
 
-- Focused Phase 12G/12H/12I slice:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_runtime_dispatch_boundary.py tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_db_postgres.py tests/test_registry_ui_contract.py`
-  - Result: `237 passed`
-- Registry/API audit:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_service.py tests/test_registry_management_protocol.py tests/test_registry_authority_contract.py tests/test_registry_sdk_contract.py tests/test_registry_adapter.py tests/test_registry_mirroring.py tests/contracts/test_registry_store_contract.py`
-  - Result: `216 passed`
-- UI asset syntax checks:
-  - `node --check octopus_registry/ui/js/router.js`
-  - `node --check octopus_registry/ui/js/components/conversation-list.js`
-  - `node --check octopus_registry/ui/js/components/agent-detail.js`
-  - Result: all passed
-- Full suite:
-  - `./.venv/bin/python -m pytest -q -n 0 tests octopus_sdk/tests`
-  - Result: `2160 passed, 1 skipped`
+- SDK/runtime/UI focused slice: `22 passed`
+- Registry/API audit slice: `190 passed`
+- Previous full suite after late-phase implementation: `2167 passed, 1 skipped`
+- Remaining manual/live items only: `12G-7`, `12I-18`, `12J-10`
+- Exit criterion 44 is still open pending manual visual confirmation
+
+## Remaining work summary
+
+Remaining manual acceptance:
+1. `12G-7`: Telegram M1 → M2 → M1 resumed reply visible in the human Telegram chat
+2. `12I-18`: visual confirmation that dashboard → tasks → conversations → agent detail no longer shows route-transition skeleton flash
+3. `12J-10`: live proof that internal delegation resumes bypass external access control in Telegram

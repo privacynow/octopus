@@ -1,7 +1,7 @@
 /**
  * Capability list — global capability overrides with toggle switches.
  */
-function renderCapabilityList(container) {
+async function renderCapabilityList(container) {
     const cleanups = UI.beginCleanupScope();
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -21,10 +21,10 @@ function renderCapabilityList(container) {
     listEl.className = 'list-container';
     listWrap.appendChild(listEl);
 
-    function loadCapabilities() {
+    async function loadCapabilities() {
         UI.reconcileChildren(listEl, UI.createSkeletonNodes(4, 'row'));
-
-        API.listCapabilities().then(caps => {
+        try {
+            const caps = await API.listCapabilities();
             if (!caps || caps.length === 0) {
                 UI.reconcileChildren(listEl, [UI.renderEmptyState('No capabilities declared.', true)]);
                 return;
@@ -87,12 +87,12 @@ function renderCapabilityList(container) {
                 return row;
             });
             UI.reconcileChildren(listEl, rows);
-        }).catch(err => {
+        } catch (err) {
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadCapabilities)]);
-        });
+        }
     }
 
-    loadCapabilities();
+    await loadCapabilities();
 
     let reloadDebounce = null;
     const unsub = WS.subscribe('agents', () => {

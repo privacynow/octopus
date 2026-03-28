@@ -1,7 +1,7 @@
 /**
  * Agent detail — compact profile with direct conversation entry.
  */
-function renderAgentDetail(container, params) {
+async function renderAgentDetail(container, params) {
     const agentId = params.id;
     const cleanups = UI.beginCleanupScope();
     let convosCursor = 0;
@@ -247,7 +247,7 @@ function renderAgentDetail(container, params) {
         conversationsLoaded = true;
     }
 
-    function loadConversations({ soft = false } = {}) {
+    async function loadConversations({ soft = false } = {}) {
         const list = document.getElementById('agent-conversations-list');
         const pag = document.getElementById('agent-conversations-pagination');
         if (!list || !pag) return;
@@ -255,23 +255,25 @@ function renderAgentDetail(container, params) {
             UI.reconcileChildren(list, UI.createSkeletonNodes(4, 'row'));
             UI.reconcileChildren(pag, []);
         }
-        API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit }).then((data) => {
+        try {
+            const data = await API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit });
             renderConversationRows(data.conversations || data || [], data);
-        }).catch((err) => {
+        } catch (err) {
             if (soft && conversationsLoaded) {
                 UI.reportError('Failed to refresh agent conversations', err, { context: 'Agent detail conversation soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(list, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadConversations)]);
             UI.reconcileChildren(pag, []);
-        });
+        }
     }
 
-    function loadDetail({ soft = false } = {}) {
+    async function loadDetail({ soft = false } = {}) {
         if (!soft || !detailLoaded) {
             UI.reconcileChildren(content, UI.createSkeletonNodes(3, 'card'));
         }
-        API.getAgentStatus(agentId).then((status) => {
+        try {
+            const status = await API.getAgentStatus(agentId);
             if (!status) {
                 UI.reconcileChildren(content, [UI.renderEmptyState('Agent not found.', true)]);
                 return;
@@ -288,10 +290,10 @@ function renderAgentDetail(container, params) {
                 buildConversationsSection(),
             ]);
             detailLoaded = true;
-            loadConversations();
-        }).catch((err) => {
+            await loadConversations();
+        } catch (err) {
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load agent: ' + err.message, loadDetail)]);
-        });
+        }
     }
 
     let detailReload = null;
@@ -305,11 +307,11 @@ function renderAgentDetail(container, params) {
         convosReload = setTimeout(() => loadConversations({ soft: true }), 350);
     }));
 
-    loadDetail();
+    await loadDetail();
     cleanups.add(() => clearTimeout(detailReload));
     cleanups.add(() => clearTimeout(convosReload));
 }
 
 function renderAgentConversations(container, params) {
-    renderAgentDetail(container, params);
+    return renderAgentDetail(container, params);
 }

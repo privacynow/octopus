@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+from app.channels.registry.delivery_transport import build_registry_message_envelope
 from octopus_sdk.inbound_types import (
     InboundAction,
     InboundEnvelope,
@@ -33,6 +35,7 @@ def test_inbound_envelope_constructs_without_surface_binding_id() -> None:
 
     assert envelope.kind == "action"
     assert not hasattr(envelope, "surface_binding_id")
+    assert envelope.admission_class == "external"
 
 
 def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
@@ -74,6 +77,72 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert action.external_conversation_ref == "registry-ext-2"
     assert message.transport == "registry"
     assert action.transport == "registry"
+    assert message.admission_class == "external"
+
+
+def test_inbound_message_round_trips_internal_admission_class() -> None:
+    payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id="reg:resume", username="registry"),
+            conversation_key="tg:12345",
+            text="resume",
+            source="telegram",
+            transport="telegram",
+            conversation_ref="telegram:bot:12345",
+            admission_class="internal",
+        )
+    )
+
+    event = deserialize_inbound("message", payload)
+
+    assert isinstance(event, InboundMessage)
+    assert event.admission_class == "internal"
+
+
+def test_registry_message_envelope_defaults_external_and_supports_internal() -> None:
+    external = build_registry_message_envelope(
+        conversation_ref="telegram:bot:12345",
+        text="hello",
+        actor_ref="registry-ui:12345",
+        delivery_id="delivery-1",
+        registry_id="default",
+        source_transport="telegram",
+    )
+    internal = build_registry_message_envelope(
+        conversation_ref="telegram:bot:12345",
+        text="resume",
+        actor_ref="delegation-resume:task-1",
+        delivery_id="delivery-2",
+        registry_id="default",
+        source_transport="telegram",
+        admission_class="internal",
+    )
+
+    assert external.admission_class == "external"
+    assert external.event.admission_class == "external"
+    assert internal.admission_class == "internal"
+    assert internal.event.admission_class == "internal"
+
+
+def test_external_ingress_files_do_not_hardcode_internal_admission() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    telegram_ingress = (
+        repo_root / "app" / "runtime" / "telegram_ingress.py"
+    ).read_text(encoding="utf-8")
+    telegram_dispatch = (
+        repo_root / "app" / "runtime" / "telegram_shared_dispatch.py"
+    ).read_text(encoding="utf-8")
+    telegram_normalization = (
+        repo_root / "app" / "runtime" / "telegram_normalization.py"
+    ).read_text(encoding="utf-8")
+    registry_delivery = (
+        repo_root / "app" / "channels" / "registry" / "delivery_transport.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'admission_class="internal"' not in telegram_ingress
+    assert 'admission_class="internal"' not in telegram_dispatch
+    assert 'admission_class="internal"' not in telegram_normalization
+    assert registry_delivery.count('admission_class="internal"') == 1
 
 
 def test_non_telegram_inbound_chat_id_falls_back_to_conversation_key() -> None:

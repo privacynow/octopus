@@ -1,7 +1,7 @@
 /**
  * Dashboard — dense operator overview with immediate follow-up paths.
  */
-function renderDashboard(container) {
+async function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -232,30 +232,31 @@ function renderDashboard(container) {
 
     let hasLoaded = false;
 
-    function loadSummary({ soft = false } = {}) {
+    async function loadSummary({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
             UI.reconcileChildren(content, UI.createSkeletonNodes(5, 'card'));
         }
-        Promise.all([
+        try {
+            const [summary, approvals, conversations, failedTasks, runningTasks, agents] = await Promise.all([
             API.getSummary(),
             API.listApprovals({ limit: 4 }),
             API.listConversations({ limit: 6, status: 'open' }),
             API.listTasks({ limit: 6, status: 'failed' }),
             API.listTasks({ limit: 6, status: 'running' }).catch(() => ({ tasks: [] })),
             API.listAgents({ limit: 8 }),
-        ]).then(([summary, approvals, conversations, failedTasks, runningTasks, agents]) => {
+            ]);
             renderDashboardView(summary, approvals, conversations, {
                 tasks: failedTasks.tasks || failedTasks || [],
                 running_tasks: runningTasks.tasks || runningTasks || [],
             }, agents);
             hasLoaded = true;
-        }).catch((err) => {
+        } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load dashboard: ' + err.message, loadSummary)]);
-        });
+        }
     }
 
     let reloadDebounce = null;
@@ -266,6 +267,6 @@ function renderDashboard(container) {
         }));
     });
 
-    loadSummary();
+    await loadSummary();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

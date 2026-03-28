@@ -4,10 +4,12 @@ import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
+from octopus_sdk.authorization import AuthorizationPort
 from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.execution import dispatch_message_request, execute_request
 from octopus_sdk.identity import resolve_delegation_parent_identity
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
+from octopus_sdk.config import BotConfigBase
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult
 from octopus_sdk.tests.support import make_sdk_harness, make_transport_identity
 from octopus_sdk.work_queue import WorkItemRecord
@@ -16,6 +18,41 @@ from octopus_sdk.workflows.delegation import (
     build_delegation_plan,
     prepare_delegation_approval,
 )
+
+
+class RestrictiveAuthorization(AuthorizationPort):
+    def __init__(self, allowed_actor_keys: set[str]) -> None:
+        self._allowed_actor_keys = set(allowed_actor_keys)
+
+    def is_allowed(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+        *,
+        override: str | None = None,
+    ) -> bool:
+        del config, override
+        return user is not None and str(user.id or "") in self._allowed_actor_keys
+
+    def is_admin(self, config: BotConfigBase, user: InboundUser | None) -> bool:
+        del config, user
+        return False
+
+    def trust_tier(self, config: BotConfigBase, user: InboundUser | None) -> str:
+        del config, user
+        return "trusted"
+
+    def access_policy(
+        self,
+        config: BotConfigBase,
+        user: InboundUser | None,
+        *,
+        override: str | None = None,
+    ) -> str:
+        del config, override
+        if user is None:
+            return "deny"
+        return "allow" if str(user.id or "") in self._allowed_actor_keys else "deny"
 
 
 def test_sdk_wiring_verification_package_has_no_app_or_registry_imports() -> None:
@@ -370,3 +407,102 @@ async def test_sdk_wiring_verification_end_to_end_deferred_notification_flow(
         target_agent_id="agent-target",
         actor_key="stub:user:1",
     ) == []
+
+
+async def test_sdk_wiring_verification_internal_admission_bypasses_restrictive_access_control(
+    tmp_path: Path,
+) -> None:
+    harness = make_sdk_harness(tmp_path, process_role="bot")
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
+    runtime.authorization = RestrictiveAuthorization({"tg:12345"})
+
+    async def _claim(event: InboundMessage, event_id: str) -> WorkItemRecord:
+        payload = serialize_inbound(event, transport="stub")
+        created, item_id = runtime.work_queue.record_and_enqueue(
+            runtime.config.data_dir,
+            event_id,
+            event.conversation_key,
+            event.user.id,
+            "message",
+            payload=payload,
+        )
+        assert created is True
+        assert item_id is not None
+        claimed = runtime.work_queue.claim_next_any(
+            runtime.config.data_dir,
+            worker_id="worker-1",
+        )
+        assert claimed is not None
+        return claimed
+
+    allowed_external = InboundMessage(
+        user=InboundUser(id="tg:12345", username="allowed"),
+        conversation_key="stub:conversation:allowed",
+        text="hello",
+        source="stub",
+        transport="stub",
+        conversation_ref="stub:conversation:allowed",
+    )
+    allowed_item = await _claim(allowed_external, "evt-allowed")
+    allowed, allowed_tier = runtime._admit_claimed_message(
+        allowed_external,
+        allowed_item,
+        conversation_ref="stub:conversation:allowed",
+    )
+    assert allowed is True
+    assert allowed_tier == "trusted"
+
+    denied_external = InboundMessage(
+        user=InboundUser(id="tg:99999", username="denied"),
+        conversation_key="stub:conversation:denied",
+        text="hello",
+        source="stub",
+        transport="stub",
+        conversation_ref="stub:conversation:denied",
+    )
+    denied_item = await _claim(denied_external, "evt-denied")
+    denied, denied_tier = runtime._admit_claimed_message(
+        denied_external,
+        denied_item,
+        conversation_ref="stub:conversation:denied",
+    )
+    assert denied is False
+    assert denied_tier == "trusted"
+    assert runtime.work_queue._state(runtime.config.data_dir).work_items[denied_item.id].error == "not_allowed"
+
+    internal_resume = InboundMessage(
+        user=InboundUser(id="reg:delegation-resume:task-1", username="registry"),
+        conversation_key="stub:conversation:resume",
+        text="resume",
+        source="stub",
+        transport="stub",
+        conversation_ref="stub:conversation:resume",
+        admission_class="internal",
+    )
+    internal_item = await _claim(internal_resume, "evt-internal")
+    internal_allowed, internal_tier = runtime._admit_claimed_message(
+        internal_resume,
+        internal_item,
+        conversation_ref="stub:conversation:resume",
+    )
+    assert internal_allowed is True
+    assert internal_tier == "internal"
+
+    external_resume = InboundMessage(
+        user=InboundUser(id="reg:delegation-resume:task-2", username="registry"),
+        conversation_key="stub:conversation:resume-external",
+        text="resume",
+        source="stub",
+        transport="stub",
+        conversation_ref="stub:conversation:resume-external",
+        admission_class="external",
+    )
+    external_resume_item = await _claim(external_resume, "evt-resume-external")
+    external_resume_allowed, _external_resume_tier = runtime._admit_claimed_message(
+        external_resume,
+        external_resume_item,
+        conversation_ref="stub:conversation:resume-external",
+    )
+    assert external_resume_allowed is False
+    assert runtime.work_queue._state(runtime.config.data_dir).work_items[external_resume_item.id].error == "not_allowed"

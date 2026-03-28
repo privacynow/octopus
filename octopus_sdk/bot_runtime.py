@@ -745,6 +745,8 @@ class BotRuntime:
         *,
         conversation_ref: str,
     ) -> tuple[bool, str]:
+        if str(getattr(event, "admission_class", "external") or "external") == "internal":
+            return True, "internal"
         actor_key = item.actor_key or str(getattr(event.user, "id", "") or "")
         trust_tier = self._trust_tier_for_event(
             conversation_ref,
@@ -850,6 +852,7 @@ class BotRuntime:
                 source=str(getattr(event, "source", "") or self.transport.descriptor.transport_type),
                 attachments=tuple(),
                 conversation_ref=conversation_ref,
+                admission_class="internal",
             )
             await self._execute_message_request(
                 event=replay_event,
@@ -903,6 +906,7 @@ class BotRuntime:
                 source=str(getattr(event, "source", "") or self.transport.descriptor.transport_type),
                 attachments=tuple(),
                 conversation_ref=conversation_ref,
+                admission_class="internal",
             )
             await self._execute_message_request(
                 event=replay_event,

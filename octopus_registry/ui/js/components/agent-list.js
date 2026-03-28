@@ -1,7 +1,7 @@
 /**
  * Agent list — dense roster with direct conversation entry.
  */
-function renderAgentList(container) {
+async function renderAgentList(container) {
     const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
@@ -197,22 +197,23 @@ function renderAgentList(container) {
         });
     }
 
-    function loadPage({ soft = false } = {}) {
+    async function loadPage({ soft = false } = {}) {
         if (!soft || !hasLoaded) {
             UI.reconcileChildren(listEl, UI.createSkeletonNodes(6, 'row'));
             UI.reconcileChildren(pagEl, []);
         }
-        API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter }).then((data) => {
+        try {
+            const data = await API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter });
             renderRows(data.agents || data || [], data.has_more, data.next_cursor);
             hasLoaded = true;
-        }).catch((err) => {
+        } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh agents', err, { context: 'Agent list soft refresh failed' });
                 return;
             }
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load agents: ' + err.message, loadPage)]);
             UI.reconcileChildren(pagEl, []);
-        });
+        }
     }
 
     let reloadDebounce = null;
@@ -222,7 +223,7 @@ function renderAgentList(container) {
     }));
 
     syncStateButtons();
-    loadPage();
+    await loadPage();
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(reloadDebounce));

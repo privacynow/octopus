@@ -151,6 +151,7 @@ def build_registry_message_delivery(
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
     source_transport: str = "registry",
+    admission_class: str = "external",
 ) -> tuple[str, str, str, str]:
     envelope = build_registry_message_envelope(
         conversation_ref=conversation_ref,
@@ -164,6 +165,7 @@ def build_registry_message_delivery(
         conversation_key_override=conversation_key_override,
         authorized_actor_key=authorized_actor_key,
         source_transport=source_transport,
+        admission_class=admission_class,
     )
     payload = serialize_inbound(envelope.event)
     return envelope.conversation_key, envelope.actor_key, envelope.event_id, payload
@@ -182,6 +184,7 @@ def build_registry_message_envelope(
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
     source_transport: str = "registry",
+    admission_class: str = "external",
 ) -> InboundEnvelope:
     if not registry_id:
         raise ValueError("Registry message delivery requires an explicit registry_id")
@@ -202,6 +205,7 @@ def build_registry_message_envelope(
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_authority_ref(registry_id),
         skip_approval=skip_approval,
+        admission_class=admission_class,
     )
     return InboundEnvelope(
         transport=source_transport,
@@ -211,6 +215,7 @@ def build_registry_message_envelope(
         received_at=datetime.now(timezone.utc),
         event=event,
         conversation_ref=conversation_ref,
+        admission_class=admission_class,
     )
 
 
@@ -565,6 +570,7 @@ async def handle_registry_delivery(
             skip_approval=True,
             conversation_key_override=parent_conversation_key,
             source_transport=resume_transport,
+            admission_class="internal",
         )
         submission = await submitter.admit_message(envelope)
         admit_status = submission.status

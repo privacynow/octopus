@@ -123,7 +123,11 @@ class RecoveryUseCases(RecoveryPort):
                 edit_message=self._messages.recovery_payload_missing_edit(),
             )
         try:
-            event = deserialize_inbound("message", payload_str)
+            event = deserialize_inbound(
+                "message",
+                payload_str,
+                admission_class="internal",
+            )
         except Exception:
             self._work_queue.fail_work_item(data_dir, item.id, error="deserialize_error")
             return RecoveryActionOutcome(

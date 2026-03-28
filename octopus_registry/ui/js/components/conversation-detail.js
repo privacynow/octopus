@@ -1,7 +1,7 @@
 /**
  * Conversation detail — full-height chat and structured event timeline.
  */
-function renderConversationDetail(container, params) {
+async function renderConversationDetail(container, params) {
     const convoId = params.id;
     const cleanups = UI.beginCleanupScope();
     container.classList.add('conversation-screen');
@@ -1016,16 +1016,16 @@ function renderConversationDetail(container, params) {
     });
     cleanups.add(unsub);
 
-    loadConversation();
-    loadTargetSuggestions();
+    const initialLoads = [loadConversation(), loadTargetSuggestions()];
     if (activeView === 'tasks') {
-        loadRelatedTasks();
+        initialLoads.push(loadRelatedTasks());
     } else {
-        loadRelatedTasks({ soft: true, silent: true });
-        reloadEvents();
+        initialLoads.push(loadRelatedTasks({ soft: true, silent: true }));
+        initialLoads.push(reloadEvents());
     }
     cleanups.add(() => clearTimeout(progressTimer));
     updateComposerAssist();
+    await Promise.all(initialLoads);
 
     function syncConversationDensity(compact) {
         page.classList.toggle('conversation-page-compact', Boolean(compact));

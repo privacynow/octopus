@@ -1065,7 +1065,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 ) VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, %s)
                 ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
                     title = EXCLUDED.title,
-                    conversation_type = EXCLUDED.conversation_type,
                     updated_at = EXCLUDED.updated_at
                 RETURNING conversation_id
                 """,
@@ -1468,6 +1467,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     conn,
                     target_agent_id=str(task_row["target_agent_id"] or ""),
                     title=str(task_row["title"] or routed_task_id),
+                    conversation_type="task_thread",
                     origin_channel="registry",
                     external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
                     now=occurred_at,
@@ -1687,6 +1687,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     conn,
                     target_agent_id=str(task["target_agent_id"] or ""),
                     title=str(task["title"] or routed_task_id),
+                    conversation_type="task_thread",
                     origin_channel="registry",
                     external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
                     now=completed_at,

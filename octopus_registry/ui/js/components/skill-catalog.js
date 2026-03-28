@@ -1,7 +1,7 @@
 /**
  * Skill catalog — dense installable runtime skill roster.
  */
-function renderSkillCatalog(container) {
+async function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
     let reloadDebounce = null;
@@ -170,7 +170,7 @@ function renderSkillCatalog(container) {
         UI.reconcileChildren(listEl, rows);
     }
 
-    function loadSkills({ soft = false } = {}) {
+    async function loadSkills({ soft = false } = {}) {
         if (!currentAgentId) {
             allSkills = [];
             renderList();
@@ -179,31 +179,32 @@ function renderSkillCatalog(container) {
         if (!soft || !allSkills.length) {
             UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
         }
-
-        API.listSkills(currentAgentId).then((data) => {
+        try {
+            const data = await API.listSkills(currentAgentId);
             allSkills = Array.isArray(data) ? data : (data.skills || []);
             renderList();
-        }).catch((err) => {
+        } catch (err) {
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
-        });
+        }
     }
 
-    function loadAgents({ soft = false } = {}) {
+    async function loadAgents({ soft = false } = {}) {
         if (!soft) {
             agentSelect.disabled = true;
             UI.reconcileChildren(listEl, UI.createSkeletonNodes(5, 'row'));
         }
-        API.listAgents({ limit: 200 }).then((data) => {
+        try {
+            const data = await API.listAgents({ limit: 200 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
             if (requested) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            loadSkills({ soft: true });
-        }).catch((err) => {
+            await loadSkills({ soft: true });
+        } catch (err) {
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);
-        });
+        }
     }
 
     searchInput.addEventListener('input', () => {
@@ -220,7 +221,7 @@ function renderSkillCatalog(container) {
         loadSkills();
     });
 
-    loadAgents();
+    await loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

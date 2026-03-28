@@ -1,7 +1,7 @@
 /**
  * Provider guidance editor — compact provider-scoped draft and publish workflow.
  */
-async function renderGuidanceEditor(container) {
+function renderGuidanceEditor(container) {
     const cleanups = UI.beginCleanupScope();
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -312,7 +312,7 @@ async function renderGuidanceEditor(container) {
         loadGuidance();
     });
 
-    await loadAgents();
+    void loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

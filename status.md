@@ -223,15 +223,16 @@ Rules followed:
 - [x] 12F-3: `WorkflowComposition.deferred_notifications` is structurally non-None through composition/build paths
 - [x] 12F-4: Full end-to-end deferred-notification integration coverage proves enqueue → next interaction flush → consume-once
 
-## Phase 12G: Resume envelope transport identity
+## Phase 12G: SDK-owned delegation continuation path
 
-- [x] 12G-1: `build_registry_message_envelope()` accepts `source_transport` and preserves target transport identity on the envelope
-- [x] 12G-2: Routed-result resume builds transport-native envelopes from `parent_transport_ref` and only falls back to registry for registry parents
-- [x] 12G-3: `telegram_execution.py` treats envelope transport/source as authoritative and resolves Telegram resumes even when `chat_id` arrives as a string
-- [x] 12G-4: Registry-origin `channel_input` / `routed_task` admissions remain registry envelopes and are explicitly documented as such in the delivery transport
-- [x] 12G-5: Automated tests prove Telegram-originated routed-result resume envelopes carry `source="telegram"`, `transport="telegram"`, numeric chat identity, and route to Telegram egress
-- [x] 12G-6: Automated tests preserve registry/non-Telegram resume behavior with transport-matched envelopes and no registry-only regression
-- [ ] 12G-7: Manual live Telegram acceptance test: operator sends delegation from M1 Telegram chat → M2 completes → M1 Telegram chat receives the resumed reply in the same thread
+- [x] 12G-1: Define `DelegationContinuationPort` in the SDK
+- [x] 12G-2: Implement the continuation path in the SDK, not `app/`
+- [x] 12G-3: Wire continuation through `BotRuntime`
+- [x] 12G-4: Rewrite `routed_result` handling to call continuation instead of fabricating an inbound message
+- [x] 12G-5: Remove dead delegation-resume re-entry paths; `admission_class` remains only for approval/retry replay
+- [x] 12G-6: Completion message and resumed provider response use the same parent transport egress
+- [x] 12G-7: Automated restrictive-auth round-trip coverage proves continuation avoids fresh-message admission
+- [ ] 12G-8: Manual live acceptance test — operator sends delegation from M1 Telegram chat → M2 completes → M1 Telegram chat receives the resumed reply in the same thread
 
 ## Phase 12H: Recipient task thread UI presentation
 
@@ -246,39 +247,23 @@ Rules followed:
 - [x] 12H-9: Fix 4 callers (`store.py:1636`, `store.py:1836`, `store_postgres.py:1467`, `store_postgres.py:1686`) to pass `conversation_type="task_thread"` explicitly
 - [x] 12H-10: Test: task thread type survives status and completion updates in both store backends
 
-## Phase 12I: Router route-transition smoothness (async pre-render)
+## Phase 12I: Two-shell route transitions
 
-- [x] 12I-1: `router.js` `_render()` is async and awaits component ready signal before swapping
-- [x] 12I-2: Router dims the old view with `loading-route`, then swaps and applies `route-enter-active`
-- [x] 12I-3: 404 path renders synchronously with the same atomic swap
-- [x] 12I-4: Convert `renderDashboard` to async pre-render
-- [x] 12I-5: Convert `renderAgentList` to async pre-render
-- [x] 12I-6: Convert `renderAgentDetail` to async pre-render
-- [x] 12I-7: Convert `renderConversationList` to async pre-render
-- [x] 12I-8: Convert `renderConversationDetail` to async pre-render
-- [x] 12I-9: Convert `renderTaskList` to async pre-render
-- [x] 12I-10: Convert `renderApprovalList` to async pre-render
-- [x] 12I-11: Convert `renderCapabilityList` to async pre-render
-- [x] 12I-12: Convert `renderUsageView` to async pre-render
-- [x] 12I-13: Convert `renderSkillCatalog` to async pre-render
-- [x] 12I-14: Convert `renderGuidanceEditor` to async pre-render
-- [x] 12I-15: `renderLoginForm` — no change (sync, no data)
-- [x] 12I-16: Error handling — failed fetches render an error state in the fragment, not a stale old view
-- [x] 12I-17: Timeout — >3s fetch mounts the prerendered shell anyway (progressive)
-- [ ] 12I-18: Test (visual/manual): navigate between dashboard → tasks → conversations → agent detail. Verify no skeleton flash; old content dims briefly, new content fades in
+- [x] 12I-1: `router.js` `_render()` is sync again
+- [x] 12I-2: All 11 route components reverted to sync shell rendering
+- [x] 12I-3: Two-shell overlay CSS exists for concurrent outgoing/incoming route shells
+- [x] 12I-4: Router mounts new shell alongside old shell and crossfades instead of single-buffer replacement
+- [x] 12I-5: Old-route cleanup runs after shell removal, not before mount
+- [x] 12I-6: 404 path uses the same two-shell swap machinery
+- [x] 12I-7: Rapid navigation uses render sequence guards and stale-shell cleanup
+- [x] 12I-8: `loading-route` dim and `.route-enter`/`.route-enter-active` are removed
+- [x] 12I-9: First page load mounts directly with no crossfade
+- [ ] 12I-10: Manual visual test — dashboard → tasks → conversations → agent detail shows no blank frame, no skeleton flash, no dim
 
-## Phase 12J: Delegation resume admission bypass (THE live Telegram no-reply root cause)
+## Phase 12J: Approval/retry replay `admission_class`
 
-- [x] 12J-1: Add `admission_class: str = "external"` to `InboundEnvelope` in `octopus_sdk/inbound_types.py`
-- [x] 12J-2: Add `admission_class: str = "external"` to `InboundMessage` in `octopus_sdk/inbound_types.py`
-- [x] 12J-3: `BotRuntime._admit_claimed_message` at `bot_runtime.py:741` — if `admission_class == "internal"`, bypass access control
-- [x] 12J-4: Delegation resume envelope at `delivery_transport.py:558` — set `admission_class="internal"`
-- [x] 12J-5: Approval replay at `bot_runtime.py:846` — set `admission_class="internal"`
-- [x] 12J-6: Retry-allow replay at `bot_runtime.py:899` — set `admission_class="internal"`
-- [x] 12J-7: Recovery replay deserialization at `inbound_types.py:305` — set `admission_class="internal"`
-- [x] 12J-8: Verify ALL 6 external sites do NOT set `admission_class="internal"` (default `"external"` is correct)
-- [x] 12J-9: Test with restrictive authorization: allowed=["tg:12345"], delegation resume from `reg:delegation-resume:...` admitted (internal), external from `reg:delegation-resume:...` rejected
-- [ ] 12J-10: Manual live acceptance test: M1 Telegram delegation → M2 completes → M1 Telegram chat receives resumed reply
+- [x] 12J-1: `admission_class` remains correctly scoped to approval and retry replay paths after 12G
+- [x] 12J-2: Replay coverage proves restrictive auth does not break retry replay execution
 
 ## Hard exit criteria
 
@@ -325,8 +310,8 @@ Rules followed:
 - [x] 41. Full deferred notification integration test passes.
 - [x] 42. Resume envelope transport matches parent transport.
 - [x] 43. Recipient task threads visually distinguishable, filters exist.
-- [ ] 44. Route transitions show no skeleton flash. Async pre-render for all data-fetching components. Router awaits ready signal.
-- [x] 45. `InboundEnvelope` and `InboundMessage` carry `admission_class`. `BotRuntime` skips access control for internal. Delegation resumes, approval replays, recovery replays are internal. Transport ingress always external. Restrictive-auth test proves bypass.
+- [ ] 44. Route transitions use two-shell crossfade. Old view stays visible until new view fades in. No blank frame, no skeleton flash, no dim. Components are sync. Cleanup runs after old shell removal.
+- [x] 45. Delegation resume uses SDK-owned continuation path (`DelegationContinuationPort`), not `InboundMessage` re-entry through `admit_message`. No synthetic actor, no `bot=None` blocker, no mixed registry/Telegram identity. `admission_class` remains only for approval/retry replays.
 - [x] 46. `conversation_type` NOT overwritten by ON CONFLICT upserts. Task thread type survives status and completion updates.
 - [x] 47. `app/runtime/composition.py` is thin wrapper over `WorkflowComposer`.
 - [x] 48. Every moved file deleted from source.
@@ -334,26 +319,23 @@ Rules followed:
 
 ## Review log
 
-- [x] Review pass 1: audited 12G/12H/12I plan sections against live code paths
-- [x] Review pass 2: audited modified tree after 12G/12H/12I focused verification
-- [x] Review pass 3 (adversarial): found 12G is correct but insufficient — resume
-  envelope has correct transport but synthetic actor is rejected by access control.
-  Found conversation_type overwrite bug in store ON CONFLICT clause. Found router
-  still shows skeleton flash despite atomic swap fix. Added 12H-8/9/10, rewrote
-  12I for async pre-render, added 12J (admission_class).
-- [x] Review pass 4: audited final 12H/12I/12J implementation against the rewritten plan and code paths before commit/deploy
+- [x] Review pass 1: audited rewritten 12G/12H/12I/12J plan sections against current code paths
+- [x] Review pass 2: found fresh-message delegation resume and async-pre-render route swaps still violated the rewritten late phases
+- [x] Review pass 3: implemented SDK continuation path, re-audited routed-result handling, then rewrote router/components back to sync two-shell rendering
+- [x] Review pass 4: reran focused slices and full suite after the second rewrite; updated status only after the final whole-tree audit
 
 ## Current verification
 
-- SDK/runtime/UI focused slice: `22 passed`
-- Registry/API audit slice: `190 passed`
-- Previous full suite after late-phase implementation: `2167 passed, 1 skipped`
-- Remaining manual/live items only: `12G-7`, `12I-18`, `12J-10`
-- Exit criterion 44 is still open pending manual visual confirmation
+- Delegation/UI focused slices:
+  - `10 passed` (`tests/test_registry_ui_contract.py`, `octopus_sdk/tests/test_wiring_verification.py`, `tests/test_agents.py` routed-result/delegation slice)
+  - `13 passed` (`tests/test_handlers.py` routed-result/delegation slice, `tests/test_request_flow.py` delegation slice, `tests/test_runtime_inbound_types.py`)
+  - `12 passed` (post-contract pass after adding `DelegationContinuationPort`)
+- Current full suite: `2168 passed, 1 skipped`
+- Remaining manual/live items only: `12G-8`, `12I-10`
+- Exit criterion 44 is still open pending manual browser confirmation
 
 ## Remaining work summary
 
 Remaining manual acceptance:
-1. `12G-7`: Telegram M1 → M2 → M1 resumed reply visible in the human Telegram chat
-2. `12I-18`: visual confirmation that dashboard → tasks → conversations → agent detail no longer shows route-transition skeleton flash
-3. `12J-10`: live proof that internal delegation resumes bypass external access control in Telegram
+1. `12G-8`: Telegram M1 → M2 → M1 resumed reply visible in the human Telegram chat
+2. `12I-10`: visual confirmation that dashboard → tasks → conversations → agent detail uses the two-shell transition with no blank frame or skeleton flash

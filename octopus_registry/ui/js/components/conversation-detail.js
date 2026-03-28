@@ -1,7 +1,7 @@
 /**
  * Conversation detail — full-height chat and structured event timeline.
  */
-async function renderConversationDetail(container, params) {
+function renderConversationDetail(container, params) {
     const convoId = params.id;
     const cleanups = UI.beginCleanupScope();
     container.classList.add('conversation-screen');
@@ -1025,7 +1025,7 @@ async function renderConversationDetail(container, params) {
     }
     cleanups.add(() => clearTimeout(progressTimer));
     updateComposerAssist();
-    await Promise.all(initialLoads);
+    void Promise.all(initialLoads);
 
     function syncConversationDensity(compact) {
         page.classList.toggle('conversation-page-compact', Boolean(compact));

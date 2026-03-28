@@ -33,13 +33,15 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
 )
 from octopus_sdk.inbound_types import deserialize_inbound
-from octopus_sdk.transport import InboundSubmissionResult
+from octopus_sdk.transport import (
+    DelegationContinuationResult,
+    InboundSubmissionResult,
+)
 from octopus_sdk.transport import TransportBindingRecord
 from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
-from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.providers import ProviderStateRecord, RunResult
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
 from app.agents.state import (
     load_registry_connection_state,
@@ -48,6 +50,7 @@ from app.agents.state import (
 )
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env
+from tests.support.handler_support import current_bot_instance
 from tests.support.service_support import build_test_bot_services
 
 
@@ -1470,7 +1473,7 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
             ),
         )
 
-        assert outcome == "retry_later"
+        assert outcome == "accepted"
         assert egress_calls == []
 
 
@@ -1706,23 +1709,28 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        seen_ready_refs: list[tuple[str, str]] = []
+        captured = []
 
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del config
-                seen_ready_refs.append(
-                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                captured.append(
+                    (
+                        request.parent_transport_ref,
+                        request.parent_conversation_key,
+                    )
                 )
-                return False
+                return DelegationContinuationResult(
+                    status="not_matched",
+                    matched=False,
+                    resumed=False,
+                )
 
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=build_test_bot_services(),
-            submitter=current_runtime().submitter,
+            submitter=_FakeSubmitter(),
             bot=None,
-            dispatcher=_FakeDispatcher(),
         )
         qualified_ref = "slack:eng:12345"
 
@@ -1747,8 +1755,8 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             runtime=runtime,
         )
 
-        assert outcome == "retry_later"
-        assert seen_ready_refs == [(qualified_ref, qualified_ref)]
+        assert outcome == "accepted"
+        assert captured == [(qualified_ref, qualified_ref)]
         assert await handle_registry_delivery(
             cfg,
             {
@@ -1774,84 +1782,30 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
+        captured = []
+
         class _FakeSubmitter:
-            def __init__(self) -> None:
-                self.envelopes = []
-
-            async def admit_message(self, envelope):
-                self.envelopes.append(envelope)
-                return InboundSubmissionResult(status="admitted", item_id="resume-item")
-
-        class _FakeEgress:
-            def __init__(self) -> None:
-                self.sent_texts: list[str] = []
-
-            async def send_text(self, text: str) -> None:
-                self.sent_texts.append(text)
-
-        class _FakeDispatcher:
-            def __init__(self, egress: _FakeEgress) -> None:
-                self.egress = egress
-                self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str, str]] = []
-
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.ready_refs.append(
-                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
-                )
-                return True
-
-            def create_egress(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.created_refs.append(
+            async def continue_delegation(self, request):
+                captured.append(
                     (
-                        str(conversation_ref),
-                        str(kwargs.get("conversation_key", "")),
-                        str(kwargs.get("external_id", "")),
-                        str(kwargs.get("source", "")),
+                        request.parent_transport_ref,
+                        request.parent_conversation_key,
+                        request.parent_external_conversation_ref,
                     )
                 )
-                return self.egress
+                return DelegationContinuationResult(
+                    status="continued",
+                    matched=True,
+                    resumed=True,
+                )
 
-        submitter = _FakeSubmitter()
-        egress = _FakeEgress()
-        dispatcher = _FakeDispatcher(egress)
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=build_test_bot_services(),
-            submitter=submitter,
-            bot=None,
-            dispatcher=dispatcher,
+            submitter=_FakeSubmitter(),
         )
         parent_ref = "slack:workspace:channel-42"
-
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
-            lambda *args, **kwargs: DelegationUpdateOutcome(
-                status="completed",
-                matched=True,
-                ready_to_resume=True,
-                resume_prompt="Resume with the specialist output.",
-                pending=PendingDelegation(
-                    conversation_ref="coord-parent-1",
-                    origin_conversation_key=parent_ref,
-                    proposal_id="proposal-1",
-                    title="Ask the specialist",
-                    tasks=[
-                        DelegatedTask(
-                            routed_task_id="task-1",
-                            title="Investigate",
-                            status="completed",
-                            summary="Specialist finished.",
-                            full_text="Detailed specialist output.",
-                        )
-                    ],
-                    status="completed",
-                ),
-            ),
-        )
 
         outcome = await handle_registry_delivery(
             cfg,
@@ -1875,13 +1829,7 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
         )
 
         assert outcome == "accepted"
-        assert dispatcher.ready_refs == [(parent_ref, parent_ref)]
-        assert dispatcher.created_refs == [(parent_ref, parent_ref, parent_ref, "slack")]
-        assert submitter.envelopes
-        assert submitter.envelopes[0].conversation_ref == parent_ref
-        assert submitter.envelopes[0].conversation_key == parent_ref
-        assert egress.sent_texts
-        assert "All delegated tasks completed" in egress.sent_texts[0]
+        assert captured == [(parent_ref, parent_ref, parent_ref)]
 
 
 async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_direct_assignment_state(
@@ -1893,46 +1841,6 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        class _FakeSubmitter:
-            def __init__(self) -> None:
-                self.envelopes = []
-
-            async def admit_message(self, envelope):
-                self.envelopes.append(envelope)
-                return InboundSubmissionResult(status="admitted", item_id="resume-item")
-
-        class _FakeEgress:
-            def __init__(self) -> None:
-                self.sent_texts: list[str] = []
-
-            async def send_text(self, text: str) -> None:
-                self.sent_texts.append(text)
-
-        class _FakeDispatcher:
-            def __init__(self, egress: _FakeEgress) -> None:
-                self.egress = egress
-                self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str, str]] = []
-
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.ready_refs.append(
-                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
-                )
-                return True
-
-            def create_egress(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.created_refs.append(
-                    (
-                        str(conversation_ref),
-                        str(kwargs.get("conversation_key", "")),
-                        str(kwargs.get("external_id", "")),
-                        str(kwargs.get("source", "")),
-                    )
-                )
-                return self.egress
-
         parent_ref = telegram_conversation_ref(cfg, 12345)
         parent_key = "tg:12345"
         save_runtime_session(
@@ -1960,16 +1868,14 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
             ),
         )
 
-        submitter = _FakeSubmitter()
-        egress = _FakeEgress()
-        dispatcher = _FakeDispatcher(egress)
+        prov.run_results = [RunResult(text="Final parent answer.")]
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
-            services=build_test_bot_services(),
-            submitter=submitter,
-            bot=None,
-            dispatcher=dispatcher,
+            services=current_runtime().services,
+            submitter=current_runtime().submitter,
+            bot=current_bot_instance(),
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         outcome = await handle_registry_delivery(
@@ -1994,17 +1900,16 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
         )
 
         assert outcome == "accepted"
-        assert dispatcher.ready_refs == [(parent_ref, parent_key)]
-        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref, "telegram")]
-        assert submitter.envelopes
-        assert submitter.envelopes[0].conversation_ref == parent_ref
-        assert submitter.envelopes[0].conversation_key == parent_key
-        assert submitter.envelopes[0].transport == "telegram"
-        assert submitter.envelopes[0].event.transport == "telegram"
-        assert submitter.envelopes[0].event.source == "telegram"
-        assert submitter.envelopes[0].event.chat_id == 12345
-        assert egress.sent_texts
-        assert "All delegated tasks completed" in egress.sent_texts[0]
+        assert len(prov.run_calls) == 1
+        assert "delegated task completed successfully" in prov.run_calls[0]["prompt"].lower()
+        assert any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+        assert any(
+            "Final parent answer." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
         session = load_runtime_session(
             cfg.data_dir,
             parent_key,
@@ -2014,8 +1919,7 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
             default_role=cfg.role,
             default_skills=cfg.default_skills,
         )
-        assert session.pending_delegation is not None
-        assert session.pending_delegation.status == "completed"
+        assert session.pending_delegation is None
 
 
 async def test_direct_assign_round_trip_from_registry_store_resumes_parent_telegram_chat(
@@ -2132,56 +2036,14 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             ),
         )
 
-        class _FakeSubmitter:
-            def __init__(self) -> None:
-                self.envelopes = []
-
-            async def admit_message(self, envelope):
-                self.envelopes.append(envelope)
-                return InboundSubmissionResult(status="admitted", item_id="resume-item")
-
-        class _FakeEgress:
-            def __init__(self) -> None:
-                self.sent_texts: list[str] = []
-
-            async def send_text(self, text: str) -> None:
-                self.sent_texts.append(text)
-
-        class _FakeDispatcher:
-            def __init__(self, egress: _FakeEgress) -> None:
-                self.egress = egress
-                self.ready_refs: list[tuple[str, str]] = []
-                self.created_refs: list[tuple[str, str, str, str]] = []
-
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.ready_refs.append(
-                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
-                )
-                return True
-
-            def create_egress(self, conversation_ref, *, config, **kwargs):
-                del config
-                self.created_refs.append(
-                    (
-                        str(conversation_ref),
-                        str(kwargs.get("conversation_key", "")),
-                        str(kwargs.get("external_id", "")),
-                        str(kwargs.get("source", "")),
-                    )
-                )
-                return self.egress
-
-        submitter = _FakeSubmitter()
-        egress = _FakeEgress()
-        dispatcher = _FakeDispatcher(egress)
+        prov.run_results = [RunResult(text="Final parent answer.")]
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
-            services=build_test_bot_services(),
-            submitter=submitter,
-            bot=None,
-            dispatcher=dispatcher,
+            services=current_runtime().services,
+            submitter=current_runtime().submitter,
+            bot=current_bot_instance(),
+            dispatcher=current_runtime().transport_dispatcher,
         )
 
         outcome = await handle_registry_delivery(
@@ -2196,17 +2058,15 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
         )
 
         assert outcome == "accepted"
-        assert dispatcher.ready_refs == [(parent_ref, parent_key)]
-        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref, "telegram")]
-        assert submitter.envelopes
-        assert submitter.envelopes[0].conversation_ref == parent_ref
-        assert submitter.envelopes[0].conversation_key == parent_key
-        assert submitter.envelopes[0].transport == "telegram"
-        assert submitter.envelopes[0].event.transport == "telegram"
-        assert submitter.envelopes[0].event.source == "telegram"
-        assert submitter.envelopes[0].event.chat_id == 12345
-        assert egress.sent_texts
-        assert "All delegated tasks completed" in egress.sent_texts[0]
+        assert len(prov.run_calls) == 1
+        assert any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+        assert any(
+            "Final parent answer." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
 
 
 async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(
@@ -2220,23 +2080,21 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del conversation_ref, config, kwargs
-                return True
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                del request
+                return DelegationContinuationResult(
+                    status="not_matched",
+                    matched=False,
+                    resumed=False,
+                )
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
-            lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
-        )
         services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
-            submitter=current_runtime().submitter,
-            bot=None,
-            dispatcher=_FakeDispatcher(),
+            submitter=_FakeSubmitter(),
         )
 
         with caplog.at_level(logging.WARNING):
@@ -2280,27 +2138,21 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del conversation_ref, config, kwargs
-                return True
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                del request
+                return DelegationContinuationResult(
+                    status="updated",
+                    matched=True,
+                    resumed=False,
+                )
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
-            lambda *args, **kwargs: DelegationUpdateOutcome(
-                status="submitted",
-                matched=True,
-                ready_to_resume=False,
-            ),
-        )
         services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
-            submitter=current_runtime().submitter,
-            bot=None,
-            dispatcher=_FakeDispatcher(),
+            submitter=_FakeSubmitter(),
         )
 
         with caplog.at_level(logging.WARNING):

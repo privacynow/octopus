@@ -10,7 +10,12 @@ from app.access import is_allowed_user_with_override, trust_tier
 from app import work_queue
 from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.inbound_types import InboundEnvelope, serialize_inbound
-from octopus_sdk.transport import BotRuntimeHandle, InboundSubmissionResult
+from octopus_sdk.transport import (
+    BotRuntimeHandle,
+    DelegationContinuationRequest,
+    DelegationContinuationResult,
+    InboundSubmissionResult,
+)
 
 
 def trust_tier_for_ref(
@@ -61,6 +66,13 @@ class LocalInboundSubmitter(BotRuntimeHandle):
 
     async def record(self, envelope: InboundEnvelope) -> bool:
         return record_inbound_envelope(self._data_dir, envelope)
+
+    async def continue_delegation(
+        self,
+        request: DelegationContinuationRequest,
+    ) -> DelegationContinuationResult:
+        del request
+        raise RuntimeError("Local inbound submitter cannot continue delegation results")
 
 
 def build_local_inbound_submitter(data_dir: Path) -> BotRuntimeHandle:

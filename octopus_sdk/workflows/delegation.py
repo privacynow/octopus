@@ -189,6 +189,7 @@ class ProposeDelegationAction:
     resume_instruction: str
     tasks: tuple[DelegationTaskDraft, ...]
     origin_conversation_key: str = ""
+    actor_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -295,6 +296,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         pending = PendingDelegation(
             conversation_ref=action.conversation_ref,
             origin_conversation_key=action.origin_conversation_key,
+            actor_key=action.actor_key,
             title=action.title,
             resume_instruction=action.resume_instruction,
             tasks=list(tasks),
@@ -410,6 +412,7 @@ def build_delegation_plan(
     tasks: list[dict[str, str]],
     *,
     origin_conversation_key: str = "",
+    actor_key: str = "",
     proposal_id: str = "",
 ) -> PendingDelegation:
     decision = decide_delegation_action(
@@ -417,6 +420,7 @@ def build_delegation_plan(
         ProposeDelegationAction(
             conversation_ref=conversation_ref,
             origin_conversation_key=origin_conversation_key,
+            actor_key=actor_key,
             title=title,
             resume_instruction=resume_instruction,
             tasks=tuple(
@@ -855,6 +859,7 @@ async def submit_participant_direct_assignment(
                 }
             ],
             origin_conversation_key=conversation_key,
+            actor_key=authorized_actor_key,
             proposal_id=result.action_id,
         )
         submitted = mark_task_submitted(
@@ -925,6 +930,7 @@ async def propose_participant_delegation(
             for item in intent.tasks
         ],
         origin_conversation_key=conversation_key,
+        actor_key=authorized_actor_key,
         proposal_id=proposal_result.proposal_id or proposal_result.action_id,
     )
     previews = await preview_participant_targets(

@@ -1,7 +1,7 @@
 /**
  * Agent list — dense roster with direct conversation entry.
  */
-async function renderAgentList(container) {
+function renderAgentList(container) {
     const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
@@ -223,7 +223,7 @@ async function renderAgentList(container) {
     }));
 
     syncStateButtons();
-    await loadPage();
+    void loadPage();
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(reloadDebounce));

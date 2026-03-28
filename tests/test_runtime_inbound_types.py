@@ -138,11 +138,15 @@ def test_external_ingress_files_do_not_hardcode_internal_admission() -> None:
     registry_delivery = (
         repo_root / "app" / "channels" / "registry" / "delivery_transport.py"
     ).read_text(encoding="utf-8")
+    bot_runtime = (
+        repo_root / "octopus_sdk" / "bot_runtime.py"
+    ).read_text(encoding="utf-8")
 
     assert 'admission_class="internal"' not in telegram_ingress
     assert 'admission_class="internal"' not in telegram_dispatch
     assert 'admission_class="internal"' not in telegram_normalization
-    assert registry_delivery.count('admission_class="internal"') == 1
+    assert 'admission_class="internal"' not in registry_delivery
+    assert bot_runtime.count('admission_class="internal"') >= 1
 
 
 def test_non_telegram_inbound_chat_id_falls_back_to_conversation_key() -> None:

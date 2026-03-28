@@ -25,7 +25,6 @@ from octopus_sdk.task_routing import TaskResultReport
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext, RunResult
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.inbound_types import InboundMessage, InboundUser
-from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.work_queue import WorkItemRecord
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
@@ -1087,7 +1086,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
         )
 
         assert outcome == "accepted"
-        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is False
         assert len(prov.run_calls) == 1
         assert "delegated developer task completed successfully" in prov.run_calls[0]["prompt"].lower()
         session_after = load_session_disk(data_dir, _conv(chat_id), prov)
@@ -1153,20 +1152,10 @@ async def test_delegation_completion_sends_final_message_all_completed():
             "All delegated tasks completed." in message.get("text", "")
             for message in current_bot_instance().sent_messages
         )
-        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is False
 
 
-async def test_registry_routed_result_skips_completion_summary_for_registry_parent(monkeypatch):
-    summary_calls: list[str] = []
-
-    async def _capture_summary(delegation, channel_egress):
-        del channel_egress
-        summary_calls.append(str(getattr(delegation, "status", "")))
-
-    monkeypatch.setattr(
-        "app.channels.registry.delivery_transport.send_delegation_completion_message",
-        _capture_summary,
-    )
+async def test_registry_routed_result_registry_parent_continues_without_admission_queue():
 
     with fresh_env(
         config_overrides={
@@ -1213,7 +1202,8 @@ async def test_registry_routed_result_skips_completion_summary_for_registry_pare
         )
 
         assert outcome == "accepted"
-        assert summary_calls == []
+        assert len(prov.run_calls) == 1
+        assert await drain_one_worker_item(data_dir) is False
 
 
 async def test_delegation_completion_sends_final_message_partial_failed():
@@ -1325,10 +1315,12 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
         }
         save_session(data_dir, _conv(chat_id), session)
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.work_queue.record_and_admit_message",
-            lambda *args, **kwargs: ("queued", "item-queued"),
-        )
+        runtime = _registry_delivery_runtime(cfg, prov)
+
+        def _raise_busy(*args, **kwargs):
+            raise RuntimeError("parent transport egress not ready")
+
+        monkeypatch.setattr(runtime.submitter.transport, "build_egress", _raise_busy)
 
         outcome = await handle_registry_delivery(
             cfg,
@@ -1347,10 +1339,10 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
                     },
                 },
             },
-            runtime=_registry_delivery_runtime(cfg, prov),
+            runtime=runtime,
         )
 
-        assert outcome == "accepted"
+        assert outcome == "retry_later"
         assert len(prov.run_calls) == 0
         session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         pending = session_after.get("pending_delegation")
@@ -1377,21 +1369,19 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "conversation_ref": conversation_ref,
             "origin_conversation_key": _conv(chat_id),
             "title": "Spec delegation",
+            "status": "completed",
             "tasks": [
                 {
                     "routed_task_id": "child-task-dup",
                     "title": "Reviewer task",
-                    "status": "submitted",
+                    "status": "completed",
+                    "summary": "Review complete",
+                    "full_text": "The reviewer finished and returned notes.",
                 }
             ],
         }
         save_session(data_dir, _conv(chat_id), session)
-
-        async def fake_admit_message(envelope):
-            del envelope
-            return InboundSubmissionResult(status="duplicate", item_id="item-dup")
-
-        monkeypatch.setattr(current_runtime().submitter, "admit_message", fake_admit_message)
+        prov.run_results = [RunResult(text="Final parent answer.")]
 
         outcome = await handle_registry_delivery(
             cfg,
@@ -1414,14 +1404,15 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
         )
 
         assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
         assert not any(
             "All delegated tasks completed." in message.get("text", "")
             for message in current_bot_instance().sent_messages
         )
-        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
-        pending = session_after.get("pending_delegation")
-        assert pending is not None
-        assert pending["status"] == "completed"
+        assert any(
+            "Final parent answer." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
 
 
 async def test_registry_routed_result_multi_child_resumes_only_after_final_child():
@@ -1509,7 +1500,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         )
 
         assert final_outcome == "accepted"
-        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is False
         assert len(prov.run_calls) == 1
         prompt = prov.run_calls[0]["prompt"]
         assert "Developer child result." in prompt
@@ -1576,7 +1567,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
         )
 
         assert outcome == "accepted"
-        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is False
         assert len(prov.run_calls) == 1
         assert current_bot_instance().sent_messages == []
         assert any(
@@ -1635,6 +1626,12 @@ async def test_registry_channel_action_retry_allow_executes_request():
             "registry_publish_level": "off",
         }
     ) as (data_dir, cfg, prov):
+        class _RestrictiveAuthorization:
+            def is_allowed(self, config, user, *, override=None):
+                del config, override
+                return str(getattr(user, "id", "") or "") == _actor(42)
+
+        current_runtime().authorization = _RestrictiveAuthorization()
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state("tg:test"), "on")
         session["pending_retry"] = pending_retry_dict(

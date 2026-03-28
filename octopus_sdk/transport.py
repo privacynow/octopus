@@ -21,6 +21,7 @@ from octopus_sdk.inbound_types import InboundEnvelope
 from octopus_sdk.inbound_types import InboundMessage
 from octopus_sdk.providers import DenialRecord
 from octopus_sdk.registry.models import ExternalConversationRef
+from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.registry.models import TransportActorKey
 from octopus_sdk.registry.models import TransportConversationKey
 from octopus_sdk.sessions import AwaitingSkillSetup
@@ -64,6 +65,30 @@ class TransportCapabilities:
 class InboundSubmissionResult:
     status: str
     item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DelegationContinuationRequest:
+    parent_conversation_key: str
+    parent_transport_ref: str
+    routed_task_id: str
+    authority_ref: str
+    result: RoutedTaskResult
+    parent_external_conversation_ref: str = ""
+
+
+@dataclass(frozen=True)
+class DelegationContinuationResult:
+    status: str
+    matched: bool = False
+    resumed: bool = False
+
+
+class DelegationContinuationPort(Protocol):
+    async def continue_delegation(
+        self,
+        request: DelegationContinuationRequest,
+    ) -> DelegationContinuationResult: ...
 
 
 @dataclass(frozen=True)
@@ -232,7 +257,7 @@ class TransportEgress(ABC):
         ...
 
 
-class BotRuntimeHandle(Protocol):
+class BotRuntimeHandle(DelegationContinuationPort, Protocol):
     async def submit(
         self,
         envelope: InboundEnvelope,
@@ -250,7 +275,6 @@ class BotRuntimeHandle(Protocol):
     ) -> InboundSubmissionResult: ...
 
     async def record(self, envelope: InboundEnvelope) -> bool: ...
-
 
 class TransportImplementation(ABC):
     @property

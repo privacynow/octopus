@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import logging
 from typing import Any
 from collections.abc import Callable
 
 from app.agents.client import AgentRegistryClient
 from app.agents.registry_capabilities import registry_authority_ref
-from app.agents.state import runtime_registry_agent_id
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.state import load_runtime_registry_connection_state
 from app.channels.registry.refs import (
@@ -19,11 +19,7 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.runtime.session_runtime import (
-    apply_runtime_delegation_result,
-    load_runtime_session,
-    save_runtime_session,
-)
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.processor_runner import ProcessorRunner
@@ -39,7 +35,6 @@ from octopus_sdk.identity import (
     conversation_key_for_ref,
     delegation_session_key,
     resolve_delegation_parent_identity,
-    telegram_chat_id_from_ref,
 )
 from octopus_sdk.inbound_types import (
     InboundAction,
@@ -57,14 +52,14 @@ from octopus_sdk.registry.management_executor import (
 )
 from octopus_sdk.transport import (
     BotRuntimeHandle,
+    DelegationContinuationRequest,
     TransportBindingRecord,
     TransportDescriptor,
     TransportEgress,
     TransportHealthRecord,
     TransportImplementation,
 )
-from octopus_sdk.workflows.delegation import send_delegation_completion_message
-
+log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class _RegistryControlAccess:
@@ -527,97 +522,31 @@ async def handle_registry_delivery(
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        if runtime.dispatcher is None:
-            raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
-        if not runtime.dispatcher.egress_ready_for_ref(
-            parent_target_ref,
-            config=config,
-            bot=runtime.bot,
-            conversation_key=parent_conversation_key,
-            source=_transport_for_conversation_ref(parent_target_ref),
-        ):
+        try:
+            continuation = await submitter.continue_delegation(
+                DelegationContinuationRequest(
+                    parent_conversation_key=parent_conversation_key,
+                    parent_transport_ref=parent_target_ref,
+                    parent_external_conversation_ref=(
+                        parent_external_conversation_ref or parent_target_ref
+                    ),
+                    routed_task_id=routed_task_id,
+                    authority_ref=registry_authority_ref(registry_id),
+                    result=routed_result,
+                )
+            )
+        except Exception:
+            log.warning(
+                "Delegation continuation failed for routed task %s",
+                routed_task_id,
+                exc_info=True,
+            )
             return "retry_later"
-        applied = apply_runtime_delegation_result(
-            config.data_dir,
-            parent_conversation_key,
-            routed_task_id=routed_task_id,
-            authority_ref=registry_authority_ref(registry_id),
-            result=routed_result,
-        )
-        if not applied.matched:
-            import logging
-
-            logging.getLogger(__name__).warning(
+        if not continuation.matched:
+            log.warning(
                 "Routed result for task %s authority %s did not match any pending delegation task",
                 routed_task_id,
                 registry_authority_ref(registry_id),
-            )
-            return "accepted"
-        if not applied.ready_to_resume or applied.pending is None:
-            return "accepted"
-        continuation_text = applied.resume_prompt
-        resume_delivery_id = (
-            f"delegation-resume:{parent_target_ref}:{int(applied.pending.created_at * 1000)}"
-        )
-        resume_transport = _transport_for_conversation_ref(parent_target_ref)
-        envelope = build_registry_message_envelope(
-            conversation_ref=parent_target_ref,
-            text=continuation_text,
-            actor_ref=f"delegation-resume:{routed_task_id}",
-            delivery_id=resume_delivery_id,
-            external_conversation_ref=parent_external_conversation_ref or parent_target_ref,
-            registry_id=registry_id,
-            skip_approval=True,
-            conversation_key_override=parent_conversation_key,
-            source_transport=resume_transport,
-            admission_class="internal",
-        )
-        submission = await submitter.admit_message(envelope)
-        admit_status = submission.status
-        if admit_status == "admitted":
-            if runtime.dispatcher is None:
-                raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
-            channel_egress = runtime.dispatcher.create_egress(
-                parent_target_ref,
-                config=config,
-                bot=runtime.bot,
-                conversation_key=parent_conversation_key,
-                source=resume_transport,
-                external_id=parent_external_conversation_ref or parent_target_ref,
-                chat_id=telegram_chat_id_from_ref(parent_target_ref),
-            )
-            if not parent_target_ref.startswith("registry:"):
-                try:
-                    await send_delegation_completion_message(applied.pending, channel_egress.send_text)
-                except Exception:
-                    pass
-            from octopus_sdk.event_sink import build_event_sink_for_context
-            from octopus_sdk.execution import TransportIdentity
-
-            transport = TransportIdentity(
-                conversation_key=parent_conversation_key,
-                origin_channel="registry",
-                actor="registry:delegation-resume",
-                external_conversation_ref=(
-                    parent_external_conversation_ref or parent_target_ref
-                ),
-                target_agent_id=runtime_registry_agent_id(config.data_dir, registry_id),
-                conversation_ref="",
-                routed_task_id="",
-                authority_ref="",
-            )
-            sink = build_event_sink_for_context(
-                transport,
-                runtime.services.control_plane.conversation_projection,
-                config,
-            )
-            tasks_summary = [
-                {"title": t.title, "target": t.target_agent_id, "status": t.status}
-                for t in (applied.pending.tasks or [])
-            ]
-            await sink.on_delegation_completed(
-                tasks_summary,
-                proposal_id=(applied.pending.proposal_id or f"delegation:{parent_conversation_key}"),
             )
         return "accepted"
 

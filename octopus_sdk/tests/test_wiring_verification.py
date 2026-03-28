@@ -11,6 +11,8 @@ from octopus_sdk.identity import resolve_delegation_parent_identity
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation
+from octopus_sdk.transport import DelegationContinuationRequest
 from octopus_sdk.tests.support import make_sdk_harness, make_transport_identity
 from octopus_sdk.work_queue import WorkItemRecord
 from octopus_sdk.workflows.delegation import (
@@ -506,3 +508,70 @@ async def test_sdk_wiring_verification_internal_admission_bypasses_restrictive_a
     )
     assert external_resume_allowed is False
     assert runtime.work_queue._state(runtime.config.data_dir).work_items[external_resume_item.id].error == "not_allowed"
+
+
+async def test_sdk_delegation_continuation_runs_without_fresh_message_admission(
+    tmp_path: Path,
+) -> None:
+    harness = make_sdk_harness(tmp_path, process_role="bot")
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
+    runtime.authorization = RestrictiveAuthorization({"tg:12345"})
+    conversation_key = "stub:conversation:resume"
+    session = runtime.sessions.load(
+        conversation_key,
+        provider_name=runtime.provider.name,
+        provider_state_factory=runtime.provider.new_provider_state,
+        approval_mode=runtime.config.approval_mode,
+        default_role=runtime.config.role,
+        default_skills=runtime.config.default_skills,
+    )
+    session.pending_delegation = PendingDelegation(
+        conversation_ref="coord-parent-1",
+        origin_conversation_key=conversation_key,
+        actor_key="tg:12345",
+        title="Ask specialist",
+        resume_instruction="Synthesize the specialist result.",
+        tasks=[
+            DelegatedTask(
+                routed_task_id="task-1",
+                title="Investigate",
+                status="submitted",
+            )
+        ],
+        status="submitted",
+    )
+    runtime.sessions.save(conversation_key, session)
+
+    result = await runtime.continue_delegation(
+        DelegationContinuationRequest(
+            parent_conversation_key=conversation_key,
+            parent_transport_ref=conversation_key,
+            parent_external_conversation_ref=conversation_key,
+            routed_task_id="task-1",
+            authority_ref="registry:default",
+            result=RoutedTaskResult(
+                routed_task_id="task-1",
+                status="completed",
+                transition_id="task-1-complete",
+                summary="Specialist finished",
+                full_text="Specialist output",
+            ),
+        )
+    )
+
+    assert result.matched is True
+    assert result.resumed is True
+    assert harness.work_queue.calls == []
+    egress = harness.transport.egresses[conversation_key]
+    assert any("All delegated tasks completed." in text for text in egress.sent_texts)
+    assert egress.sent_texts[-1] == "sdk response"
+    resumed_session = runtime.sessions.load(
+        conversation_key,
+        provider_name=runtime.provider.name,
+        provider_state_factory=runtime.provider.new_provider_state,
+        approval_mode=runtime.config.approval_mode,
+        default_role=runtime.config.role,
+        default_skills=runtime.config.default_skills,
+    )
+    assert resumed_session.pending_delegation is None

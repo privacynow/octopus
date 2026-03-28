@@ -1,7 +1,7 @@
 /**
  * Task view — compact routed-work queue with status filters.
  */
-async function renderTaskList(container) {
+function renderTaskList(container) {
     const cleanups = UI.beginCleanupScope();
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -441,7 +441,8 @@ async function renderTaskList(container) {
     }));
 
     syncStatusButtons();
-    await Promise.all([loadSummary(), loadList()]);
+    void loadSummary();
+    void loadList();
 
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

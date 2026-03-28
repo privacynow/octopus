@@ -1,7 +1,7 @@
 /**
  * Capability list — global capability overrides with toggle switches.
  */
-async function renderCapabilityList(container) {
+function renderCapabilityList(container) {
     const cleanups = UI.beginCleanupScope();
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -92,7 +92,7 @@ async function renderCapabilityList(container) {
         }
     }
 
-    await loadCapabilities();
+    void loadCapabilities();
 
     let reloadDebounce = null;
     const unsub = WS.subscribe('agents', () => {

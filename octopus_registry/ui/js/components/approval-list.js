@@ -1,7 +1,7 @@
 /**
  * Approvals — compact decision queue.
  */
-async function renderApprovalList(container) {
+function renderApprovalList(container) {
     const cleanups = UI.beginCleanupScope();
     let cursor = 0;
     let cursorStack = [];
@@ -193,6 +193,6 @@ async function renderApprovalList(container) {
         reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
     }));
 
-    await loadPage();
+    void loadPage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

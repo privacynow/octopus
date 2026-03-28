@@ -1,7 +1,7 @@
 /**
  * Agent detail — compact profile with direct conversation entry.
  */
-async function renderAgentDetail(container, params) {
+function renderAgentDetail(container, params) {
     const agentId = params.id;
     const cleanups = UI.beginCleanupScope();
     let convosCursor = 0;
@@ -184,10 +184,38 @@ async function renderAgentDetail(container, params) {
         head.innerHTML = '<strong>Conversations</strong>';
         section.appendChild(head);
 
+        const groups = document.createElement('div');
+        groups.className = 'agent-detail-conversation-groups';
+
+        const conversationsGroup = document.createElement('div');
+        conversationsGroup.className = 'agent-detail-conversation-group';
+        conversationsGroup.dataset.key = 'direct-conversations';
+        const conversationsLabel = document.createElement('div');
+        conversationsLabel.className = 'agent-detail-conversation-group-title';
+        conversationsLabel.textContent = 'Conversations';
+        conversationsGroup.appendChild(conversationsLabel);
         const list = document.createElement('div');
         list.id = 'agent-conversations-list';
         list.className = 'list-container';
-        section.appendChild(list);
+        conversationsGroup.appendChild(list);
+        groups.appendChild(conversationsGroup);
+
+        const taskThreadsGroup = document.createElement('div');
+        taskThreadsGroup.id = 'agent-task-threads-group';
+        taskThreadsGroup.className = 'agent-detail-conversation-group';
+        taskThreadsGroup.dataset.key = 'task-threads';
+        taskThreadsGroup.hidden = true;
+        const taskThreadsLabel = document.createElement('div');
+        taskThreadsLabel.className = 'agent-detail-conversation-group-title';
+        taskThreadsLabel.textContent = 'Task threads';
+        taskThreadsGroup.appendChild(taskThreadsLabel);
+        const taskList = document.createElement('div');
+        taskList.id = 'agent-task-threads-list';
+        taskList.className = 'list-container';
+        taskThreadsGroup.appendChild(taskList);
+        groups.appendChild(taskThreadsGroup);
+
+        section.appendChild(groups);
 
         const pag = document.createElement('div');
         pag.id = 'agent-conversations-pagination';
@@ -198,16 +226,20 @@ async function renderAgentDetail(container, params) {
 
     function renderConversationRows(conversations, data) {
         const list = document.getElementById('agent-conversations-list');
+        const taskList = document.getElementById('agent-task-threads-list');
+        const taskThreadsGroup = document.getElementById('agent-task-threads-group');
         const pag = document.getElementById('agent-conversations-pagination');
-        if (!list || !pag) return;
+        if (!list || !taskList || !taskThreadsGroup || !pag) return;
 
         if (!conversations.length) {
             UI.reconcileChildren(list, [UI.renderEmptyState('No conversations.', true)]);
+            UI.reconcileChildren(taskList, []);
+            taskThreadsGroup.hidden = true;
             UI.reconcileChildren(pag, []);
             return;
         }
 
-        const rows = conversations.map((item) => {
+        const buildRows = (items) => items.map((item) => {
             const sub = document.createElement('span');
             sub.textContent = [
                 item.conversation_type === 'task_thread' ? 'task thread' : '',
@@ -226,7 +258,27 @@ async function renderAgentDetail(container, params) {
             row.dataset.key = item.conversation_id;
             return row;
         });
-        UI.reconcileChildren(list, rows);
+
+        const directConversations = conversations.filter(
+            (item) => String(item.conversation_type || 'conversation') !== 'task_thread',
+        );
+        const taskThreads = conversations.filter(
+            (item) => String(item.conversation_type || 'conversation') === 'task_thread',
+        );
+
+        if (directConversations.length) {
+            UI.reconcileChildren(list, buildRows(directConversations));
+        } else {
+            UI.reconcileChildren(list, [UI.renderEmptyState('No direct conversations.', true)]);
+        }
+
+        if (taskThreads.length) {
+            taskThreadsGroup.hidden = false;
+            UI.reconcileChildren(taskList, buildRows(taskThreads));
+        } else {
+            taskThreadsGroup.hidden = true;
+            UI.reconcileChildren(taskList, []);
+        }
 
         const wrapper = document.createElement('div');
         UI.renderPagination(wrapper, {
@@ -307,7 +359,7 @@ async function renderAgentDetail(container, params) {
         convosReload = setTimeout(() => loadConversations({ soft: true }), 350);
     }));
 
-    await loadDetail();
+    void loadDetail();
     cleanups.add(() => clearTimeout(detailReload));
     cleanups.add(() => clearTimeout(convosReload));
 }

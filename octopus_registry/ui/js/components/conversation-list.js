@@ -1,7 +1,7 @@
 /**
  * Conversation list — direct work start plus active thread roster.
  */
-async function renderConversationList(container) {
+function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
     const QUICK_START_INLINE_LIMIT = 8;
     const CONVERSATION_TYPES = [
@@ -364,7 +364,8 @@ async function renderConversationList(container) {
 
     syncStatusButtons();
     syncTypeButtons();
-    await Promise.all([loadQuickStart(), loadPage()]);
+    void loadQuickStart();
+    void loadPage();
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => clearTimeout(quickStartReload));

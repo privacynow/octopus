@@ -37,6 +37,8 @@ from octopus_sdk.registry.models import DiscoveredAgentRef, RoutedTaskUpdate
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import EditableHandle
+from octopus_sdk.transport import DelegationContinuationRequest
+from octopus_sdk.transport import DelegationContinuationResult
 from octopus_sdk.transport import TransportDescriptor
 from octopus_sdk.transport import TransportEgress
 from octopus_sdk.transport import TransportImplementation
@@ -434,6 +436,137 @@ class BotRuntime:
             envelope.kind,
             payload=payload,
         )
+
+    async def continue_delegation(
+        self,
+        request: DelegationContinuationRequest,
+    ) -> DelegationContinuationResult:
+        from octopus_sdk.workflows.delegation import (
+            apply_routed_result,
+            build_resume_prompt,
+            delegation_ready_to_resume,
+        )
+        from octopus_sdk.workflows.execution_finalization import (
+            FinalizationContext,
+            finalize_execution,
+        )
+
+        session = self._load_session(request.parent_conversation_key)
+        pending = session.pending_delegation
+        was_ready_to_resume = delegation_ready_to_resume(pending)
+        applied = apply_routed_result(
+            pending,
+            routed_task_id=request.routed_task_id,
+            authority_ref=request.authority_ref,
+            result=request.result,
+        )
+        updated_pending = applied.pending
+        matched = applied.matched
+        ready_to_resume = applied.ready_to_resume
+        resume_prompt = applied.resume_prompt
+        completion_message = applied.completion_message
+        newly_ready = applied.matched and applied.ready_to_resume and not was_ready_to_resume
+
+        if not matched and pending is not None:
+            matching_task = next(
+                (
+                    task
+                    for task in pending.tasks
+                    if task.routed_task_id == request.routed_task_id
+                    and (
+                        not request.authority_ref
+                        or not task.authority_ref
+                        or task.authority_ref == request.authority_ref
+                    )
+                ),
+                None,
+            )
+            if matching_task is not None and delegation_ready_to_resume(pending):
+                matched = True
+                updated_pending = pending
+                ready_to_resume = True
+                resume_prompt = build_resume_prompt(pending)
+                completion_message = ""
+                newly_ready = False
+
+        if not matched:
+            return DelegationContinuationResult(status="not_matched", matched=False, resumed=False)
+
+        session.pending_delegation = updated_pending
+        self.sessions.save(request.parent_conversation_key, session)
+
+        if updated_pending is None or not ready_to_resume:
+            return DelegationContinuationResult(status="updated", matched=True, resumed=False)
+
+        actor_key = str(updated_pending.actor_key or "")
+        actor_user = InboundUser(id=actor_key or "internal:delegation")
+        descriptor = self._descriptor_for_ref(request.parent_transport_ref)
+        resume_transport = (
+            descriptor.transport_type
+            if descriptor is not None
+            else str(request.parent_transport_ref or "").split(":", 1)[0] or "registry"
+        )
+        event = InboundMessage(
+            user=actor_user,
+            conversation_key=request.parent_conversation_key,
+            text=resume_prompt,
+            attachments=(),
+            source=resume_transport,
+            transport=resume_transport,
+            conversation_ref=request.parent_transport_ref,
+            external_conversation_ref=(
+                request.parent_external_conversation_ref or request.parent_transport_ref
+            ),
+            authority_ref=request.authority_ref,
+            authorized_actor_key=actor_key,
+            skip_approval=True,
+            admission_class="internal",
+        )
+        item = WorkItemRecord(
+            id=f"delegation:{request.routed_task_id}",
+            conversation_key=request.parent_conversation_key,
+            actor_key=actor_key,
+            kind="message",
+        )
+        egress, conversation_ref = self._build_worker_egress(event, item)
+        title = summarize_text(updated_pending.title or resume_prompt) or "Delegation follow-up"
+        await egress.bind(title=title, config=self.config)
+        if newly_ready and completion_message:
+            await egress.send_text(completion_message)
+        trust_tier = self._trust_tier_for_event(
+            conversation_ref,
+            actor_key=actor_key,
+            user=actor_user,
+        )
+        outcome = await self._execute_message_request(
+            event=event,
+            item=item,
+            egress=egress,
+            conversation_ref=conversation_ref,
+            trust_tier=trust_tier,
+            cancel_event=None,
+            skip_approval=True,
+            prompt=resume_prompt,
+            image_paths=[],
+            attachments=[],
+        )
+        await finalize_execution(
+            outcome,
+            context=FinalizationContext(
+                config=self.config,
+                item_id=item.id,
+                conversation_key=request.parent_conversation_key,
+                runtime_chat=request.parent_conversation_key,
+                conversation_ref=updated_pending.conversation_ref,
+                chat_id=event.chat_id if isinstance(event.chat_id, int) else 0,
+                skip_approval=True,
+                load_session=self._load_session,
+                save_session=self.sessions.save,
+                record_usage=self.work_queue.record_usage,
+                completion_webhook_sender=self.workflows.completion_webhook,
+            ),
+        )
+        return DelegationContinuationResult(status="continued", matched=True, resumed=True)
 
     async def dispatch_claimed_item(
         self,

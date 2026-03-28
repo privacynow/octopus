@@ -1,7 +1,7 @@
 /**
  * Dashboard — dense operator overview with immediate follow-up paths.
  */
-async function renderDashboard(container) {
+function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
@@ -267,6 +267,6 @@ async function renderDashboard(container) {
         }));
     });
 
-    await loadSummary();
+    void loadSummary();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

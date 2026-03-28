@@ -1,7 +1,7 @@
 /**
  * Skill catalog — dense installable runtime skill roster.
  */
-async function renderSkillCatalog(container) {
+function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
     let reloadDebounce = null;
@@ -221,7 +221,7 @@ async function renderSkillCatalog(container) {
         loadSkills();
     });
 
-    await loadAgents();
+    void loadAgents();
 
     const unsub = WS.subscribe('agents', () => {
         clearTimeout(reloadDebounce);

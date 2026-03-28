@@ -1,7 +1,7 @@
 /**
  * Usage view — compact rollup with conversation table.
  */
-async function renderUsageView(container) {
+function renderUsageView(container) {
     const cleanups = UI.beginCleanupScope();
     let currentRange = '7d';
     let hasLoaded = false;
@@ -179,6 +179,6 @@ async function renderUsageView(container) {
     }));
 
     syncRangeButtons();
-    await loadUsage();
+    void loadUsage();
     cleanups.add(() => clearTimeout(reloadDebounce));
 }

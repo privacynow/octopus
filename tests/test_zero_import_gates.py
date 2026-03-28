@@ -1483,6 +1483,7 @@ def test_octopus_sdk_convenience_surfaces_do_not_reexport_testing_utilities() ->
     forbidden = (
         "from octopus_sdk.testing",
         "import octopus_sdk.testing",
+        "InMemoryDeferredNotificationStore",
         "InMemoryWorkQueue",
         "InMemorySessionStore",
     )

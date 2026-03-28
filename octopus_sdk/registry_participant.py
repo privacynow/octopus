@@ -86,6 +86,8 @@ class RegistryCoordination(Protocol):
         selector: TargetSelector,
         title: str,
         instructions: str,
+        origin_transport_ref: str = "",
+        authorized_actor_key: str = "",
         message_text: str = "",
     ) -> CoordinationActionResult: ...
 

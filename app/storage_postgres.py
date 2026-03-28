@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 from octopus_sdk.workflows.delegation import apply_routed_result
 
 _SCHEMA_TABLE = "bot_runtime.sessions"
+_DEFERRED_NOTIFICATIONS_TABLE = "bot_runtime.deferred_notifications"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +211,96 @@ def list_sessions(conn) -> list[dict[str, Any]]:
     return results
 
 
+def enqueue_deferred_notification(conn, notification: DeferredNotification) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {_DEFERRED_NOTIFICATIONS_TABLE} (
+                notification_id,
+                target_agent_id,
+                actor_key,
+                content,
+                priority,
+                created_at,
+                expires_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s::timestamptz, %s::timestamptz)
+            ON CONFLICT (notification_id) DO UPDATE SET
+                target_agent_id = EXCLUDED.target_agent_id,
+                actor_key = EXCLUDED.actor_key,
+                content = EXCLUDED.content,
+                priority = EXCLUDED.priority,
+                created_at = EXCLUDED.created_at,
+                expires_at = EXCLUDED.expires_at
+            """,
+            (
+                notification.notification_id,
+                notification.target_agent_id,
+                notification.actor_key,
+                notification.content,
+                notification.priority,
+                notification.created_at,
+                notification.expires_at,
+            ),
+        )
+    conn.commit()
+
+
+def flush_deferred_notifications(
+    conn,
+    *,
+    target_agent_id: str,
+    actor_key: str,
+    now: str | None = None,
+) -> list[DeferredNotification]:
+    current = now or datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {_DEFERRED_NOTIFICATIONS_TABLE} WHERE expires_at <= %s::timestamptz",
+            (current,),
+        )
+        cur.execute(
+            f"""
+            SELECT notification_id, target_agent_id, actor_key, content, priority, created_at, expires_at
+            FROM {_DEFERRED_NOTIFICATIONS_TABLE}
+            WHERE target_agent_id = %s AND actor_key = %s
+            ORDER BY created_at ASC
+            """,
+            (target_agent_id, actor_key),
+        )
+        rows = cur.fetchall()
+        if rows:
+            cur.executemany(
+                f"DELETE FROM {_DEFERRED_NOTIFICATIONS_TABLE} WHERE notification_id = %s",
+                [(str(row[0]),) for row in rows],
+            )
+    conn.commit()
+    return [
+        DeferredNotification(
+            notification_id=str(row[0]),
+            target_agent_id=str(row[1]),
+            actor_key=str(row[2]),
+            content=str(row[3]),
+            priority=str(row[4]),
+            created_at=row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]),
+            expires_at=row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]),
+        )
+        for row in rows
+    ]
+
+
+def expire_stale_deferred_notifications(conn, *, now: str | None = None) -> int:
+    current = now or datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {_DEFERRED_NOTIFICATIONS_TABLE} WHERE expires_at <= %s::timestamptz",
+            (current,),
+        )
+        deleted = int(cur.rowcount or 0)
+    conn.commit()
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # Store wrapper for runtime_backend (data_dir ignored; uses pool)
 # ---------------------------------------------------------------------------
@@ -305,3 +397,39 @@ class PostgresSessionStore:
 
     def reset_db_for_test(self, data_dir: Path) -> None:
         pass  # Tests use conn-based API and truncate; no per-dir reset
+
+    def enqueue_deferred_notification(
+        self,
+        data_dir: Path,
+        notification: DeferredNotification,
+    ) -> None:
+        del data_dir
+        with self._conn() as conn:
+            enqueue_deferred_notification(conn, notification)
+
+    def flush_deferred_notifications(
+        self,
+        data_dir: Path,
+        *,
+        target_agent_id: str,
+        actor_key: str,
+        now: str | None = None,
+    ) -> list[DeferredNotification]:
+        del data_dir
+        with self._conn() as conn:
+            return flush_deferred_notifications(
+                conn,
+                target_agent_id=target_agent_id,
+                actor_key=actor_key,
+                now=now,
+            )
+
+    def expire_stale_deferred_notifications(
+        self,
+        data_dir: Path,
+        *,
+        now: str | None = None,
+    ) -> int:
+        del data_dir
+        with self._conn() as conn:
+            return expire_stale_deferred_notifications(conn, now=now)

@@ -804,22 +804,64 @@ async def submit_participant_direct_assignment(
     message_text: str = "",
     origin_channel: str,
     external_ref: str,
+    authorized_actor_key: str = "",
 ) -> CoordinationActionResult:
+    coordination_external_ref = external_ref
+    if conversation_ref and not conversation_ref.startswith("registry:"):
+        coordination_external_ref = conversation_ref
     conversation_id = await _coordination_conversation_id(
         runtime,
         conversation_key,
         conversation_ref=conversation_ref,
         origin_channel=origin_channel,
-        external_ref=external_ref,
+        external_ref=coordination_external_ref,
         title=f"{origin_channel.title()} {external_ref}",
     )
-    return await runtime.coordination.direct_assign(
+    result = await runtime.coordination.direct_assign(
         conversation_id,
         selector=selector,
         title=title,
         instructions=instructions,
+        origin_transport_ref=conversation_ref,
+        authorized_actor_key=authorized_actor_key,
         message_text=message_text,
     )
+    if result.accepted and result.routed_tasks:
+        pending = build_delegation_plan(
+            conversation_id,
+            title,
+            "",
+            [
+                {
+                    "draft_id": str(result.routed_tasks[0].routed_task_id or result.action_id or title),
+                    "title": title,
+                    "target_agent_id": (
+                        str(result.routed_tasks[0].target_agent_id or "")
+                        or selector.preferred_agent_id
+                        or selector.value
+                    ),
+                    "target": (
+                        str(result.routed_tasks[0].target_agent_id or "")
+                        or selector.preferred_agent_id
+                        or selector.value
+                    ),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "instructions": instructions,
+                }
+            ],
+            origin_conversation_key=conversation_key,
+            proposal_id=result.action_id,
+        )
+        submitted = mark_task_submitted(
+            pending,
+            routed_task_id=str(result.routed_tasks[0].routed_task_id or ""),
+            authority_ref=str(result.routed_tasks[0].authority_ref or ""),
+        )
+        session = _load_session(runtime, conversation_key)
+        session.pending_delegation = submitted.pending or pending
+        _save_session(runtime, conversation_key, session)
+    return result
 
 
 async def propose_participant_delegation(
@@ -832,6 +874,7 @@ async def propose_participant_delegation(
     intent: DelegationIntent,
     origin_channel: str,
     external_ref: str,
+    authorized_actor_key: str = "",
 ) -> ParticipantDelegationPlan:
     coordination_external_ref = external_ref
     if conversation_ref and not conversation_ref.startswith("registry:"):
@@ -850,6 +893,7 @@ async def propose_participant_delegation(
             title=title,
             resume_instruction=intent.resume_instruction,
             origin_transport_ref=conversation_ref,
+            authorized_actor_key=authorized_actor_key,
             tasks=list(intent.tasks),
         ),
     )

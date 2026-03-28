@@ -922,6 +922,216 @@ benefits — no transport-specific code needed.
 - Management protocol delivery (Phase 4) is confirmed clean of the same bug
 - No conversation key mismatch in any delegation round-trip path
 
+### Phase 12: Delegation completeness, recipient visibility, and composition fixes
+
+Phase 11 fixed the SDK protocol for delegation transport identity. Phase 12
+addresses three additional gaps found in live testing plus composition
+type-safety issues found in adversarial review.
+
+**Live test observation:** Operator sent a task from M1 to M2 via the
+registry UI. The task executed on M2 — the answer appeared in the registry.
+However:
+- The answer did NOT appear in M1's Telegram chat (the reply was lost)
+- The incoming task did NOT appear in M2's conversation list in the registry
+- When the same authorized user next messages M2 on Telegram, they see
+  nothing about the completed work
+
+These are three distinct problems at three different levels:
+
+1. **Direct-assignment transport identity parity** (bug) — the direct-assign
+   path (`/delegate @m2 ...` or UI "Send directly") does not carry
+   `origin_transport_ref`, so the parent bot cannot resume the Telegram chat
+   when the result comes back. Live symptom: `ValueError: unknown conversation
+   ref: 8698216169` — raw chat ID instead of `telegram:<bot-id>:8698216169`.
+   The result is in the registry, but M1 cannot deliver it to Telegram.
+2. **Recipient-side routed-task conversation projection** (missing feature) —
+   when M1 delegates to M2, the registry shows the task on M1's parent
+   conversation but does NOT create a recipient-visible conversation/thread
+   for M2. M2's execution runs with a blank `external_conversation_ref`,
+   causing mirror/create-conversation failures. The operator sees M2
+   completed the work only by looking at M1's conversation in the registry.
+3. **Deferred recipient notification** (new capability) — when M2 completes
+   a delegated task, the authorized operator who next talks to M2 on Telegram
+   (or Slack, or any transport) should see a summary of the completed work.
+   This is the "refresh M2 at the next opportunity" requirement. The system
+   currently has no mechanism to store pending summaries keyed by operator
+   identity for delivery on the next transport interaction.
+
+Plus composition type-safety fixes from adversarial review.
+
+#### 12A: Direct-assignment transport identity parity
+
+**Root cause:** `DirectAssignmentRequest` and `DirectAssignActionPayload`
+have no `origin_transport_ref` field. The registry store creates the routed
+task without the transport ref. When the result comes back, the delivery
+payload's `parent_external_conversation_ref` contains only the bare
+`external_conversation_ref` from the conversations table — which for
+Telegram is the raw numeric chat ID, not a qualified transport ref.
+`resolve_delegation_parent_identity()` then passes this to the transport
+dispatcher, which rejects it because it's not a known transport ref prefix.
+
+**Checklist:**
+
+- [ ] 12A-1: Add `origin_transport_ref: str = ""` to
+  `DirectAssignmentRequest` and `DirectAssignActionPayload` in
+  `octopus_sdk/registry/models.py`
+- [ ] 12A-2: `submit_participant_direct_assignment()` in
+  `octopus_sdk/workflows/delegation.py` must populate `origin_transport_ref`
+  from the caller's transport identity
+- [ ] 12A-3: Registry store `direct_assign` action handler in
+  `octopus_registry/store.py` must persist `origin_transport_ref` on the
+  routed task and include it in the `routed_result` delivery payload
+- [ ] 12A-4: Delivery handler `resolve_delegation_parent_identity()` in
+  `app/channels/registry/delivery_transport.py` must prefer
+  `origin_transport_ref` from the delivery payload over the bare
+  `external_conversation_ref` fallback
+- [ ] 12A-5: `ensure_conversation_id()` callers in
+  `octopus_sdk/workflows/delegation.py` must pass qualified transport refs
+  (e.g., `telegram:<bot-id>:<chat-id>`) as `external_conversation_ref`,
+  not raw numeric IDs. This is an SDK-side fix — the callers are in the
+  SDK delegation workflow, not in transport code.
+- [ ] 12A-6: Test: direct-assign from Telegram M1 → M2 → result → M1
+  resume in Telegram chat. Verify `origin_transport_ref` survives the
+  round-trip. Verify no `ValueError: unknown conversation ref`.
+
+**Exit gate:**
+- Direct assignment from any transport produces a routed task with
+  `origin_transport_ref` set
+- Result delivery resolves parent identity from `origin_transport_ref`
+- Parent bot resumes the correct transport chat
+- No raw numeric IDs leak into transport ref fields
+
+#### 12B: Recipient-side routed-task conversation projection
+
+**Root cause:** Routed tasks create a delivery for the target bot and
+mirror status events on the PARENT conversation, but do NOT create a
+recipient-visible conversation projection for the TARGET bot. When M2
+executes the task, its `external_conversation_ref` is blank because the
+routed-task delivery was built without one. This causes registry
+conversation mirroring to fail on M2's side.
+
+**Checklist:**
+
+- [ ] 12B-1: If the SDK needs a new type or extension to
+  `ConversationProjectionPort` in `octopus_sdk/conversation_projection.py`
+  to support recipient-side projection, define it there first. Then in
+  `octopus_registry/store.py`, when the registry store creates a routed
+  task, also create (or ensure) a recipient-side conversation projection
+  that M2 can see in the registry UI. This should be a first-class
+  incoming-work thread visible under M2's conversations.
+- [ ] 12B-2: The SDK delivery envelope model (in
+  `octopus_sdk/registry/models.py` or the delivery payload type) must
+  require a valid `external_conversation_ref` for routed-task deliveries.
+  `octopus_registry/store.py` populates this field when creating the
+  delivery — using the routed-task ref or a synthetic conversation ref.
+  `app/channels/registry/delivery_transport.py` consumes it when building
+  the inbound envelope. It must not be blank.
+- [ ] 12B-3: Registry UI must show the incoming delegated task under M2's
+  conversation list (or task list) with status, instructions, and result.
+- [ ] 12B-4: Mirror events from M2's execution (provider.request,
+  provider.response, tool.execution, etc.) must be visible on M2's
+  recipient conversation, not only on M1's parent conversation.
+- [ ] 12B-5: Test: M1 delegates to M2 → M2's registry conversation list
+  shows the incoming task → M2 executes → events visible on M2's thread →
+  result visible.
+
+**Exit gate:**
+- Recipient bots have visible incoming-task threads in the registry
+- Routed-task execution has a valid `external_conversation_ref`
+- Mirror events from recipient execution are visible in the registry UI
+- No blank `external_conversation_ref` on any routed-task execution path
+
+#### 12C: Deferred recipient notification
+
+**Root cause:** When M2 completes a delegated task, the result goes back
+to M1 (the requester). The authorized operator who next talks to M2 on
+Telegram/Slack sees nothing about the completed work. There is no
+mechanism to store "pending summaries for the next transport interaction."
+
+This is a new capability, not a bugfix.
+
+**Checklist:**
+
+- [ ] 12C-1: Define a `DeferredNotification` model in the SDK — a pending
+  message keyed by `(target_agent_id, authorized_actor_key)` with content,
+  priority, and expiration
+- [ ] 12C-2: When a routed task completes or fails, create a deferred
+  notification for the authorized operator on the target bot: "Task
+  '<title>' completed/failed. Summary: <summary>". The creation logic
+  lives in the SDK delegation workflow (`octopus_sdk/workflows/delegation.py`
+  or equivalent) using `DeferredNotificationPort`. The port implementation
+  in `app/` persists it. The registry store in `octopus_registry/store.py`
+  may also create notifications for registry-originated task completions.
+- [ ] 12C-3: Define a `DeferredNotificationPort` in the SDK — the bot
+  runtime checks for pending notifications when an authorized user sends
+  their next message on any transport
+- [ ] 12C-4: Implement the port in `app/` using the existing session/store
+  infrastructure. The notification is flushed and displayed before or after
+  the user's next message response.
+- [ ] 12C-5: The deferred notification must work across transports — if the
+  operator next talks to M2 on Telegram, they see it there. If on Slack,
+  they see it there. The notification is keyed by actor, not by transport.
+- [ ] 12C-6: Notifications have a TTL. Stale notifications (e.g., >24h) are
+  silently expired, not shown.
+- [ ] 12C-7: Test: M1 delegates to M2 → M2 completes → operator sends
+  message to M2 on Telegram → deferred notification is shown → notification
+  is consumed (not shown again).
+
+**Exit gate:**
+- Deferred notifications exist as an SDK-level capability
+- Completed/failed delegated tasks produce deferred notifications for the
+  authorized operator on the target bot
+- Notifications are shown on the operator's next transport interaction
+- Notifications are actor-keyed, not transport-keyed
+- Notifications have TTL and are consumed after display
+
+#### 12D: Composition type-safety fixes
+
+Adversarial review found silent fallbacks and type downgrades in the
+composition layer. These undermine the SDK port boundary.
+
+**Checklist:**
+
+- [ ] 12D-1: `WorkflowComposition.trust_tier_resolver` — change type from
+  `Callable[..., str] | None` to `TrustTierResolverPort | None`. The
+  protocol must survive composition, not degrade to a bare callable.
+  `TrustTierResolverPort` is a callback protocol with `__call__`, so
+  regular functions and lambdas with matching signatures satisfy it
+  structurally — no wrapper classes needed.
+- [ ] 12D-2: `WorkflowComposition` required fields `messages`, `config`,
+  `sessions` — remove `| None` and `= None` defaults. These are required.
+  The dataclass enforces it, not just the composer. (`work_queue` is on
+  `BotServicesPort`, not `WorkflowComposition` — do not change it here.)
+  Only one direct `WorkflowComposition(...)` construction exists today
+  (in `octopus_sdk/composition.py`), but removing the defaults prevents
+  future construction without required ports.
+- [ ] 12D-3: BotRuntime `bot_runtime.py:1341` — remove the defensive
+  `if self.workflows.messages is not None` guard on
+  `recovery_orphaned_command`. Messages is a required port. If it's None,
+  that's a construction bug, not a case to silently skip. This is the only
+  confirmed instance. Any future similar guards on required ports are
+  also prohibited.
+- [ ] 12D-4: `_reject_test_implementations` in `composition.py` — add
+  `messages` and `config` to the candidate dict. Every port the composer
+  manages (required and optional) must be checked.
+- [ ] 12D-5: `_UnavailablePort.__getattr__` returns a callable that raises
+  `NotConfiguredError`, which means `hasattr(port, 'method')` returns
+  `True`. This is a known theoretical issue. No current code uses
+  `hasattr` for port feature-detection. Do NOT add `__hasattr__` (not a
+  valid Python special method). Document the behavior in the class
+  docstring. Revisit only if `hasattr`-based feature detection is
+  introduced in the future.
+- [ ] 12D-6: Run full test suite. Any test that constructs
+  `WorkflowComposition` with `messages=None` must use
+  `build_for_testing()` or provide a real implementation.
+
+**Exit gate:**
+- `WorkflowComposition` required fields have no None defaults
+- `trust_tier_resolver` is typed as `TrustTierResolverPort`, not `Callable`
+- No defensive None guards on required ports in BotRuntime
+- `_reject_test_implementations` covers ALL managed ports
+- Full test suite passes
+
 ## Hard exit criteria
 
 These are immutable.
@@ -1003,24 +1213,46 @@ These are immutable.
     completion messages target the original transport chat.
 32. Cross-transport delegation round-trip test passes: Telegram → registry
     delegation → target bot → result → parent Telegram resume.
-33. `app/runtime/composition.py` is a thin app-specific wrapper over
+33. `DirectAssignmentRequest` carries `origin_transport_ref`. Direct-assign
+    round-trip preserves parent transport identity. No raw numeric IDs in
+    transport ref fields.
+34. Recipient bots have visible incoming-task conversation projections in the
+    registry. Routed-task execution has a valid `external_conversation_ref`.
+    Mirror events from recipient execution are visible in the registry UI.
+35. Deferred notifications exist as an SDK capability. Completed/failed
+    delegated tasks produce notifications for the authorized operator on the
+    target bot, keyed by actor, shown on next transport interaction, with TTL.
+36. `WorkflowComposition.trust_tier_resolver` is typed as
+    `TrustTierResolverPort`, not bare `Callable`. `messages`, `config`,
+    `sessions` on `WorkflowComposition` have no `| None` defaults. No
+    defensive None guards on required ports in BotRuntime.
+    `_reject_test_implementations` covers all managed ports including
+    `messages` and `config`.
+37. `app/runtime/composition.py` is a thin app-specific wrapper over
     `WorkflowComposer`. It does not own business logic.
-34. Every file moved from `app/` is deleted in the same change.
-35. No exit criterion has been weakened, qualified, or removed.
+38. Every file moved from `app/` is deleted in the same change.
+39. No exit criterion has been weakened, qualified, or removed.
 
 ## Dependencies
 
 ```
 Phases 1–10: COMPLETE (see status.md)
-Phase 11 (delegation protocol transport identity) — new work, builds on completed architecture
+Phase 11 (delegation protocol transport identity) — implemented
+Phase 12A (direct-assign identity parity) — depends on Phase 11
+Phase 12B (recipient conversation projection) — independent of 12A
+Phase 12C (deferred recipient notification) — depends on 12B
+Phase 12D (composition type-safety) — independent, can run in parallel
 ```
 
 - Phases 1-10 are complete
-- Phase 11 depends on the completed architecture (especially Phase 4
-  management protocol and Phase 8 BotRuntime dispatch) but does not
-  invalidate any completed phase — it extends the SDK protocol
-- Phase 11 items 11n-11p revisit completed phases to verify they are
-  not affected by the same identity-loss pattern
+- Phase 11 is implemented (delegation protocol transport identity)
+- Phase 12A depends on Phase 11 (uses the same `origin_transport_ref`
+  pattern, applied to the direct-assign path)
+- Phase 12B is independent — it's a missing registry feature, not a
+  transport identity issue
+- Phase 12C depends on 12B — deferred notifications need the recipient
+  conversation projection to exist
+- Phase 12D is independent and can run in parallel with 12A-12C
 
 ## Developer prompt
 
@@ -1097,13 +1329,35 @@ developer template. Test utilities are deliberately non-durable and raise on
 persistence-guarantee methods. Compositions with test implementations are
 marked test_mode=True.
 
-Phase 10 — Verify exit criteria 1-28 and 33-35. (Criteria 29-32 are Phase 11.)
+Phase 10 — Verify exit criteria 1-28. (Criteria 29-32 are Phase 11, 33-36
+are Phase 12.)
 
 Phase 11 — Fix delegation protocol transport identity. 16 items (11a-11p).
-Exit criteria 29-32. This is not a Telegram-specific patch — it is an SDK
-protocol change that makes delegation round-trip identity explicit for any
-transport. Revisit Phase 4, 8, and 9 deliverables for the same identity-loss
-pattern.
+Exit criteria 29-32. Implemented. This is not a Telegram-specific patch — it
+is an SDK protocol change that makes delegation round-trip identity explicit
+for any transport.
+
+Phase 12 — Four sub-phases addressing live-tested gaps and adversarial review
+findings. Exit criteria 33-36.
+
+Phase 12A — Direct-assignment transport identity parity. The direct-assign
+path does not carry origin_transport_ref, so parent bot cannot resume the
+transport chat when the result comes back. Live symptom: ValueError with raw
+numeric chat ID. 6 items (12A-1 through 12A-6).
+
+Phase 12B — Recipient-side routed-task conversation projection. When M1
+delegates to M2, the registry shows nothing on M2's side. M2's execution
+runs with blank external_conversation_ref. 5 items (12B-1 through 12B-5).
+
+Phase 12C — Deferred recipient notification. New SDK capability. When M2
+completes a delegated task, the authorized operator who next talks to M2
+sees a summary. Keyed by actor, not transport. TTL. 7 items (12C-1 through
+12C-7).
+
+Phase 12D — Composition type-safety fixes from adversarial review. Remove
+silent None fallbacks on required ports, fix trust_tier_resolver type
+downgrade, complete _reject_test_implementations coverage. 6 items (12D-1
+through 12D-6).
 
 Non-negotiables:
 - Three packages with locked import boundaries
@@ -1154,6 +1408,17 @@ explicitly — `PendingDelegation.origin_conversation_key` and
 `RoutedTaskRequest.origin_transport_ref`. Delegation results are delivered to
 the correct parent session regardless of which transport initiated the
 delegation. No registry store reverse-lookups. No transport-specific patches.
+Direct assignment carries the same identity parity as AI-generated delegation.
+
+Recipient bots have visible incoming-task conversation projections in the
+registry. Operators are notified of completed delegated work on their next
+transport interaction with the target bot — actor-keyed, transport-neutral,
+with TTL.
+
+The composition layer enforces its own contracts: required ports have no None
+defaults, protocols survive composition without type downgrade, test
+implementations are rejected by `.build()`, and no silent fallbacks exist
+for required capabilities.
 
 The registry server is its own package. The bot is its own package. The SDK
 is the shared contract.

@@ -36,6 +36,7 @@ from .store_base import (
     delegation_event,
     direct_assignment_message_text,
     routed_task_created_event,
+    routed_task_external_conversation_ref,
     routed_task_progress_event,
     routed_task_result_event,
     stable_routed_task_id,
@@ -1148,6 +1149,69 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             cancelled_at="",
         )
 
+    def _ensure_conversation_in_tx(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        target_agent_id: str,
+        title: str,
+        origin_channel: str,
+        external_conversation_ref: str,
+        now: str,
+    ) -> str:
+        if not origin_channel or not origin_channel.strip():
+            raise ValueError("origin_channel must not be empty")
+        if not external_conversation_ref or not external_conversation_ref.strip():
+            raise ValueError("external_conversation_ref must not be empty")
+        agent_row = conn.execute(
+            "SELECT bot_key FROM agents WHERE agent_id = ?",
+            (target_agent_id,),
+        ).fetchone()
+        bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
+        if not bot_key:
+            raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
+        canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
+        conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
+        conn.execute(
+            """
+            INSERT INTO conversations (
+                conversation_id, target_agent_id, title, origin_channel,
+                external_conversation_ref, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+            ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
+                title = excluded.title,
+                updated_at = excluded.updated_at
+            """,
+            (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
+        )
+        row = conn.execute(
+            """
+            SELECT conversation_id FROM conversations
+            WHERE target_agent_id = ? AND origin_channel = ? AND external_conversation_ref = ?
+            """,
+            (target_agent_id, origin_channel, external_conversation_ref),
+        ).fetchone()
+        return str(row["conversation_id"] if row is not None else conversation_id)
+
+    def _ensure_routed_task_recipient_conversation_in_tx(
+        self,
+        conn: sqlite3.Connection,
+        request: RoutedTaskRequest,
+        *,
+        now: str,
+    ) -> str:
+        external_conversation_ref = str(request.external_conversation_ref or "").strip()
+        if not external_conversation_ref:
+            external_conversation_ref = routed_task_external_conversation_ref(request.routed_task_id)
+        return self._ensure_conversation_in_tx(
+            conn,
+            target_agent_id=request.target_agent_id,
+            title=request.title,
+            origin_channel="registry",
+            external_conversation_ref=external_conversation_ref,
+            now=now,
+        )
+
     def _create_routed_task_in_tx(
         self,
         conn: sqlite3.Connection,
@@ -1157,9 +1221,19 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     ) -> dict[str, object]:
         validated_request = validated_routed_task_request(request)
         disabled_capabilities = self._disabled_capabilities(conn)
-        for capability in requested_routed_capabilities(validated_request.model_dump(mode="json")):
+        request_payload = validated_request.model_dump(mode="json")
+        request_payload["external_conversation_ref"] = (
+            str(request_payload.get("external_conversation_ref", "") or "").strip()
+            or routed_task_external_conversation_ref(validated_request.routed_task_id)
+        )
+        for capability in requested_routed_capabilities(request_payload):
             if capability.lower() in disabled_capabilities:
                 raise CapabilityDisabledError(capability)
+        recipient_conversation_id = self._ensure_routed_task_recipient_conversation_in_tx(
+            conn,
+            validated_request,
+            now=now,
+        )
         conn.execute(
             """
             INSERT INTO routed_tasks (
@@ -1182,7 +1256,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 validated_request.origin_agent_id,
                 validated_request.target_agent_id,
                 validated_request.title,
-                ensure_json(validated_request),
+                ensure_json(request_payload),
                 now,
                 now,
             ),
@@ -1191,7 +1265,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn,
             target_agent_id=validated_request.target_agent_id,
             kind="routed_task",
-            payload=validated_request,
+            payload=request_payload,
             now=now,
             delivery_id=uuid.uuid4().hex,
         )
@@ -1211,6 +1285,22 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                 (mirrored_event.created_at, mirrored_event.conversation_id),
+            )
+        recipient_event = self._insert_event(
+            conn,
+            event_id=f"{mirrored_event.event_id}:recipient",
+            conversation_id=recipient_conversation_id,
+            agent_id=validated_request.target_agent_id,
+            kind=mirrored_event.kind,
+            actor="",
+            content=mirrored_event.content,
+            metadata=mirrored_event.metadata,
+            created_at=mirrored_event.created_at,
+        )
+        if recipient_event is not None:
+            conn.execute(
+                "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                (mirrored_event.created_at, recipient_conversation_id),
             )
         return {
             "request": validated_request,
@@ -1491,6 +1581,31 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 )
                 if primary_event is not None:
                     inserted_events.append(primary_event)
+                task_request = decode_json_field(task_row["request_json"], {})
+                recipient_conversation_id = self._ensure_conversation_in_tx(
+                    conn,
+                    target_agent_id=str(task_row["target_agent_id"] or ""),
+                    title=str(task_row["title"] or routed_task_id),
+                    origin_channel="registry",
+                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
+                    now=occurred_at,
+                )
+                recipient_event = self._insert_event(
+                    conn,
+                    event_id=f"{primary_event_id}:recipient",
+                    conversation_id=recipient_conversation_id,
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(validated_payload.summary or decision.new_state),
+                    metadata=primary_metadata,
+                    created_at=occurred_at,
+                )
+                if recipient_event is not None:
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                        (occurred_at, recipient_conversation_id),
+                    )
                 for event in validated_payload.timeline_events:
                     event_metadata = {
                         "routed_task_id": routed_task_id,
@@ -1667,6 +1782,38 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                         (completed_at, task["parent_conversation_id"]),
                     )
+                recipient_conversation_id = self._ensure_conversation_in_tx(
+                    conn,
+                    target_agent_id=str(task["target_agent_id"] or ""),
+                    title=str(task["title"] or routed_task_id),
+                    origin_channel="registry",
+                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
+                    now=completed_at,
+                )
+                recipient_event = self._insert_event(
+                    conn,
+                    event_id=f"{primary_event_id}:recipient",
+                    conversation_id=recipient_conversation_id,
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(
+                        validated_payload.get("summary")
+                        or validated_payload.get("full_text")
+                        or decision.new_state
+                    ),
+                    metadata={
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload.transition_id,
+                    },
+                    created_at=completed_at,
+                )
+                if recipient_event is not None:
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                        (completed_at, recipient_conversation_id),
+                    )
             return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
@@ -1832,42 +1979,15 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         if not external_conversation_ref or not external_conversation_ref.strip():
             raise ValueError("external_conversation_ref must not be empty")
         now = utcnow_iso()
-
-        # Look up bot_key for the target agent to compute deterministic conversation_id
         with self._connect() as conn:
-            agent_row = conn.execute(
-                "SELECT bot_key FROM agents WHERE agent_id = ?",
-                (target_agent_id,),
-            ).fetchone()
-            bot_key = ""
-            if agent_row is not None:
-                bot_key = str(agent_row["bot_key"] or "").strip()
-            if not bot_key:
-                raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
-            canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
-            conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
-
-            conn.execute(
-                """
-                INSERT INTO conversations (
-                    conversation_id, target_agent_id, title, origin_channel,
-                    external_conversation_ref, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
-                ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
-                    title = excluded.title,
-                    updated_at = excluded.updated_at
-                """,
-                (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
+            actual_id = self._ensure_conversation_in_tx(
+                conn,
+                target_agent_id=target_agent_id,
+                title=title,
+                origin_channel=origin_channel,
+                external_conversation_ref=external_conversation_ref,
+                now=now,
             )
-            # Resolve actual conversation_id (may be existing row)
-            row = conn.execute(
-                """
-                SELECT conversation_id FROM conversations
-                WHERE target_agent_id = ? AND origin_channel = ? AND external_conversation_ref = ?
-                """,
-                (target_agent_id, origin_channel, external_conversation_ref),
-            ).fetchone()
-            actual_id = row["conversation_id"] if row else conversation_id
         return self.get_conversation(actual_id)
 
     def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
@@ -2425,6 +2545,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     created_at=now,
                     content=proposal.title or "Delegation proposal",
                     origin_transport_ref=str(proposal.origin_transport_ref or ""),
+                    authorized_actor_key=str(proposal.authorized_actor_key or ""),
                 )
                 inserted_event = self._insert_event(
                     conn,
@@ -2466,6 +2587,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 proposal_origin_transport_ref = str(
                     proposal_metadata.get("origin_transport_ref", "") or ""
                 )
+                proposal_authorized_actor_key = str(
+                    proposal_metadata.get("authorized_actor_key", "") or ""
+                )
                 task_entries = list(proposal_metadata.get("tasks", []))
                 if not task_entries:
                     raise ValueError(f"Delegation proposal {proposal_id} has no tasks")
@@ -2492,6 +2616,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "origin_transport_ref": (
                             proposal_origin_transport_ref
                             or str(conversation["external_conversation_ref"] or "")
+                        ),
+                        "authorized_actor_key": proposal_authorized_actor_key,
+                        "external_conversation_ref": routed_task_external_conversation_ref(
+                            stable_routed_task_id(conversation_id, validated_envelope.action_id, index)
                         ),
                         "origin_agent_id": conversation["target_agent_id"],
                         "target_agent_id": resolved_target["agent_id"],
@@ -2526,6 +2654,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     created_at=now,
                     content="Delegated work submitted",
                     origin_transport_ref=proposal_origin_transport_ref,
+                    authorized_actor_key=proposal_authorized_actor_key,
                 )
                 inserted_event = self._insert_event(
                     conn,
@@ -2583,6 +2712,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 request = {
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": conversation_id,
+                    "origin_transport_ref": (
+                        str(assignment.origin_transport_ref or "")
+                        or str(conversation["external_conversation_ref"] or "")
+                    ),
+                    "authorized_actor_key": str(assignment.authorized_actor_key or ""),
+                    "external_conversation_ref": routed_task_external_conversation_ref(routed_task_id),
                     "origin_agent_id": conversation["target_agent_id"],
                     "target_agent_id": resolved_target["agent_id"],
                     "title": assignment.title,
@@ -2623,6 +2758,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     ],
                     created_at=now,
                     content="Direct assignment submitted",
+                    origin_transport_ref=str(assignment.origin_transport_ref or ""),
+                    authorized_actor_key=str(assignment.authorized_actor_key or ""),
                 )
                 inserted_event = self._insert_event(
                     conn,

@@ -34,7 +34,11 @@ from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.registry.models import DiscoveredAgentRef
 from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
 from octopus_sdk.skill_types import SkillRequirement
-from octopus_sdk.testing import InMemorySessionStore, InMemoryWorkQueue
+from octopus_sdk.testing import (
+    InMemoryDeferredNotificationStore,
+    InMemorySessionStore,
+    InMemoryWorkQueue,
+)
 from octopus_sdk.transport import (
     EditableHandle,
     TransportBindingRecord,
@@ -788,9 +792,16 @@ class StubAuthorization(AuthorizationPort):
         return override or "allow"
 
 
+@dataclass
 class StubRegistryHealth:
+    current_ids: dict[str, str] = field(default_factory=dict)
+    live_ids: dict[str, str] = field(default_factory=dict)
+
+    def current_local_agent_ids(self) -> dict[str, str]:
+        return dict(self.current_ids)
+
     def live_local_agent_ids(self) -> dict[str, str]:
-        return {}
+        return dict(self.live_ids or self.current_ids)
 
 
 @dataclass
@@ -923,6 +934,7 @@ class SdkHarness:
     transport: StubTransport
     sessions: InMemorySessionStore
     work_queue: RecordingWorkQueue
+    deferred_notifications: InMemoryDeferredNotificationStore
     authorization: StubAuthorization
     artifacts: StubArtifacts
     _workflow_holder: dict[str, WorkflowComposition]
@@ -932,12 +944,19 @@ class SdkHarness:
         workflows: WorkflowComposition,
         *,
         allow_test_mode: bool = True,
+        local_agent_ids: dict[str, str] | None = None,
     ) -> BotRuntime:
         self._workflow_holder["workflows"] = workflows
+        registry = StubRegistryParticipant(
+            health=StubRegistryHealth(
+                current_ids=dict(local_agent_ids or {}),
+                live_ids=dict(local_agent_ids or {}),
+            )
+        )
         return BotRuntime(
             config=self.config,
             transport=self.transport,
-            registry=StubRegistryParticipant(),  # type: ignore[arg-type]
+            registry=registry,  # type: ignore[arg-type]
             provider=self.provider,
             sessions=self.sessions,
             workflows=workflows,
@@ -977,6 +996,7 @@ def make_sdk_harness(
     content_store = StubContentStore()
     queue = work_queue or RecordingWorkQueue()
     workflow_holder: dict[str, WorkflowComposition] = {}
+    deferred_notifications = InMemoryDeferredNotificationStore()
     sessions = InMemorySessionStore(
         config=config,
         catalog=lambda: workflow_holder["workflows"].runtime_skills.catalog,
@@ -996,6 +1016,7 @@ def make_sdk_harness(
         .with_trust_tier_resolver(trust_tier_resolver)
         .with_text_formatting(StubTextFormatting())
         .with_completion_webhook(StubCompletionWebhook())
+        .with_deferred_notifications(deferred_notifications)
         .with_prompt_size_warning_threshold(10)
     )
     return SdkHarness(
@@ -1005,6 +1026,7 @@ def make_sdk_harness(
         transport=transport,
         sessions=sessions,
         work_queue=queue,
+        deferred_notifications=deferred_notifications,
         authorization=StubAuthorization(),
         artifacts=StubArtifacts(tmp_path),
         _workflow_holder=workflow_holder,

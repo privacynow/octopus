@@ -16,6 +16,7 @@ from app.provider_guidance_service import (
     PROMPT_SIZE_WARNING_THRESHOLD,
     get_provider_guidance_service,
 )
+from app.runtime.deferred_notifications import LocalDeferredNotifications
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_catalog_service import get_skill_catalog_service
@@ -65,6 +66,7 @@ def compose_workflows(
         .with_trust_tier_resolver(trust_tier_for_ref)
         .with_text_formatting(formatting)
         .with_completion_webhook(_send_completion_webhook)
+        .with_deferred_notifications(LocalDeferredNotifications())
         .with_prompt_size_warning_threshold(PROMPT_SIZE_WARNING_THRESHOLD)
         .build()
     )

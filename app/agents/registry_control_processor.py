@@ -196,6 +196,8 @@ class RegistryControlProcessor(ControlProcessor):
                 routed_task_id=payload.routed_task_id,
                 parent_conversation_id=payload.parent_conversation_id,
                 origin_transport_ref=payload.origin_transport_ref,
+                authorized_actor_key=payload.authorized_actor_key,
+                external_conversation_ref=payload.external_conversation_ref,
                 origin_agent_id=payload.origin_agent_id,
                 target_agent_id=payload.target_agent_id,
                 title=payload.title,

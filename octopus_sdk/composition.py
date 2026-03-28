@@ -16,6 +16,7 @@ from octopus_sdk.bot_runtime import (
 )
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.content_store import ContentStorePort
+from octopus_sdk.deferred_notifications import DeferredNotificationPort
 from octopus_sdk.formatting import TextFormattingPort
 from octopus_sdk.messages import MessageTemplatePort
 from octopus_sdk.work_queue import WorkQueuePort
@@ -68,6 +69,14 @@ def _is_test_implementation(value: object | None) -> bool:
 
 
 class _UnavailablePort:
+    """Loud placeholder for optional workflow ports.
+
+    Note: ``hasattr(port, "method")`` returns True because ``__getattr__``
+    produces a callable that raises ``NotConfiguredError`` at call time rather
+    than raising ``AttributeError``. No current runtime code uses ``hasattr``
+    for workflow-port feature detection; revisit only if that changes.
+    """
+
     def __init__(self, capability: str) -> None:
         self._capability = capability
 
@@ -104,6 +113,7 @@ class WorkflowComposer:
         self._trust_tier_resolver: TrustTierResolverPort | None = None
         self._text_formatting: TextFormattingPort | None = None
         self._completion_webhook: CompletionWebhookPort | None = None
+        self._deferred_notifications: DeferredNotificationPort | None = None
         self._prompt_size_warning_threshold: int = 0
 
     def with_messages(self, messages: MessageTemplatePort) -> "WorkflowComposer":
@@ -162,13 +172,22 @@ class WorkflowComposer:
         self._completion_webhook = completion_webhook
         return self
 
+    def with_deferred_notifications(
+        self,
+        deferred_notifications: DeferredNotificationPort,
+    ) -> "WorkflowComposer":
+        self._deferred_notifications = deferred_notifications
+        return self
+
     def with_prompt_size_warning_threshold(self, threshold: int) -> "WorkflowComposer":
         self._prompt_size_warning_threshold = threshold
         return self
 
     def _reject_test_implementations(self) -> None:
         candidates = {
+            "messages": self._messages,
             "sessions": self._sessions,
+            "config": self._config,
             "work_queue": self._work_queue,
             "catalog_service": self._catalog_service,
             "import_service": self._import_service,
@@ -180,6 +199,7 @@ class WorkflowComposer:
             "trust_tier_resolver": self._trust_tier_resolver,
             "text_formatting": self._text_formatting,
             "completion_webhook": self._completion_webhook,
+            "deferred_notifications": self._deferred_notifications,
         }
         for name, value in candidates.items():
             if _is_test_implementation(value):
@@ -239,6 +259,10 @@ class WorkflowComposer:
         completion_webhook = self._completion_webhook or cast(
             CompletionWebhookPort,
             _UnavailablePort("completion webhook"),
+        )
+        deferred_notifications = self._deferred_notifications or cast(
+            DeferredNotificationPort,
+            _UnavailablePort("deferred notifications"),
         )
 
         management_capabilities: list[str] = []
@@ -336,5 +360,6 @@ class WorkflowComposer:
             text_formatting=text_formatting,
             completion_webhook=completion_webhook,
             trust_tier_resolver=trust_tier_resolver,
+            deferred_notifications=deferred_notifications,
             test_only=test_only,
         )

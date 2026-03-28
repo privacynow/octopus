@@ -5,12 +5,13 @@ import pytest
 
 import app.workflows.delegation.telegram as delegation_channel
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
-from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
+from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, RoutedTaskRef, TargetSelector
 from octopus_sdk.agent_directory import AuthorityResolution
 from octopus_sdk.identity import telegram_conversation_ref
 from app.channels.telegram.state import build_telegram_runtime
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
+from app.runtime.session_runtime import load_runtime_session
 from tests.support.handler_support import FakeChat, FakeMessage, FakeProvider, make_config
 from tests.support.config_support import make_registry_connection
 from tests.support.service_support import build_test_bot_services
@@ -322,17 +323,28 @@ async def test_submit_direct_assignment_uses_live_registry_state_not_config_snap
     _save_live_registry_state(tmp_path, agent_id="live-agent")
     message = FakeMessage(chat=FakeChat(12345), text="/delegate @agent-reviewer do work")
     created: list[dict] = []
+    submitted: list[tuple[str, object]] = []
+    qualified_ref = telegram_conversation_ref(cfg, message.chat.id)
 
     async def _create_conversation(**kwargs):
         created.append(kwargs)
         return "conversation-id"
 
     async def _submit_action(*, conversation_id, envelope):
+        submitted.append((conversation_id, envelope))
         return CoordinationActionResult(
             conversation_id=conversation_id,
             action_id=envelope.action_id,
             action=envelope.action,
             accepted=True,
+            routed_tasks=[
+                RoutedTaskRef(
+                    routed_task_id="task-direct-1",
+                    target_agent_id="agent-reviewer",
+                    title="Direct assignment",
+                    status="queued",
+                )
+            ],
         )
 
     monkeypatch.setattr(
@@ -350,7 +362,7 @@ async def test_submit_direct_assignment_uses_live_registry_state_not_config_snap
         runtime,
         "tg:12345",
         message,
-        conversation_ref="conv-1",
+        conversation_ref=qualified_ref,
         selector=TargetSelector(kind="agent", value="agent-reviewer", preferred_agent_id="agent-reviewer"),
         title="Direct assignment",
         instructions="Do the work",
@@ -359,3 +371,20 @@ async def test_submit_direct_assignment_uses_live_registry_state_not_config_snap
 
     assert result.accepted is True
     assert created and created[0]["target_agent_id"] == "live-agent"
+    assert created[0]["external_conversation_ref"] == qualified_ref
+    assert submitted and submitted[0][0] == "conversation-id"
+    assert submitted[0][1].payload["origin_transport_ref"] == qualified_ref
+    session = load_runtime_session(
+        tmp_path,
+        "tg:12345",
+        provider_name=runtime.provider.name,
+        provider_state_factory=runtime.provider.new_provider_state,
+        approval_mode=cfg.approval_mode,
+        default_role=cfg.role,
+        default_skills=cfg.default_skills,
+    )
+    assert session.pending_delegation is not None
+    assert session.pending_delegation.origin_conversation_key == "tg:12345"
+    assert session.pending_delegation.status == "submitted"
+    assert session.pending_delegation.tasks[0].routed_task_id == "task-direct-1"
+    assert session.pending_delegation.tasks[0].status == "submitted"

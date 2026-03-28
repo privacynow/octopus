@@ -413,6 +413,30 @@ def test_create_routed_task_and_lookup(store):
     assert task.request["origin_transport_ref"] == "telegram:origin:task-1"
     assert len(deliveries) == 1
     assert deliveries[0].kind == "routed_task"
+    assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-1"
+
+
+def test_create_routed_task_creates_recipient_conversation_projection(store):
+    _routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id="task-recipient-projection",
+    )
+
+    deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
+    conversations = store.list_conversations(for_agent_id=target_id, limit=25)
+    recipient_conversation = next(
+        conversation
+        for conversation in conversations
+        if conversation.external_conversation_ref == "routed-task:task-recipient-projection"
+    )
+    events = store.list_events(recipient_conversation.conversation_id).events
+
+    assert len(deliveries) == 1
+    assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-recipient-projection"
+    assert recipient_conversation.origin_channel == "registry"
+    assert events
+    assert events[0].kind == "task.status"
+    assert events[0].metadata["status"] == "queued"
 
 
 def test_create_routed_task_mirrors_parent_conversation_event(store):
@@ -565,12 +589,19 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
     )
 
     events = store.list_events(conversation_id).events
+    recipient_conversation = next(
+        conversation
+        for conversation in store.list_conversations(limit=25)
+        if conversation.external_conversation_ref == "routed-task:task-auto-mirror"
+    )
+    recipient_events = store.list_events(recipient_conversation.conversation_id).events
 
     assert status_result.events_written is True
     assert status_result.inserted_events[0].seq and status_result.inserted_events[0].seq > 0
     assert result_result.events_written is True
     assert result_result.inserted_events[0].seq and result_result.inserted_events[0].seq > 0
     assert [event.metadata["status"] for event in events] == ["queued", "running", "completed"]
+    assert [event.metadata["status"] for event in recipient_events] == ["queued", "running", "completed"]
 
 
 def test_list_tasks_can_filter_by_parent_conversation_id(store):

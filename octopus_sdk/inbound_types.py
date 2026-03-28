@@ -85,6 +85,7 @@ class InboundMessage:
     external_conversation_ref: str = ""
     routed_task_id: str = ""
     authority_ref: str = ""
+    authorized_actor_key: str = ""
     skip_approval: bool = False
     transport: str = ""
 
@@ -208,6 +209,7 @@ def serialize_inbound(
                 "external_conversation_ref": event.external_conversation_ref,
                 "routed_task_id": event.routed_task_id,
                 "authority_ref": event.authority_ref,
+                "authorized_actor_key": event.authorized_actor_key,
                 "skip_approval": event.skip_approval,
                 "attachments": [
                     {
@@ -311,6 +313,7 @@ def deserialize_inbound(
             external_conversation_ref=external_conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
             authority_ref=authority_ref,
+            authorized_actor_key=str(data.get("authorized_actor_key", "") or ""),
             skip_approval=bool(data.get("skip_approval", False)),
         )
     if kind == "command":

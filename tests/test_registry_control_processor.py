@@ -241,6 +241,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
             payload_json=SubmitRoutedTaskPayload(
                 routed_task_id="task-1",
                 parent_conversation_id="parent-1",
+                origin_transport_ref="telegram:origin:12345",
+                authorized_actor_key="telegram:operator:42",
+                external_conversation_ref="routed-task:task-1",
                 origin_agent_id="origin-1",
                 target_agent_id="target-1",
                 title="Investigate",
@@ -332,6 +335,9 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert search.agents[0].agent_id == "target-1"
     assert resolution.status == "resolved"
     assert resolution.authority_ref == "registry:alpha"
+    assert client.submitted_tasks[0].origin_transport_ref == "telegram:origin:12345"
+    assert client.submitted_tasks[0].authorized_actor_key == "telegram:operator:42"
+    assert client.submitted_tasks[0].external_conversation_ref == "routed-task:task-1"
     assert client.submitted_tasks[0].context == {"severity": "high"}
     assert client.status_updates[0][1].timeline_events[0].event_id == "evt-1"
     assert client.status_updates[0][1].progress == 50

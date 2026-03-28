@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.formatting import summarize_text
-from octopus_sdk.identity import telegram_numeric_id
+from octopus_sdk.identity import telegram_actor_key, telegram_numeric_id
 from app.presentation import telegram as telegram_presenters
 from app.channels.telegram.state import TelegramRuntime
 from octopus_sdk.execution import RequestExecutionOutcome
@@ -72,6 +72,7 @@ async def submit_direct_assignment(
         message_text=message_text,
         origin_channel="telegram",
         external_ref=external_ref,
+        authorized_actor_key=telegram_actor_key(getattr(getattr(message, "from_user", None), "id", "")),
     )
 
 
@@ -107,6 +108,7 @@ async def propose_delegation_plan(
             ),
             origin_channel="telegram",
             external_ref=external_ref,
+            authorized_actor_key=telegram_actor_key(getattr(getattr(message, "from_user", None), "id", "")),
         )
     except Exception as exc:
         return _coordination_unavailable_outcome(str(exc))

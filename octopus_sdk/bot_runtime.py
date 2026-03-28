@@ -17,9 +17,10 @@ from typing import runtime_checkable
 from uuid import uuid4
 
 from octopus_sdk.agent_directory import AgentDirectoryPort
-from octopus_sdk.authorization import AuthorizationPort
+from octopus_sdk.authorization import AuthorizationPort, TrustTierResolverPort
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.conversation_projection import ConversationProjectionPort
+from octopus_sdk.deferred_notifications import DeferredNotificationPort
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.formatting import TextFormattingPort, summarize_text
 from octopus_sdk.health_publication import HealthPublicationPort
@@ -288,13 +289,14 @@ class WorkflowComposition:
     pending: PendingWorkflows
     recovery: RecoveryWorkflows
     provider_guidance: ProviderGuidanceWorkflows
-    messages: MessageTemplatePort | None = None
-    config: BotConfigBase | None = None
-    sessions: SessionRuntimePort | None = None
+    messages: MessageTemplatePort
+    config: BotConfigBase
+    sessions: SessionRuntimePort
     management_capabilities: tuple[str, ...] = ()
     text_formatting: TextFormattingPort | None = None
     completion_webhook: CompletionWebhookPort | None = None
-    trust_tier_resolver: Callable[..., str] | None = None
+    trust_tier_resolver: TrustTierResolverPort | None = None
+    deferred_notifications: DeferredNotificationPort | None = None
     test_only: bool = False
 
 
@@ -572,9 +574,52 @@ class BotRuntime:
         if not authority_ref:
             return ""
         try:
+            current = self.registry.health.current_local_agent_ids().get(authority_ref, "")
+            if current:
+                return current
+        except Exception:
+            pass
+        try:
             return self.registry.health.live_local_agent_ids().get(authority_ref, "")
         except Exception:
             return ""
+
+    def _local_agent_ids(self) -> tuple[str, ...]:
+        agent_ids: list[str] = []
+        try:
+            current = self.registry.health.current_local_agent_ids()
+        except Exception:
+            current = {}
+        try:
+            live = self.registry.health.live_local_agent_ids()
+        except Exception:
+            live = {}
+        for value in tuple(current.values()) + tuple(live.values()):
+            agent_id = str(value or "")
+            if agent_id and agent_id not in agent_ids:
+                agent_ids.append(agent_id)
+        return tuple(agent_ids)
+
+    async def _flush_deferred_notifications(
+        self,
+        *,
+        actor_key: str,
+        egress: TransportEgress,
+    ) -> None:
+        store = self.workflows.deferred_notifications
+        if not actor_key:
+            return
+        store.expire_stale(self.config.data_dir)
+        for target_agent_id in self._local_agent_ids():
+            notifications = store.flush(
+                self.config.data_dir,
+                target_agent_id=target_agent_id,
+                actor_key=actor_key,
+            )
+            for notification in notifications:
+                text = str(notification.content or "").strip()
+                if text:
+                    await egress.send_text(text)
 
     async def _noop_timeline_callback(self, html_text: str, *, force: bool = False) -> None:
         del html_text, force
@@ -1259,6 +1304,10 @@ class BotRuntime:
 
         if not routed_task_id:
             await egress.bind(title=title, config=self.config)
+            await self._flush_deferred_notifications(
+                actor_key=item.actor_key,
+                egress=egress,
+            )
 
         session = self._load_session(item.conversation_key)
         expiration = expire_stale_delegations(
@@ -1299,6 +1348,10 @@ class BotRuntime:
                 task_routing=self.control_plane.task_routing if self.control_plane is not None else None,
                 record_usage=self.work_queue.record_usage,
                 completion_webhook_sender=self.workflows.completion_webhook,
+                deferred_notifications=self.workflows.deferred_notifications,
+                deferred_target_agent_id=self._target_agent_id_for_authority(authority_ref),
+                deferred_actor_key=str(getattr(event, "authorized_actor_key", "") or ""),
+                deferred_title=title,
             ),
         )
 
@@ -1340,11 +1393,7 @@ class BotRuntime:
         except Exception:
             return
         detail = f"/{event.command}" if isinstance(event, InboundCommand) else "a button action"
-        message = (
-            self.workflows.messages.recovery_orphaned_command(detail)
-            if self.workflows.messages is not None
-            else f"Recovered orphaned {detail}. The original message context is no longer available."
-        )
+        message = self.workflows.messages.recovery_orphaned_command(detail)
         await egress.send_text(message)
 
     async def _dispatch_claimed_item(

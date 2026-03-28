@@ -1411,8 +1411,8 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "disconnected": 0,
     }
     assert payload["conversations"] == {
-        "total": 1,
-        "active": 1,
+        "total": 3,
+        "active": 3,
         "pending_approvals": 1,
     }
     assert payload["tasks"] == {
@@ -1730,9 +1730,12 @@ def test_agent_resource_endpoints_round_trip(monkeypatch, tmp_path: Path):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert agent_conversations.status_code == 200
-    assert [item["conversation_id"] for item in agent_conversations.json()["conversations"]] == [
-        conversation_id
-    ]
+    conversations = agent_conversations.json()["conversations"]
+    conversation_ids = {item["conversation_id"] for item in conversations}
+    titles = {item["title"] for item in conversations}
+    assert conversation_id in conversation_ids
+    assert len(conversations) >= 2
+    assert titles >= {"Endpoint audit conversation", "Endpoint task"}
 
     listed_events = client.get(
         f"/v1/conversations/{conversation_id}/events",

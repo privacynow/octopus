@@ -8,10 +8,15 @@ import pytest
 from octopus_sdk.bot_runtime import WorkflowComposition
 from octopus_sdk.bot_runtime import BotRuntime
 from octopus_sdk.composition import WorkflowComposer, WorkflowComposerError, WorkflowNotConfiguredError
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, ProviderConfigRecord, ProviderStateRecord, RunContext
 from octopus_sdk.registry.models import DiscoveredAgentRef
 from octopus_sdk.sessions import SessionState
-from octopus_sdk.testing import InMemorySessionStore, InMemoryWorkQueue
+from octopus_sdk.testing import (
+    InMemoryDeferredNotificationStore,
+    InMemorySessionStore,
+    InMemoryWorkQueue,
+)
 from octopus_sdk.work_queue import WorkerHeartbeat
 from octopus_sdk.workflows.skills import RuntimeSkillInfoRecord, SkillMutationResult
 from tests.support.config_support import make_config
@@ -241,12 +246,24 @@ class _GuidanceService:
         return None
 
 
+class _NonTestSessionStore(InMemorySessionStore):
+    pass
+
+
+class _NonTestWorkQueue(InMemoryWorkQueue):
+    pass
+
+
 def _trust_tier_resolver(conversation_ref: str, user: object | None, *, config, dispatcher=None) -> str:
     del conversation_ref, user, config, dispatcher
     return "trusted"
 
 
-def _build_workflows(*, include_optional: bool = True) -> WorkflowComposition:
+def _build_workflows(
+    *,
+    include_optional: bool = True,
+    include_deferred_notifications: bool = True,
+) -> WorkflowComposition:
     config = make_config(data_dir=Path("/tmp/sdk-composer"))
     holder: dict[str, WorkflowComposition] = {}
     sessions = InMemorySessionStore(
@@ -260,6 +277,8 @@ def _build_workflows(*, include_optional: bool = True) -> WorkflowComposition:
         .with_sessions(sessions)
         .with_work_queue(InMemoryWorkQueue())
     )
+    if include_deferred_notifications:
+        composer = composer.with_deferred_notifications(InMemoryDeferredNotificationStore())
     if include_optional:
         composer = (
             composer
@@ -293,6 +312,7 @@ def _fully_configured_composer() -> WorkflowComposer:
         .with_provider_guidance(_GuidanceService())
         .with_trust_tier_resolver(_trust_tier_resolver)
         .with_work_queue(InMemoryWorkQueue())
+        .with_deferred_notifications(InMemoryDeferredNotificationStore())
     )
     holder["workflows"] = composer.build_for_testing()
     return composer
@@ -311,9 +331,54 @@ def test_workflow_composer_build_rejects_test_implementations() -> None:
         .with_config(config)
         .with_sessions(InMemorySessionStore(config=config))
         .with_work_queue(InMemoryWorkQueue())
+        .with_deferred_notifications(InMemoryDeferredNotificationStore())
     )
     with pytest.raises(WorkflowComposerError, match="build_for_testing"):
         composer.build()
+
+
+def test_workflow_composer_build_rejects_test_only_deferred_notification_store() -> None:
+    config = make_config(data_dir=Path("/tmp/sdk-composer"))
+    composer = (
+        WorkflowComposer()
+        .with_messages(_Messages())
+        .with_config(config)
+        .with_sessions(_NonTestSessionStore(config=config))
+        .with_work_queue(_NonTestWorkQueue())
+        .with_deferred_notifications(InMemoryDeferredNotificationStore())
+    )
+    with pytest.raises(WorkflowComposerError, match="deferred_notifications"):
+        composer.build()
+
+
+def test_in_memory_deferred_notifications_store_flushes_and_expires() -> None:
+    store = InMemoryDeferredNotificationStore()
+    data_dir = Path("/tmp/sdk-deferred-notifications")
+    live = DeferredNotification(
+        target_agent_id="agent-1",
+        actor_key="actor-1",
+        content="live",
+        created_at="2026-01-01T00:00:00+00:00",
+        expires_at="2026-01-02T00:00:00+00:00",
+    )
+    stale = DeferredNotification(
+        target_agent_id="agent-1",
+        actor_key="actor-1",
+        content="stale",
+        created_at="2026-01-01T00:00:00+00:00",
+        expires_at="2026-01-01T00:00:01+00:00",
+    )
+    store.enqueue(data_dir, live)
+    store.enqueue(data_dir, stale)
+
+    assert store.expire_stale(data_dir, now="2026-01-01T00:00:02+00:00") == 1
+    delivered = store.flush(
+        data_dir,
+        target_agent_id="agent-1",
+        actor_key="actor-1",
+        now="2026-01-01T12:00:00+00:00",
+    )
+    assert [item.content for item in delivered] == ["live"]
 
 
 def test_in_memory_session_store_recovery_methods_fail_loudly() -> None:
@@ -340,11 +405,20 @@ def test_in_memory_work_queue_recovery_methods_fail_loudly(tmp_path: Path) -> No
 
 
 def test_workflow_composer_optional_capabilities_fail_loudly() -> None:
-    workflows = _build_workflows(include_optional=False)
+    workflows = _build_workflows(
+        include_optional=False,
+        include_deferred_notifications=False,
+    )
     with pytest.raises(WorkflowNotConfiguredError):
         workflows.provider_guidance.management.detail("stub")
     with pytest.raises(WorkflowNotConfiguredError):
         workflows.runtime_skills.catalog.list_skills("docs")
+    with pytest.raises(WorkflowNotConfiguredError):
+        workflows.deferred_notifications.flush(
+            Path("/tmp/sdk-deferred-notifications"),
+            target_agent_id="agent-1",
+            actor_key="actor-1",
+        )
 
 
 def test_workflow_composer_tracks_management_capabilities_from_optional_ports() -> None:

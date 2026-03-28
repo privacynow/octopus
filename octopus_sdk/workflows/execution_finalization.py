@@ -11,6 +11,7 @@ from typing import Awaitable, Callable
 from uuid import uuid4
 
 from octopus_sdk.config import BotConfigBase
+from octopus_sdk.deferred_notifications import DeferredNotification, DeferredNotificationPort
 from octopus_sdk.execution import RequestExecutionOutcome
 from octopus_sdk.formatting import summarize_text
 from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
@@ -39,6 +40,10 @@ class FinalizationContext:
     task_routing: TaskRoutingPort | None = None
     record_usage: Callable[..., None] | None = None
     completion_webhook_sender: CompletionWebhookPort | None = None
+    deferred_notifications: DeferredNotificationPort | None = None
+    deferred_target_agent_id: str = ""
+    deferred_actor_key: str = ""
+    deferred_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,7 @@ class FinalizationOutcome:
     usage_status: str = "skipped"
     timeline_status: str = "skipped"
     webhook_status: str = "skipped"
+    deferred_notification_status: str = "skipped"
 
 
 def _result_full_text(outcome: RequestExecutionOutcome, *, last_status_text: str) -> str:
@@ -190,8 +196,9 @@ async def finalize_execution(
             )
 
     webhook_status = "skipped"
+    completion_webhook_url = str(getattr(context.config, "completion_webhook_url", "") or "")
     if (
-        context.config.completion_webhook_url
+        completion_webhook_url
         and outcome.status != "delegation_proposed"
         and not context.routed_task_id
         and context.completion_webhook_sender is not None
@@ -200,7 +207,7 @@ async def finalize_execution(
         completed_at = datetime.now(timezone.utc).isoformat()
         asyncio.create_task(
             context.completion_webhook_sender(
-                context.config.completion_webhook_url,
+                completion_webhook_url,
                 chat_id=context.chat_id,
                 conversation_ref=context.conversation_ref,
                 status=outcome.status,
@@ -210,10 +217,40 @@ async def finalize_execution(
         )
         webhook_status = "scheduled"
 
+    deferred_notification_status = "skipped"
+    if context.routed_task_id:
+        target_agent_id = str(context.deferred_target_agent_id or "").strip()
+        actor_key = str(context.deferred_actor_key or "").strip()
+        if target_agent_id and actor_key:
+            full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
+            result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else "failed"
+            verb = "completed" if result_status == "completed" else "failed"
+            title = str(context.deferred_title or "Task").strip() or "Task"
+            summary = summarize_text(full_text or outcome.error_text or result_status, limit=240)
+            content = f"Task '{title}' {verb}. Summary: {summary}".strip()
+            try:
+                context.deferred_notifications.enqueue(
+                    context.config.data_dir,
+                    DeferredNotification(
+                        target_agent_id=target_agent_id,
+                        actor_key=actor_key,
+                        content=content,
+                    ),
+                )
+                deferred_notification_status = "queued"
+            except Exception:
+                deferred_notification_status = "queue_failed"
+                log.warning(
+                    "Failed to enqueue deferred notification for routed task %s",
+                    context.routed_task_id,
+                    exc_info=True,
+                )
+
     return FinalizationOutcome(
         delegation_status=delegation_status,
         routed_result_status=routed_result_status,
         usage_status=usage_status,
         timeline_status=timeline_status,
         webhook_status=webhook_status,
+        deferred_notification_status=deferred_notification_status,
     )

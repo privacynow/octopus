@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import telegram_conversation_key
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 from octopus_sdk.workflows.delegation import apply_routed_result
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -33,6 +35,19 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS deferred_notifications (
+    notification_id TEXT PRIMARY KEY,
+    target_agent_id TEXT NOT NULL,
+    actor_key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'normal',
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_deferred_notifications_target_actor
+    ON deferred_notifications (target_agent_id, actor_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_deferred_notifications_expires
+    ON deferred_notifications (expires_at);
 """
 
 
@@ -117,6 +132,9 @@ class SQLiteSessionStore:
         if version < 2:
             _run_migration_step(conn, 2, self._migrate_v1_to_v2)
             version = 2
+        if version < 3:
+            _run_migration_step(conn, 3, self._migrate_v2_to_v3)
+            version = 3
         return None
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
@@ -146,6 +164,26 @@ class SQLiteSessionStore:
             DROP TABLE sessions;
             ALTER TABLE sessions_v2 RENAME TO sessions;
             CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions (updated_at);
+            """,
+        )
+
+    def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
+        _execute_sql_script(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS deferred_notifications (
+                notification_id TEXT PRIMARY KEY,
+                target_agent_id TEXT NOT NULL,
+                actor_key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                priority TEXT NOT NULL DEFAULT 'normal',
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_deferred_notifications_target_actor
+                ON deferred_notifications (target_agent_id, actor_key, created_at);
+            CREATE INDEX IF NOT EXISTS idx_deferred_notifications_expires
+                ON deferred_notifications (expires_at);
             """,
         )
 
@@ -353,3 +391,107 @@ class SQLiteSessionStore:
         db_path = data_dir / "sessions.db"
         if db_path.exists():
             db_path.unlink()
+
+    def enqueue_deferred_notification(
+        self,
+        data_dir: Path,
+        notification: DeferredNotification,
+    ) -> None:
+        conn = self._db(data_dir)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO deferred_notifications (
+                notification_id,
+                target_agent_id,
+                actor_key,
+                content,
+                priority,
+                created_at,
+                expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification.notification_id,
+                notification.target_agent_id,
+                notification.actor_key,
+                notification.content,
+                notification.priority,
+                notification.created_at,
+                notification.expires_at,
+            ),
+        )
+        conn.commit()
+
+    def flush_deferred_notifications(
+        self,
+        data_dir: Path,
+        *,
+        target_agent_id: str,
+        actor_key: str,
+        now: str | None = None,
+    ) -> list[DeferredNotification]:
+        conn = self._db(data_dir)
+        current = datetime.fromisoformat(now) if now else datetime.now(timezone.utc)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """
+                SELECT notification_id, target_agent_id, actor_key, content, priority, created_at, expires_at
+                FROM deferred_notifications
+                WHERE target_agent_id = ? AND actor_key = ?
+                ORDER BY created_at ASC
+                """,
+                (target_agent_id, actor_key),
+            ).fetchall()
+            delivered: list[DeferredNotification] = []
+            delete_ids: list[str] = []
+            for row in rows:
+                notification = DeferredNotification(
+                    notification_id=str(row[0]),
+                    target_agent_id=str(row[1]),
+                    actor_key=str(row[2]),
+                    content=str(row[3]),
+                    priority=str(row[4]),
+                    created_at=str(row[5]),
+                    expires_at=str(row[6]),
+                )
+                if datetime.fromisoformat(notification.expires_at) <= current:
+                    delete_ids.append(notification.notification_id)
+                    continue
+                delivered.append(notification)
+                delete_ids.append(notification.notification_id)
+            if delete_ids:
+                conn.executemany(
+                    "DELETE FROM deferred_notifications WHERE notification_id = ?",
+                    [(value,) for value in delete_ids],
+                )
+            conn.commit()
+            return delivered
+        except Exception:
+            conn.rollback()
+            raise
+
+    def expire_stale_deferred_notifications(
+        self,
+        data_dir: Path,
+        *,
+        now: str | None = None,
+    ) -> int:
+        conn = self._db(data_dir)
+        current = datetime.fromisoformat(now) if now else datetime.now(timezone.utc)
+        rows = conn.execute(
+            "SELECT notification_id, expires_at FROM deferred_notifications"
+        ).fetchall()
+        expired_ids = [
+            str(row[0])
+            for row in rows
+            if datetime.fromisoformat(str(row[1])) <= current
+        ]
+        if not expired_ids:
+            return 0
+        conn.executemany(
+            "DELETE FROM deferred_notifications WHERE notification_id = ?",
+            [(value,) for value in expired_ids],
+        )
+        conn.commit()
+        return len(expired_ids)

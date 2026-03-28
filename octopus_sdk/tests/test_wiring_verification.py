@@ -4,11 +4,13 @@ import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.execution import dispatch_message_request, execute_request
 from octopus_sdk.identity import resolve_delegation_parent_identity
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskResult
 from octopus_sdk.tests.support import make_sdk_harness, make_transport_identity
+from octopus_sdk.work_queue import WorkItemRecord
 from octopus_sdk.workflows.delegation import (
     apply_routed_result,
     build_delegation_plan,
@@ -212,3 +214,95 @@ async def test_sdk_wiring_verification_exercises_full_workflow_lifecycle(tmp_pat
     await runtime.run()
     assert harness.transport.started is True
     assert harness.transport.stopped is True
+
+
+async def test_sdk_wiring_verification_enqueues_deferred_notification_for_routed_task_completion(
+    tmp_path: Path,
+) -> None:
+    harness = make_sdk_harness(tmp_path, process_role="bot")
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(
+        workflows,
+        local_agent_ids={"registry:local": "agent-target"},
+    )
+    event = InboundMessage(
+        user=InboundUser(id="reg:agent:origin", username="registry"),
+        conversation_key="delegation:origin:conv-1",
+        text="Specialist task",
+        source="registry",
+        transport="registry",
+        conversation_ref="registry:local:task:task-1",
+        routed_task_id="task-1",
+        authority_ref="registry:local",
+        authorized_actor_key="telegram:42",
+    )
+    item = WorkItemRecord(
+        id="item-routed-1",
+        conversation_key="delegation:origin:conv-1",
+        event_id="evt-routed-1",
+        actor_key="reg:agent:origin",
+        kind="message",
+        state="claimed",
+        created_at="2026-03-28T00:00:00+00:00",
+    )
+
+    await runtime.dispatch_claimed_item("message", event, item)
+
+    notifications = harness.deferred_notifications.flush(
+        runtime.config.data_dir,
+        target_agent_id="agent-target",
+        actor_key="telegram:42",
+    )
+    assert len(notifications) == 1
+    assert notifications[0].content == "Task 'Specialist task' completed. Summary: sdk response"
+
+
+async def test_sdk_wiring_verification_flushes_deferred_notifications_on_next_operator_message(
+    tmp_path: Path,
+) -> None:
+    harness = make_sdk_harness(tmp_path, process_role="bot")
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(
+        workflows,
+        local_agent_ids={"registry:local": "agent-target"},
+    )
+    harness.deferred_notifications.enqueue(
+        runtime.config.data_dir,
+        DeferredNotification(
+            target_agent_id="agent-target",
+            actor_key="stub:user:1",
+            content="Task 'Specialist task' completed. Summary: sdk response",
+            created_at="2026-03-28T00:00:00+00:00",
+            expires_at="2026-03-29T00:00:00+00:00",
+        ),
+    )
+    event = InboundMessage(
+        user=InboundUser(id="stub:user:1", username="sdk"),
+        conversation_key="stub:conversation:1",
+        text="hello",
+        source="stub",
+        transport="stub",
+        conversation_ref="stub:conversation:1",
+    )
+    item = WorkItemRecord(
+        id="item-user-1",
+        conversation_key="stub:conversation:1",
+        event_id="evt-user-1",
+        actor_key="stub:user:1",
+        kind="message",
+        state="claimed",
+        created_at="2026-03-28T00:01:00+00:00",
+    )
+
+    await runtime.dispatch_claimed_item("message", event, item)
+
+    sent = harness.transport.egresses["stub:conversation:1"].sent_texts
+    assert sent == [
+        "Task 'Specialist task' completed. Summary: sdk response",
+        "sdk response",
+    ]
+    assert harness.deferred_notifications.flush(
+        runtime.config.data_dir,
+        target_agent_id="agent-target",
+        actor_key="stub:user:1",
+    ) == []

@@ -148,6 +148,7 @@ def build_registry_message_delivery(
     registry_id: str,
     skip_approval: bool = False,
     conversation_key_override: str = "",
+    authorized_actor_key: str = "",
 ) -> tuple[str, str, str, str]:
     envelope = build_registry_message_envelope(
         conversation_ref=conversation_ref,
@@ -159,6 +160,7 @@ def build_registry_message_delivery(
         registry_id=registry_id,
         skip_approval=skip_approval,
         conversation_key_override=conversation_key_override,
+        authorized_actor_key=authorized_actor_key,
     )
     payload = serialize_inbound(envelope.event)
     return envelope.conversation_key, envelope.actor_key, envelope.event_id, payload
@@ -175,6 +177,7 @@ def build_registry_message_envelope(
     registry_id: str,
     skip_approval: bool = False,
     conversation_key_override: str = "",
+    authorized_actor_key: str = "",
 ) -> InboundEnvelope:
     if not registry_id:
         raise ValueError("Registry message delivery requires an explicit registry_id")
@@ -191,6 +194,7 @@ def build_registry_message_envelope(
         conversation_ref=conversation_ref,
         external_conversation_ref=external_conversation_ref,
         routed_task_id=routed_task_id,
+        authorized_actor_key=authorized_actor_key,
         authority_ref=registry_authority_ref(registry_id),
         skip_approval=skip_approval,
     )
@@ -326,7 +330,9 @@ async def admit_registry_delivery(
             text=text,
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
             delivery_id=delivery_id,
+            external_conversation_ref=str(request.get("external_conversation_ref", "") or ""),
             routed_task_id=request["routed_task_id"],
+            authorized_actor_key=str(request.get("authorized_actor_key", "") or ""),
             registry_id=registry_id,
         )
         await submitter.admit_message(envelope)

@@ -37,8 +37,10 @@ from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import TransportBindingRecord
 from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
-from octopus_sdk.sessions import DelegatedTask, PendingDelegation
+from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
 from app.agents.state import (
     load_registry_connection_state,
     load_runtime_registry_connection_state,
@@ -1070,6 +1072,90 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
     assert captured["text"] == "what is 2 + 3"
 
 
+async def test_admit_registry_delivery_routed_task_preserves_external_conversation_ref(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["conversation_ref"] = envelope.conversation_ref
+            captured["external_conversation_ref"] = envelope.event.external_conversation_ref
+            captured["routed_task_id"] = envelope.event.routed_task_id
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-routed-ext-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-ext-1",
+                "title": "Incoming work",
+                "instructions": "Handle this carefully.",
+                "origin_agent_id": "origin-1",
+                "external_conversation_ref": "routed-task:task-ext-1",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+    )
+
+    assert outcome == "accepted"
+    assert captured == {
+        "conversation_ref": registry_task_ref("prod", "task-ext-1"),
+        "external_conversation_ref": "routed-task:task-ext-1",
+        "routed_task_id": "task-ext-1",
+    }
+
+
+async def test_admit_registry_delivery_routed_task_preserves_authorized_actor_key(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["authorized_actor_key"] = envelope.event.authorized_actor_key
+            captured["actor_key"] = envelope.actor_key
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-routed-actor-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-actor-1",
+                "title": "Incoming work",
+                "instructions": "Handle this carefully.",
+                "origin_agent_id": "origin-1",
+                "authorized_actor_key": "telegram:12345",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+    )
+
+    assert outcome == "accepted"
+    assert captured == {
+        "authorized_actor_key": "telegram:12345",
+        "actor_key": "reg:agent:origin-1",
+    }
+
+
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 
@@ -1556,6 +1642,135 @@ async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_e
         assert submitter.envelopes[0].conversation_key == parent_ref
         assert egress.sent_texts
         assert "All delegated tasks completed" in egress.sent_texts[0]
+
+
+async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_direct_assignment_state(
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        class _FakeSubmitter:
+            def __init__(self) -> None:
+                self.envelopes = []
+
+            async def admit_message(self, envelope):
+                self.envelopes.append(envelope)
+                return InboundSubmissionResult(status="admitted", item_id="resume-item")
+
+        class _FakeEgress:
+            def __init__(self) -> None:
+                self.sent_texts: list[str] = []
+
+            async def send_text(self, text: str) -> None:
+                self.sent_texts.append(text)
+
+        class _FakeDispatcher:
+            def __init__(self, egress: _FakeEgress) -> None:
+                self.egress = egress
+                self.ready_refs: list[tuple[str, str]] = []
+                self.created_refs: list[tuple[str, str, str]] = []
+
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.ready_refs.append(
+                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+                )
+                return True
+
+            def create_egress(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.created_refs.append(
+                    (
+                        str(conversation_ref),
+                        str(kwargs.get("conversation_key", "")),
+                        str(kwargs.get("external_id", "")),
+                    )
+                )
+                return self.egress
+
+        parent_ref = telegram_conversation_ref(cfg, 12345)
+        parent_key = "tg:12345"
+        save_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            SessionState(
+                provider=prov.name,
+                provider_state=ProviderStateRecord(),
+                approval_mode=cfg.approval_mode,
+                pending_delegation=PendingDelegation(
+                    conversation_ref="coord-parent-1",
+                    origin_conversation_key=parent_key,
+                    proposal_id="direct-1",
+                    title="Direct assignment",
+                    tasks=[
+                        DelegatedTask(
+                            routed_task_id="task-1",
+                            title="Investigate",
+                            target_agent_id="agent-reviewer",
+                            status="submitted",
+                        )
+                    ],
+                    status="submitted",
+                ),
+            ),
+        )
+
+        submitter = _FakeSubmitter()
+        egress = _FakeEgress()
+        dispatcher = _FakeDispatcher(egress)
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_test_bot_services(),
+            submitter=submitter,
+            bot=None,
+            dispatcher=dispatcher,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-telegram-direct-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "coord-parent-1",
+                    "parent_transport_ref": parent_ref,
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "task-1-complete",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert dispatcher.ready_refs == [(parent_ref, parent_key)]
+        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref)]
+        assert submitter.envelopes
+        assert submitter.envelopes[0].conversation_ref == parent_ref
+        assert submitter.envelopes[0].conversation_key == parent_key
+        assert egress.sent_texts
+        assert "All delegated tasks completed" in egress.sent_texts[0]
+        session = load_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            approval_mode=cfg.approval_mode,
+            default_role=cfg.role,
+            default_skills=cfg.default_skills,
+        )
+        assert session.pending_delegation is not None
+        assert session.pending_delegation.status == "completed"
 
 
 async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(

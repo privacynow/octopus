@@ -39,6 +39,7 @@ from .store_base import (
     delegation_event,
     direct_assignment_message_text,
     routed_task_created_event,
+    routed_task_external_conversation_ref,
     validated_action_payload,
     validated_ack_request,
     validated_agent_card_payload,
@@ -996,6 +997,65 @@ class RegistryPostgresStore(AbstractRegistryStore):
             queued_at=str(row["created_at"] or ""),
         )
 
+    def _ensure_conversation_in_tx(
+        self,
+        conn,
+        *,
+        target_agent_id: str,
+        title: str,
+        origin_channel: str,
+        external_conversation_ref: str,
+        now: str,
+    ) -> str:
+        if not origin_channel or not origin_channel.strip():
+            raise ValueError("origin_channel must not be empty")
+        if not external_conversation_ref or not external_conversation_ref.strip():
+            raise ValueError("external_conversation_ref must not be empty")
+        with _cur(conn) as cur:
+            cur.execute(
+                f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                (target_agent_id,),
+            )
+            agent_row = cur.fetchone()
+            bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
+            if not bot_key:
+                raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
+            canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
+            conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.conversations (
+                    conversation_id, target_agent_id, title, origin_channel,
+                    external_conversation_ref, status, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, 'open', %s, %s)
+                ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING conversation_id
+                """,
+                (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
+            )
+            return str(cur.fetchone()["conversation_id"])
+
+    def _ensure_routed_task_recipient_conversation_in_tx(
+        self,
+        conn,
+        request: RoutedTaskRequest,
+        *,
+        now: str,
+    ) -> str:
+        external_conversation_ref = str(request.external_conversation_ref or "").strip()
+        if not external_conversation_ref:
+            external_conversation_ref = routed_task_external_conversation_ref(request.routed_task_id)
+        return self._ensure_conversation_in_tx(
+            conn,
+            target_agent_id=request.target_agent_id,
+            title=request.title,
+            origin_channel="registry",
+            external_conversation_ref=external_conversation_ref,
+            now=now,
+        )
+
     def _create_routed_task_in_tx(
         self,
         conn,
@@ -1006,9 +1066,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
         validated_request = validated_routed_task_request(request)
         disabled_capabilities = self._disabled_capabilities(conn)
         request_payload = validated_request.model_dump(mode="json")
+        request_payload["external_conversation_ref"] = (
+            str(request_payload.get("external_conversation_ref", "") or "").strip()
+            or routed_task_external_conversation_ref(validated_request.routed_task_id)
+        )
         for capability in requested_routed_capabilities(request_payload):
             if capability.lower() in disabled_capabilities:
                 raise CapabilityDisabledError(capability)
+        recipient_conversation_id = self._ensure_routed_task_recipient_conversation_in_tx(
+            conn,
+            validated_request,
+            now=now,
+        )
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -1063,6 +1132,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                     (mirrored_event.created_at, mirrored_event.conversation_id),
                 )
+        recipient_event = self._insert_event(
+            conn,
+            event_id=f"{mirrored_event.event_id}:recipient",
+            conversation_id=recipient_conversation_id,
+            agent_id=validated_request.target_agent_id,
+            kind=mirrored_event.kind,
+            actor="",
+            content=mirrored_event.content,
+            metadata=mirrored_event.metadata,
+            created_at=mirrored_event.created_at,
+        )
+        if recipient_event is not None:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                    (mirrored_event.created_at, recipient_conversation_id),
+                )
         return {
             "request": validated_request,
             "delivery": delivery,
@@ -1083,94 +1169,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_row = cur.fetchone()
             if conversation_row is None:
                 raise KeyError(validated_request.parent_conversation_id)
-            disabled_capabilities = self._disabled_capabilities(conn)
-            request_payload = validated_request.model_dump(mode="json")
-            for capability in requested_routed_capabilities(request_payload):
-                if capability.lower() in disabled_capabilities:
-                    raise CapabilityDisabledError(capability)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.routed_tasks (
-                        routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
-                        title, request_json, status, summary, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', '', %s, %s)
-                    ON CONFLICT(routed_task_id) DO UPDATE SET
-                        parent_conversation_id = EXCLUDED.parent_conversation_id,
-                        origin_agent_id = EXCLUDED.origin_agent_id,
-                        target_agent_id = EXCLUDED.target_agent_id,
-                        title = EXCLUDED.title,
-                        request_json = EXCLUDED.request_json,
-                        status = EXCLUDED.status,
-                        summary = EXCLUDED.summary,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        validated_request.routed_task_id,
-                        validated_request.parent_conversation_id,
-                        validated_request.origin_agent_id,
-                        validated_request.target_agent_id,
-                        validated_request.title,
-                        _jsonb(request_payload),
-                        now,
-                        now,
-                    ),
-                )
-            delivery = self._create_delivery(
+            created = self._create_routed_task_in_tx(
                 conn,
-                target_agent_id=validated_request.target_agent_id,
-                kind="routed_task",
-                payload=request_payload,
+                validated_request.model_dump(mode="json"),
                 now=now,
-                delivery_id=uuid.uuid4().hex,
             )
-            mirrored_event = routed_task_created_event(validated_request)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(event_id) DO NOTHING
-                    """,
-                    (
-                        mirrored_event.event_id,
-                        mirrored_event.conversation_id,
-                        validated_request.target_agent_id,
-                        mirrored_event.kind,
-                        "",
-                        mirrored_event.content,
-                        _jsonb(mirrored_event.metadata),
-                        mirrored_event.created_at,
-                    ),
-                )
-                inserted = cur.rowcount > 0
-            inserted_events: list[EventRecord] = []
-            if inserted:
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"SELECT seq FROM {_SCHEMA}.events WHERE event_id = %s",
-                        (mirrored_event.event_id,),
-                    )
-                    seq_row = cur.fetchone()
-                inserted_events.append(_record(EventRecord, {
-                    "seq": int(seq_row["seq"]) if seq_row is not None else 0,
-                    "event_id": mirrored_event.event_id,
-                    "conversation_id": mirrored_event.conversation_id,
-                    "agent_id": validated_request.target_agent_id,
-                    "kind": mirrored_event.kind,
-                    "actor": "",
-                    "content": mirrored_event.content,
-                    "metadata": mirrored_event.metadata,
-                    "created_at": mirrored_event.created_at,
-                }))
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (mirrored_event.created_at, mirrored_event.conversation_id),
-                    )
+            delivery = created["delivery"]
+            inserted_event = created.get("event")
+            inserted_events = [inserted_event] if isinstance(inserted_event, EventRecord) else []
         return _record(TaskRecord, {
             "routed_task_id": validated_request.routed_task_id,
-            "delivery_id": delivery["delivery_id"],
+            "delivery_id": delivery.delivery_id,
             "events_written": bool(inserted_events),
             "inserted_events": inserted_events,
             "parent_conversation_id": validated_request.parent_conversation_id,
@@ -1400,6 +1409,41 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
                 if primary_event is not None:
                     inserted_events.append(primary_event)
+                task_request = decode_json_field(task_row["request_json"], {})
+                recipient_conversation_id = self._ensure_conversation_in_tx(
+                    conn,
+                    target_agent_id=str(task_row["target_agent_id"] or ""),
+                    title=str(task_row["title"] or routed_task_id),
+                    origin_channel="registry",
+                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
+                    now=occurred_at,
+                )
+                recipient_event = self._insert_event(
+                    conn,
+                    event_id=f"{primary_event_id}:recipient",
+                    conversation_id=recipient_conversation_id,
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(validated_payload.get("summary") or decision.new_state),
+                    metadata={
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload["transition_id"],
+                        **(
+                            {"progress": validated_payload["progress"]}
+                            if validated_payload.get("progress") is not None
+                            else {}
+                        ),
+                    },
+                    created_at=occurred_at,
+                )
+                if recipient_event is not None:
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                            (occurred_at, recipient_conversation_id),
+                        )
                 for event in validated_payload["timeline_events"]:
                     event_metadata = {
                         "routed_task_id": routed_task_id,
@@ -1585,6 +1629,39 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                             (completed_at, task["parent_conversation_id"]),
                         )
+                recipient_conversation_id = self._ensure_conversation_in_tx(
+                    conn,
+                    target_agent_id=str(task["target_agent_id"] or ""),
+                    title=str(task["title"] or routed_task_id),
+                    origin_channel="registry",
+                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
+                    now=completed_at,
+                )
+                recipient_event = self._insert_event(
+                    conn,
+                    event_id=f"{primary_event_id}:recipient",
+                    conversation_id=recipient_conversation_id,
+                    agent_id=str(row["agent_id"] or ""),
+                    kind="task.status",
+                    actor="",
+                    content=str(
+                        validated_payload.summary
+                        or validated_payload.full_text
+                        or decision.new_state
+                    ),
+                    metadata={
+                        "routed_task_id": routed_task_id,
+                        "status": decision.new_state,
+                        "transition_id": validated_payload.transition_id,
+                    },
+                    created_at=completed_at,
+                )
+                if recipient_event is not None:
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
+                            (completed_at, recipient_conversation_id),
+                        )
             return _record(TaskRecord, {
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
@@ -1764,35 +1841,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now = utcnow_iso()
 
         with self._connect() as conn, _write_tx(conn):
-            # Look up bot_key for the target agent to compute deterministic conversation_id
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (target_agent_id,),
-                )
-                agent_row = cur.fetchone()
-                bot_key = ""
-                if agent_row is not None:
-                    bot_key = str(agent_row["bot_key"] or "").strip()
-                if not bot_key:
-                    raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
-                canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
-                conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
-
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_channel,
-                        external_conversation_ref, status, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, 'open', %s, %s)
-                    ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
-                        title = EXCLUDED.title,
-                        updated_at = EXCLUDED.updated_at
-                    RETURNING conversation_id
-                    """,
-                    (conversation_id, target_agent_id, title, origin_channel, external_conversation_ref, now, now),
-                )
-                actual_id = cur.fetchone()["conversation_id"]
+            actual_id = self._ensure_conversation_in_tx(
+                conn,
+                target_agent_id=target_agent_id,
+                title=title,
+                origin_channel=origin_channel,
+                external_conversation_ref=external_conversation_ref,
+                now=now,
+            )
         return self.get_conversation(actual_id)
 
     def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "") -> list[ConversationRecord]:
@@ -2379,6 +2435,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     created_at=now,
                     content=proposal.title or "Delegation proposal",
                     origin_transport_ref=str(proposal.origin_transport_ref or ""),
+                    authorized_actor_key=str(proposal.authorized_actor_key or ""),
                 )
                 inserted_event = self._insert_event(
                     conn,
@@ -2430,6 +2487,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 proposal_origin_transport_ref = str(
                     proposal_metadata.get("origin_transport_ref", "") or ""
                 )
+                proposal_authorized_actor_key = str(
+                    proposal_metadata.get("authorized_actor_key", "") or ""
+                )
                 task_entries = list(proposal_metadata.get("tasks", []))
                 if not task_entries:
                     raise ValueError(f"Delegation proposal {proposal_id} has no tasks")
@@ -2456,6 +2516,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         "origin_transport_ref": (
                             proposal_origin_transport_ref
                             or str(conversation["external_conversation_ref"] or "")
+                        ),
+                        "authorized_actor_key": proposal_authorized_actor_key,
+                        "external_conversation_ref": routed_task_external_conversation_ref(
+                            stable_routed_task_id(conversation_id, validated_envelope.action_id, index)
                         ),
                         "origin_agent_id": conversation["target_agent_id"],
                         "target_agent_id": resolved_target["agent_id"],
@@ -2490,6 +2554,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     created_at=now,
                     content="Delegated work submitted",
                     origin_transport_ref=proposal_origin_transport_ref,
+                    authorized_actor_key=proposal_authorized_actor_key,
                 )
                 inserted_event = self._insert_event(
                     conn,
@@ -2548,6 +2613,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 request = {
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": conversation_id,
+                    "origin_transport_ref": (
+                        str(assignment.origin_transport_ref or "")
+                        or str(conversation["external_conversation_ref"] or "")
+                    ),
+                    "authorized_actor_key": str(assignment.authorized_actor_key or ""),
+                    "external_conversation_ref": routed_task_external_conversation_ref(routed_task_id),
                     "origin_agent_id": conversation["target_agent_id"],
                     "target_agent_id": resolved_target["agent_id"],
                     "title": assignment.title,
@@ -2588,6 +2659,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     ],
                     created_at=now,
                     content="Direct assignment submitted",
+                    origin_transport_ref=str(assignment.origin_transport_ref or ""),
+                    authorized_actor_key=str(assignment.authorized_actor_key or ""),
                 )
                 inserted_event = self._insert_event(
                     conn,

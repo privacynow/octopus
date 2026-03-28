@@ -5,7 +5,7 @@ Plan source of truth: [PLAN-sdk-4.md](/Users/tinker/output/bots/telegram-agent-b
 Rules followed:
 - The plan was not modified in this execution pass.
 - Progress is recorded here only.
-- Items are checked only after code changes, tests, and a two-pass review against the immutable plan.
+- Items are checked only after code changes, tests, and two-pass review against the immutable plan.
 - "Mostly done" is not done.
 
 ## Phase 1: Move 5 pure files to SDK + extract time_utils
@@ -66,7 +66,7 @@ Rules followed:
 - [x] 3.5b: Add `WorkflowComposer` with builder API
 - [x] 3.5c: `WorkflowComposer.build()` returns a fully wired `WorkflowComposition`
 - [x] 3.5d: Required ports fail at `.build()` time with explicit errors
-- [x] 3.5e: Optional ports default to loud `NotConfiguredError` implementations
+- [x] 3.5e: Optional ports default to loud `NotConfiguredError`
 - [x] 3.5f: Add `InMemoryWorkQueue` in `octopus_sdk/testing/work_queue.py`
 - [x] 3.5g: Add `InMemorySessionStore` in `octopus_sdk/testing/sessions.py`
 - [x] 3.5g2: `.build()` rejects test implementations, `.build_for_testing()` accepts them, `BotRuntime` rejects test-only composition unless explicitly overridden
@@ -171,6 +171,42 @@ Rules followed:
 - [x] 11o: Extend wiring verification so delegation identity is proven through the round-trip, not bypassed by stubs
 - [x] 11p: Verify Phase 8 runtime path does not strip routed-result transport identity; `RegistryDeliveryTransport` handles `routed_result` directly and tests lock the handler behavior
 
+## Phase 12A: Direct-assignment transport identity parity
+
+- [x] 12A-1: Add `origin_transport_ref: str = ""` to `DirectAssignmentRequest` and `DirectAssignActionPayload` in `octopus_sdk/registry/models.py`
+- [x] 12A-2: `submit_participant_direct_assignment()` in `octopus_sdk/workflows/delegation.py` populates `origin_transport_ref` from the caller transport identity
+- [x] 12A-3: Registry store `direct_assign` action handlers persist `origin_transport_ref` on the routed task and include it in the `routed_result` delivery payload
+- [x] 12A-4: Delivery handler `resolve_delegation_parent_identity()` prefers `origin_transport_ref` from the delivery payload over the bare `external_conversation_ref` fallback
+- [x] 12A-5: `ensure_conversation_id()` callers in `octopus_sdk/workflows/delegation.py` pass qualified transport refs as `external_conversation_ref`
+- [x] 12A-6: Direct-assign round-trip coverage proves Telegram M1 → M2 → result → M1 resume with `origin_transport_ref` preserved and no raw-ref failure
+
+## Phase 12B: Recipient-side routed-task conversation projection
+
+- [x] 12B-1: Existing SDK delivery/conversation models were sufficient; the registry store now creates or ensures recipient-side routed-task projections without introducing an app-owned protocol
+- [x] 12B-2: Routed-task delivery payloads require and carry a valid `external_conversation_ref`; recipient execution no longer runs with a blank routed-task external ref
+- [x] 12B-3: Registry UI/store queries expose incoming delegated work under the recipient bot conversation/task view
+- [x] 12B-4: Recipient execution mirror events are written against the recipient-side task thread, not only the requester parent conversation
+- [x] 12B-5: Store/service/agent tests cover recipient projection visibility, routed-task event mirroring, and result visibility on the recipient thread
+
+## Phase 12C: Deferred recipient notification
+
+- [x] 12C-1: Define a `DeferredNotification` model in the SDK
+- [x] 12C-2: Routed-task completion/failure creates deferred notifications through the SDK execution-finalization path using `DeferredNotificationPort`
+- [x] 12C-3: Define a `DeferredNotificationPort` in the SDK and integrate the bot runtime flush path
+- [x] 12C-4: Implement the port in `app/` using durable storage-backed adapters
+- [x] 12C-5: Deferred notification delivery is actor-keyed rather than transport-keyed, so the next authorized interaction on any transport can flush it
+- [x] 12C-6: Notifications have TTL and stale entries expire before display
+- [x] 12C-7: Wiring/runtime tests cover completion → deferred enqueue → next interaction flush → consume-once behavior
+
+## Phase 12D: Composition type-safety fixes
+
+- [x] 12D-1: `WorkflowComposition.trust_tier_resolver` is typed as `TrustTierResolverPort | None`, not bare `Callable`
+- [x] 12D-2: `WorkflowComposition` required fields `messages`, `config`, and `sessions` have no `| None` defaults
+- [x] 12D-3: The defensive `if self.workflows.messages is not None` guard is removed from BotRuntime required-port flow
+- [x] 12D-4: `_reject_test_implementations` covers all managed ports including `messages` and `config`
+- [x] 12D-5: `_UnavailablePort` documents the `hasattr()` behavior explicitly; no fake `__hasattr__` path was added
+- [x] 12D-6: Full test suite passes after the composition tightening
+
 ## Hard exit criteria
 
 - [x] 1. Three packages exist: `octopus_sdk/`, `octopus_registry/`, `app/`.
@@ -179,14 +215,14 @@ Rules followed:
 - [x] 4. `app/` does not import `octopus_registry/`.
 - [x] 5. Import-graph regression tests lock all three boundaries.
 - [x] 6. Registry server (enrollment, status, UI, management API) is deployable from `octopus_registry/` + `octopus_sdk/`.
-- [x] 7. Standalone registry behavior is explicit for not connected / capability unavailable cases.
+- [x] 7. Standalone registry behavior is explicit: when no bot is connected, management endpoints return "agent not connected"; when capability is unavailable, they fail explicitly.
 - [x] 8. Connected-bot management operations execute through `management_request` / `management_result` over poll/ack. No new bot listener/bind.
 - [x] 9. All 27 management HTTP endpoints are agent-scoped.
 - [x] 10. Bot is deployable from `app/` + `octopus_sdk/`.
 - [x] 11. All 14 workflow implementations live in `octopus_sdk/workflows/` with zero `from app.*` imports and constructor-injected SDK Ports.
 - [x] 12. All 4 backend-neutral FSMs live in `octopus_sdk/workflows/`.
 - [x] 13. `TransportDispatcher` lives in `octopus_sdk/`.
-- [x] 14. `WorkflowComposer` exists in the SDK and assembles all workflow implementations through a builder API.
+- [x] 14. `WorkflowComposer` exists in the SDK and assembles all workflow implementations from injected Ports through a builder API.
 - [x] 15. SDK provides `InMemoryWorkQueue` and `InMemorySessionStore` in `octopus_sdk/testing/`; they are explicitly test-only and non-durable.
 - [x] 16. `WorkflowComposer` required ports fail at `.build()`, optional ports fail loudly, `.build()` rejects test implementations, `.build_for_testing()` marks compositions test-only, and `BotRuntime` refuses test-only compositions without explicit override.
 - [x] 17. Bots advertise management capabilities at registration time based on wired optional ports.
@@ -205,31 +241,24 @@ Rules followed:
 - [x] 30. `RoutedTaskRequest` carries `origin_transport_ref`.
 - [x] 31. Delegation result handler resolves the parent session using transport identity and targets resume/completion at the original transport chat.
 - [x] 32. Cross-transport delegation round-trip tests pass for Telegram and a generic non-Telegram transport.
-- [x] 33. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`.
-- [x] 34. Every file moved from `app/` is deleted in the same change.
-- [x] 35. No exit criterion was weakened, qualified, or removed in this execution pass.
+- [x] 33. `DirectAssignmentRequest` carries `origin_transport_ref`. Direct-assign round-trip preserves parent transport identity. No raw numeric IDs in transport ref fields.
+- [x] 34. Recipient bots have visible incoming-task conversation projections in the registry. Routed-task execution has a valid `external_conversation_ref`. Mirror events from recipient execution are visible in the registry UI.
+- [x] 35. Deferred notifications exist as an SDK capability. Completed/failed delegated tasks produce notifications for the authorized operator on the target bot, keyed by actor, shown on next transport interaction, with TTL.
+- [x] 36. `WorkflowComposition.trust_tier_resolver` is typed as `TrustTierResolverPort`, not bare `Callable`. `messages`, `config`, and `sessions` on `WorkflowComposition` have no `| None` defaults. No defensive None guards on required ports in BotRuntime. `_reject_test_implementations` covers all managed ports including `messages` and `config`.
+- [x] 37. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
+- [x] 38. Every file moved from `app/` is deleted in the same change.
+- [x] 39. No exit criterion was weakened, qualified, or removed in this execution pass.
 
 ## Review log
 
-- [x] Review pass 1: Phase 11 implementation audit against plan items 11a-11p before final verification
-- [x] Review pass 2: Full-tree audit against hard exits 1-35 after final verification
+- [x] Review pass 1: audited Phase 12 SDK/store/delivery/runtime changes against plan items 12A-12D before final verification
+- [x] Review pass 2: audited hard exits 1-39 against the current tree after verification, found the remaining deferred-notification silent path, fixed it, and reran verification on the final tree
 
 ## Current verification
 
-- Focused delegation identity / management / store / wiring slice:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/contracts/test_registry_store_contract.py tests/test_registry_management_protocol.py tests/test_agents.py tests/test_handlers_delegation.py octopus_sdk/tests/test_wiring_verification.py`
-  - `149 passed`
-- Delegation-machine and Telegram delegation presentation regression slice:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_delegation_machine.py tests/test_telegram_delegation_channel.py`
-  - `13 passed`
-- Full repository verification:
+- Focused Phase 12 composition/deferred slice:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_sdk_composition.py tests/test_execution_finalization.py octopus_sdk/tests/test_wiring_verification.py`
+  - Result: `23 passed`
+- Full suite:
   - `./.venv/bin/python -m pytest -q -n 0 tests octopus_sdk/tests`
-  - `2128 passed, 1 skipped`
-
-## Notes
-
-- `PLAN-sdk-4.md` was not modified in this execution pass.
-- Phase 11 was completed as an SDK protocol change, not a Telegram-only patch.
-- Delegation proposals now carry origin transport identity explicitly, and delegated routed-task creation prefers proposal-carried `origin_transport_ref` over conversation-row lookup.
-- Registry management conversation operations now derive session keys from the stored transport ref for the conversation rather than from the registry conversation id.
-- `BotRuntime` does not own a separate `routed_result` branch; `RegistryDeliveryTransport` handles routed results directly, and the reviewed tests lock the transport-identity behavior there.
+  - Result: `2143 passed, 1 skipped`

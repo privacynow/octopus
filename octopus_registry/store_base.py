@@ -89,6 +89,10 @@ def stable_routed_task_id(conversation_id: str, action_id: str, index: int) -> s
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
+def routed_task_external_conversation_ref(routed_task_id: str) -> str:
+    return f"routed-task:{str(routed_task_id or '').strip()}"
+
+
 def direct_assignment_message_text(payload: DirectAssignActionPayload) -> str:
     raw = str(payload.message_text or "").strip()
     if raw:
@@ -497,6 +501,7 @@ def delegation_event(
     created_at: str,
     content: str = "",
     origin_transport_ref: str = "",
+    authorized_actor_key: str = "",
 ) -> EventRecord:
     normalized_tasks = [
         task.as_dict() if isinstance(task, RegistryJsonRecord) else dict(task)
@@ -508,6 +513,8 @@ def delegation_event(
     }
     if origin_transport_ref:
         metadata["origin_transport_ref"] = origin_transport_ref
+    if authorized_actor_key:
+        metadata["authorized_actor_key"] = authorized_actor_key
     return EventRecord(
         event_id=f"{kind}:{proposal_id}",
         conversation_id=conversation_id,

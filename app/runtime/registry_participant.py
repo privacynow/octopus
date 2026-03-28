@@ -647,6 +647,8 @@ class _ParticipantCoordination(RegistryCoordination):
         selector: TargetSelector,
         title: str,
         instructions: str,
+        origin_transport_ref: str = "",
+        authorized_actor_key: str = "",
         message_text: str = "",
     ) -> CoordinationActionResult:
         envelope = CoordinationActionEnvelope(
@@ -656,6 +658,8 @@ class _ParticipantCoordination(RegistryCoordination):
                 selector=selector,
                 title=title,
                 instructions=instructions,
+                origin_transport_ref=origin_transport_ref,
+                authorized_actor_key=authorized_actor_key,
                 message_text=message_text,
             ).model_dump(exclude_unset=True),
         )

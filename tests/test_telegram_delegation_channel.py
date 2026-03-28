@@ -206,7 +206,7 @@ async def test_propose_delegation_plan_marks_unavailable_targets_in_rendered_pla
         "tg:12345",
         message,
         session,
-        conversation_ref="conv-1",
+        conversation_ref=telegram_conversation_ref(cfg, message.chat.id),
         result=result,
     )
 

@@ -1,4 +1,7 @@
 import time
+from types import SimpleNamespace
+
+import pytest
 
 from octopus_sdk.workflows.delegation import (
     all_tasks_terminal,
@@ -8,8 +11,9 @@ from octopus_sdk.workflows.delegation import (
     build_delegation_plan,
     expire_stale_delegations,
     mark_task_submitted,
+    submit_participant_direct_assignment,
 )
-from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.registry.models import RoutedTaskResult, TargetSelector
 
 
 def test_build_delegation_plan_sets_proposed_status():
@@ -62,6 +66,21 @@ def test_build_delegation_plan_preserves_task_fields():
     assert task.authority_ref == ""
     assert task.target_agent_id == "test-writer-1"
     assert task.instructions == "Write focused regression tests."
+
+
+@pytest.mark.asyncio
+async def test_submit_participant_direct_assignment_rejects_unqualified_origin_transport_ref():
+    with pytest.raises(ValueError, match="qualified transport ref"):
+        await submit_participant_direct_assignment(
+            SimpleNamespace(),
+            "tg:12345",
+            conversation_ref="8698216169",
+            selector=TargetSelector(kind="agent", value="m2", preferred_agent_id="agent-m2"),
+            title="Ask M2",
+            instructions="Do the task.",
+            origin_channel="telegram",
+            external_ref="8698216169",
+        )
 
 
 def test_build_delegation_plan_does_not_translate_registry_id_to_authority_ref():

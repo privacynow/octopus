@@ -207,6 +207,22 @@ Rules followed:
 - [x] 12D-5: `_UnavailablePort` documents the `hasattr()` behavior explicitly; no fake `__hasattr__` path was added
 - [x] 12D-6: Full test suite passes after the composition tightening
 
+## Phase 12E: Poll cursor correctness and registry reconnect safety
+
+- [x] 12E-1: Re-enrollment resets `poll_cursor` to `0` in bot-local registry state
+- [x] 12E-2: Identity/auth failure clears local registry state, re-enrolls, and restarts polling from cursor `0`
+- [x] 12E-3: Cursor never advances past unacked deliveries; `retry_later` does not move the durable cursor past the skipped item
+- [x] 12E-4: Registry exposes `registry_epoch`; bots persist it and reset cursor when the epoch changes
+- [x] 12E-5: Tests cover fresh-registry rebuild with stale local state, re-enrollment, cursor reset, and successful replay from `0`
+- [x] 12E-6: Tests cover crash-before-ack behavior: delivery is seen again, acked, and only then advances the cursor
+
+## Phase 12F: Remaining test and type gaps from adversarial review
+
+- [x] 12F-1: `origin_transport_ref` is validated at SDK submission time and rejects raw numeric/unqualified refs
+- [x] 12F-2: Full direct-assign round-trip integration coverage proves parent transport resume with preserved `origin_transport_ref`
+- [x] 12F-3: `WorkflowComposition.deferred_notifications` is structurally non-None through composition/build paths
+- [x] 12F-4: Full end-to-end deferred-notification integration coverage proves enqueue → next interaction flush → consume-once
+
 ## Hard exit criteria
 
 - [x] 1. Three packages exist: `octopus_sdk/`, `octopus_registry/`, `app/`.
@@ -245,20 +261,31 @@ Rules followed:
 - [x] 34. Recipient bots have visible incoming-task conversation projections in the registry. Routed-task execution has a valid `external_conversation_ref`. Mirror events from recipient execution are visible in the registry UI.
 - [x] 35. Deferred notifications exist as an SDK capability. Completed/failed delegated tasks produce notifications for the authorized operator on the target bot, keyed by actor, shown on next transport interaction, with TTL.
 - [x] 36. `WorkflowComposition.trust_tier_resolver` is typed as `TrustTierResolverPort`, not bare `Callable`. `messages`, `config`, and `sessions` on `WorkflowComposition` have no `| None` defaults. No defensive None guards on required ports in BotRuntime. `_reject_test_implementations` covers all managed ports including `messages` and `config`.
-- [x] 37. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
-- [x] 38. Every file moved from `app/` is deleted in the same change.
-- [x] 39. No exit criterion was weakened, qualified, or removed in this execution pass.
+- [x] 37. Re-enrollment resets poll cursor to `0`. Registry rebuild is detected by identity validation or epoch mechanism. Cursor never advances past unacked deliveries. Stale cursor from a previous registry instance cannot permanently skip deliveries.
+- [x] 38. `origin_transport_ref` is validated at SDK submission time. Raw numeric IDs and unqualified strings fail with `ValueError`.
+- [x] 39. Full direct-assign round-trip integration test exists and passes.
+- [x] 40. `WorkflowComposition.deferred_notifications` cannot be `None` through any construction path.
+- [x] 41. Full end-to-end deferred notification integration test exists and passes.
+- [x] 42. `app/runtime/composition.py` is a thin app-specific wrapper over `WorkflowComposer`. It does not own business logic.
+- [x] 43. Every file moved from `app/` is deleted in the same change.
+- [x] 44. No exit criterion was weakened, qualified, or removed in this execution pass.
 
 ## Review log
 
-- [x] Review pass 1: audited Phase 12 SDK/store/delivery/runtime changes against plan items 12A-12D before final verification
-- [x] Review pass 2: audited hard exits 1-39 against the current tree after verification, found the remaining deferred-notification silent path, fixed it, and reran verification on the final tree
+- [x] Review pass 1: audited Phase 12A-12F SDK/store/runtime/delivery changes against the updated immutable plan before final verification
+- [x] Review pass 2: audited hard exits 1-44 against the final tree after verification, reconciled stale `status.md` numbering with the current plan, and rechecked the new cursor/validation/deferred-notification gates against code plus tests
 
 ## Current verification
 
-- Focused Phase 12 composition/deferred slice:
-  - `./.venv/bin/python -m pytest -q -n 0 tests/test_sdk_composition.py tests/test_execution_finalization.py octopus_sdk/tests/test_wiring_verification.py`
-  - Result: `23 passed`
+- Focused Phase 12E/12F slice:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/contracts/test_registry_store_contract.py tests/test_orchestration.py octopus_sdk/tests/test_wiring_verification.py tests/test_sdk_composition.py`
+  - Result: `176 passed`
+- Broader registry/SDK verification:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_service.py tests/test_agents.py tests/contracts/test_registry_store_contract.py tests/test_orchestration.py octopus_sdk/tests/test_wiring_verification.py tests/test_sdk_composition.py tests/test_telegram_delegation_channel.py tests/test_registry_sdk_contract.py tests/test_registry_authority_contract.py tests/test_registry_management_protocol.py`
+  - Result: `273 passed`
+- Registry/API audit:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_service.py tests/test_registry_management_protocol.py tests/test_registry_authority_contract.py tests/test_registry_sdk_contract.py tests/test_registry_adapter.py tests/test_registry_mirroring.py tests/contracts/test_registry_store_contract.py`
+  - Result: `213 passed`
 - Full suite:
   - `./.venv/bin/python -m pytest -q -n 0 tests octopus_sdk/tests`
-  - Result: `2143 passed, 1 skipped`
+  - Result: `2154 passed, 1 skipped`

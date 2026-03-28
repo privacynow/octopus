@@ -292,11 +292,11 @@ class WorkflowComposition:
     messages: MessageTemplatePort
     config: BotConfigBase
     sessions: SessionRuntimePort
+    deferred_notifications: DeferredNotificationPort
     management_capabilities: tuple[str, ...] = ()
     text_formatting: TextFormattingPort | None = None
     completion_webhook: CompletionWebhookPort | None = None
     trust_tier_resolver: TrustTierResolverPort | None = None
-    deferred_notifications: DeferredNotificationPort | None = None
     test_only: bool = False
 
 

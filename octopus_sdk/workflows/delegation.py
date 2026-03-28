@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Protocol
 
 from octopus_sdk.config import BotConfigBase
-from octopus_sdk.identity import normalize_conversation_id
+from octopus_sdk.identity import normalize_conversation_id, validate_qualified_transport_ref
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.registry.models import (
     CoordinationActionResult,
@@ -806,6 +806,10 @@ async def submit_participant_direct_assignment(
     external_ref: str,
     authorized_actor_key: str = "",
 ) -> CoordinationActionResult:
+    validated_origin_transport_ref = validate_qualified_transport_ref(
+        conversation_ref,
+        field_name="origin_transport_ref",
+    )
     coordination_external_ref = external_ref
     if conversation_ref and not conversation_ref.startswith("registry:"):
         coordination_external_ref = conversation_ref
@@ -822,7 +826,7 @@ async def submit_participant_direct_assignment(
         selector=selector,
         title=title,
         instructions=instructions,
-        origin_transport_ref=conversation_ref,
+        origin_transport_ref=validated_origin_transport_ref,
         authorized_actor_key=authorized_actor_key,
         message_text=message_text,
     )
@@ -876,6 +880,10 @@ async def propose_participant_delegation(
     external_ref: str,
     authorized_actor_key: str = "",
 ) -> ParticipantDelegationPlan:
+    validated_origin_transport_ref = validate_qualified_transport_ref(
+        conversation_ref,
+        field_name="origin_transport_ref",
+    )
     coordination_external_ref = external_ref
     if conversation_ref and not conversation_ref.startswith("registry:"):
         coordination_external_ref = conversation_ref
@@ -892,7 +900,7 @@ async def propose_participant_delegation(
         intent=DelegationIntent(
             title=title,
             resume_instruction=intent.resume_instruction,
-            origin_transport_ref=conversation_ref,
+            origin_transport_ref=validated_origin_transport_ref,
             authorized_actor_key=authorized_actor_key,
             tasks=list(intent.tasks),
         ),

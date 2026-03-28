@@ -327,6 +327,24 @@ def test_enroll_hashes_agent_token_at_rest(store):
     assert re.fullmatch(r"[0-9a-f]{64}", stored)
 
 
+def test_enroll_and_poll_expose_stable_registry_epoch(store):
+    enrolled = store.enroll(_card("epoch-bot"))
+    store.register(
+        enrolled.agent_token,
+        AgentRegisterRequest(
+            agent_card=_card("epoch-bot"),
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=1,
+        ),
+    )
+
+    polled = store.poll(enrolled.agent_token, cursor=0, limit=20)
+
+    assert enrolled.registry_epoch
+    assert polled.registry_epoch == enrolled.registry_epoch
+
+
 def test_poll_delivers_to_enrolled_agent(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
     delivery = store.create_delivery(
@@ -354,6 +372,27 @@ def test_ack_marks_delivery_done(store):
     polled = store.poll(agent_token, cursor=0, limit=20)
     delivery_id = polled.deliveries[0].delivery_id
     store.ack(agent_token, delivery_ids=[delivery_id], classification="accepted")
+
+    assert store.poll(agent_token, cursor=0, limit=20).deliveries == []
+
+
+def test_poll_redelivers_leased_delivery_when_cursor_did_not_advance(store):
+    agent_id, agent_token = _enroll(store, "leased-bot")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
+    )
+
+    first = store.poll(agent_token, cursor=0, limit=20)
+    second = store.poll(agent_token, cursor=0, limit=20)
+
+    assert len(first.deliveries) == 1
+    assert len(second.deliveries) == 1
+    assert second.deliveries[0].delivery_id == first.deliveries[0].delivery_id
+    assert second.deliveries[0].state == "leased"
+
+    store.ack(agent_token, delivery_ids=[first.deliveries[0].delivery_id], classification="accepted")
 
     assert store.poll(agent_token, cursor=0, limit=20).deliveries == []
 

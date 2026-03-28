@@ -117,6 +117,7 @@ from octopus_sdk.task_protocol import (
 )
 
 _SCHEMA_VERSION = 1
+_REGISTRY_EPOCH_KEY = "registry_epoch"
 
 
 def _record(model_cls, payload):
@@ -396,7 +397,26 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
                 (str(_SCHEMA_VERSION),),
             )
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                (_REGISTRY_EPOCH_KEY, uuid.uuid4().hex),
+            )
             conn.commit()
+
+    def _registry_epoch(self, conn: sqlite3.Connection) -> str:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?",
+            (_REGISTRY_EPOCH_KEY,),
+        ).fetchone()
+        epoch = str(row["value"] if row is not None else "").strip()
+        if epoch:
+            return epoch
+        epoch = uuid.uuid4().hex
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (_REGISTRY_EPOCH_KEY, epoch),
+        )
+        return epoch
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
         slug = requested
@@ -557,6 +577,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         "slug": existing["slug"],
                         "agent_token": agent_token,
                         "poll_cursor": "0",
+                        "registry_epoch": self._registry_epoch(conn),
                     })
 
             slug = self._ensure_unique_slug(conn, card.slug or "agent")
@@ -599,6 +620,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "slug": slug,
             "agent_token": agent_token,
             "poll_cursor": "0",
+            "registry_epoch": self._registry_epoch(conn),
         })
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
@@ -1367,6 +1389,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            registry_epoch = self._registry_epoch(conn)
             allowed_kinds = delivery_kinds_for_registry_scope(
                 registry_scope_for_agent_row(row)
             )
@@ -1376,7 +1399,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     SELECT seq, delivery_id, kind, payload_json, state, created_at
                     FROM deliveries
                     WHERE target_agent_id = ?
-                      AND state = 'queued'
+                      AND state IN ('queued', 'leased')
                       AND seq > ?
                     ORDER BY seq ASC
                     LIMIT ?
@@ -1390,7 +1413,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     SELECT seq, delivery_id, kind, payload_json, state, created_at
                     FROM deliveries
                     WHERE target_agent_id = ?
-                      AND state = 'queued'
+                      AND state IN ('queued', 'leased')
                       AND seq > ?
                       AND kind IN ({placeholders})
                     ORDER BY seq ASC
@@ -1448,7 +1471,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             for item in deliveries
         ]
         next_cursor = str(max([cursor] + [int(item["cursor"]) for item in items]))
-        return _record(DeliveryPollResult, {"deliveries": items, "next_cursor": next_cursor})
+        return _record(
+            DeliveryPollResult,
+            {
+                "deliveries": items,
+                "next_cursor": next_cursor,
+                "registry_epoch": registry_epoch,
+            },
+        )
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
@@ -1469,7 +1499,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 conn.execute(
                     """
                     UPDATE deliveries
-                    SET state = ?, updated_at = ?, acked_at = ?
+                    SET state = ?, updated_at = ?, acked_at = ?, leased_at = NULL
                     WHERE delivery_id = ?
                       AND target_agent_id = ?
                     """,

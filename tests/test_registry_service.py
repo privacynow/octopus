@@ -1952,6 +1952,79 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert routed_result["payload"]["parent_external_conversation_ref"] == "conv-1"
 
 
+def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    enroll = client.post(
+        "/v1/agents/enroll",
+        json={
+            "enrollment_token": "enroll-secret",
+            "agent_card": {
+                "bot_key": "bot:epoch-bot",
+                "display_name": "Epoch Bot",
+                "slug": "epoch-bot",
+                "role": "developer",
+                "registry_scope": "full",
+                "capabilities": ["python"],
+                "tags": ["backend"],
+                "description": "Epoch test bot",
+                "provider": "codex",
+                "mode": "registry",
+                "connectivity_state": "degraded",
+                "channel_capabilities": ["registry"],
+                "management_capabilities": [],
+                "version": "test",
+            },
+        },
+    )
+    assert enroll.status_code == 200
+    registry_epoch = enroll.json()["registry_epoch"]
+    token = enroll.json()["agent_token"]
+    agent_id = enroll.json()["agent_id"]
+
+    register = client.post(
+        "/v1/agents/register",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent_card": {
+                "bot_key": "bot:epoch-bot",
+                "display_name": "Epoch Bot",
+                "slug": "epoch-bot",
+                "role": "developer",
+                "registry_scope": "full",
+                "capabilities": ["python"],
+                "tags": ["backend"],
+                "description": "Epoch test bot",
+                "provider": "codex",
+                "mode": "registry",
+                "channel_capabilities": ["registry"],
+                "management_capabilities": [],
+                "version": "test",
+            },
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 1,
+        },
+    )
+    assert register.status_code == 200
+
+    _create_conversation(
+        client,
+        token,
+        agent_id,
+        "epoch-conv-1",
+        title="Epoch conversation",
+    )
+    poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert poll.status_code == 200
+    assert poll.json()["registry_epoch"] == registry_epoch
+
+
 def test_registry_list_tasks_can_filter_by_parent_conversation_id(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

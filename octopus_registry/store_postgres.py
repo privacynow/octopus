@@ -112,6 +112,7 @@ from octopus_sdk.task_protocol import (
 )
 
 _SCHEMA = "agent_registry"
+_REGISTRY_EPOCH_KEY = "registry_epoch"
 
 
 def _json_ready(value: object) -> object:
@@ -184,6 +185,36 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     raise RuntimeError(
                         "agent_registry schema not found. Run DB bootstrap or DB update to apply 0004_registry.sql."
                     )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.meta (key, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT (key) DO NOTHING
+                    """,
+                    (_REGISTRY_EPOCH_KEY, uuid.uuid4().hex),
+                )
+            conn.commit()
+
+    def _registry_epoch(self, conn) -> str:
+        with _cur(conn) as cur:
+            cur.execute(
+                f"SELECT value FROM {_SCHEMA}.meta WHERE key = %s",
+                (_REGISTRY_EPOCH_KEY,),
+            )
+            row = cur.fetchone()
+            epoch = str((row or {}).get("value", "") or "").strip()
+            if epoch:
+                return epoch
+            epoch = uuid.uuid4().hex
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.meta (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """,
+                (_REGISTRY_EPOCH_KEY, epoch),
+            )
+            return epoch
 
     def _offline_before(self) -> str:
         return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
@@ -352,6 +383,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         "slug": existing["slug"],
                         "agent_token": agent_token,
                         "poll_cursor": "0",
+                        "registry_epoch": self._registry_epoch(conn),
                     })
 
         agent_id = uuid.uuid4().hex
@@ -359,6 +391,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
+            registry_epoch = self._registry_epoch(conn)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -399,6 +432,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "slug": slug,
             "agent_token": agent_token,
             "poll_cursor": "0",
+            "registry_epoch": registry_epoch,
         })
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
@@ -1193,6 +1227,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            registry_epoch = self._registry_epoch(conn)
             allowed_kinds = delivery_kinds_for_registry_scope(
                 registry_scope_for_agent_row(row)
             )
@@ -1203,7 +1238,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         SELECT seq, delivery_id, kind, payload_json, state, created_at
                         FROM {_SCHEMA}.deliveries
                         WHERE target_agent_id = %s
-                          AND state = 'queued'
+                          AND state IN ('queued', 'leased')
                           AND seq > %s
                         ORDER BY seq ASC
                         LIMIT %s
@@ -1216,7 +1251,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         SELECT seq, delivery_id, kind, payload_json, state, created_at
                         FROM {_SCHEMA}.deliveries
                         WHERE target_agent_id = %s
-                          AND state = 'queued'
+                          AND state IN ('queued', 'leased')
                           AND seq > %s
                           AND kind = ANY(%s)
                         ORDER BY seq ASC
@@ -1278,7 +1313,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for item in deliveries
         ]
         next_cursor = str(max([cursor] + [int(item["cursor"]) for item in items]))
-        return _record(DeliveryPollResult, {"deliveries": items, "next_cursor": next_cursor})
+        return _record(
+            DeliveryPollResult,
+            {
+                "deliveries": items,
+                "next_cursor": next_cursor,
+                "registry_epoch": registry_epoch,
+            },
+        )
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
@@ -1299,7 +1341,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     UPDATE {_SCHEMA}.deliveries
-                    SET state = %s, updated_at = %s, acked_at = %s
+                    SET state = %s, updated_at = %s, acked_at = %s, leased_at = NULL
                     WHERE delivery_id = ANY(%s)
                       AND target_agent_id = %s
                     """,

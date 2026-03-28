@@ -734,12 +734,16 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             return {
                 "deliveries": [
                     {
+                        "seq": 1,
+                        "cursor": "1",
                         "delivery_id": "d1",
                         "registry_id": "default",
                         "kind": "channel_input",
                         "payload": {"conversation_id": "c1", "text": "hello"},
                     },
                     {
+                        "seq": 2,
+                        "cursor": "2",
                         "delivery_id": "d2",
                         "registry_id": "default",
                         "kind": "channel_action",
@@ -845,6 +849,241 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         ("poll", "0"),
         ("accepted", ("d2",)),
         ("rejected", ("d1",)),
+    ]
+
+
+async def test_agent_runtime_poll_does_not_advance_cursor_past_retry_later(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            return {
+                "agent_id": "agent-123",
+                "slug": "product-bot",
+                "agent_token": "secret-token",
+                "poll_cursor": "0",
+                "registry_epoch": "epoch-1",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            return {"ok": True}
+
+        async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
+            calls.append(("poll", cursor))
+            return {
+                "deliveries": [
+                    {
+                        "seq": 1,
+                        "cursor": "1",
+                        "delivery_id": "d1",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    },
+                    {
+                        "seq": 2,
+                        "cursor": "2",
+                        "delivery_id": "d2",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "retry"},
+                    },
+                ],
+                "next_cursor": "2",
+                "registry_epoch": "epoch-1",
+            }
+
+        async def ack(self, delivery_ids, *, classification: str):
+            calls.append((classification, tuple(delivery_ids)))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+
+    async def handler(delivery):
+        return "accepted" if delivery["delivery_id"] == "d1" else "retry_later"
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
+    assert await runtime.sync_once() == "connected"
+
+    processed = await runtime.poll_once()
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert processed == 2
+    assert state.poll_cursor == "1"
+    assert state.registry_epoch == "epoch-1"
+    assert calls == [
+        ("poll", "0"),
+        ("accepted", ("d1",)),
+        ("retry_later", ("d2",)),
+    ]
+
+
+async def test_agent_runtime_poll_resets_cursor_and_repolls_when_registry_epoch_changes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            calls.append(("register", self.agent_token))
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            calls.append(("heartbeat", self.agent_token))
+            return {"ok": True}
+
+        async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
+            calls.append(("poll", cursor))
+            if cursor == "2":
+                return {"deliveries": [], "next_cursor": "2", "registry_epoch": "epoch-2"}
+            return {
+                "deliveries": [
+                    {
+                        "seq": 1,
+                        "cursor": "1",
+                        "delivery_id": "d1",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    }
+                ],
+                "next_cursor": "1",
+                "registry_epoch": "epoch-2",
+            }
+
+        async def ack(self, delivery_ids, *, classification: str):
+            calls.append((classification, tuple(delivery_ids)))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id="default",
+            registry_scope="full",
+            agent_id="agent-123",
+            agent_token="secret-token",
+            poll_cursor="2",
+            registry_epoch="epoch-1",
+            connectivity_state="connected",
+        ),
+    )
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(
+        config,
+        delivery_handler=lambda delivery: asyncio.sleep(0, result="accepted"),
+        registry=config.agent_registries[0],
+    )
+
+    assert await runtime.sync_once() == "connected"
+    processed = await runtime.poll_once()
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert processed == 1
+    assert state.poll_cursor == "1"
+    assert state.registry_epoch == "epoch-2"
+    assert calls == [
+        ("register", "secret-token"),
+        ("heartbeat", "secret-token"),
+        ("poll", "2"),
+        ("poll", "0"),
+        ("accepted", ("d1",)),
+    ]
+
+
+async def test_agent_runtime_sync_reenrolls_after_registry_auth_failure(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            calls.append(("enroll", enrollment_token))
+            return {
+                "agent_id": "agent-new",
+                "slug": "product-bot",
+                "agent_token": "new-token",
+                "poll_cursor": "0",
+                "registry_epoch": "epoch-2",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            calls.append(("register", self.agent_token))
+            if self.agent_token == "stale-token":
+                raise RegistryClientError(
+                    "Registry POST /v1/agents/register failed: HTTP 401",
+                    error_code="registry_auth_failed",
+                    operator_detail="Registry POST /v1/agents/register failed with HTTP 401.",
+                    status_code=401,
+                )
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            calls.append(("heartbeat", self.agent_token))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id="default",
+            registry_scope="full",
+            agent_id="agent-old",
+            agent_token="stale-token",
+            poll_cursor="42",
+            registry_epoch="epoch-1",
+            registered_slug="old-slug",
+            registered_card_hash="old-hash",
+            connectivity_state="connected",
+        ),
+    )
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
+
+    assert await runtime.sync_once() == "connected"
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert state.agent_id == "agent-new"
+    assert state.agent_token == "new-token"
+    assert state.poll_cursor == "0"
+    assert state.registry_epoch == "epoch-2"
+    assert calls == [
+        ("register", "stale-token"),
+        ("enroll", "enroll-secret"),
+        ("register", "new-token"),
+        ("heartbeat", "new-token"),
     ]
 
 
@@ -1771,6 +2010,192 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
         )
         assert session.pending_delegation is not None
         assert session.pending_delegation.status == "completed"
+
+
+async def test_direct_assign_round_trip_from_registry_store_resumes_parent_telegram_chat(
+    tmp_path: Path,
+):
+    from octopus_registry.store import RegistrySQLiteStore
+    from octopus_sdk.registry.models import (
+        AgentCard,
+        AgentRegisterRequest,
+        CoordinationActionEnvelope,
+        DirectAssignActionPayload,
+        RoutedTaskResult,
+        TargetSelector,
+    )
+
+    def _enroll_registered(store: RegistrySQLiteStore, slug: str, display_name: str) -> tuple[str, str]:
+        card = AgentCard(
+            display_name=display_name,
+            slug=slug,
+            role="developer",
+            registry_scope="full",
+            capabilities=["delegation"],
+            tags=["test"],
+            description=display_name,
+            provider="codex",
+            mode="registry",
+            connectivity_state="connected",
+            channel_capabilities=["telegram", "registry"],
+            bot_key=f"bot:{slug}",
+        )
+        enrolled = store.enroll(card)
+        store.register(
+            enrolled.agent_token,
+            AgentRegisterRequest(
+                agent_card=card,
+                connectivity_state="connected",
+                current_capacity=0,
+                max_capacity=1,
+            ),
+        )
+        return enrolled.agent_id, enrolled.agent_token
+
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+        origin_id, origin_token = _enroll_registered(store, "origin-bot", "Origin Bot")
+        target_id, target_token = _enroll_registered(store, "m2-bot", "M2 Bot")
+        parent_ref = telegram_conversation_ref(cfg, 12345)
+        parent_key = conversation_key_for_ref(parent_ref)
+        conversation = store.create_conversation(
+            target_agent_id=origin_id,
+            title="Direct assignment parent",
+            origin_channel="telegram",
+            external_conversation_ref=parent_ref,
+        )
+        action = store.add_conversation_action(
+            conversation.conversation_id,
+                CoordinationActionEnvelope(
+                    action_id="direct-assign-1",
+                    action="direct_assign",
+                    payload=DirectAssignActionPayload(
+                        selector=TargetSelector(kind="agent", value="m2-bot", preferred_agent_id=target_id),
+                        title="What is 2 + 3?",
+                        instructions="Answer the question.",
+                        message_text="what is 2 + 3?",
+                    origin_transport_ref=parent_ref,
+                ),
+            ),
+        )
+        routed_task_id = str(action.routed_tasks[0].routed_task_id)
+        target_deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
+        assert target_deliveries[0].kind == "routed_task"
+
+        store.update_routed_task_result(
+            target_token,
+            routed_task_id,
+            RoutedTaskResult(
+                routed_task_id=routed_task_id,
+                status="completed",
+                transition_id=f"{routed_task_id}-complete",
+                summary="The answer is 5.",
+                full_text="5",
+            ),
+        )
+        origin_deliveries = store.poll(origin_token, cursor=0, limit=20).deliveries
+        routed_result = next(delivery for delivery in origin_deliveries if delivery.kind == "routed_result")
+
+        save_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            SessionState(
+                provider=prov.name,
+                provider_state=ProviderStateRecord(),
+                approval_mode=cfg.approval_mode,
+                pending_delegation=PendingDelegation(
+                    conversation_ref=conversation.conversation_id,
+                    origin_conversation_key=parent_key,
+                    proposal_id="direct-assign-1",
+                    title="What is 2 + 3?",
+                    tasks=[
+                        DelegatedTask(
+                            routed_task_id=routed_task_id,
+                            title="What is 2 + 3?",
+                            target_agent_id=target_id,
+                            status="submitted",
+                        )
+                    ],
+                    status="submitted",
+                ),
+            ),
+        )
+
+        class _FakeSubmitter:
+            def __init__(self) -> None:
+                self.envelopes = []
+
+            async def admit_message(self, envelope):
+                self.envelopes.append(envelope)
+                return InboundSubmissionResult(status="admitted", item_id="resume-item")
+
+        class _FakeEgress:
+            def __init__(self) -> None:
+                self.sent_texts: list[str] = []
+
+            async def send_text(self, text: str) -> None:
+                self.sent_texts.append(text)
+
+        class _FakeDispatcher:
+            def __init__(self, egress: _FakeEgress) -> None:
+                self.egress = egress
+                self.ready_refs: list[tuple[str, str]] = []
+                self.created_refs: list[tuple[str, str, str]] = []
+
+            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.ready_refs.append(
+                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+                )
+                return True
+
+            def create_egress(self, conversation_ref, *, config, **kwargs):
+                del config
+                self.created_refs.append(
+                    (
+                        str(conversation_ref),
+                        str(kwargs.get("conversation_key", "")),
+                        str(kwargs.get("external_id", "")),
+                    )
+                )
+                return self.egress
+
+        submitter = _FakeSubmitter()
+        egress = _FakeEgress()
+        dispatcher = _FakeDispatcher(egress)
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_test_bot_services(),
+            submitter=submitter,
+            bot=None,
+            dispatcher=dispatcher,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": routed_result.delivery_id,
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": routed_result.payload.as_dict(),
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert dispatcher.ready_refs == [(parent_ref, parent_key)]
+        assert dispatcher.created_refs == [(parent_ref, parent_key, parent_ref)]
+        assert submitter.envelopes
+        assert submitter.envelopes[0].conversation_ref == parent_ref
+        assert submitter.envelopes[0].conversation_key == parent_key
+        assert egress.sent_texts
+        assert "All delegated tasks completed" in egress.sent_texts[0]
 
 
 async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(

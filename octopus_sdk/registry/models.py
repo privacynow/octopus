@@ -176,6 +176,7 @@ class EnrollmentResult(RegistryRecordModel):
     agent_token: str = ""
     slug: str = ""
     poll_cursor: str = "0"
+    registry_epoch: str = ""
 
 
 class AgentRegisterRequest(RegistryRecordModel):
@@ -298,6 +299,7 @@ class DeliveryRecord(RegistryRecordModel):
 class DeliveryPollResult(RegistryRecordModel):
     deliveries: list[DeliveryRecord] = Field(default_factory=list)
     next_cursor: str = "0"
+    registry_epoch: str = ""
 
 
 class AckResult(RegistryRecordModel):

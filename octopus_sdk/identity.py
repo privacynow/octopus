@@ -21,6 +21,14 @@ from uuid import uuid4
 from octopus_sdk.config import BotConfigBase
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_KNOWN_TRANSPORT_REF_PREFIXES = frozenset({
+    "telegram",
+    "slack",
+    "registry",
+    "stub",
+    "discord",
+    "whatsapp",
+})
 log = logging.getLogger(__name__)
 
 
@@ -180,6 +188,28 @@ def bot_identity(data_dir: Path) -> str:
 
 def telegram_conversation_ref(config: BotConfigBase, chat_id: int | str) -> str:
     return f"telegram:{bot_identity(Path(config.data_dir))}:{chat_id}"
+
+
+def is_qualified_transport_ref(conversation_ref: str) -> bool:
+    token = str(conversation_ref or "").strip()
+    if not token:
+        return True
+    parts = token.split(":")
+    if len(parts) < 3 or any(not part for part in parts):
+        return False
+    return parts[0] in _KNOWN_TRANSPORT_REF_PREFIXES
+
+
+def validate_qualified_transport_ref(conversation_ref: str, *, field_name: str = "conversation_ref") -> str:
+    token = str(conversation_ref or "").strip()
+    if not token:
+        return ""
+    if not is_qualified_transport_ref(token):
+        raise ValueError(
+            f"{field_name} must be a qualified transport ref with a known transport prefix; "
+            f"got {token!r}"
+        )
+    return token
 
 
 def conversation_key_for_ref(conversation_ref: str) -> str:

@@ -1348,6 +1348,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "request": validated_request,
             "delivery": delivery,
             "event": inserted_event,
+            "recipient_conversation_id": recipient_conversation_id,
+            "recipient_event": recipient_event,
         }
 
     def _create_delivery(
@@ -1392,12 +1394,16 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             delivery = created["delivery"]
             inserted_event = created.get("event")
+            recipient_event = created.get("recipient_event")
             inserted_events = [inserted_event] if isinstance(inserted_event, EventRecord) else []
+            recipient_inserted_events = [recipient_event] if isinstance(recipient_event, EventRecord) else []
         return _record(TaskRecord, {
             "routed_task_id": validated_request.routed_task_id,
             "delivery_id": delivery.delivery_id,
-            "events_written": bool(inserted_events),
+            "events_written": bool(inserted_events or recipient_inserted_events),
             "inserted_events": inserted_events,
+            "recipient_conversation_id": str(created.get("recipient_conversation_id") or ""),
+            "recipient_inserted_events": recipient_inserted_events,
             "parent_conversation_id": validated_request.parent_conversation_id,
             "origin_agent_id": validated_request.origin_agent_id,
             "target_agent_id": validated_request.target_agent_id,
@@ -1595,6 +1601,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
             duplicate = False
             inserted_events: list[EventRecord] = []
+            recipient_inserted_events: list[EventRecord] = []
+            recipient_conversation_id = ""
             primary_event_id = f"task-transition:{routed_task_id}:{validated_payload.transition_id}"
             if conn.execute(
                 "SELECT 1 FROM events WHERE event_id = ?",
@@ -1653,6 +1661,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     created_at=occurred_at,
                 )
                 if recipient_event is not None:
+                    recipient_inserted_events.append(recipient_event)
                     conn.execute(
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                         (occurred_at, recipient_conversation_id),
@@ -1688,8 +1697,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
-                "events_written": bool(inserted_events),
+                "events_written": bool(inserted_events or recipient_inserted_events),
                 "inserted_events": inserted_events,
+                "recipient_conversation_id": recipient_conversation_id,
+                "recipient_inserted_events": recipient_inserted_events,
                 "parent_conversation_id": task_row["parent_conversation_id"],
                 "origin_agent_id": task_row["origin_agent_id"],
                 "target_agent_id": task_row["target_agent_id"],
@@ -1765,6 +1776,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 (task["parent_conversation_id"],),
             ).fetchone()
             inserted_events: list[EventRecord] = []
+            recipient_inserted_events: list[EventRecord] = []
+            recipient_conversation_id = ""
             if not duplicate:
                 persisted_result = validated_payload.model_dump(mode="json", exclude_none=True)
                 persisted_result["completed_at"] = completed_at
@@ -1862,6 +1875,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     created_at=completed_at,
                 )
                 if recipient_event is not None:
+                    recipient_inserted_events.append(recipient_event)
                     conn.execute(
                         "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
                         (completed_at, recipient_conversation_id),
@@ -1870,8 +1884,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "duplicate": duplicate,
-                "events_written": bool(inserted_events),
+                "events_written": bool(inserted_events or recipient_inserted_events),
                 "inserted_events": inserted_events,
+                "recipient_conversation_id": recipient_conversation_id,
+                "recipient_inserted_events": recipient_inserted_events,
                 "parent_conversation_id": task["parent_conversation_id"],
                 "origin_transport_ref": str(task_request.get("origin_transport_ref", "") or ""),
                 "origin_agent_id": task["origin_agent_id"],

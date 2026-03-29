@@ -812,13 +812,32 @@ function renderConversationDetail(container, params) {
         lastRelatedTaskSignature = nextSignature;
     }
 
+    function taskThreadTaskId(data) {
+        const conversation = data || meta;
+        if (!conversation || String(conversation.conversation_type || 'conversation') !== 'task_thread') {
+            return '';
+        }
+        const externalRef = String(conversation.external_conversation_ref || '').trim();
+        if (!externalRef.startsWith('routed-task:')) {
+            return '';
+        }
+        return externalRef.slice('routed-task:'.length).trim();
+    }
+
     async function loadRelatedTasks({ soft = false, silent = false } = {}) {
         try {
-            const data = await API.listTasks({
-                parent_conversation_id: convoId,
-                limit: 100,
-            });
-            relatedTasks = data.tasks || data || [];
+            const conversationData = meta || await API.getConversation(convoId);
+            const taskId = taskThreadTaskId(conversationData);
+            if (taskId) {
+                const task = await API.getTask(taskId);
+                relatedTasks = task ? [task] : [];
+            } else {
+                const data = await API.listTasks({
+                    parent_conversation_id: convoId,
+                    limit: 100,
+                });
+                relatedTasks = data.tasks || data || [];
+            }
             tasksLoaded = true;
             if (meta) renderMetaCard(meta);
             if (activeView === 'tasks') {

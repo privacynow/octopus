@@ -76,6 +76,11 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "Task thread" in agent_detail
     assert "No direct conversations." in agent_detail
     assert "agent-task-threads-list" in agent_detail
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    assert "externalRef.startsWith('routed-task:')" in detail
+    assert "API.getTask(taskId)" in detail
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

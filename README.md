@@ -267,6 +267,11 @@ Delegation and routed work are now structured end to end:
   `running`, `completed`, `failed`, `cancelled`, and `timed_out`
 - recipient-side routed-task projections are typed as task threads in the
   registry store and UI instead of being treated as ordinary conversations
+- recipient task threads receive their own live `task.status` websocket events
+  in the registry UI
+- task-thread detail resolves its routed task from
+  `external_conversation_ref = routed-task:<task_id>` instead of pretending the
+  recipient thread is the parent conversation
 
 The serialized inbound contract also carries an explicit admission class:
 

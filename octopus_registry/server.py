@@ -40,6 +40,7 @@ from octopus_sdk.registry.models import (
     ConversationCreate,
     CoordinationActionEnvelope,
     HealthSummary,
+    TaskRecord,
     RoutedTaskResult,
     RoutedTaskUpdate,
     utcnow_iso,
@@ -195,6 +196,18 @@ def _event_invalidation_topics(kind: str) -> tuple[str, ...]:
     if kind in {"approval.requested", "approval.decided"}:
         topics.add("approvals")
     return tuple(sorted(topics))
+
+
+async def _broadcast_task_record_events(result: TaskRecord) -> None:
+    agent_id = str(result.target_agent_id or result.origin_agent_id or "")
+    for event in result.inserted_events or []:
+        conversation_id = str(event.conversation_id or result.parent_conversation_id or "")
+        if conversation_id:
+            await _ws_manager.broadcast_event(conversation_id, agent_id, event.model_dump(mode="json"))
+    for event in result.recipient_inserted_events or []:
+        conversation_id = str(event.conversation_id or result.recipient_conversation_id or "")
+        if conversation_id:
+            await _ws_manager.broadcast_event(conversation_id, agent_id, event.model_dump(mode="json"))
 
 
 async def _broadcast_invalidations(
@@ -395,8 +408,7 @@ async def create_routed_task(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     parent_conversation_id = str(result.parent_conversation_id or "")
     agent_id = str(result.target_agent_id or result.origin_agent_id or "")
-    for ev in result.inserted_events:
-        await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev.model_dump(mode="json"))
+    await _broadcast_task_record_events(result)
     await _broadcast_invalidations(
         topics=("tasks", "conversations", "summary"),
         reason="routed_task.created",
@@ -463,9 +475,8 @@ async def routed_task_status(
     # Broadcast actual stored events via WebSocket (only when events were inserted)
     parent_conversation_id = result.parent_conversation_id
     agent_id = result.target_agent_id or result.origin_agent_id
-    if parent_conversation_id and result.inserted_events:
-        for ev in result.inserted_events:
-            await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev.model_dump(mode="json"))
+    if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
+        await _broadcast_task_record_events(result)
     await _broadcast_invalidations(
         topics=("tasks", "conversations", "summary"),
         reason="routed_task.updated",
@@ -504,9 +515,8 @@ async def routed_task_result(
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
     parent_conversation_id = str(result.parent_conversation_id or "")
     agent_id = str(result.target_agent_id or result.origin_agent_id or "")
-    if parent_conversation_id and result.inserted_events:
-        for ev in result.inserted_events:
-            await _ws_manager.broadcast_event(parent_conversation_id, agent_id, ev.model_dump(mode="json"))
+    if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
+        await _broadcast_task_record_events(result)
     await _broadcast_invalidations(
         topics=("tasks", "conversations", "summary"),
         reason="routed_task.completed",

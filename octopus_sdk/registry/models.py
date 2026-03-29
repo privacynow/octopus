@@ -254,6 +254,7 @@ class TaskRecord(RegistryRecordModel):
     title: str = ""
     instructions: str = ""
     parent_conversation_id: str = ""
+    recipient_conversation_id: str = ""
     origin_transport_ref: str = ""
     origin_agent_id: str = ""
     origin_display_name: str = ""
@@ -268,6 +269,7 @@ class TaskRecord(RegistryRecordModel):
     created_at: str = ""
     updated_at: str = ""
     inserted_events: list[EventRecord] = Field(default_factory=list)
+    recipient_inserted_events: list[EventRecord] = Field(default_factory=list)
 
 
 class ConversationRecord(RegistryRecordModel):

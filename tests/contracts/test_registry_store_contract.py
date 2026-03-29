@@ -456,7 +456,7 @@ def test_create_routed_task_and_lookup(store):
 
 
 def test_create_routed_task_creates_recipient_conversation_projection(store):
-    _routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+    routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
         store,
         routed_task_id="task-recipient-projection",
     )
@@ -474,6 +474,9 @@ def test_create_routed_task_creates_recipient_conversation_projection(store):
     assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-recipient-projection"
     assert recipient_conversation.origin_channel == "registry"
     assert recipient_conversation.conversation_type == "task_thread"
+    assert routed.recipient_conversation_id == recipient_conversation.conversation_id
+    assert routed.recipient_inserted_events
+    assert routed.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
     assert events
     assert events[0].kind == "task.status"
     assert events[0].metadata["status"] == "queued"
@@ -701,8 +704,14 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
 
     assert status_result.events_written is True
     assert status_result.inserted_events[0].seq and status_result.inserted_events[0].seq > 0
+    assert status_result.recipient_conversation_id == recipient_conversation.conversation_id
+    assert status_result.recipient_inserted_events
+    assert status_result.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
     assert result_result.events_written is True
     assert result_result.inserted_events[0].seq and result_result.inserted_events[0].seq > 0
+    assert result_result.recipient_conversation_id == recipient_conversation.conversation_id
+    assert result_result.recipient_inserted_events
+    assert result_result.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
     assert [event.metadata["status"] for event in events] == ["queued", "running", "completed"]
     assert [event.metadata["status"] for event in recipient_events] == ["queued", "running", "completed"]
 

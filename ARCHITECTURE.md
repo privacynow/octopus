@@ -613,6 +613,9 @@ types:
 Recipient-side routed work is also projected as `task_thread` conversations and
 rendered separately from direct conversations in agent and conversation lists,
 so delegated work is visible without pretending it is ordinary chat history.
+The registry store writes task-status events to both the origin parent
+conversation and the recipient task thread, and the websocket layer now
+broadcasts both streams so M2-side task-thread detail stays live.
 
 Conversation detail in `octopus_registry/ui/js/components/conversation-detail.js` is also the
 main operator entrypoint for structured coordination today:
@@ -627,6 +630,9 @@ main operator entrypoint for structured coordination today:
   counts into an `Activity (n)` action
 - the `Tasks` tab renders routed work as first-class task objects with task
   actions
+- when the current conversation is a recipient `task_thread`, the `Tasks` tab
+  resolves the single routed task via `routed-task:<task_id>` instead of
+  querying by parent conversation id
 - `Full activity` keeps the full stored event stream for diagnostics
 
 ## Main Interaction Flows

@@ -96,79 +96,6 @@ Core registry UI routes:
 - **Usage**: per-conversation token and cost rollups
 - **Skills** and **Guidance**: operator management surfaces
 
-## Skills And Guidance
-
-Skills and guidance are related, but they live at different layers of the
-system.
-
-### Builtin Skills
-
-Builtin skills are part of the bot’s runtime catalog. They do not need to be
-installed from a remote registry before use.
-
-Builtin skills can be enabled in two ways:
-
-- **default-on for all new conversations** via `BOT_SKILLS`
-- **per conversation in Telegram** with `/skills add <name>`
-
-Typical user flow:
-
-1. `/skills list` to see what is available
-2. `/skills info <name>` if details are needed
-3. `/skills add <name>` to activate the skill in the current chat
-4. `/skills setup <name>` if the skill needs credentials
-5. `/skills remove <name>` or `/skills clear` to deactivate
-
-If activation would materially increase prompt size, the bot shows an inline
-confirmation before enabling the skill.
-
-### Imported Registry Skills
-
-Imported skills are different from builtin skills.
-
-- they come from a remote skill registry
-- they must be installed before they can be activated in a conversation
-- after install, they are activated the same way as builtin skills:
-  `/skills add <name>`
-
-For real registry installs to work, the bot must have a configured
-`BOT_REGISTRY_URL`.
-
-### Where Skill Actions Happen
-
-Octopus separates catalog management from conversation activation.
-
-| Surface | Use it for |
-|---|---|
-| Telegram `/skills ...` | activate or remove skills in the current conversation |
-| Browser **Skills** page | browse the runtime catalog, search the registry, install/update/uninstall imported skills, and manage skill lifecycle state |
-| `BOT_SKILLS` config | turn selected skills on by default for every conversation |
-
-The browser **Skills** page is not the place where a user activates a skill
-into one specific chat. That remains a Telegram conversation action.
-
-### Guidance
-
-Guidance is provider-level instruction state, not a conversation skill.
-
-It is operator-managed and controls the effective instruction body for a given
-provider such as Claude or Codex.
-
-Guidance can be managed through:
-
-- Telegram `/guidance ...` commands
-- the browser **Guidance** page
-
-Typical operator flow:
-
-1. preview the current provider guidance
-2. edit or save a draft
-3. submit / approve / reject if lifecycle gates are in use
-4. publish the guidance
-
-Guidance requires a connected bot that advertises the `provider_guidance`
-management capability.
-
 ## Deployment Model
 
 For the shipped Telegram runtime in this repo:
@@ -222,6 +149,26 @@ Use:
 
 Each member bot receives a `BOT_PROJECTS` entry, so users can switch into the
 workspace with `/project <name>`.
+
+## Skills And Guidance
+
+Skills and guidance are operator-managed capabilities, but they are not the
+main entrypoint into Octopus.
+
+- builtin skills come with the bot runtime and can be enabled per chat through
+  Telegram `/skills ...` commands or turned on by default with `BOT_SKILLS`
+- imported skills come from a remote registry and require `BOT_REGISTRY_URL`
+  before the browser **Skills** page can install them
+- the browser **Skills** page manages the catalog and lifecycle; it does not
+  activate a skill into one specific conversation
+- guidance is provider-level instruction state for Claude/Codex behavior and is
+  managed through Telegram `/guidance ...` commands or the browser
+  **Guidance** page
+
+If you need the full model for builtin skills, imported registry skills,
+conversation activation, and provider guidance, see
+[ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md)
+and [docs/manual/README.md](/Users/tinker/output/bots/telegram-agent-bot/docs/manual/README.md).
 
 ## Troubleshooting
 

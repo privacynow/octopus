@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from octopus_sdk.authorization import AuthorizationPort
@@ -305,14 +305,15 @@ async def test_sdk_wiring_verification_flushes_deferred_notifications_on_next_op
         workflows,
         local_agent_ids={"registry:local": "agent-target"},
     )
+    now = datetime.now(timezone.utc)
     harness.deferred_notifications.enqueue(
         runtime.config.data_dir,
         DeferredNotification(
             target_agent_id="agent-target",
             actor_key="stub:user:1",
             content="Task 'Specialist task' completed. Summary: sdk response",
-            created_at="2026-03-28T00:00:00+00:00",
-            expires_at="2026-03-29T00:00:00+00:00",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(days=1)).isoformat(),
         ),
     )
     event = InboundMessage(
@@ -330,7 +331,7 @@ async def test_sdk_wiring_verification_flushes_deferred_notifications_on_next_op
         actor_key="stub:user:1",
         kind="message",
         state="claimed",
-        created_at="2026-03-28T00:01:00+00:00",
+        created_at=(now + timedelta(minutes=1)).isoformat(),
     )
 
     await runtime.dispatch_claimed_item("message", event, item)

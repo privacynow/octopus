@@ -72,6 +72,14 @@ FORBIDDEN_OLD_WORLD_TEST_TOKENS = (
     "_default_registry_participant",
 )
 
+DELETED_MODULE_PATHS = (
+    "app/time_utils.py",
+    "app/control_plane/bus_base.py",
+    "octopus_registry/presenters.py",
+    "app/work_queue_sqlite.py",
+    "app/work_queue_postgres.py",
+)
+
 
 def test_deleted_legacy_module_references_are_gone__app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -81,6 +89,12 @@ def test_deleted_legacy_module_references_are_gone__app_code() -> None:
         text = path.read_text()
         for forbidden in FORBIDDEN_APP_REFERENCES:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
+def test_deleted_dead_modules_are_absent() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for relative_path in DELETED_MODULE_PATHS:
+        assert not (repo_root / relative_path).exists(), f"{relative_path} should stay deleted"
 
 
 def test_deleted_telegram_singleton_helpers_are_gone__app_code() -> None:

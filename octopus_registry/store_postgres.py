@@ -17,9 +17,7 @@ from octopus_sdk.content_models import (
     ProviderGuidanceTrackRecord,
     RuntimeSkillSummary,
     RuntimeSkillTrackRecord,
-    SkillFileRecord,
     SkillRevisionRecord,
-    skill_precedence,
 )
 
 from psycopg.rows import dict_row
@@ -31,6 +29,66 @@ from .capability_service import (
 )
 from .postgres import get_connection
 from .exact_aliases import matches_exact_alias
+from .store_dialect import StoreDialect
+from .store_shared.agents import (
+    get_agent_runtime_health as shared_get_agent_runtime_health,
+    get_agent_status as shared_get_agent_status,
+    list_agents as shared_list_agents,
+)
+from .store_shared.conversations import (
+    get_conversation as shared_get_conversation,
+    list_agent_conversations as shared_list_agent_conversations,
+    list_conversations as shared_list_conversations,
+)
+from .store_shared.content import (
+    append_provider_guidance_approval as shared_append_provider_guidance_approval,
+    append_skill_approval as shared_append_skill_approval,
+    apply_provider_guidance_lifecycle_transition as shared_apply_provider_guidance_lifecycle_transition,
+    apply_skill_lifecycle_transition as shared_apply_skill_lifecycle_transition,
+    clear_published_provider_guidance_revision as shared_clear_published_provider_guidance_revision,
+    clear_published_skill_revision as shared_clear_published_skill_revision,
+    delete_skill_track as shared_delete_skill_track,
+    get_latest_provider_guidance_approval_action as shared_get_latest_provider_guidance_approval_action,
+    get_latest_skill_approval_action as shared_get_latest_skill_approval_action,
+    get_provider_guidance as shared_get_provider_guidance,
+    list_provider_guidance_approvals as shared_list_provider_guidance_approvals,
+    list_provider_guidance_revisions as shared_list_provider_guidance_revisions,
+    list_runtime_skill_summaries as shared_list_runtime_skill_summaries,
+    list_skill_approvals as shared_list_skill_approvals,
+    list_skill_revisions as shared_list_skill_revisions,
+    list_skill_summaries as shared_list_skill_summaries,
+    list_skill_tracks as shared_list_skill_tracks,
+    replace_provider_guidance as shared_replace_provider_guidance,
+    replace_skill_track as shared_replace_skill_track,
+    resolve_provider_guidance as shared_resolve_provider_guidance,
+    resolve_runtime_skill as shared_resolve_runtime_skill,
+    resolve_skill as shared_resolve_skill,
+    set_provider_guidance_revision_status as shared_set_provider_guidance_revision_status,
+    set_published_provider_guidance_revision as shared_set_published_provider_guidance_revision,
+    set_published_skill_revision as shared_set_published_skill_revision,
+    set_skill_revision_status as shared_set_skill_revision_status,
+    upsert_provider_guidance_draft as shared_upsert_provider_guidance_draft,
+    upsert_skill_draft as shared_upsert_skill_draft,
+)
+from .store_shared.delivery import (
+    ack as shared_ack,
+    poll as shared_poll,
+)
+from .store_shared.summary import (
+    get_summary as shared_get_summary,
+    get_usage as shared_get_usage,
+    get_usage_summary as shared_get_usage_summary,
+    list_approvals as shared_list_approvals,
+)
+from .store_shared.routed_tasks import (
+    create_routed_task as shared_create_routed_task,
+    update_routed_task_result as shared_update_routed_task_result,
+    update_routed_task_status as shared_update_routed_task_status,
+)
+from .store_shared.tasks import (
+    get_task as shared_get_task,
+    list_tasks as shared_list_tasks,
+)
 from .store_base import (
     AbstractRegistryStore,
     stable_routed_task_id,
@@ -41,7 +99,6 @@ from .store_base import (
     routed_task_created_event,
     routed_task_external_conversation_ref,
     validated_action_payload,
-    validated_ack_request,
     validated_agent_card_payload,
     validated_conversation_action,
     validated_conversation_message_text,
@@ -50,17 +107,12 @@ from .store_base import (
     validated_management_result,
     validated_register_payload,
     validated_routed_task_request,
-    validated_routed_task_result_payload,
-    validated_routed_task_status_payload,
     validated_search_query,
     decode_json_field,
-    delivery_kinds_for_registry_scope,
     canonical_registry_connectivity_state,
     effective_connectivity_state,
     hash_agent_token,
-    registry_scope_for_agent_row,
     require_registry_scope,
-    runtime_health_detail,
     runtime_health_generated_at,
     runtime_health_summary,
     utcnow_iso,
@@ -142,6 +194,40 @@ def _record(model_cls, payload):
 
 def _records(model_cls, rows):
     return [_record(model_cls, row) for row in rows]
+
+
+class _PostgresStoreDialect(StoreDialect):
+    def placeholder(self, index: int) -> str:
+        return "%s"
+
+    def qualify(self, table: str) -> str:
+        return f"{_SCHEMA}.{table}"
+
+    def json_text(self, json_expr: str, key: str) -> str:
+        return f"{json_expr}->>'{key}'"
+
+    def usage_token_predicate(self, metadata_expr: str) -> str:
+        return f"{metadata_expr} ? 'prompt_tokens'"
+
+    def execute(self, conn, sql: str, params=()):
+        with _cur(conn) as cur:
+            cur.execute(sql, params)
+            return cur.rowcount
+
+    def fetchone(self, conn, sql: str, params=()):
+        with _cur(conn) as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+        return None if row is None else dict(row)
+
+    def fetchall(self, conn, sql: str, params=()):
+        with _cur(conn) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+
+_POSTGRES_STORE_DIALECT = _PostgresStoreDialect()
 
 
 @contextmanager
@@ -1212,39 +1298,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         now = utcnow_iso()
-        validated_request = validated_routed_task_request(
-            request.model_dump(mode="json") if hasattr(request, "model_dump") else request
-        )
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT conversation_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (validated_request.parent_conversation_id,),
-                )
-                conversation_row = cur.fetchone()
-            if conversation_row is None:
-                raise KeyError(validated_request.parent_conversation_id)
-            created = self._create_routed_task_in_tx(
+            return shared_create_routed_task(
                 conn,
-                validated_request.model_dump(mode="json"),
+                dialect=_POSTGRES_STORE_DIALECT,
+                request=request,
                 now=now,
+                create_routed_task_in_tx=self._create_routed_task_in_tx,
             )
-            delivery = created["delivery"]
-            inserted_event = created.get("event")
-            recipient_event = created.get("recipient_event")
-            inserted_events = [inserted_event] if isinstance(inserted_event, EventRecord) else []
-            recipient_inserted_events = [recipient_event] if isinstance(recipient_event, EventRecord) else []
-        return _record(TaskRecord, {
-            "routed_task_id": validated_request.routed_task_id,
-            "delivery_id": delivery.delivery_id,
-            "events_written": bool(inserted_events or recipient_inserted_events),
-            "inserted_events": inserted_events,
-            "recipient_conversation_id": str(created.get("recipient_conversation_id") or ""),
-            "recipient_inserted_events": recipient_inserted_events,
-            "parent_conversation_id": validated_request.parent_conversation_id,
-            "origin_agent_id": validated_request.origin_agent_id,
-            "target_agent_id": validated_request.target_agent_id,
-        })
 
     def poll(self, agent_token: str, *, cursor: int, limit: int) -> DeliveryPollResult:
         now = utcnow_iso()
@@ -1252,136 +1313,31 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            registry_epoch = self._registry_epoch(conn)
-            allowed_kinds = delivery_kinds_for_registry_scope(
-                registry_scope_for_agent_row(row)
+            return shared_poll(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_row=row,
+                cursor=cursor,
+                limit=limit,
+                now=now,
+                registry_epoch=self._registry_epoch(conn),
+                task_snapshot_row=self._task_snapshot__row,
             )
-            with _cur(conn) as cur:
-                if allowed_kinds is None:
-                    cur.execute(
-                        f"""
-                        SELECT seq, delivery_id, kind, payload_json, state, created_at
-                        FROM {_SCHEMA}.deliveries
-                        WHERE target_agent_id = %s
-                          AND state IN ('queued', 'leased')
-                          AND seq > %s
-                        ORDER BY seq ASC
-                        LIMIT %s
-                        """,
-                        (row["agent_id"], cursor, limit),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        SELECT seq, delivery_id, kind, payload_json, state, created_at
-                        FROM {_SCHEMA}.deliveries
-                        WHERE target_agent_id = %s
-                          AND state IN ('queued', 'leased')
-                          AND seq > %s
-                          AND kind = ANY(%s)
-                        ORDER BY seq ASC
-                        LIMIT %s
-                        """,
-                        (row["agent_id"], cursor, list(allowed_kinds), limit),
-                    )
-                deliveries = cur.fetchall()
-            delivery_ids = [item["delivery_id"] for item in deliveries]
-            if delivery_ids:
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE {_SCHEMA}.deliveries
-                        SET state = 'leased', leased_at = %s, updated_at = %s
-                        WHERE delivery_id = ANY(%s)
-                        """,
-                        (now, now, delivery_ids),
-                    )
-                for item in deliveries:
-                    if item["kind"] != "routed_task":
-                        continue
-                    payload = decode_json_field(item["payload_json"], {})
-                    routed_task_id = str(payload.get("routed_task_id") or "").strip()
-                    if not routed_task_id:
-                        continue
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
-                            (routed_task_id,),
-                        )
-                        task_row = cur.fetchone()
-                    if task_row is None:
-                        continue
-                    decision = apply_task_transition(
-                        self._task_snapshot__row(task_row),
-                        TaskTransitionRequest(
-                            transition="lease",
-                            actor_role="system",
-                            transition_id=item["delivery_id"],
-                            occurred_at=now,
-                        ),
-                    )
-                    if decision.ok and not decision.duplicate and decision.new_state != task_row["status"]:
-                        with _cur(conn) as cur:
-                            cur.execute(
-                                f"UPDATE {_SCHEMA}.routed_tasks SET status = %s, updated_at = %s WHERE routed_task_id = %s",
-                                (decision.new_state, now, routed_task_id),
-                            )
-        items = [
-            _record(DeliveryRecord, {
-                "cursor": str(item["seq"]),
-                "delivery_id": item["delivery_id"],
-                "kind": item["kind"],
-                "payload": decode_json_field(item["payload_json"], {}),
-                "state": "leased" if item["delivery_id"] in delivery_ids else item["state"],
-                "created_at": item["created_at"],
-            })
-            for item in deliveries
-        ]
-        next_cursor = str(max([cursor] + [int(item["cursor"]) for item in items]))
-        return _record(
-            DeliveryPollResult,
-            {
-                "deliveries": items,
-                "next_cursor": next_cursor,
-                "registry_epoch": registry_epoch,
-            },
-        )
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
-        validated_ids, validated_classification = validated_ack_request(
-            delivery_ids=delivery_ids,
-            classification=classification,
-        )
-        next_state = {
-            "accepted": "acked",
-            "rejected": "dead_letter",
-            "retry_later": "queued",
-        }[validated_classification]
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.deliveries
-                    SET state = %s, updated_at = %s, acked_at = %s, leased_at = NULL
-                    WHERE delivery_id = ANY(%s)
-                      AND target_agent_id = %s
-                    """,
-                    (
-                        next_state,
-                        now,
-                        now if next_state != "queued" else None,
-                        validated_ids,
-                        row["agent_id"],
-                    ),
-                )
-        return _record(
-            AckResult,
-            {"updated": len(validated_ids), "classification": validated_classification},
-        )
+            return shared_ack(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                target_agent_id=row["agent_id"],
+                delivery_ids=delivery_ids,
+                classification=classification,
+                now=now,
+            )
 
     def update_routed_task_status(
         self,
@@ -1390,171 +1346,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
-        payload_data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
-        if isinstance(payload_data, dict):
-            payload_task_id = str(payload_data.pop("routed_task_id", "") or "")
-            if payload_task_id and payload_task_id != routed_task_id:
-                raise ValueError("routed_task_id must match the requested task")
-            payload_data = {"routed_task_id": routed_task_id, **payload_data}
-        validated_payload = validated_routed_task_status_payload(
-            payload_data
-        )
         with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            require_registry_scope(row, {"coordination", "full"})
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
-                    (routed_task_id,),
-                )
-                task_row = cur.fetchone()
-            if task_row is None:
-                raise KeyError(routed_task_id)
-            if str(task_row["target_agent_id"] or "") != str(row["agent_id"] or ""):
-                raise PermissionError("Routed task does not belong to this agent")
-            occurred_at = now
-            requested_status = validated_payload["status"]
-            if requested_status == "running":
-                transition = "progress" if str(task_row["status"] or "") == "running" else "start"
-            elif requested_status == "failed":
-                transition = "fail"
-            elif requested_status == "timed_out":
-                transition = "time_out"
-            elif requested_status == "cancelled":
-                transition = "cancel"
-            elif requested_status == "leased":
-                transition = "lease"
-            else:
-                raise ValueError(f"Unsupported routed task status: {requested_status}")
-            decision = apply_task_transition(
-                self._task_snapshot__row(task_row),
-                TaskTransitionRequest(
-                    transition=transition,
-                    actor_role="target_bot",
-                    transition_id=validated_payload["transition_id"],
-                    occurred_at=occurred_at,
-                    progress=validated_payload.get("progress"),
-                ),
+            return shared_update_routed_task_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                token_row=self._token_row,
+                require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
+                task_snapshot_row=self._task_snapshot__row,
+                insert_event=self._insert_event,
+                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
+                agent_token=agent_token,
+                routed_task_id=routed_task_id,
+                payload=payload,
+                now=now,
             )
-            if not decision.ok:
-                raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
-            inserted_events: list[EventRecord] = []
-            recipient_inserted_events: list[EventRecord] = []
-            recipient_conversation_id = ""
-            primary_event_id = f"task-transition:{routed_task_id}:{validated_payload['transition_id']}"
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT 1 FROM {_SCHEMA}.events WHERE event_id = %s",
-                    (primary_event_id,),
-                )
-                duplicate = cur.fetchone() is not None
-            if not duplicate:
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.routed_tasks SET status = %s, summary = %s, updated_at = %s WHERE routed_task_id = %s",
-                        (decision.new_state, validated_payload["summary"], occurred_at, routed_task_id),
-                    )
-                primary_event = self._insert_event(
-                    conn,
-                    event_id=primary_event_id,
-                    conversation_id=str(task_row["parent_conversation_id"] or ""),
-                    agent_id=str(row["agent_id"] or ""),
-                    kind="task.status",
-                    actor="",
-                    content=str(validated_payload.get("summary") or decision.new_state),
-                    metadata={
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload["transition_id"],
-                        **(
-                            {"progress": validated_payload["progress"]}
-                            if validated_payload.get("progress") is not None
-                            else {}
-                        ),
-                    },
-                    created_at=occurred_at,
-                )
-                if primary_event is not None:
-                    inserted_events.append(primary_event)
-                task_request = decode_json_field(task_row["request_json"], {})
-                recipient_conversation_id = self._ensure_conversation_in_tx(
-                    conn,
-                    target_agent_id=str(task_row["target_agent_id"] or ""),
-                    title=str(task_row["title"] or routed_task_id),
-                    conversation_type="task_thread",
-                    origin_channel="registry",
-                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
-                    now=occurred_at,
-                )
-                recipient_event = self._insert_event(
-                    conn,
-                    event_id=f"{primary_event_id}:recipient",
-                    conversation_id=recipient_conversation_id,
-                    agent_id=str(row["agent_id"] or ""),
-                    kind="task.status",
-                    actor="",
-                    content=str(validated_payload.get("summary") or decision.new_state),
-                    metadata={
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload["transition_id"],
-                        **(
-                            {"progress": validated_payload["progress"]}
-                            if validated_payload.get("progress") is not None
-                            else {}
-                        ),
-                    },
-                    created_at=occurred_at,
-                )
-                if recipient_event is not None:
-                    recipient_inserted_events.append(recipient_event)
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (occurred_at, recipient_conversation_id),
-                        )
-                for event in validated_payload["timeline_events"]:
-                    event_metadata = {
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload["transition_id"],
-                        **dict(event.get("metadata") or {}),
-                    }
-                    if event.get("progress") is not None:
-                        event_metadata["progress"] = event["progress"]
-                    inserted_event = self._insert_event(
-                        conn,
-                        event_id=str(event["event_id"]),
-                        conversation_id=str(event["conversation_id"]),
-                        agent_id=str(row["agent_id"] or ""),
-                        kind="task.status",
-                        actor="",
-                        content=str(event.get("body", "") or event.get("title", "") or ""),
-                        metadata=event_metadata,
-                        created_at=str(event["created_at"]),
-                    )
-                    if inserted_event is not None:
-                        inserted_events.append(inserted_event)
-                if inserted_events:
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (inserted_events[-1]["created_at"], task_row["parent_conversation_id"]),
-                        )
-            return _record(TaskRecord, {
-                "routed_task_id": routed_task_id,
-                "status": decision.new_state,
-                "duplicate": duplicate,
-                "events_written": bool(inserted_events or recipient_inserted_events),
-                "inserted_events": inserted_events,
-                "recipient_conversation_id": recipient_conversation_id,
-                "recipient_inserted_events": recipient_inserted_events,
-                "parent_conversation_id": task_row["parent_conversation_id"],
-                "origin_agent_id": task_row["origin_agent_id"],
-                "target_agent_id": task_row["target_agent_id"],
-            })
 
     def update_routed_task_result(
         self,
@@ -1563,195 +1368,22 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
-        usage_fields = {"prompt_tokens", "completion_tokens", "cost_usd"}
-        if hasattr(payload, "model_fields_set"):
-            include_usage_fields = bool(
-                set(getattr(payload, "model_fields_set", set())) & usage_fields
-            )
-        elif isinstance(payload, Mapping):
-            include_usage_fields = bool(set(payload) & usage_fields)
-        else:
-            include_usage_fields = False
-        payload_data = payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
-        if isinstance(payload_data, dict):
-            payload_task_id = str(payload_data.pop("routed_task_id", "") or "")
-            if payload_task_id and payload_task_id != routed_task_id:
-                raise ValueError("routed_task_id must match the requested task")
-            payload_data = {"routed_task_id": routed_task_id, **payload_data}
-        validated_payload = validated_routed_task_result_payload(
-            payload_data
-        )
         with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            require_registry_scope(row, {"coordination", "full"})
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",
-                    (routed_task_id,),
-                )
-                task = cur.fetchone()
-            if task is None:
-                raise KeyError(routed_task_id)
-            task_request = decode_json_field(task["request_json"], {})
-            if str(task["target_agent_id"] or "") != str(row["agent_id"] or ""):
-                raise PermissionError("Routed task does not belong to this agent")
-            requested_status = validated_payload["status"]
-            if requested_status == "completed":
-                transition = "complete"
-            elif requested_status == "failed":
-                transition = "fail"
-            elif requested_status == "timed_out":
-                transition = "time_out"
-            else:
-                raise ValueError(f"Unsupported routed task result status: {requested_status}")
-            completed_at = now
-            decision = apply_task_transition(
-                self._task_snapshot__row(task),
-                TaskTransitionRequest(
-                    transition=transition,
-                    actor_role="target_bot",
-                    transition_id=validated_payload["transition_id"],
-                    occurred_at=completed_at,
-                ),
+            return shared_update_routed_task_result(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                token_row=self._token_row,
+                require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
+                task_snapshot_row=self._task_snapshot__row,
+                insert_event=self._insert_event,
+                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
+                create_delivery=self._create_delivery,
+                json_param=_jsonb,
+                agent_token=agent_token,
+                routed_task_id=routed_task_id,
+                payload=payload,
+                now=now,
             )
-            if not decision.ok:
-                raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
-            primary_event_id = f"task-result:{routed_task_id}:{validated_payload['transition_id']}"
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT 1 FROM {_SCHEMA}.events WHERE event_id = %s",
-                    (primary_event_id,),
-                )
-                duplicate = cur.fetchone() is not None
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (task["parent_conversation_id"],),
-                )
-                parent_conversation = cur.fetchone()
-            inserted_events: list[EventRecord] = []
-            recipient_inserted_events: list[EventRecord] = []
-            recipient_conversation_id = ""
-            if not duplicate:
-                persisted_result = validated_payload.model_dump(mode="json", exclude_none=True)
-                persisted_result["completed_at"] = completed_at
-                persisted_result["status"] = decision.new_state
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE {_SCHEMA}.routed_tasks
-                        SET status = %s, summary = %s, result_json = %s, updated_at = %s
-                        WHERE routed_task_id = %s
-                        """,
-                        (
-                            decision.new_state,
-                            validated_payload["summary"],
-                            _jsonb(persisted_result),
-                            completed_at,
-                            routed_task_id,
-                        ),
-                    )
-                self._create_delivery(
-                    conn,
-                    target_agent_id=task["origin_agent_id"],
-                    kind="routed_result",
-                    payload={
-                        "routed_task_id": routed_task_id,
-                        "parent_conversation_id": task["parent_conversation_id"],
-                        "parent_transport_ref": str(task_request.get("origin_transport_ref", "") or ""),
-                        "parent_external_conversation_ref": (
-                            str(parent_conversation["external_conversation_ref"] or "")
-                            if parent_conversation is not None
-                            else ""
-                        ),
-                        "result": persisted_result,
-                    },
-                    now=completed_at,
-                    delivery_id=uuid.uuid4().hex,
-                )
-                event_metadata = {
-                    "routed_task_id": routed_task_id,
-                    "status": decision.new_state,
-                    "transition_id": validated_payload.transition_id,
-                }
-                if include_usage_fields:
-                    event_metadata["prompt_tokens"] = int(validated_payload.prompt_tokens or 0)
-                    event_metadata["completion_tokens"] = int(validated_payload.completion_tokens or 0)
-                    event_metadata["cost_usd"] = float(validated_payload.cost_usd or 0.0)
-                if validated_payload.provider:
-                    event_metadata["provider"] = validated_payload.provider
-                mirrored_event = self._insert_event(
-                    conn,
-                    event_id=primary_event_id,
-                    conversation_id=str(task["parent_conversation_id"] or ""),
-                    agent_id=str(row["agent_id"] or ""),
-                    kind="task.status",
-                    actor="",
-                    content=str(
-                        validated_payload.summary
-                        or validated_payload.full_text
-                        or decision.new_state
-                    ),
-                    metadata=event_metadata,
-                    created_at=completed_at,
-                )
-                if mirrored_event is not None:
-                    inserted_events.append(mirrored_event)
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (completed_at, task["parent_conversation_id"]),
-                        )
-                recipient_conversation_id = self._ensure_conversation_in_tx(
-                    conn,
-                    target_agent_id=str(task["target_agent_id"] or ""),
-                    title=str(task["title"] or routed_task_id),
-                    conversation_type="task_thread",
-                    origin_channel="registry",
-                    external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
-                    now=completed_at,
-                )
-                recipient_event = self._insert_event(
-                    conn,
-                    event_id=f"{primary_event_id}:recipient",
-                    conversation_id=recipient_conversation_id,
-                    agent_id=str(row["agent_id"] or ""),
-                    kind="task.status",
-                    actor="",
-                    content=str(
-                        validated_payload.summary
-                        or validated_payload.full_text
-                        or decision.new_state
-                    ),
-                    metadata={
-                        "routed_task_id": routed_task_id,
-                        "status": decision.new_state,
-                        "transition_id": validated_payload.transition_id,
-                    },
-                    created_at=completed_at,
-                )
-                if recipient_event is not None:
-                    recipient_inserted_events.append(recipient_event)
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (completed_at, recipient_conversation_id),
-                        )
-            return _record(TaskRecord, {
-                "routed_task_id": routed_task_id,
-                "status": decision.new_state,
-                "duplicate": duplicate,
-                "events_written": bool(inserted_events or recipient_inserted_events),
-                "inserted_events": inserted_events,
-                "recipient_conversation_id": recipient_conversation_id,
-                "recipient_inserted_events": recipient_inserted_events,
-                "parent_conversation_id": task["parent_conversation_id"],
-                "origin_transport_ref": str(task_request.get("origin_transport_ref", "") or ""),
-                "origin_agent_id": task["origin_agent_id"],
-                "target_agent_id": task["target_agent_id"],
-            })
 
     def report_management_result(
         self,
@@ -1843,56 +1475,25 @@ class RegistryPostgresStore(AbstractRegistryStore):
         q: str = "",
         connectivity_state: str = "",
     ) -> list[AgentRecord]:
-        fetch_limit = limit + 1
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                if q or connectivity_state:
-                    cur.execute(f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name)")
-                    rows = cur.fetchall()
-                    agents = [self._row_to_agent(row) for row in rows]
-                    if for_agent_id is not None:
-                        agents = [agent for agent in agents if agent["agent_id"] == for_agent_id]
-                    q_lower = q.strip().lower()
-                    if q_lower:
-                        agents = [
-                            agent for agent in agents
-                            if q_lower in (agent["display_name"] or "").lower()
-                            or q_lower in (agent["slug"] or "").lower()
-                            or q_lower in (agent["role"] or "").lower()
-                            or q_lower in (agent["provider"] or "").lower()
-                        ]
-                    if connectivity_state:
-                        agents = [
-                            agent for agent in agents
-                            if (agent["connectivity_state"] or "") == connectivity_state
-                        ]
-                    return agents[cursor: cursor + fetch_limit]
-                if for_agent_id is not None:
-                    cur.execute(
-                        f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s ORDER BY lower(display_name) LIMIT %s OFFSET %s",
-                        (for_agent_id, fetch_limit, cursor),
-                    )
-                else:
-                    cur.execute(
-                        f"SELECT * FROM {_SCHEMA}.agents ORDER BY lower(display_name) LIMIT %s OFFSET %s",
-                        (fetch_limit, cursor),
-                    )
-                rows = cur.fetchall()
-        return [self._row_to_agent(row) for row in rows]
+            return shared_list_agents(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                row_to_agent=self._row_to_agent,
+                for_agent_id=for_agent_id,
+                cursor=cursor,
+                limit=limit,
+                q=q,
+                connectivity_state=connectivity_state,
+            )
 
     def get_agent_runtime_health(self, agent_id: str) -> RuntimeHealthDetailRecord | None:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (agent_id,),
-                )
-                row = cur.fetchone()
-            if row is None:
-                return None
-            detail = runtime_health_detail(
-                row.get("runtime_health_json"),
-                self._runtime_worker_rows(conn, agent_id),
+            detail = shared_get_agent_runtime_health(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+                runtime_worker_rows=self._runtime_worker_rows,
             )
             return _record(RuntimeHealthDetailRecord, detail) if detail is not None else None
 
@@ -1933,343 +1534,67 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
-        # When a search query is provided (>= 3 chars), use FTS-based search
         if q and len(q) >= 3:
             search_hits = self.search_conversations(q, limit=fetch_limit + cursor)
             hit_ids = [h["conversation_id"] for h in search_hits]
             if not hit_ids:
                 return []
             with self._connect() as conn:
-                with _cur(conn) as cur:
-                    placeholders = ",".join(["%s"] * len(hit_ids))
-                    where_clauses = [f"c.conversation_id IN ({placeholders})"]
-                    params: list[object] = list(hit_ids)
-                    if for_agent_id is not None:
-                        where_clauses.append("c.target_agent_id = %s")
-                        params.append(for_agent_id)
-                    if status:
-                        where_clauses.append("c.status = %s")
-                        params.append(status)
-                    if conversation_type:
-                        where_clauses.append("c.conversation_type = %s")
-                        params.append(conversation_type)
-                    where_sql = " WHERE " + " AND ".join(where_clauses)
-                    sql = f"""
-                        SELECT
-                            c.*,
-                            a.display_name AS target_name,
-                            COUNT(e.event_id) AS event_count
-                        FROM {_SCHEMA}.conversations c
-                        LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                        LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
-                        {where_sql}
-                        GROUP BY c.conversation_id, c.target_agent_id, c.title, c.conversation_type, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
-                        ORDER BY c.updated_at DESC
-                        LIMIT %s OFFSET %s
-                    """
-                    params.extend([fetch_limit, cursor])
-                    cur.execute(sql, params)
-                    rows = cur.fetchall()
-        else:
-            with self._connect() as conn:
-                with _cur(conn) as cur:
-                    sql = f"""
-                        SELECT
-                            c.*,
-                            a.display_name AS target_name,
-                            COUNT(e.event_id) AS event_count
-                        FROM {_SCHEMA}.conversations c
-                        LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                        LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
-                    """
-                    params_list: list[object] = []
-                    where_clauses_list: list[str] = []
-                    if for_agent_id is not None:
-                        where_clauses_list.append("c.target_agent_id = %s")
-                        params_list.append(for_agent_id)
-                    if status:
-                        where_clauses_list.append("c.status = %s")
-                        params_list.append(status)
-                    if conversation_type:
-                        where_clauses_list.append("c.conversation_type = %s")
-                        params_list.append(conversation_type)
-                    if where_clauses_list:
-                        sql += " WHERE " + " AND ".join(where_clauses_list)
-                    sql += """
-                        GROUP BY c.conversation_id, c.target_agent_id, c.title, c.conversation_type, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
-                        ORDER BY c.updated_at DESC
-                        LIMIT %s OFFSET %s
-                    """
-                    params_list.extend([fetch_limit, cursor])
-                    cur.execute(sql, params_list)
-                    rows = cur.fetchall()
-        return _records(ConversationRecord, [
-            {
-                "conversation_id": row["conversation_id"],
-                "target_agent_id": row["target_agent_id"],
-                "target_display_name": row["target_name"] or "",
-                "title": row["title"],
-                "conversation_type": row["conversation_type"] or "conversation",
-                "status": row["status"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "origin_channel": row["origin_channel"],
-                "external_conversation_ref": row["external_conversation_ref"],
-                "event_count": int(row["event_count"] or 0),
-            }
-            for row in rows
-        ])
+                return shared_list_conversations(
+                    conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    for_agent_id=for_agent_id,
+                    cursor=cursor,
+                    limit=limit,
+                    status=status,
+                    conversation_type=conversation_type,
+                    search_hit_ids=hit_ids,
+                )
+        with self._connect() as conn:
+            return shared_list_conversations(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                for_agent_id=for_agent_id,
+                cursor=cursor,
+                limit=limit,
+                status=status,
+                conversation_type=conversation_type,
+            )
 
     def get_conversation(self, conversation_id: str) -> ConversationRecord:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        c.*,
-                        a.display_name AS target_name,
-                        COUNT(e.event_id) AS event_count
-                    FROM {_SCHEMA}.conversations c
-                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    LEFT JOIN {_SCHEMA}.events e ON e.conversation_id = c.conversation_id
-                    WHERE c.conversation_id = %s
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.conversation_type, c.origin_channel, c.external_conversation_ref, c.status, c.created_at, c.updated_at, a.display_name
-                    """,
-                    (conversation_id,),
-                )
-                row = cur.fetchone()
-                cur.execute(
-                    f"""
-                    SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
-                    FROM {_SCHEMA}.routed_tasks t
-                    LEFT JOIN {_SCHEMA}.agents origin ON origin.agent_id = t.origin_agent_id
-                    LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
-                    WHERE t.parent_conversation_id = %s
-                    ORDER BY t.updated_at DESC
-                    """,
-                    (conversation_id,),
-                )
-                task_rows = cur.fetchall()
-        if row is None:
-            raise KeyError(conversation_id)
-        tasks = [
-            {
-                "routed_task_id": task["routed_task_id"],
-                "parent_conversation_id": task["parent_conversation_id"],
-                "origin_agent_id": task["origin_agent_id"],
-                "origin_display_name": task["origin_name"] or "",
-                "target_agent_id": task["target_agent_id"],
-                "target_display_name": task["target_name"] or "",
-                "title": task["title"],
-                "status": task["status"],
-                "summary": task["summary"],
-                "created_at": task["created_at"],
-                "updated_at": task["updated_at"],
-            }
-            for task in task_rows
-        ]
-        return _record(ConversationRecord, {
-            "conversation_id": row["conversation_id"],
-            "target_agent_id": row["target_agent_id"],
-            "target_display_name": row["target_name"] or "",
-            "target_name": row["target_name"] or "",
-            "title": row["title"],
-            "conversation_type": row["conversation_type"] or "conversation",
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "origin_channel": row["origin_channel"],
-            "external_conversation_ref": row["external_conversation_ref"],
-            "event_count": int(row["event_count"] or 0),
-            "linked_routed_tasks": tasks,
-        })
+            return shared_get_conversation(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                conversation_id=conversation_id,
+            )
 
     def get_usage_summary(self, since_iso: str, until_iso: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                if until_iso:
-                    cur.execute(
-                        f"""
-                        SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
-                        FROM {_SCHEMA}.events e
-                        LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
-                        WHERE (
-                            e.kind = 'provider.response'
-                            OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens')
-                        ) AND e.created_at >= %s AND e.created_at <= %s
-                        ORDER BY e.created_at
-                        """,
-                        (since_iso, until_iso),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        SELECT e.conversation_id, e.metadata_json, e.created_at, c.title
-                        FROM {_SCHEMA}.events e
-                        LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
-                        WHERE (
-                            e.kind = 'provider.response'
-                            OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens')
-                        ) AND e.created_at >= %s
-                        ORDER BY e.created_at
-                        """,
-                        (since_iso,),
-                    )
-                rows = cur.fetchall()
-        return _records(UsageSummaryRecord, [
-            {
-                "conversation_id": row["conversation_id"],
-                "title": row["title"] or "",
-                "metadata": decode_json_field(row["metadata_json"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ])
+            return shared_get_usage_summary(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                since_iso=since_iso,
+                until_iso=until_iso,
+            )
 
     def get_summary(self, *, now_iso: str) -> RegistrySummaryRecord:
-        window_start = (
-            datetime.fromisoformat(now_iso) - timedelta(hours=24)
-        ).isoformat()
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT connectivity_state, last_heartbeat_at FROM {_SCHEMA}.agents"
-                )
-                agent_rows = cur.fetchall()
-                cur.execute(
-                    f"""
-                    SELECT
-                        COUNT(*) AS total,
-                        SUM(CASE WHEN status IN ('open', 'running', 'cancelling') THEN 1 ELSE 0 END) AS active
-                    FROM {_SCHEMA}.conversations
-                    """
-                )
-                conversation_totals = cur.fetchone()
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*) AS cnt
-                    FROM {_SCHEMA}.conversations c
-                    WHERE EXISTS (
-                        SELECT 1
-                        FROM {_SCHEMA}.events e
-                        WHERE e.conversation_id = c.conversation_id
-                          AND e.kind = 'approval.requested'
-                          AND e.seq = (
-                              SELECT MAX(e2.seq)
-                              FROM {_SCHEMA}.events e2
-                              WHERE e2.conversation_id = c.conversation_id
-                                AND e2.kind IN ('approval.requested', 'approval.decided')
-                          )
-                    )
-                    """
-                )
-                pending_approvals_row = cur.fetchone()
-                cur.execute(
-                    f"""
-                    SELECT
-                        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
-                        SUM(CASE WHEN status IN ('queued', 'leased', 'submitted') THEN 1 ELSE 0 END) AS pending,
-                        SUM(CASE WHEN status = 'failed' AND updated_at >= %s THEN 1 ELSE 0 END) AS failed_24h
-                    FROM {_SCHEMA}.routed_tasks
-                    """,
-                    (window_start,),
-                )
-                task_totals = cur.fetchone()
-        connected = 0
-        degraded = 0
-        disconnected = 0
-        for row in agent_rows:
-            state = effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
-            if state == "connected":
-                connected += 1
-            elif state == "degraded":
-                degraded += 1
-            else:
-                disconnected += 1
-        usage_rows = self.get_usage_summary(window_start, until_iso=now_iso)
-        usage_total = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "cost_usd": 0.0,
-        }
-        for row in usage_rows:
-            metadata = row.get("metadata") or {}
-            usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
-            usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
-            usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
-        return _record(RegistrySummaryRecord, {
-            "generated_at": now_iso,
-            "agents": {
-                "total": len(agent_rows),
-                "connected": connected,
-                "degraded": degraded,
-                "disconnected": disconnected,
-            },
-            "conversations": {
-                "total": int(conversation_totals["total"] or 0),
-                "active": int(conversation_totals["active"] or 0),
-                "pending_approvals": int(pending_approvals_row["cnt"] or 0),
-            },
-            "tasks": {
-                "running": int(task_totals["running"] or 0),
-                "pending": int(task_totals["pending"] or 0),
-                "failed_24h": int(task_totals["failed_24h"] or 0),
-            },
-            "usage_24h": usage_total,
-        })
+            return shared_get_summary(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                now_iso=now_iso,
+            )
 
     def list_approvals(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25) -> list[ApprovalRecord]:
-        fetch_limit = limit + 1
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                sql = f"""
-                    SELECT
-                        e.event_id,
-                        e.conversation_id,
-                        e.actor,
-                        e.content,
-                        e.metadata_json,
-                        e.created_at,
-                        c.title,
-                        c.status AS conversation_status,
-                        c.updated_at AS conversation_updated_at,
-                        c.target_agent_id,
-                        a.display_name AS target_name
-                    FROM {_SCHEMA}.events e
-                    JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id
-                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    WHERE e.kind = 'approval.requested'
-                      AND e.seq = (
-                          SELECT MAX(e2.seq)
-                          FROM {_SCHEMA}.events e2
-                          WHERE e2.conversation_id = e.conversation_id
-                            AND e2.kind IN ('approval.requested', 'approval.decided')
-                      )
-                """
-                params: list[object] = []
-                if for_agent_id is not None:
-                    sql += " AND c.target_agent_id = %s"
-                    params.append(for_agent_id)
-                sql += " ORDER BY e.created_at DESC LIMIT %s OFFSET %s"
-                params.extend([fetch_limit, cursor])
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-        return _records(ApprovalRecord, [
-            {
-                "request_id": row["event_id"],
-                "conversation_id": row["conversation_id"],
-                "conversation_title": row["title"],
-                "conversation_status": row["conversation_status"],
-                "conversation_updated_at": row["conversation_updated_at"],
-                "target_agent_id": row["target_agent_id"],
-                "target_display_name": row["target_name"] or "",
-                "actor": row["actor"],
-                "content": row["content"],
-                "created_at": row["created_at"],
-                **(json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else (row["metadata_json"] or {})),
-            }
-            for row in rows
-        ])
+            return shared_list_approvals(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                for_agent_id=for_agent_id,
+                cursor=cursor,
+                limit=limit,
+            )
 
     def search_conversations(self, q: str, limit: int = 20) -> list[ConversationSearchHitRecord]:
         with self._connect() as conn:
@@ -2907,86 +2232,27 @@ class RegistryPostgresStore(AbstractRegistryStore):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
+        completed_since_iso: str = "",
     ) -> list[TaskRecord]:
-        fetch_limit = limit + 1
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                sql = f"""
-                    SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
-                    FROM {_SCHEMA}.routed_tasks t
-                    LEFT JOIN {_SCHEMA}.agents origin ON origin.agent_id = t.origin_agent_id
-                    LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
-                """
-                params: list[object] = []
-                where_clauses: list[str] = []
-                if for_agent_id is not None:
-                    where_clauses.append("(t.origin_agent_id = %s OR t.target_agent_id = %s)")
-                    params.extend([for_agent_id, for_agent_id])
-                if parent_conversation_id:
-                    where_clauses.append("t.parent_conversation_id = %s")
-                    params.append(parent_conversation_id)
-                if status:
-                    where_clauses.append("t.status = %s")
-                    params.append(status)
-                if where_clauses:
-                    sql += " WHERE " + " AND ".join(where_clauses)
-                sql += " ORDER BY t.updated_at DESC LIMIT %s OFFSET %s"
-                params.extend([fetch_limit, cursor])
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-        return _records(TaskRecord, [
-            {
-                "routed_task_id": row["routed_task_id"],
-                "parent_conversation_id": row["parent_conversation_id"],
-                "origin_transport_ref": decode_json_field(row["request_json"], {}).get("origin_transport_ref", ""),
-                "origin_agent_id": row["origin_agent_id"],
-                "origin_display_name": row["origin_name"] or "",
-                "target_agent_id": row["target_agent_id"],
-                "target_display_name": row["target_name"] or "",
-                "title": row["title"],
-                "status": row["status"],
-                "summary": row["summary"],
-                "instructions": decode_json_field(row["request_json"], {}).get("instructions", ""),
-                "result_summary": decode_json_field(row["result_json"], {}).get("summary", ""),
-                "result_text": decode_json_field(row["result_json"], {}).get("full_text", ""),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ])
+            return shared_list_tasks(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                for_agent_id=for_agent_id,
+                parent_conversation_id=parent_conversation_id,
+                cursor=cursor,
+                limit=limit,
+                status=status,
+                completed_since_iso=completed_since_iso,
+            )
 
     def get_task(self, routed_task_id: str) -> TaskRecord:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
-                    FROM {_SCHEMA}.routed_tasks t
-                    LEFT JOIN {_SCHEMA}.agents origin ON origin.agent_id = t.origin_agent_id
-                    LEFT JOIN {_SCHEMA}.agents target ON target.agent_id = t.target_agent_id
-                    WHERE t.routed_task_id = %s
-                    """,
-                    (routed_task_id,),
-                )
-                row = cur.fetchone()
-        if row is None:
-            raise KeyError(routed_task_id)
-        return _record(TaskRecord, {
-            "routed_task_id": row["routed_task_id"],
-            "parent_conversation_id": row["parent_conversation_id"],
-            "origin_transport_ref": decode_json_field(row["request_json"], {}).get("origin_transport_ref", ""),
-            "origin_agent_id": row["origin_agent_id"],
-            "origin_display_name": row["origin_name"] or "",
-            "target_agent_id": row["target_agent_id"],
-            "target_display_name": row["target_name"] or "",
-            "title": row["title"],
-            "status": row["status"],
-            "summary": row["summary"],
-            "request": decode_json_field(row["request_json"], {}),
-            "result": decode_json_field(row["result_json"], {}),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        })
+            return shared_get_task(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                routed_task_id=routed_task_id,
+            )
 
     def publish_events(
         self,
@@ -3187,117 +2453,37 @@ class RegistryPostgresStore(AbstractRegistryStore):
         )
 
     def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
-        fetch_limit = limit + 1
-        effective_agent_id = for_agent_id if for_agent_id is not None else agent_id
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                sql = f"""
-                    SELECT c.*, a.display_name AS target_name
-                    FROM {_SCHEMA}.conversations c
-                    LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
-                    WHERE c.target_agent_id = %s
-                """
-                params: list[object] = [effective_agent_id]
-                if conversation_type:
-                    sql += " AND c.conversation_type = %s"
-                    params.append(conversation_type)
-                sql += """
-                    ORDER BY c.updated_at DESC
-                    LIMIT %s OFFSET %s
-                """
-                params.extend([fetch_limit, cursor])
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-        return _records(ConversationRecord, [
-            {
-                "conversation_id": row["conversation_id"],
-                "target_agent_id": row["target_agent_id"],
-                "target_name": row["target_name"] or "",
-                "title": row["title"],
-                "conversation_type": row["conversation_type"] or "conversation",
-                "origin_channel": row["origin_channel"],
-                "status": row["status"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
-            for row in rows
-        ])
+            return shared_list_agent_conversations(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+                for_agent_id=for_agent_id,
+                cursor=cursor,
+                limit=limit,
+                conversation_type=conversation_type,
+            )
 
     def get_agent_status(self, agent_id: str) -> AgentStatusRecord | None:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (agent_id,),
-                )
-                row = cur.fetchone()
-            if row is None:
-                return None
-            agent = self._row_to_agent(row)
-            workers = self._runtime_worker_rows(conn, agent_id)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*) AS cnt FROM {_SCHEMA}.conversations
-                    WHERE target_agent_id = %s AND status IN ('open', 'running')
-                    """,
-                    (agent_id,),
-                )
-                active_count_row = cur.fetchone()
-                active_conversations = int(active_count_row["cnt"]) if active_count_row else 0
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*) AS cnt FROM {_SCHEMA}.events
-                    WHERE agent_id = %s AND kind = 'error'
-                      AND created_at::timestamptz >= (now() - interval '1 hour')
-                    """,
-                    (agent_id,),
-                )
-                error_count_row = cur.fetchone()
-                recent_errors = int(error_count_row["cnt"]) if error_count_row else 0
-        return AgentStatusRecord(
-            **agent.model_dump(mode="json"),
-            workers=workers,
-            active_conversations=active_conversations,
-            recent_errors=recent_errors,
-        )
+            return shared_get_agent_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+                row_to_agent=self._row_to_agent,
+                runtime_worker_rows=self._runtime_worker_rows,
+            )
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:
         with self._connect() as conn:
-            sql = (
-                f"SELECT e.*, c.title AS conversation_title "
-                f"FROM {_SCHEMA}.events e "
-                f"LEFT JOIN {_SCHEMA}.conversations c ON c.conversation_id = e.conversation_id "
-                f"WHERE (e.kind = 'provider.response' OR (e.kind = 'task.status' AND e.metadata_json ? 'prompt_tokens'))"
+            return shared_get_usage(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                since=since,
+                until=until,
             )
-            params: list[object] = []
-            if agent_id:
-                sql += " AND e.agent_id = %s"
-                params.append(agent_id)
-            if conversation_id:
-                sql += " AND e.conversation_id = %s"
-                params.append(conversation_id)
-            if since:
-                sql += " AND e.created_at >= %s"
-                params.append(since)
-            if until:
-                sql += " AND e.created_at <= %s"
-                params.append(until)
-            sql += " ORDER BY e.created_at"
-            with _cur(conn) as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-        return _records(UsageSummaryRecord, [
-            {
-                "event_id": row["event_id"],
-                "conversation_id": row["conversation_id"],
-                "title": row["conversation_title"] or "",
-                "agent_id": row["agent_id"],
-                "metadata": decode_json_field(row["metadata_json"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ])
 
     def export_conversation(self, conversation_id: str) -> str:
         with self._connect() as conn:
@@ -3325,151 +2511,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 lines.append("")
         return "\n".join(lines)
 
-    def purge_old_events(self, older_than_days: int = 30) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"DELETE FROM {_SCHEMA}.events WHERE created_at < %s",
-                    (cutoff,),
-                )
-                count = cur.rowcount
-        return count
-
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_json(raw: object, default: object) -> object:
-        if raw is None:
-            return default
-        if isinstance(raw, (list, dict)):
-            return raw
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return default
-
-    @staticmethod
-    def _stable_json(value: object) -> str:
-        return json.dumps(value, sort_keys=True)
-
-    def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
-        return record.revision.revision_id or f"{record.slug}|{record.revision.digest}"
-
-    def _guidance_revision_id(self, record: ProviderGuidanceTrackRecord) -> str:
-        key = f"{record.provider}|{record.scope_kind}|{record.scope_key}"
-        return record.revision.revision_id or f"{key}|{record.revision.digest}"
-
-    def _upsert_registry_skill(
-        self,
-        record: RuntimeSkillTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._skill_revision_id(record)
-        files_json = self._stable_json(
-            [
-                {
-                    "relative_path": f.relative_path,
-                    "content_text": f.content_text,
-                    "content_type": f.content_type,
-                    "executable": f.executable,
-                }
-                for f in record.revision.files
-            ]
-        )
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT published_revision_id FROM {_SCHEMA}.runtime_skills WHERE slug = %s",
-                    (record.slug,),
-                )
-                existing = cur.fetchone()
-                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.runtime_skills (
-                        slug, display_name, description, source_kind, source_uri, owner_actor,
-                        visibility, is_mutable, archived, instruction_body, requirements_json,
-                        provider_config_json, files_json, active_revision_id, published_revision_id,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(slug) DO UPDATE SET
-                        display_name = EXCLUDED.display_name,
-                        description = EXCLUDED.description,
-                        source_kind = EXCLUDED.source_kind,
-                        source_uri = EXCLUDED.source_uri,
-                        owner_actor = EXCLUDED.owner_actor,
-                        visibility = EXCLUDED.visibility,
-                        is_mutable = EXCLUDED.is_mutable,
-                        archived = EXCLUDED.archived,
-                        instruction_body = EXCLUDED.instruction_body,
-                        requirements_json = EXCLUDED.requirements_json,
-                        provider_config_json = EXCLUDED.provider_config_json,
-                        files_json = EXCLUDED.files_json,
-                        active_revision_id = EXCLUDED.active_revision_id,
-                        published_revision_id = EXCLUDED.published_revision_id,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        record.slug,
-                        record.display_name,
-                        record.description,
-                        record.source_kind,
-                        record.source_uri,
-                        record.owner_actor,
-                        record.visibility,
-                        record.is_mutable,
-                        record.archived,
-                        record.revision.instruction_body,
-                        self._stable_json(record.revision.requirements),
-                        self._stable_json(record.revision.provider_config),
-                        files_json,
-                        revision_id,
-                        published_revision_id,
-                        now,
-                        now,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.skill_revisions (
-                        revision_id, slug, instruction_body, requirements_json,
-                        provider_config_json, files_json, version_label, changelog,
-                        status, created_by, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(revision_id) DO UPDATE SET
-                        instruction_body = EXCLUDED.instruction_body,
-                        requirements_json = EXCLUDED.requirements_json,
-                        provider_config_json = EXCLUDED.provider_config_json,
-                        files_json = EXCLUDED.files_json,
-                        version_label = EXCLUDED.version_label,
-                        changelog = EXCLUDED.changelog,
-                        status = EXCLUDED.status,
-                        created_by = EXCLUDED.created_by,
-                        created_at = EXCLUDED.created_at
-                    """,
-                    (
-                        revision_id,
-                        record.slug,
-                        record.revision.instruction_body,
-                        self._stable_json(record.revision.requirements),
-                        self._stable_json(record.revision.provider_config),
-                        files_json,
-                        record.revision.version_label,
-                        record.revision.changelog,
-                        status,
-                        record.revision.created_by,
-                        record.revision.created_at or now,
-                    ),
-                )
-
     def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="published", publish=True)
+        with self._connect() as conn, _write_tx(conn):
+            shared_replace_skill_track(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def delete_skill_track(
         self,
@@ -3480,207 +2528,48 @@ class RegistryPostgresStore(AbstractRegistryStore):
         owner_actor: str = "",
     ) -> bool:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(f"DELETE FROM {_SCHEMA}.skill_revisions WHERE slug = %s", (slug,))
-                cur.execute(f"DELETE FROM {_SCHEMA}.skill_approvals WHERE slug = %s", (slug,))
-                cur.execute(f"DELETE FROM {_SCHEMA}.runtime_skills WHERE slug = %s", (slug,))
-                return cur.rowcount > 0
-
-    def _skill_row_to_track(self, row: dict[str, object]) -> RuntimeSkillTrackRecord:
-        files_data = self._parse_json(row.get("files_json", "[]"), [])
-        files = tuple(
-            SkillFileRecord(
-                relative_path=f.get("relative_path", ""),
-                content_text=f.get("content_text", ""),
-                content_type=f.get("content_type", "text/plain"),
-                executable=bool(f.get("executable", False)),
-            )
-            for f in files_data
-            if isinstance(f, dict)
-        )
-        revision = SkillRevisionRecord(
-            instruction_body=row.get("instruction_body", ""),
-            requirements=self._parse_json(row.get("requirements_json", "[]"), []),
-            provider_config=self._parse_json(row.get("provider_config_json", "{}"), {}),
-            files=files,
-            version_label=row.get("version_label", ""),
-            changelog=row.get("changelog", ""),
-            created_by=row.get("created_by", ""),
-            created_at=row.get("created_at", ""),
-            revision_id=row.get("revision_id", row.get("active_revision_id", "")),
-            status=row.get("status", "published"),
-        )
-        return RuntimeSkillTrackRecord(
-            slug=row["slug"],
-            display_name=row.get("display_name", ""),
-            description=row.get("description", ""),
-            source_kind=row.get("source_kind", "custom"),
-            revision=revision,
-            source_uri=row.get("source_uri", ""),
-            owner_actor=row.get("owner_actor", ""),
-            visibility=row.get("visibility", "private"),
-            is_mutable=bool(row.get("is_mutable", True)),
-            archived=bool(row.get("archived", False)),
-            active_revision_id=row.get("active_revision_id", ""),
-            published_revision_id=row.get("published_revision_id", ""),
-        )
-
-    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[dict[str, object]]:
-        revision_ref = (
-            "CASE WHEN s.published_revision_id != '' THEN s.published_revision_id ELSE s.active_revision_id END"
-            if runtime_only else "s.active_revision_id"
-        )
-        extra_where = "AND s.published_revision_id != ''" if runtime_only else ""
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        s.slug, s.display_name, s.description, s.source_kind,
-                        s.source_uri, s.owner_actor, s.visibility, s.is_mutable,
-                        s.archived, s.active_revision_id, s.published_revision_id,
-                        rev.revision_id, rev.instruction_body, rev.requirements_json,
-                        rev.provider_config_json, rev.files_json, rev.version_label,
-                        rev.changelog, rev.status, rev.created_by, rev.created_at
-                    FROM {_SCHEMA}.runtime_skills s
-                    JOIN {_SCHEMA}.skill_revisions rev ON rev.revision_id = {revision_ref}
-                    WHERE s.slug = %s
-                    {extra_where}
-                    """,
-                    (slug,),
-                )
-                return cur.fetchall()
+            return shared_delete_skill_track(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=False)]
-        return sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
+        with self._connect() as conn:
+            return shared_list_skill_tracks(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        tracks = self.list_skill_tracks(slug)
-        return tracks[0] if tracks else None
+        with self._connect() as conn:
+            return shared_resolve_skill(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=True)]
-        records = sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
-        return records[0] if records else None
-
-    def _skill_summaries(self, *, runtime_only: bool) -> list[RuntimeSkillSummary]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(f"SELECT slug FROM {_SCHEMA}.runtime_skills ORDER BY lower(slug)")
-                slugs = cur.fetchall()
-        resolver = self.resolve_runtime_skill if runtime_only else self.resolve_skill
-        summaries: list[RuntimeSkillSummary] = []
-        for row in slugs:
-            record = resolver(row["slug"])
-            if record is None:
-                continue
-            summaries.append(
-                RuntimeSkillSummary(
-                    slug=record.slug,
-                    display_name=record.display_name,
-                    description=record.description,
-                    source_kind=record.source_kind,
-                    source_uri=record.source_uri,
-                    visibility=record.visibility,
-                    is_mutable=record.is_mutable,
-                    digest=record.revision.digest,
-                    status=record.revision.status,
-                    runtime_available=bool(record.published_revision_id) or not record.is_mutable,
-                    has_unpublished_changes=bool(record.published_revision_id)
-                    and record.published_revision_id != record.active_revision_id,
-                )
-            )
-        return summaries
+            return shared_resolve_runtime_skill(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=False)
+        with self._connect() as conn:
+            return shared_list_skill_summaries(conn, dialect=_POSTGRES_STORE_DIALECT)
 
     def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=True)
+        with self._connect() as conn:
+            return shared_list_runtime_skill_summaries(conn, dialect=_POSTGRES_STORE_DIALECT)
 
     def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="draft", publish=False)
+        with self._connect() as conn, _write_tx(conn):
+            shared_upsert_skill_draft(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT revision_id, instruction_body, requirements_json, provider_config_json,
-                           files_json, version_label, changelog, status, created_by, created_at
-                    FROM {_SCHEMA}.skill_revisions
-                    WHERE slug = %s
-                    ORDER BY created_at DESC, revision_id DESC
-                    """,
-                    (slug,),
-                )
-                rows = cur.fetchall()
-        return [
-            SkillRevisionRecord(
-                instruction_body=row["instruction_body"],
-                requirements=self._parse_json(row["requirements_json"], []),
-                provider_config=self._parse_json(row["provider_config_json"], {}),
-                files=tuple(
-                    SkillFileRecord(
-                        relative_path=f.get("relative_path", ""),
-                        content_text=f.get("content_text", ""),
-                        content_type=f.get("content_type", "text/plain"),
-                        executable=bool(f.get("executable", False)),
-                    )
-                    for f in self._parse_json(row["files_json"], [])
-                    if isinstance(f, dict)
-                ),
-                version_label=row["version_label"],
-                changelog=row["changelog"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_revisions(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT record_id, revision_id, action, actor, note, created_at
-                    FROM {_SCHEMA}.skill_approvals
-                    WHERE slug = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    """,
-                    (slug,),
-                )
-                rows = cur.fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_approvals(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT action
-                    FROM {_SCHEMA}.skill_approvals
-                    WHERE slug = %s AND revision_id = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    LIMIT 1
-                    """,
-                    (slug, revision_id),
-                )
-                row = cur.fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_skill_approval_action(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+            )
 
     def append_skill_approval(
         self,
@@ -3691,50 +2580,39 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor: str,
         note: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{slug}|{revision_id}|{action}|{now}"
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.skill_approvals (
-                        record_id, slug, revision_id, action, actor, note, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (record_id, slug, revision_id, action, actor, note, now),
-                )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
+            return shared_append_skill_approval(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
+            )
 
     def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
-                    (status, slug, revision_id),
-                )
+            shared_set_skill_revision_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                status=status,
+            )
 
     def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
-                    (revision_id, utcnow_iso(), slug),
-                )
+            shared_set_published_skill_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+            )
 
     def clear_published_skill_revision(self, slug: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
-                    (utcnow_iso(), slug),
-                )
+            shared_clear_published_skill_revision(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def apply_skill_lifecycle_transition(
         self,
@@ -3747,125 +2625,26 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor: str = "",
         note: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{slug}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                if set_status is not None:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
-                        (set_status, slug, revision_id),
-                    )
-                if published_pointer == "set_active":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
-                        (revision_id, now, slug),
-                    )
-                elif published_pointer == "clear":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
-                        (now, slug),
-                    )
-                if approval_action is not None:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.skill_approvals (
-                            record_id, slug, revision_id, action, actor, note, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (record_id, slug, revision_id, approval_action, actor, note, now),
-                    )
-                    record = LifecycleApprovalRecord(
-                        record_id=record_id,
-                        revision_id=revision_id,
-                        action=approval_action,
-                        actor=actor,
-                        note=note,
-                        created_at=now,
-                    )
-        return record
-
-    # --- Provider guidance ---
-
-    def _upsert_registry_guidance(
-        self,
-        record: ProviderGuidanceTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._guidance_revision_id(record)
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT published_revision_id FROM {_SCHEMA}.provider_guidance WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (record.provider, record.scope_kind, record.scope_key),
-                )
-                existing = cur.fetchone()
-                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.provider_guidance (
-                        provider, scope_kind, scope_key, content, format, is_mutable,
-                        active_revision_id, published_revision_id, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(provider, scope_kind, scope_key) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        format = EXCLUDED.format,
-                        is_mutable = EXCLUDED.is_mutable,
-                        active_revision_id = EXCLUDED.active_revision_id,
-                        published_revision_id = EXCLUDED.published_revision_id,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        record.provider,
-                        record.scope_kind,
-                        record.scope_key,
-                        record.revision.content,
-                        record.revision.format,
-                        record.is_mutable,
-                        revision_id,
-                        published_revision_id,
-                        now,
-                        now,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.guidance_revisions (
-                        revision_id, provider, scope_kind, scope_key, content, format,
-                        status, created_by, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(revision_id) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        format = EXCLUDED.format,
-                        status = EXCLUDED.status,
-                        created_by = EXCLUDED.created_by,
-                        created_at = EXCLUDED.created_at
-                    """,
-                    (
-                        revision_id,
-                        record.provider,
-                        record.scope_kind,
-                        record.scope_key,
-                        record.revision.content,
-                        record.revision.format,
-                        status,
-                        record.revision.created_by,
-                        record.revision.created_at or now,
-                    ),
-                )
+            return shared_apply_skill_lifecycle_transition(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
+            )
 
     def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="published", publish=True)
+        with self._connect() as conn, _write_tx(conn):
+            shared_replace_provider_guidance(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="draft", publish=False)
+        with self._connect() as conn, _write_tx(conn):
+            shared_upsert_provider_guidance_draft(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def get_provider_guidance(
         self,
@@ -3875,81 +2654,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                        g.active_revision_id, g.published_revision_id,
-                        rev.content, rev.format, rev.created_by, rev.created_at,
-                        rev.status, rev.revision_id
-                    FROM {_SCHEMA}.provider_guidance g
-                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.active_revision_id
-                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                row = cur.fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
-
-    def _runtime_provider_guidance(
-        self,
-        provider: str,
-        *,
-        scope_kind: str,
-        scope_key: str,
-    ) -> ProviderGuidanceTrackRecord | None:
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                        g.active_revision_id, g.published_revision_id,
-                        rev.content, rev.format, rev.created_by, rev.created_at,
-                        rev.status, rev.revision_id
-                    FROM {_SCHEMA}.provider_guidance g
-                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.published_revision_id
-                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s AND g.published_revision_id != ''
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                row = cur.fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
+            return shared_get_provider_guidance(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def resolve_provider_guidance(
         self,
@@ -3957,11 +2668,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         instance_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
-        if instance_key:
-            match = self._runtime_provider_guidance(provider, scope_kind="instance", scope_key=instance_key)
-            if match is not None:
-                return match
-        return self._runtime_provider_guidance(provider, scope_kind="system", scope_key="")
+        with self._connect() as conn:
+            return shared_resolve_provider_guidance(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                instance_key=instance_key,
+            )
 
     def list_provider_guidance_revisions(
         self,
@@ -3971,28 +2684,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[ProviderGuidanceRevisionRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT revision_id, content, format, created_by, created_at, status
-                    FROM {_SCHEMA}.guidance_revisions
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
-                    ORDER BY created_at DESC, revision_id DESC
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                rows = cur.fetchall()
-        return [
-            ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
+            return shared_list_provider_guidance_revisions(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def list_provider_guidance_approvals(
         self,
@@ -4002,28 +2700,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT record_id, revision_id, action, actor, note, created_at
-                    FROM {_SCHEMA}.guidance_approvals
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                rows = cur.fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
+            return shared_list_provider_guidance_approvals(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def get_latest_provider_guidance_approval_action(
         self,
@@ -4034,19 +2717,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> str:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT action
-                    FROM {_SCHEMA}.guidance_approvals
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    LIMIT 1
-                    """,
-                    (provider, scope_kind, scope_key, revision_id),
-                )
-                row = cur.fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_provider_guidance_approval_action(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def append_provider_guidance_approval(
         self,
@@ -4059,26 +2737,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{action}|{now}"
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.guidance_approvals (
-                        record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, now),
-                )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
+            return shared_append_provider_guidance_approval(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def set_provider_guidance_revision_status(
         self,
@@ -4090,11 +2760,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
-                    (status, provider, scope_kind, scope_key, revision_id),
-                )
+            shared_set_provider_guidance_revision_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                status=status,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def set_published_provider_guidance_revision(
         self,
@@ -4105,11 +2779,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (revision_id, utcnow_iso(), provider, scope_kind, scope_key),
-                )
+            shared_set_published_provider_guidance_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def clear_published_provider_guidance_revision(
         self,
@@ -4119,11 +2796,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (utcnow_iso(), provider, scope_kind, scope_key),
-                )
+            shared_clear_published_provider_guidance_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def apply_provider_guidance_lifecycle_transition(
         self,
@@ -4138,44 +2817,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                if set_status is not None:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
-                        (set_status, provider, scope_kind, scope_key, revision_id),
-                    )
-                if published_pointer == "set_active":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                        (revision_id, now, provider, scope_kind, scope_key),
-                    )
-                elif published_pointer == "clear":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                        (now, provider, scope_kind, scope_key),
-                    )
-                if approval_action is not None:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.guidance_approvals (
-                            record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (record_id, provider, scope_kind, scope_key, revision_id, approval_action, actor, note, now),
-                    )
-                    record = LifecycleApprovalRecord(
-                        record_id=record_id,
-                        revision_id=revision_id,
-                        action=approval_action,
-                        actor=actor,
-                        note=note,
-                        created_at=now,
-                    )
-        return record
+            return shared_apply_provider_guidance_lifecycle_transition(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )

@@ -61,6 +61,107 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         assert "__routeReady" in text, f"{name} must publish an initial route readiness promise"
 
 
+def test_management_views_request_agent_pages_with_supported_limit() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.listAgents({ limit: 100 })" in skill_catalog
+    assert "API.listAgents({ limit: 200 })" not in skill_catalog
+    assert "API.listAgents({ limit: 100 })" in guidance_editor
+    assert "API.listAgents({ limit: 200 })" not in guidance_editor
+    assert "searchCatalogSkills: (agentId, query)" in api_js
+
+
+def test_skill_catalog_only_offers_install_for_registry_search_hits() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.searchCatalogSkills(currentAgentId, queryText)" in skill_catalog
+    assert "_renderRegistrySkillRow" in skill_catalog
+    assert "_renderLocalSkillRow" in skill_catalog
+    assert "skill.status" not in skill_catalog
+    assert "can_import" in skill_catalog
+    assert "can_uninstall" in skill_catalog
+    assert "can_update" in skill_catalog
+
+
+def test_management_views_do_not_block_route_readiness_on_slow_management_fetches() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "void loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" in skill_catalog
+    assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
+    assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
+    assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
+    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
+    assert "renderLoadingState('Loading guidance…');" in guidance_editor
+
+
+def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function peekCachedData(" in helper
+    assert "function loadCachedData(" in helper
+    assert "function invalidateCachedData(" in helper
+    assert "peekCachedData," in helper
+    assert "loadCachedData," in helper
+    assert "invalidateCachedData," in helper
+
+    assert "UI.peekCachedData(_skillCacheKey(currentAgentId))" in skill_catalog
+    assert "UI.loadCachedData(" in skill_catalog
+    assert "_invalidateSkillCaches();" in skill_catalog
+    assert "UI.peekCachedData(_guidanceCacheKey())" in guidance_editor
+    assert "UI.loadCachedData(" in guidance_editor
+    assert "_invalidateGuidanceCache();" in guidance_editor
+
+
+def test_conversation_empty_state_avoids_repeating_route_title() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Nothing here yet." in conversation_list
+    assert "No conversations yet." not in conversation_list
+
+
+def test_dashboard_surfaces_recently_completed_tasks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Recently completed" in dashboard
+    assert "completed_since_iso: recentCompletedSinceIso()" in dashboard
+    assert "status: 'completed'" in dashboard
+
+
 def test_conversation_views_distinguish_task_threads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (

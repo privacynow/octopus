@@ -6,8 +6,18 @@ function renderSkillCatalog(container) {
     let searchTimeout = null;
     let currentQ = '';
     let allSkills = [];
+    let registrySkills = [];
+    let registryError = '';
     let availableAgents = [];
     let currentAgentId = '';
+    const SKILL_CACHE_TTL_MS = 60000;
+    const SKILL_SEARCH_CACHE_TTL_MS = 30000;
+    const CACHE_ERROR_TTL_MS = 5000;
+
+    function renderLoadingState(message = 'Loading skills…') {
+        UI.clearMemoizedRender(listEl);
+        UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
+    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -96,6 +106,189 @@ function renderSkillCatalog(container) {
         agentDropdown.update(agents, currentAgentId);
     }
 
+    function _queryText() {
+        return String(currentQ || '').trim();
+    }
+
+    function _skillCacheKey(agentId) {
+        return `skills:list:${String(agentId || '').trim()}`;
+    }
+
+    function _skillSearchCacheKey(agentId, queryText) {
+        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
+    }
+
+    function _invalidateSkillCaches(agentId = currentAgentId) {
+        const normalizedAgentId = String(agentId || '').trim();
+        if (!normalizedAgentId) return;
+        UI.invalidateCachedData([
+            _skillCacheKey(normalizedAgentId),
+            `skills:search:${normalizedAgentId}:`,
+        ]);
+    }
+
+    function _filteredCatalogSkills() {
+        const queryText = _queryText().toLowerCase();
+        if (!queryText) {
+            return allSkills;
+        }
+        return allSkills.filter((skill) => {
+            const haystack = [
+                skill.name || '',
+                skill.display_name || '',
+                skill.description || '',
+                skill.source_kind || '',
+            ].join(' ').toLowerCase();
+            return haystack.includes(queryText);
+        });
+    }
+
+    function _sectionLabel(text, key) {
+        const el = document.createElement('div');
+        el.className = 'list-section-label';
+        el.dataset.key = key;
+        el.textContent = text;
+        return el;
+    }
+
+    function _buildActionButton({ label, pendingLabel, className, onClick, errorMessage }) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = className;
+        btn.textContent = label;
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            btn.textContent = pendingLabel;
+            try {
+                await onClick();
+            } catch (err) {
+                btn.disabled = false;
+                btn.textContent = label;
+                UI.reportError(errorMessage, err, { context: 'Skill action failed' });
+            }
+        });
+        return btn;
+    }
+
+    function _localSkillActions(skillName, skill) {
+        const actions = document.createElement('div');
+        actions.className = 'list-row-actions';
+
+        if (skill.can_update) {
+            actions.appendChild(_buildActionButton({
+                label: 'Update',
+                pendingLabel: 'Updating…',
+                className: 'btn btn-sm list-row-action',
+                errorMessage: 'Failed to update the skill',
+                onClick: async () => {
+                    await API.updateSkill(currentAgentId, skillName);
+                    _invalidateSkillCaches();
+                    await loadSkills({ soft: true, forceCatalog: true });
+                },
+            }));
+        }
+
+        if (skill.can_uninstall) {
+            actions.appendChild(_buildActionButton({
+                label: 'Uninstall',
+                pendingLabel: 'Uninstalling…',
+                className: 'btn btn-sm btn-danger list-row-action',
+                errorMessage: 'Failed to uninstall the skill',
+                onClick: async () => {
+                    await API.uninstallSkill(currentAgentId, skillName);
+                    _invalidateSkillCaches();
+                    await loadSkills({ soft: true, forceCatalog: true });
+                },
+            }));
+        }
+
+        return actions.childElementCount ? actions : null;
+    }
+
+    function _registrySkillActions(skillName, skill) {
+        if (!skill.can_import) {
+            return null;
+        }
+        const actions = document.createElement('div');
+        actions.className = 'list-row-actions';
+        actions.appendChild(_buildActionButton({
+            label: 'Install',
+            pendingLabel: 'Installing…',
+            className: 'btn btn-sm btn-primary list-row-action',
+            errorMessage: 'Failed to install the skill',
+            onClick: async () => {
+                await API.installSkill(currentAgentId, skillName);
+                _invalidateSkillCaches();
+                await loadSkills({ soft: true, forceCatalog: true });
+            },
+        }));
+        return actions;
+    }
+
+    function _renderLocalSkillRow(skill) {
+        const shellRow = document.createElement('div');
+        shellRow.className = 'list-row-shell';
+        shellRow.dataset.key = `local:${skill.name || skill.display_name || ''}`;
+
+        const sub = document.createElement('span');
+        const fragments = [];
+        if (skill.description) {
+            fragments.push(String(skill.description));
+        }
+        if (skill.source_kind) {
+            fragments.push(String(skill.source_kind).replace(/_/g, ' '));
+        }
+        if (skill.lifecycle_status) {
+            fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
+        }
+        sub.textContent = fragments.join(' • ') || 'Runtime skill';
+
+        const row = UI.renderListRow({
+            label: skill.display_name || skill.name || '',
+            sublabelNode: sub,
+            badgeText: String(skill.source_kind || '').replace(/_/g, ' '),
+        });
+        shellRow.appendChild(row);
+
+        const actions = _localSkillActions(skill.name || '', skill);
+        if (actions) {
+            shellRow.appendChild(actions);
+        }
+        return shellRow;
+    }
+
+    function _renderRegistrySkillRow(skill) {
+        const shellRow = document.createElement('div');
+        shellRow.className = 'list-row-shell';
+        shellRow.dataset.key = `registry:${skill.name || skill.display_name || ''}`;
+
+        const sub = document.createElement('span');
+        const fragments = [];
+        if (skill.description) {
+            fragments.push(String(skill.description));
+        }
+        if (skill.publisher) {
+            fragments.push(String(skill.publisher));
+        }
+        if (skill.version) {
+            fragments.push(`v${skill.version}`);
+        }
+        sub.textContent = fragments.join(' • ') || 'Registry skill';
+
+        const row = UI.renderListRow({
+            label: skill.display_name || skill.name || '',
+            sublabelNode: sub,
+            badgeText: 'registry',
+        });
+        shellRow.appendChild(row);
+
+        const actions = _registrySkillActions(skill.name || '', skill);
+        if (actions) {
+            shellRow.appendChild(actions);
+        }
+        return shellRow;
+    }
+
     function renderList() {
         if (!currentAgentId) {
             UI.reconcileChildren(listEl, [
@@ -103,95 +296,148 @@ function renderSkillCatalog(container) {
             ]);
             return;
         }
-        let filtered = allSkills;
-        if (currentQ) {
-            filtered = allSkills.filter((skill) => {
-                const haystack = [
-                    skill.slug || skill.name || '',
-                    skill.description || skill.display_name || '',
-                ].join(' ').toLowerCase();
-                return haystack.includes(currentQ);
-            });
-        }
+        const queryText = _queryText();
+        const filteredCatalog = _filteredCatalogSkills();
+        const visibleRegistry = queryText.length >= 2 ? registrySkills : [];
 
-        if (!filtered.length) {
+        if (!filteredCatalog.length && !visibleRegistry.length) {
             UI.clearMemoizedRender(listEl);
-            UI.reconcileChildren(listEl, [
-                UI.renderEmptyState(allSkills.length ? 'No skills match this search.' : 'No runtime skills available.', true),
-            ]);
+            if (queryText.length >= 2 && registryError) {
+                UI.reconcileChildren(listEl, [
+                    UI.createErrorCard(`Registry search unavailable: ${registryError}`, () => loadSkills({ soft: true })),
+                ]);
+            } else {
+                UI.reconcileChildren(listEl, [
+                    UI.renderEmptyState(allSkills.length ? 'No skills match this search.' : 'No runtime skills available.', true),
+                ]);
+            }
             return;
         }
 
         UI.memoizedRender(listEl, {
             agentId: currentAgentId,
-            query: currentQ,
-            skills: filtered,
-        }, (state) => state.skills.map((skill) => {
-            const shellRow = document.createElement('div');
-            shellRow.className = 'list-row-shell';
-            shellRow.dataset.key = skill.slug || skill.name || skill.display_name || '';
-
-            const sub = document.createElement('span');
-            sub.textContent = skill.description || skill.display_name || 'Runtime skill';
-
-            const row = UI.renderListRow({
-                label: skill.slug || skill.name || '',
-                sublabelNode: sub,
-                badgeText: (skill.status || '').trim() || '',
-                badgeClass: skill.status ? 'badge-' + skill.status : '',
-            });
-            shellRow.appendChild(row);
-
-            const skillName = skill.slug || skill.name || '';
-            const isInstalled = ['installed', 'published', 'active'].includes(String(skill.status || '').trim());
-            const actionBtn = document.createElement('button');
-            actionBtn.type = 'button';
-            actionBtn.className = `btn btn-sm list-row-action${isInstalled ? ' btn-danger' : ' btn-primary'}`;
-            actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
-            actionBtn.addEventListener('click', async () => {
-                actionBtn.disabled = true;
-                actionBtn.textContent = isInstalled ? 'Uninstalling…' : 'Installing…';
-                try {
-                    if (isInstalled) {
-                        await API.uninstallSkill(currentAgentId, skillName);
-                    } else {
-                        await API.installSkill(currentAgentId, skillName);
-                    }
-                    loadSkills();
-                } catch (err) {
-                    actionBtn.disabled = false;
-                    actionBtn.textContent = isInstalled ? 'Uninstall' : 'Install';
-                    UI.reportError('Failed to update the skill', err, { context: 'Skill action failed' });
+            query: queryText,
+            localSkills: filteredCatalog,
+            registrySkills: visibleRegistry,
+            registryError: queryText.length >= 2 ? registryError : '',
+        }, (state) => {
+            const nodes = [];
+            if (state.localSkills.length) {
+                if (state.registrySkills.length) {
+                    nodes.push(_sectionLabel('Local skills', 'skills-local-heading'));
                 }
-            });
-            shellRow.appendChild(actionBtn);
-            return shellRow;
-        }), {
+                nodes.push(...state.localSkills.map((skill) => _renderLocalSkillRow(skill)));
+            }
+            if (state.registrySkills.length) {
+                if (state.localSkills.length) {
+                    nodes.push(_sectionLabel('Registry matches', 'skills-registry-heading'));
+                }
+                nodes.push(...state.registrySkills.map((skill) => _renderRegistrySkillRow(skill)));
+            }
+            if (state.registryError) {
+                const notice = UI.renderEmptyState(`Registry search unavailable. ${state.registryError}`, true);
+                notice.dataset.key = 'registry-search-error';
+                nodes.push(notice);
+            }
+            return nodes;
+        }, {
             signatureFn(state) {
                 return {
                     agentId: String(state.agentId || ''),
                     query: String(state.query || ''),
-                    skills: (state.skills || []).map((skill) => ({
-                        slug: String(skill.slug || skill.name || skill.display_name || ''),
-                        description: String(skill.description || skill.display_name || ''),
-                        status: String(skill.status || ''),
+                    localSkills: (state.localSkills || []).map((skill) => ({
+                        name: String(skill.name || skill.display_name || ''),
+                        description: String(skill.description || ''),
+                        sourceKind: String(skill.source_kind || ''),
+                        lifecycle: String(skill.lifecycle_status || ''),
+                        canUpdate: Boolean(skill.can_update),
+                        canUninstall: Boolean(skill.can_uninstall),
                     })),
+                    registrySkills: (state.registrySkills || []).map((skill) => ({
+                        name: String(skill.name || skill.display_name || ''),
+                        description: String(skill.description || ''),
+                        publisher: String(skill.publisher || ''),
+                        version: String(skill.version || ''),
+                        canImport: Boolean(skill.can_import),
+                    })),
+                    registryError: String(state.registryError || ''),
                 };
             },
         });
     }
 
-    async function loadSkills({ soft = false } = {}) {
+    async function loadSkills({ soft = false, forceCatalog = false } = {}) {
         if (!currentAgentId) {
             allSkills = [];
+            registrySkills = [];
+            registryError = '';
             renderList();
             return;
         }
+        const queryText = _queryText();
+        const shouldLoadCatalog = forceCatalog || !allSkills.length;
+        const hadVisibleState = listEl.childElementCount > 0;
+        let hasCachedView = false;
+        if (shouldLoadCatalog) {
+            const cachedCatalog = UI.peekCachedData(_skillCacheKey(currentAgentId));
+            if (cachedCatalog) {
+                const data = Array.isArray(cachedCatalog) ? cachedCatalog : (cachedCatalog.skills || []);
+                allSkills = Array.isArray(data) ? data : [];
+                hasCachedView = true;
+            }
+        }
+        if (queryText.length >= 2) {
+            const cachedSearch = UI.peekCachedData(_skillSearchCacheKey(currentAgentId, queryText));
+            if (cachedSearch) {
+                registrySkills = Array.isArray(cachedSearch.registry) ? cachedSearch.registry : [];
+                registryError = String(cachedSearch.registry_error || '');
+                hasCachedView = true;
+            }
+        } else {
+            registrySkills = [];
+            registryError = '';
+        }
+        if (hasCachedView) {
+            renderList();
+        }
+        if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
+            renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
+        }
         try {
-            const data = await API.listSkills(currentAgentId);
-            allSkills = Array.isArray(data) ? data : (data.skills || []);
+            if (shouldLoadCatalog) {
+                const data = await UI.loadCachedData(
+                    _skillCacheKey(currentAgentId),
+                    () => API.listSkills(currentAgentId),
+                    {
+                        ttlMs: SKILL_CACHE_TTL_MS,
+                        errorTtlMs: CACHE_ERROR_TTL_MS,
+                        forceRefresh: hasCachedView || forceCatalog,
+                    },
+                );
+                allSkills = Array.isArray(data) ? data : (data.skills || []);
+            }
+            if (queryText.length >= 2) {
+                const search = await UI.loadCachedData(
+                    _skillSearchCacheKey(currentAgentId, queryText),
+                    () => API.searchCatalogSkills(currentAgentId, queryText),
+                    {
+                        ttlMs: SKILL_SEARCH_CACHE_TTL_MS,
+                        errorTtlMs: CACHE_ERROR_TTL_MS,
+                        forceRefresh: hasCachedView,
+                    },
+                );
+                registrySkills = Array.isArray(search.registry) ? search.registry : [];
+                registryError = String(search.registry_error || '');
+            } else {
+                registrySkills = [];
+                registryError = '';
+            }
             renderList();
         } catch (err) {
+            if (hasCachedView || hadVisibleState) {
+                UI.reportError('Failed to refresh skills', err, { context: 'Skills refresh failed' });
+                return;
+            }
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
         }
@@ -202,14 +448,16 @@ function renderSkillCatalog(container) {
             agentSelect.disabled = true;
         }
         try {
-            const data = await API.listAgents({ limit: 200 });
+            const previousAgentId = currentAgentId;
+            const data = await API.listAgents({ limit: 100 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
             if (requested) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            await loadSkills({ soft: true });
+            const agentChanged = previousAgentId !== currentAgentId;
+            void loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });
         } catch (err) {
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);
@@ -219,8 +467,8 @@ function renderSkillCatalog(container) {
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
-            currentQ = searchInput.value.trim().toLowerCase();
-            renderList();
+            currentQ = searchInput.value.trim();
+            void loadSkills({ soft: true });
         }, 250);
     });
 

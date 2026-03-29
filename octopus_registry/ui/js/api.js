@@ -209,6 +209,8 @@ const API = (() => {
         // Skills
         listSkills: (agentId, opts = {}) =>
             request('GET', `${_agentPath(agentId)}/catalog/skills`, { params: opts }),
+        searchCatalogSkills: (agentId, query) =>
+            request('GET', `${_agentPath(agentId)}/catalog/skills/search`, { params: { q: query } }),
         getSkillDetail: (agentId, name) =>
             request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}`),
         installSkill: (agentId, name) =>

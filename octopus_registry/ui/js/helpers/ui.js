@@ -4,6 +4,7 @@ window.UI = (() => {
     let toastRegion = null;
     let activeCleanupBag = null;
     const memoizedSignatures = new WeakMap();
+    const dataCache = new Map();
 
     function esc(str) {
         if (str === null || str === undefined) return '';
@@ -380,6 +381,98 @@ window.UI = (() => {
         } catch {
             return String(value);
         }
+    }
+
+    function _cloneCachedValue(value) {
+        if (typeof structuredClone === 'function') {
+            try {
+                return structuredClone(value);
+            } catch {
+                // Fall through to JSON cloning for plain data payloads.
+            }
+        }
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return value;
+        }
+    }
+
+    function peekCachedData(key, { allowExpired = true } = {}) {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey) return null;
+        const entry = dataCache.get(normalizedKey);
+        if (!entry || entry.error) {
+            return null;
+        }
+        const fresh = entry.expiresAt > Date.now();
+        if (!allowExpired && !fresh) {
+            return null;
+        }
+        return _cloneCachedValue(entry.value);
+    }
+
+    async function loadCachedData(key, loader, { ttlMs = 30000, errorTtlMs = 5000, forceRefresh = false } = {}) {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey) {
+            return loader();
+        }
+        const now = Date.now();
+        const entry = dataCache.get(normalizedKey);
+        if (!forceRefresh && entry && !entry.error && entry.expiresAt > now) {
+            return _cloneCachedValue(entry.value);
+        }
+        if (!forceRefresh && entry && entry.error && entry.expiresAt > now) {
+            throw entry.error;
+        }
+        if (entry && entry.inflight) {
+            const result = await entry.inflight;
+            return _cloneCachedValue(result);
+        }
+        const inflight = Promise.resolve().then(loader);
+        const pending = {
+            expiresAt: 0,
+            value: null,
+            error: null,
+            inflight,
+        };
+        dataCache.set(normalizedKey, pending);
+        try {
+            const value = await inflight;
+            if (dataCache.get(normalizedKey) === pending) {
+                dataCache.set(normalizedKey, {
+                    expiresAt: Date.now() + Math.max(0, ttlMs),
+                    value: _cloneCachedValue(value),
+                    error: null,
+                    inflight: null,
+                });
+            }
+            return _cloneCachedValue(value);
+        } catch (error) {
+            if (dataCache.get(normalizedKey) === pending) {
+                dataCache.set(normalizedKey, {
+                    expiresAt: Date.now() + Math.max(0, errorTtlMs),
+                    value: null,
+                    error,
+                    inflight: null,
+                });
+            }
+            throw error;
+        }
+    }
+
+    function invalidateCachedData(prefixes) {
+        const values = Array.isArray(prefixes) ? prefixes : [prefixes];
+        values
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+            .forEach((prefix) => {
+                Array.from(dataCache.keys()).forEach((key) => {
+                    if (key === prefix || key.startsWith(prefix)) {
+                        dataCache.delete(key);
+                    }
+                });
+            });
     }
 
     function subscribeWithRefresh(cleanups, topic, loader, delay = 350) {
@@ -839,6 +932,9 @@ window.UI = (() => {
         visibleLabel,
         renderPagination,
         dataSignature,
+        peekCachedData,
+        loadCachedData,
+        invalidateCachedData,
         subscribeWithRefresh,
         createSegmentedControl,
         createCursorPaginator,

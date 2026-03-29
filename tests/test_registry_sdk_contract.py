@@ -675,6 +675,69 @@ def test_sdk_client_disconnect_and_fail_delivery_map_to_existing_endpoints():
     assert calls[1][1].endswith("/v1/agents/ack")
 
 
+def test_sdk_client_management_result_keeps_discriminator_in_payload():
+    from unittest.mock import patch
+
+    from octopus_sdk.registry.client import RegistryClient
+    from octopus_sdk.registry.management import (
+        ListCatalogSkillsResult,
+        ManagementResult,
+    )
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+
+        class FakeResp:
+            status_code = 200
+            content = (
+                b'{"request_id":"request-1","agent_id":"agent-1","success":true,'
+                b'"payload":{"operation":"list_catalog_skills","items":[]},'
+                b'"error_code":"","error_detail":"","completed_at":"2026-03-29T00:00:00+00:00"}'
+            )
+            text = content.decode()
+
+            def json(self):
+                return {
+                    "request_id": "request-1",
+                    "agent_id": "agent-1",
+                    "success": True,
+                    "payload": {
+                        "operation": "list_catalog_skills",
+                        "items": [],
+                    },
+                    "error_code": "",
+                    "error_detail": "",
+                    "completed_at": "2026-03-29T00:00:00+00:00",
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    result = ManagementResult(
+        request_id="request-1",
+        agent_id="agent-1",
+        success=True,
+        payload=ListCatalogSkillsResult(),
+    )
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        returned = asyncio.run(client.management_result("request-1", result))
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1/agents/management-requests/request-1/result")
+    assert captured["json"]["payload"]["operation"] == "list_catalog_skills"
+    assert returned.payload is not None
+    assert returned.payload.operation == "list_catalog_skills"
+
+
 def test_sdk_client_renew_enrollment_and_heartbeat_return_typed_models():
     from unittest.mock import patch
     from octopus_sdk.registry.client import RegistryClient

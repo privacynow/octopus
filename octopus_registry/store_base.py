@@ -671,6 +671,7 @@ class AbstractRegistryStore(Protocol):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
+        completed_since_iso: str = "",
     ) -> list[TaskRecord]:
         """Return routed tasks in UI-ready form with offset-based pagination."""
 
@@ -710,9 +711,6 @@ class AbstractRegistryStore(Protocol):
 
     def export_conversation(self, conversation_id: str) -> str:
         """Export conversation as markdown events."""
-
-    def purge_old_events(self, older_than_days: int = 30) -> int:
-        """Delete events older than the given number of days. Return count deleted."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

@@ -128,7 +128,7 @@ function renderGuidanceEditor(container) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            await loadGuidance();
+            void loadGuidance();
         } catch (err) {
             UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);

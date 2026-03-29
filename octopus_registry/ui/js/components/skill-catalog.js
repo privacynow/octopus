@@ -209,7 +209,7 @@ function renderSkillCatalog(container) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            await loadSkills({ soft: true });
+            void loadSkills({ soft: true });
         } catch (err) {
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);

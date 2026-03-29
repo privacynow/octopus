@@ -76,6 +76,21 @@ def test_management_views_request_agent_pages_with_supported_limit() -> None:
     assert "API.listAgents({ limit: 200 })" not in guidance_editor
 
 
+def test_management_views_do_not_block_route_readiness_on_slow_management_fetches() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "void loadSkills({ soft: true });" in skill_catalog
+    assert "await loadSkills({ soft: true });" not in skill_catalog
+    assert "void loadGuidance();" in guidance_editor
+    assert "await loadGuidance();" not in guidance_editor
+
+
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (

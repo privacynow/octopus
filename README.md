@@ -1,8 +1,9 @@
 # Octopus Agent Platform
 
-Octopus runs Claude or Codex behind Telegram, with a local registry that gives
-operators a browser UI for conversations, tasks, approvals, usage, skills, and
-guidance.
+Octopus runs Claude or Codex behind Telegram and adds a local registry so
+operators can manage bots, monitor work, review approvals, inspect
+conversations, route tasks, manage skills, and edit provider guidance from a
+browser UI.
 
 The main entrypoint is:
 
@@ -10,8 +11,8 @@ The main entrypoint is:
 ./octopus
 ```
 
-`./octopus` sets up bots, manages local deployment state under `.deploy/`,
-starts and reconnects the local registry stack, and handles day-to-day operator
+`./octopus` manages local deployment state under `.deploy/`, starts and
+reconnects the local registry stack, and handles normal operator lifecycle
 work.
 
 ## Quick Start
@@ -28,21 +29,28 @@ cd ~/octopus
 Setup offers three modes:
 
 - **Autonomous**: private bot, no approval gates
-- **Safe**: default; execution goes through approval mode
+- **Safe**: default; requests go through approval mode
 - **Advanced**: manual role, tags, description, default skills, allowed users,
   working dir, and timeout settings
 
-## What End Users See
+## How People Use Octopus
+
+Octopus has two primary user roles:
+
+- **end users** interact with the bot in Telegram
+- **operators** manage bots and work through the CLI and registry UI
+
+### End Users
 
 For most users, Octopus is just a Telegram chat bot.
 
-- Send a normal message to ask for work.
-- Use `/help` for command discovery.
-- If approval mode is enabled, the bot will stop for review before executing.
-- If routed work is used, the parent reply still comes back into the same
-  Telegram chat.
+- send a normal message to ask for work
+- use `/help` for command discovery
+- if approval mode is enabled, the bot pauses for review before executing
+- if routed work is used, the parent reply still comes back into the same
+  Telegram chat
 
-Important user-facing commands:
+Common user-facing commands:
 
 ```text
 /help
@@ -54,18 +62,14 @@ Important user-facing commands:
 /skills clear
 ```
 
-The Telegram command help is the current call to action for skills. The bot
-already tells users to use `/skills list` and `/skills add <name>` when skills
-are relevant.
-
-## What Operators Use
+### Operators
 
 Operators work through two surfaces:
 
 - the `./octopus` CLI
 - the local registry UI at `/ui`
 
-Core commands:
+Core CLI commands:
 
 ```bash
 ./octopus
@@ -79,7 +83,7 @@ Core commands:
 ./octopus clean
 ```
 
-Useful registry UI routes:
+Core registry UI routes:
 
 - **Dashboard**: open conversations, running work, recent completions,
   follow-up items, and agent health
@@ -94,23 +98,24 @@ Useful registry UI routes:
 
 ## Skills And Guidance
 
-These two features are related, but they are not the same thing.
+Skills and guidance are related, but they live at different layers of the
+system.
 
 ### Builtin Skills
 
-Builtin skills are part of the bot runtime catalog. They do not need to be
+Builtin skills are part of the bot’s runtime catalog. They do not need to be
 installed from a remote registry before use.
 
-They can be used in two ways:
+Builtin skills can be enabled in two ways:
 
-- **default-on for every conversation** via `BOT_SKILLS`
-- **activated per conversation** in Telegram with `/skills add <name>`
+- **default-on for all new conversations** via `BOT_SKILLS`
+- **per conversation in Telegram** with `/skills add <name>`
 
-User-facing skill flow:
+Typical user flow:
 
 1. `/skills list` to see what is available
-2. `/skills info <name>` if the user needs details
-3. `/skills add <name>` to activate it for the current conversation
+2. `/skills info <name>` if details are needed
+3. `/skills add <name>` to activate the skill in the current chat
 4. `/skills setup <name>` if the skill needs credentials
 5. `/skills remove <name>` or `/skills clear` to deactivate
 
@@ -119,49 +124,42 @@ confirmation before enabling the skill.
 
 ### Imported Registry Skills
 
-Registry-imported skills are different from builtin skills.
+Imported skills are different from builtin skills.
 
-- They come from a remote skill registry, not the local builtin catalog.
-- They are only installable if the bot is configured with a registry source.
-- After install, they are still activated the same way as builtin skills:
-  `/skills add <name>`.
+- they come from a remote skill registry
+- they must be installed before they can be activated in a conversation
+- after install, they are activated the same way as builtin skills:
+  `/skills add <name>`
 
-For true registry installs to work, the bot must have a configured
-`BOT_REGISTRY_URL`. Without that, registry search may still display local
-catalog information, but install actions will not be usable.
+For real registry installs to work, the bot must have a configured
+`BOT_REGISTRY_URL`.
 
-### Skills In The Registry UI
+### Where Skill Actions Happen
 
-The browser **Skills** page is currently a catalog and lifecycle surface, not a
-conversation activation surface.
+Octopus separates catalog management from conversation activation.
 
-What it does well:
+| Surface | Use it for |
+|---|---|
+| Telegram `/skills ...` | activate or remove skills in the current conversation |
+| Browser **Skills** page | browse the runtime catalog, search the registry, install/update/uninstall imported skills, and manage skill lifecycle state |
+| `BOT_SKILLS` config | turn selected skills on by default for every conversation |
 
-- shows the local runtime catalog
-- shows registry search matches
-- exposes install, update, and uninstall for the relevant rows
-
-What it does **not** currently do:
-
-- it does not activate a skill into a specific conversation
-
-Conversation-level skill activation still happens through Telegram commands,
-not through the browser UI.
+The browser **Skills** page is not the place where a user activates a skill
+into one specific chat. That remains a Telegram conversation action.
 
 ### Guidance
 
-Guidance is operator-managed provider instruction state, not an end-user chat
-feature.
+Guidance is provider-level instruction state, not a conversation skill.
 
-It controls provider-specific system guidance such as the effective Claude or
-Codex instruction body.
+It is operator-managed and controls the effective instruction body for a given
+provider such as Claude or Codex.
 
-It can be managed through:
+Guidance can be managed through:
 
 - Telegram `/guidance ...` commands
 - the browser **Guidance** page
 
-Typical guidance flow:
+Typical operator flow:
 
 1. preview the current provider guidance
 2. edit or save a draft
@@ -185,7 +183,7 @@ Important URLs and env values:
 - bot-to-registry URL inside Docker: `http://registry:8787`
 - operator login secret: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
 
-The runtime still supports multiple registry records through indexed
+The runtime supports multiple registry records through indexed
 `BOT_AGENT_REGISTRY_<n>_*` env vars, but the `./octopus` CLI is intentionally
 local-registry-first.
 

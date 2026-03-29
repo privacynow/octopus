@@ -1,10 +1,10 @@
 # Architecture
 
 This document describes the current system shape in code: the deployment CLI,
-the application/runtime, the registry service and SPA, and the shared SDK that
+the application runtime, the registry service and SPA, and the shared SDK that
 binds them together.
 
-The SDK-4 shape is now explicit:
+The codebase is split into four primary packages:
 
 - `app/` is the shipped Telegram bot runtime and deployment CLI
 - `octopus_registry/` is the standalone management plane
@@ -154,8 +154,8 @@ shipped Telegram implementation in this repo is stricter:
 - those connections must collectively provide full participant coverage across
   `channel` and `coordination`
 
-`app/main.py` is now a thin runnable entrypoint. The current runtime handoff is
-split by responsibility:
+`app/main.py` is a thin runnable entrypoint. The runtime handoff is split by
+responsibility:
 
 - `app/runtime/startup.py`
   - startup validation
@@ -179,8 +179,8 @@ The registry server and bot runtime are separate deployable processes. The bot
 does not expose its own management HTTP API; the registry is the management
 plane and talks to connected bots over the SDK management protocol.
 
-Management reads that back the `Skills` and `Guidance` UI routes now use
-layered caching:
+Read-heavy management views such as `Skills` and `Guidance` use layered
+caching:
 
 - `octopus_registry.ingress`
   - keeps a short-lived in-process cache for catalog list/search reads and
@@ -255,7 +255,7 @@ contract outside the SDK.
 
 ### Workflow Composition And Testing Fence
 
-The SDK now owns workflow composition directly.
+The SDK owns workflow composition directly.
 
 - `octopus_sdk.composition.WorkflowComposer`
   - assembles the full workflow graph from injected ports
@@ -423,7 +423,7 @@ concrete implementations.
 
 ### Composition Root
 
-`app/main.py` is now a thin launcher. The current startup sequence is:
+`app/main.py` is a thin launcher. The startup sequence is:
 
 1. parse CLI flags and load config in `app/main.py`
 2. run startup validation/doctor/provider-health guards in `app/runtime/startup.py`
@@ -525,7 +525,7 @@ do not expose their own browser UI or management API.
 | Realtime API | `WS /v1/ws` for typed `event`, `heartbeat`, `progress`, and `invalidate` envelopes |
 | Operator SPA | browser UI under `/ui` |
 
-Important current behavior:
+Important behavior:
 
 - list endpoints use cursor/limit/has_more pagination
 - agent list supports server-side `q` and `state`
@@ -539,8 +539,27 @@ Important current behavior:
 
 ### Skills And Guidance Surfaces
 
-The current system has three distinct skill/guidance surfaces, and they should
-not be conflated:
+The system has three distinct skill surfaces plus a separate guidance surface.
+They should not be conflated.
+
+```mermaid
+flowchart LR
+    user["End user"] --> tg["Telegram chat"]
+    operator["Operator"] --> ui["Registry UI"]
+    operator --> cli["octopus CLI"]
+
+    tg --> cmd["/skills and /guidance commands"]
+    ui --> skills_ui["Skills page"]
+    ui --> guidance_ui["Guidance page"]
+
+    cmd --> activation["Conversation skill activation"]
+    skills_ui --> catalog["Catalog and lifecycle management"]
+    guidance_ui --> guidance["Provider guidance lifecycle"]
+
+    activation --> runtime["Runtime skill catalog"]
+    catalog --> runtime
+    guidance --> provider["Provider instruction state"]
+```
 
 - **runtime catalog**
   - builtin and imported runtime skills exposed by the bot
@@ -549,14 +568,13 @@ not be conflated:
 - **conversation skill activation**
   - per-conversation skill enable/disable state
   - backed by conversation skill activation workflows and management endpoints
-  - currently exposed to end users through Telegram commands such as
+  - exposed to end users through Telegram commands such as
     `/skills add <name>` and `/skills remove <name>`
 - **operator catalog/lifecycle UI**
   - browser `Skills` page and related lifecycle endpoints
   - shows catalog rows, registry search matches, install/update/uninstall, and
     custom-skill lifecycle state
-  - does not currently provide a browser CTA for activating a skill into a
-    specific conversation
+  - manages the catalog, not per-conversation activation
 
 Provider guidance is separate again:
 
@@ -571,24 +589,25 @@ The websocket manager in `octopus_registry/ws.py` uses typed SDK
 envelopes from `octopus_sdk.realtime` and pushes explicit topics, not wildcard
 subscriptions.
 
-Current topic families:
+Topic families:
 
 - `conversation:<id>`
 - `agent:<id>`
 - collection topics such as `summary`, `agents`, `conversations`, `tasks`, `approvals`, `usage`
 
-Current realtime envelope types:
+Realtime envelope types:
 
 - `event`
 - `heartbeat`
 - `progress`
 - `invalidate`
 
-The SPA is a vanilla JS application in `octopus_registry/ui/` and subscribes to explicit topics
-through `octopus_registry/ui/js/ws.js`. Dashboard and list refreshes are driven by invalidation
-topics; conversation detail also renders progress updates. Mounted routes debounce websocket
-bursts, skip unchanged payloads with view-level signatures, and suppress background-tab refresh
-churn instead of rebuilding visible DOM on every invalidate event.
+The SPA is a vanilla JS application in `octopus_registry/ui/` and subscribes
+to explicit topics through `octopus_registry/ui/js/ws.js`. Dashboard and list
+refreshes are driven by invalidation topics; conversation detail also renders
+progress updates. Mounted routes debounce websocket bursts, skip unchanged
+payloads with view-level signatures, and suppress background-tab refresh churn
+instead of rebuilding visible DOM on every invalidate event.
 
 Signature rule:
 
@@ -656,8 +675,7 @@ Important SPA primitives:
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app
 
-The current component split matches operator jobs rather than raw resource
-types:
+The component split follows operator jobs rather than raw resource types:
 
 - dashboard: summary + immediate follow-up + recent completed work
 - conversations: start/reopen work and inspect active threads
@@ -671,10 +689,10 @@ Recipient-side routed work is also projected as `task_thread` conversations and
 rendered separately from direct conversations in agent and conversation lists,
 so delegated work is visible without pretending it is ordinary chat history.
 The registry store writes task-status events to both the origin parent
-conversation and the recipient task thread, and the websocket layer now
+conversation and the recipient task thread, and the websocket layer
 broadcasts both streams so M2-side task-thread detail stays live.
 
-The route shells also use one shared layout vocabulary:
+The route shells use one shared layout vocabulary:
 
 - compact page header
 - `admin-shell`
@@ -682,7 +700,7 @@ The route shells also use one shared layout vocabulary:
 - `list-shell`
 - `list-container`
 
-CSS spacing/padding is now tokenized in `octopus_registry/ui/css/main.css`
+CSS spacing and padding are tokenized in `octopus_registry/ui/css/main.css`
 (`--card-padding`, `--panel-padding`, `--compact-card-padding`, shared
 `--space-*` gaps, shared row paddings) so empty states and list spacing render
 the same way across agents, conversations, tasks, approvals, and nested
@@ -876,8 +894,8 @@ shape is:
     - summary/usage/approvals
 
 The backend entry points still own connection lifecycles and backend-native
-write/transaction helpers, but shared registry business logic is now extracted by domain
-instead of being duplicated wholesale between SQLite and Postgres.
+write and transaction helpers, but shared registry business logic is extracted
+by domain instead of being duplicated wholesale between SQLite and Postgres.
 
 ## Architecture Rules
 

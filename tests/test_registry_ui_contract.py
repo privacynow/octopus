@@ -63,6 +63,9 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
 
 def test_management_views_request_agent_pages_with_supported_limit() -> None:
     repo_root = Path(__file__).resolve().parents[1]
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
     ).read_text(encoding="utf-8")
@@ -74,6 +77,22 @@ def test_management_views_request_agent_pages_with_supported_limit() -> None:
     assert "API.listAgents({ limit: 200 })" not in skill_catalog
     assert "API.listAgents({ limit: 100 })" in guidance_editor
     assert "API.listAgents({ limit: 200 })" not in guidance_editor
+    assert "searchCatalogSkills: (agentId, query)" in api_js
+
+
+def test_skill_catalog_only_offers_install_for_registry_search_hits() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.searchCatalogSkills(currentAgentId, queryText)" in skill_catalog
+    assert "_renderRegistrySkillRow" in skill_catalog
+    assert "_renderLocalSkillRow" in skill_catalog
+    assert "skill.status" not in skill_catalog
+    assert "can_import" in skill_catalog
+    assert "can_uninstall" in skill_catalog
+    assert "can_update" in skill_catalog
 
 
 def test_management_views_do_not_block_route_readiness_on_slow_management_fetches() -> None:
@@ -85,14 +104,14 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
     ).read_text(encoding="utf-8")
 
-    assert "await loadSkills(" not in skill_catalog
-    assert "await loadGuidance(" not in guidance_editor
+    assert "void loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" in skill_catalog
+    assert "await loadSkills({ soft: soft && !agentChanged, forceCatalog: agentChanged || !allSkills.length });" not in skill_catalog
+    assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
+    assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
     assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState('Loading skills…');" in skill_catalog
-    assert "void loadSkills({ soft: soft && !agentChanged });" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
-    assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
 
 
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:

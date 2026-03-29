@@ -2,6 +2,7 @@
 
 import threading
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.providers import ProviderStateRecord
 from app import storage_postgres
@@ -82,6 +83,50 @@ def test_save_session_then_exists(postgres_truncated):
             default_session("codex", _provider_state_factory("tg:test"), "off"),
         )
         assert storage_postgres.session_exists(conn, conversation_key) is True
+
+
+def test_postgres_deferred_notifications_flush_and_expire(postgres_truncated):
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        storage_postgres.enqueue_deferred_notification(
+            conn,
+            DeferredNotification(
+                notification_id="notif-live",
+                target_agent_id="agent-1",
+                actor_key="telegram:42",
+                content="live",
+                created_at="2026-03-28T00:00:00+00:00",
+                expires_at="2026-03-29T00:00:00+00:00",
+            ),
+        )
+        storage_postgres.enqueue_deferred_notification(
+            conn,
+            DeferredNotification(
+                notification_id="notif-stale",
+                target_agent_id="agent-1",
+                actor_key="telegram:42",
+                content="stale",
+                created_at="2026-03-28T00:00:00+00:00",
+                expires_at="2026-03-28T00:00:01+00:00",
+            ),
+        )
+        assert storage_postgres.expire_stale_deferred_notifications(
+            conn,
+            now="2026-03-28T00:00:02+00:00",
+        ) == 1
+        delivered = storage_postgres.flush_deferred_notifications(
+            conn,
+            target_agent_id="agent-1",
+            actor_key="telegram:42",
+            now="2026-03-28T12:00:00+00:00",
+        )
+        assert [item.notification_id for item in delivered] == ["notif-live"]
+        assert storage_postgres.flush_deferred_notifications(
+            conn,
+            target_agent_id="agent-1",
+            actor_key="telegram:42",
+        ) == []
 
 
 def test_delete_session(postgres_truncated):

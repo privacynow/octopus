@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "octopus_sdk/tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v -n 6"

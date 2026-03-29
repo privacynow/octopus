@@ -21,6 +21,7 @@ from app.credential_validation import validate_credential
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.identity import (
     telegram_conversation_ref,
+    telegram_chat_id_from_ref,
     telegram_numeric_id,
 )
 from octopus_sdk.bot_runtime import ExecutionServices
@@ -85,6 +86,7 @@ class _TelegramSessionRuntime:
             config=config,
             provider_name=provider_name,
             trust_tier=trust_tier,
+            catalog=self.state.services.workflows.runtime_skills.catalog,
         )
 
 
@@ -218,6 +220,7 @@ def resolve_context(
         config=runtime.config,
         provider_name=runtime.provider.name,
         trust_tier=trust_tier,
+        catalog=runtime.services.workflows.runtime_skills.catalog,
     )
 
 
@@ -406,12 +409,28 @@ def execution_channel_metadata(
         descriptor = dispatcher.descriptor_for_ref(resolved_ref)
     from octopus_sdk.identity import telegram_conversation_key, parse_conversation_key, telegram_actor_key
 
-    if isinstance(chat_id, int):
-        conv_key = telegram_conversation_key(chat_id)
+    transport_hint = str(
+        getattr(message, "transport", "")
+        or getattr(message, "source", "")
+        or ""
+    ).strip()
+    resolved_chat_id = chat_id if isinstance(chat_id, int) else None
+    if transport_hint == "telegram" and resolved_chat_id is None:
+        resolved_chat_id = telegram_chat_id_from_ref(resolved_ref)
+    if resolved_chat_id is None and isinstance(chat_id, str) and chat_id.isdigit():
+        resolved_chat_id = int(chat_id)
+    explicit_registry = transport_hint == "registry" or resolved_ref.startswith("registry:")
+
+    if (transport_hint == "telegram" or resolved_chat_id is not None) and not explicit_registry:
+        conv_key = (
+            telegram_conversation_key(resolved_chat_id)
+            if resolved_chat_id is not None
+            else parse_conversation_key(chat_id)
+        )
         origin = "telegram"
     else:
         conv_key = parse_conversation_key(chat_id)
-        origin = "registry"
+        origin = transport_hint or "registry"
 
     # Resolve target_agent_id scoped by authority — no guessing
     authority_ref = getattr(message, "authority_ref", "")
@@ -430,8 +449,9 @@ def execution_channel_metadata(
         if _user is not None:
             actor = telegram_actor_key(getattr(_user, "id", 0))
 
-    external_conversation_ref = str(chat_id)
-    if origin == "registry":
+    if origin == "telegram" and resolved_chat_id is not None:
+        external_conversation_ref = str(resolved_chat_id)
+    else:
         external_conversation_ref = str(
             getattr(message, "external_id", "")
             or getattr(message, "external_conversation_ref", "")

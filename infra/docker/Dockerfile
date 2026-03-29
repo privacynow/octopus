@@ -12,7 +12,6 @@ COPY app ./app
 COPY octopus_sdk ./octopus_sdk
 COPY skills ./skills
 COPY scripts ./scripts
-COPY ui ./ui
 
 # Default: run the bot (overridden by compose for one-shot db commands)
 ENV PYTHONUNBUFFERED=1

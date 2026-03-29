@@ -10,7 +10,7 @@ from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
 from app.runtime.services import BotServices
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.identity import conversation_key_for_ref, parse_actor_key
 from octopus_sdk.transport import TransportDescriptor

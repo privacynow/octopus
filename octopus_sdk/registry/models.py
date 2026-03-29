@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Literal, NewType
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, field_validator, model_validator
 
 from octopus_sdk.realtime import ConversationProgressUpdate
 
@@ -122,6 +122,7 @@ class AgentCard(RegistryRecordModel):
     current_capacity: int = 0
     max_capacity: int = 1
     channel_capabilities: list[str] = Field(default_factory=list)
+    management_capabilities: list[str] = Field(default_factory=list)
     version: str = "dev"
 
 
@@ -175,6 +176,7 @@ class EnrollmentResult(RegistryRecordModel):
     agent_token: str = ""
     slug: str = ""
     poll_cursor: str = "0"
+    registry_epoch: str = ""
 
 
 class AgentRegisterRequest(RegistryRecordModel):
@@ -211,6 +213,7 @@ class AgentRecord(RegistryRecordModel):
     current_capacity: int = 0
     max_capacity: int = 1
     channel_capabilities: list[str] = Field(default_factory=list)
+    management_capabilities: list[str] = Field(default_factory=list)
     version: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -251,6 +254,8 @@ class TaskRecord(RegistryRecordModel):
     title: str = ""
     instructions: str = ""
     parent_conversation_id: str = ""
+    recipient_conversation_id: str = ""
+    origin_transport_ref: str = ""
     origin_agent_id: str = ""
     origin_display_name: str = ""
     target_agent_id: str = ""
@@ -264,12 +269,14 @@ class TaskRecord(RegistryRecordModel):
     created_at: str = ""
     updated_at: str = ""
     inserted_events: list[EventRecord] = Field(default_factory=list)
+    recipient_inserted_events: list[EventRecord] = Field(default_factory=list)
 
 
 class ConversationRecord(RegistryRecordModel):
     conversation_id: str = ""
     target_agent_id: str = ""
     title: str = ""
+    conversation_type: str = "conversation"
     origin_channel: str = ""
     external_conversation_ref: str = ""
     status: str = ""
@@ -295,6 +302,7 @@ class DeliveryRecord(RegistryRecordModel):
 class DeliveryPollResult(RegistryRecordModel):
     deliveries: list[DeliveryRecord] = Field(default_factory=list)
     next_cursor: str = "0"
+    registry_epoch: str = ""
 
 
 class AckResult(RegistryRecordModel):
@@ -420,6 +428,9 @@ class RoutedTaskRequest(RegistryRecordModel):
 
     routed_task_id: str
     parent_conversation_id: str
+    origin_transport_ref: str = ""
+    authorized_actor_key: str = ""
+    external_conversation_ref: str = ""
     origin_agent_id: str
     target_agent_id: str
     title: str
@@ -450,6 +461,14 @@ class RoutedTaskRequest(RegistryRecordModel):
         if not text:
             raise ValueError(f"{info.field_name} must not be blank")
         return text
+
+    @model_validator(mode="after")
+    def default_external_conversation_ref(self) -> "RoutedTaskRequest":
+        external_ref = str(self.external_conversation_ref or "").strip()
+        if not external_ref:
+            external_ref = f"routed-task:{self.routed_task_id}"
+        object.__setattr__(self, "external_conversation_ref", external_ref)
+        return self
 
 
 class TargetSelector(RegistryRecordModel):
@@ -515,6 +534,8 @@ class DelegationIntent(RegistryRecordModel):
 
     title: str = ""
     resume_instruction: str = ""
+    origin_transport_ref: str = ""
+    authorized_actor_key: str = ""
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 
@@ -524,6 +545,8 @@ class DirectAssignmentRequest(RegistryRecordModel):
     selector: TargetSelector
     title: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
+    origin_transport_ref: str = ""
+    authorized_actor_key: str = ""
     message_text: str = ""
     priority: str = "normal"
     requested_capabilities: list[str] = Field(default_factory=list)
@@ -557,6 +580,8 @@ class DelegateTasksActionPayload(RegistryRecordModel):
 
     title: str = ""
     resume_instruction: str = ""
+    origin_transport_ref: str = ""
+    authorized_actor_key: str = ""
     tasks: list[DelegationTaskDraft] = Field(..., min_length=1)
 
 

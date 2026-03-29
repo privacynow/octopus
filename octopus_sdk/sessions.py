@@ -187,6 +187,8 @@ class DelegatedTask:
 class PendingDelegation:
     """Parent-side delegated work waiting for child results."""
     conversation_ref: str
+    origin_conversation_key: str = ""
+    actor_key: str = ""
     proposal_id: str = ""
     title: str = ""
     resume_instruction: str = ""

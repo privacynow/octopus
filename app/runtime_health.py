@@ -16,7 +16,7 @@ from octopus_sdk.registry.models import RuntimeHealthPayload
 from octopus_sdk.sessions import session_from_dict
 from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
 from app.storage import list_sessions, load_session
-from app.time_utils import age_seconds, utc_now
+from octopus_sdk.time_utils import age_seconds, utc_now
 
 if TYPE_CHECKING:
     from app.config import BotConfig

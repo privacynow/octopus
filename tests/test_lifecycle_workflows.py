@@ -11,12 +11,8 @@ from app.credential_store import init_credential_store_for_config
 from octopus_sdk.identity import telegram_actor_key
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
+from app.runtime import composition
 from app.storage import close_db, default_session, ensure_data_dirs
-from app.workflows.provider_guidance.management import get_provider_guidance_management_use_cases
-from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases
-from app.workflows.runtime_skills.activation import get_runtime_skill_activation_use_cases
-from app.workflows.runtime_skills.approval import get_runtime_skill_approval_use_cases
-from app.workflows.runtime_skills.authoring import get_runtime_skill_authoring_use_cases
 from tests.support.config_support import make_config
 
 
@@ -27,6 +23,7 @@ def _init_runtime_content(tmp_path: Path):
     cfg = make_config(data_dir=data_dir, registry_url="https://registry.example.test/index.json")
     init_content_store_for_config(cfg)
     init_credential_store_for_config(cfg)
+    composition.workflows.cache_clear()
     return cfg, data_dir
 
 
@@ -34,9 +31,10 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        authoring = get_runtime_skill_authoring_use_cases()
-        approval = get_runtime_skill_approval_use_cases()
-        activation = get_runtime_skill_activation_use_cases()
+        flows = composition.workflows()
+        authoring = flows.runtime_skills.authoring
+        approval = flows.runtime_skills.approval
+        activation = flows.runtime_skills.activation
 
         created = authoring.create_draft("workflow-draft", owner_actor=actor_key)
         assert created.ok is True
@@ -105,7 +103,7 @@ def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: P
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        authoring = get_runtime_skill_authoring_use_cases()
+        authoring = composition.workflows().runtime_skills.authoring
 
         invalid = authoring.create_draft("Bad Name", owner_actor=actor_key)
         duplicate = authoring.create_draft("existing-skill", owner_actor=actor_key)
@@ -127,8 +125,9 @@ def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: P
 def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
-        management = get_provider_guidance_management_use_cases()
-        preview = get_provider_guidance_use_cases()
+        flows = composition.workflows()
+        management = flows.provider_guidance.management
+        preview = flows.provider_guidance.preview
 
         original = preview.preview("claude", role="", active_skills=[], compact_mode=False)
         assert "Claude Runtime Guidance" in original.effective_guidance
@@ -169,8 +168,9 @@ def test_runtime_skill_lifecycle_replay_and_repair_paths(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        authoring = get_runtime_skill_authoring_use_cases()
-        approval = get_runtime_skill_approval_use_cases()
+        flows = composition.workflows()
+        authoring = flows.runtime_skills.authoring
+        approval = flows.runtime_skills.approval
         store = get_content_store()
 
         authoring.create_draft("repair-skill", owner_actor=actor_key)
@@ -223,7 +223,7 @@ def test_runtime_skill_lifecycle_replay_and_repair_paths(tmp_path: Path):
 def test_provider_guidance_lifecycle_replay_and_repair_paths(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
-        management = get_provider_guidance_management_use_cases()
+        management = composition.workflows().provider_guidance.management
         store = get_content_store()
 
         management.edit_draft(
@@ -262,7 +262,7 @@ def test_sqlite_atomic_skill_transition_rolls_back_when_insert_fails(tmp_path: P
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(7)
-        authoring = get_runtime_skill_authoring_use_cases()
+        authoring = composition.workflows().runtime_skills.authoring
         store = get_content_store()
 
         authoring.create_draft("atomic-skill", owner_actor=actor_key)

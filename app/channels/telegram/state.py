@@ -15,12 +15,12 @@ from app.config import BotConfig
 from octopus_sdk.identity import telegram_conversation_key
 from octopus_sdk.transport import BotRuntimeHandle
 from octopus_sdk.providers import Provider
-from app.ratelimit import RateLimiter
 from app.runtime.work_admission import build_local_inbound_submitter
 from app.runtime.services import BotServices
+from octopus_sdk.ratelimit import RateLimiter
 
 if TYPE_CHECKING:
-    from app.runtime.transport_dispatcher import TransportDispatcher
+    from octopus_sdk.transport_dispatcher import TransportDispatcher
 
 
 def make_boot_id() -> str:

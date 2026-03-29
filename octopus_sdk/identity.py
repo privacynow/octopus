@@ -21,6 +21,14 @@ from uuid import uuid4
 from octopus_sdk.config import BotConfigBase
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_KNOWN_TRANSPORT_REF_PREFIXES = frozenset({
+    "telegram",
+    "slack",
+    "registry",
+    "stub",
+    "discord",
+    "whatsapp",
+})
 log = logging.getLogger(__name__)
 
 
@@ -43,6 +51,18 @@ def _prefixed(prefix: str, value: int | str) -> str:
     if raw.startswith(f"{prefix}:"):
         return raw
     return f"{prefix}:{raw}"
+
+
+def event_id_for_conversation_key(conversation_key: str, raw_event_id: str | int) -> str:
+    """Prefix a bare event id to match the conversation-key namespace."""
+
+    token = str(raw_event_id).strip()
+    if not token or ":" in token:
+        return token
+    prefix, _, _ = str(conversation_key).partition(":")
+    if not prefix:
+        return token
+    return f"{prefix}:{token}"
 
 
 def telegram_actor_key(user_id: int | str) -> str:
@@ -170,6 +190,28 @@ def telegram_conversation_ref(config: BotConfigBase, chat_id: int | str) -> str:
     return f"telegram:{bot_identity(Path(config.data_dir))}:{chat_id}"
 
 
+def is_qualified_transport_ref(conversation_ref: str) -> bool:
+    token = str(conversation_ref or "").strip()
+    if not token:
+        return True
+    parts = token.split(":")
+    if len(parts) < 3 or any(not part for part in parts):
+        return False
+    return parts[0] in _KNOWN_TRANSPORT_REF_PREFIXES
+
+
+def validate_qualified_transport_ref(conversation_ref: str, *, field_name: str = "conversation_ref") -> str:
+    token = str(conversation_ref or "").strip()
+    if not token:
+        return ""
+    if not is_qualified_transport_ref(token):
+        raise ValueError(
+            f"{field_name} must be a qualified transport ref with a known transport prefix; "
+            f"got {token!r}"
+        )
+    return token
+
+
 def conversation_key_for_ref(conversation_ref: str) -> str:
     chat_id = telegram_chat_id_from_ref(conversation_ref)
     if chat_id is not None:
@@ -183,6 +225,32 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
         if len(parts) == 4 and parts[2] == "conversation":
             return f"registry:conversation:{parts[3]}"
     return conversation_ref
+
+
+def resolve_delegation_parent_identity(
+    *,
+    parent_transport_ref: str = "",
+    parent_external_conversation_ref: str = "",
+    parent_conversation_id: str = "",
+) -> tuple[str, str]:
+    """Return the best parent transport ref plus the session key derived from it.
+
+    Delegation results should resume the originating transport chat, not the
+    registry coordination conversation. The explicit transport ref carried on
+    the routed-task protocol is the primary source. The mirrored conversation
+    external ref is the fallback. The registry conversation id is last resort.
+    """
+
+    for candidate in (
+        parent_transport_ref,
+        parent_external_conversation_ref,
+        parent_conversation_id,
+    ):
+        conversation_ref = str(candidate or "").strip()
+        if not conversation_ref:
+            continue
+        return conversation_ref, conversation_key_for_ref(conversation_ref)
+    return "", ""
 
 
 def resolve_event_conversation_ref(*, config: BotConfigBase, event: ConversationScopedEvent) -> str:

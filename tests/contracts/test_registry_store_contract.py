@@ -7,12 +7,12 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import CapabilityDisabledError
-from app.registry_service.store_base import PROTECTED_ROUTED_TASK_STATUSES
-from app.registry_service.store_base import RegistryScopeError
-from app.registry_service.store_base import conversation_status_for_event
-from app.registry_service.store_base import hash_agent_token
+from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_base import CapabilityDisabledError
+from octopus_registry.store_base import PROTECTED_ROUTED_TASK_STATUSES
+from octopus_registry.store_base import RegistryScopeError
+from octopus_registry.store_base import conversation_status_for_event
+from octopus_registry.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -27,9 +27,12 @@ from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     AgentHeartbeatRequest,
     AgentRegisterRequest,
+    ApproveDelegationActionPayload,
     ApproveRejectActionPayload,
     CancelTaskActionPayload,
     CoordinationActionEnvelope,
+    DelegateTasksActionPayload,
+    DelegationTaskDraft,
     DirectAssignActionPayload,
     EventRecord,
     RegistryJsonRecord,
@@ -167,7 +170,7 @@ def _stored_agent_token(store, agent_id: str) -> str:
         assert row is not None
         return str(row["agent_token"])
 
-    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -195,7 +198,7 @@ def _routed_task_row(store, routed_task_id: str):
         assert row is not None
         return row
 
-    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -230,6 +233,7 @@ def _create_routed_task(
         RoutedTaskRequest(
             routed_task_id=routed_task_id,
             parent_conversation_id=conversation.conversation_id,
+            origin_transport_ref=f"telegram:origin:{routed_task_id}",
             origin_agent_id=origin_id,
             target_agent_id=target_id,
             title="Review task",
@@ -270,7 +274,7 @@ def store(request, tmp_path: Path):
         return
 
     postgres_url = request.getfixturevalue("postgres_registry_truncated")
-    from app.registry_service.store_postgres import RegistryPostgresStore
+    from octopus_registry.store_postgres import RegistryPostgresStore
 
     yield RegistryPostgresStore(postgres_url)
 
@@ -323,6 +327,24 @@ def test_enroll_hashes_agent_token_at_rest(store):
     assert re.fullmatch(r"[0-9a-f]{64}", stored)
 
 
+def test_enroll_and_poll_expose_stable_registry_epoch(store):
+    enrolled = store.enroll(_card("epoch-bot"))
+    store.register(
+        enrolled.agent_token,
+        AgentRegisterRequest(
+            agent_card=_card("epoch-bot"),
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=1,
+        ),
+    )
+
+    polled = store.poll(enrolled.agent_token, cursor=0, limit=20)
+
+    assert enrolled.registry_epoch
+    assert polled.registry_epoch == enrolled.registry_epoch
+
+
 def test_poll_delivers_to_enrolled_agent(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
     delivery = store.create_delivery(
@@ -350,6 +372,27 @@ def test_ack_marks_delivery_done(store):
     polled = store.poll(agent_token, cursor=0, limit=20)
     delivery_id = polled.deliveries[0].delivery_id
     store.ack(agent_token, delivery_ids=[delivery_id], classification="accepted")
+
+    assert store.poll(agent_token, cursor=0, limit=20).deliveries == []
+
+
+def test_poll_redelivers_leased_delivery_when_cursor_did_not_advance(store):
+    agent_id, agent_token = _enroll(store, "leased-bot")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload=RegistryJsonRecord({"conversation_id": "conv-1", "text": "hello"}),
+    )
+
+    first = store.poll(agent_token, cursor=0, limit=20)
+    second = store.poll(agent_token, cursor=0, limit=20)
+
+    assert len(first.deliveries) == 1
+    assert len(second.deliveries) == 1
+    assert second.deliveries[0].delivery_id == first.deliveries[0].delivery_id
+    assert second.deliveries[0].state == "leased"
+
+    store.ack(agent_token, delivery_ids=[first.deliveries[0].delivery_id], classification="accepted")
 
     assert store.poll(agent_token, cursor=0, limit=20).deliveries == []
 
@@ -388,7 +431,7 @@ def test_search_agents_by_capability(store):
     assert misses == []
 
 
-def test_search_agents_excludes_offline(store):
+def test_search_agents_excludes_disconnected(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.deregister(agent_token)
 
@@ -399,13 +442,107 @@ def test_create_routed_task_and_lookup(store):
     routed, origin_id, target_id, target_token, _conversation_id = _create_routed_task(
         store, routed_task_id="task-1"
     )
+    task = store.get_task("task-1")
 
     deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
 
     assert routed.routed_task_id == "task-1"
     assert routed.delivery_id
+    assert task.origin_transport_ref == "telegram:origin:task-1"
+    assert task.request["origin_transport_ref"] == "telegram:origin:task-1"
     assert len(deliveries) == 1
     assert deliveries[0].kind == "routed_task"
+    assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-1"
+
+
+def test_create_routed_task_creates_recipient_conversation_projection(store):
+    routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id="task-recipient-projection",
+    )
+
+    deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
+    conversations = store.list_conversations(for_agent_id=target_id, limit=25)
+    recipient_conversation = next(
+        conversation
+        for conversation in conversations
+        if conversation.external_conversation_ref == "routed-task:task-recipient-projection"
+    )
+    events = store.list_events(recipient_conversation.conversation_id).events
+
+    assert len(deliveries) == 1
+    assert deliveries[0].payload["external_conversation_ref"] == "routed-task:task-recipient-projection"
+    assert recipient_conversation.origin_channel == "registry"
+    assert recipient_conversation.conversation_type == "task_thread"
+    assert routed.recipient_conversation_id == recipient_conversation.conversation_id
+    assert routed.recipient_inserted_events
+    assert routed.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
+    assert events
+    assert events[0].kind == "task.status"
+    assert events[0].metadata["status"] == "queued"
+
+
+def test_list_conversations_can_filter_by_conversation_type(store):
+    _routed, origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id="task-filter-task-thread",
+    )
+    regular = store.create_conversation(
+        target_agent_id=target_id,
+        title="Regular conversation",
+        origin_channel="telegram",
+        external_conversation_ref="telegram:bot-filter:12345",
+    )
+
+    task_threads = store.list_conversations(
+        for_agent_id=target_id,
+        limit=25,
+        conversation_type="task_thread",
+    )
+    regular_only = store.list_conversations(
+        for_agent_id=target_id,
+        limit=25,
+        conversation_type="conversation",
+    )
+
+    assert all(item.conversation_type == "task_thread" for item in task_threads)
+    assert all(item.conversation_type == "conversation" for item in regular_only)
+    assert any(item.external_conversation_ref == "routed-task:task-filter-task-thread" for item in task_threads)
+
+
+def test_recipient_task_thread_type_survives_status_and_result_updates(store):
+    routed_task_id = "task-thread-survives"
+    _routed, _origin_id, target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id=routed_task_id,
+    )
+    recipient = next(
+        item
+        for item in store.list_conversations(for_agent_id=target_id, limit=50)
+        if item.external_conversation_ref == f"routed-task:{routed_task_id}"
+    )
+    assert recipient.conversation_type == "task_thread"
+
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, routed_task_id)
+
+    after_status = store.get_conversation(recipient.conversation_id)
+    assert after_status.conversation_type == "task_thread"
+
+    store.update_routed_task_result(
+        target_token,
+        routed_task_id,
+        RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status="completed",
+            transition_id=f"{routed_task_id}-complete",
+            summary="done",
+            full_text="done",
+        ),
+    )
+
+    after_result = store.get_conversation(recipient.conversation_id)
+    assert after_result.conversation_type == "task_thread"
 
 
 def test_create_routed_task_mirrors_parent_conversation_event(store):
@@ -558,12 +695,25 @@ def test_routed_task_status_and_result_auto_mirror_events(store):
     )
 
     events = store.list_events(conversation_id).events
+    recipient_conversation = next(
+        conversation
+        for conversation in store.list_conversations(limit=25)
+        if conversation.external_conversation_ref == "routed-task:task-auto-mirror"
+    )
+    recipient_events = store.list_events(recipient_conversation.conversation_id).events
 
     assert status_result.events_written is True
     assert status_result.inserted_events[0].seq and status_result.inserted_events[0].seq > 0
+    assert status_result.recipient_conversation_id == recipient_conversation.conversation_id
+    assert status_result.recipient_inserted_events
+    assert status_result.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
     assert result_result.events_written is True
     assert result_result.inserted_events[0].seq and result_result.inserted_events[0].seq > 0
+    assert result_result.recipient_conversation_id == recipient_conversation.conversation_id
+    assert result_result.recipient_inserted_events
+    assert result_result.recipient_inserted_events[0].conversation_id == recipient_conversation.conversation_id
     assert [event.metadata["status"] for event in events] == ["queued", "running", "completed"]
+    assert [event.metadata["status"] for event in recipient_events] == ["queued", "running", "completed"]
 
 
 def test_list_tasks_can_filter_by_parent_conversation_id(store):
@@ -600,11 +750,11 @@ def test_list_agents_supports_query_and_connectivity_filters(store):
 
     q_hits = store.list_agents(q="review")
     connected_hits = store.list_agents(connectivity_state="connected")
-    offline_hits = store.list_agents(connectivity_state="offline")
+    disconnected_hits = store.list_agents(connectivity_state="disconnected")
 
     assert [item.slug for item in q_hits] == ["alpha-reviewer"]
     assert {item.slug for item in connected_hits} == {"alpha-reviewer"}
-    assert [item.agent_id for item in offline_hits] == [beta_id]
+    assert [item.agent_id for item in disconnected_hits] == [beta_id]
 
 
 def test_routed_task_status_requires_explicit_non_empty_status(store):
@@ -898,6 +1048,53 @@ def test_direct_assign_persists_visible_operator_message(store):
         and event.metadata["routed_task_id"] == routed_task_id
         for event in events
     )
+
+
+def test_delegation_approval_prefers_explicit_origin_transport_ref_from_proposal(store):
+    origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
+    target_id, _target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
+    conversation = store.create_conversation(
+        target_agent_id=origin_id,
+        title="Delegation transport identity",
+        origin_channel="telegram",
+        external_conversation_ref="telegram:bot-origin:12345",
+    )
+
+    proposed = store.add_conversation_action(
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="proposal-origin-transport-ref",
+            action="delegate_tasks",
+            payload=DelegateTasksActionPayload(
+                title="Ask the specialist",
+                resume_instruction="Resume in the parent chat.",
+                origin_transport_ref="slack:workspace:channel-42",
+                tasks=[
+                    DelegationTaskDraft(
+                        draft_id="draft-1",
+                        selector=TargetSelector(kind="agent", value="m2", preferred_agent_id=target_id),
+                        title="Investigate",
+                        instructions="Return the findings.",
+                    )
+                ],
+            ),
+        ),
+    )
+
+    approved = store.add_conversation_action(
+        conversation.conversation_id,
+        CoordinationActionEnvelope(
+            action_id="approve-origin-transport-ref",
+            action="approve_delegation",
+            payload=ApproveDelegationActionPayload(proposal_id=proposed.proposal_id),
+        ),
+    )
+
+    task = store.get_task(approved.routed_tasks[0].routed_task_id)
+
+    assert task is not None
+    assert task.origin_transport_ref == "slack:workspace:channel-42"
+    assert task.request["origin_transport_ref"] == "slack:workspace:channel-42"
 
 
 def test_direct_assign_rejects_ambiguous_display_name_alias(store):

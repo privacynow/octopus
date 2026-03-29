@@ -744,7 +744,7 @@ def _parse_discovery_query(
             required_state = value.lower()
         else:
             free_text_parts.append(token)
-    if required_state not in {"connected", "degraded", "standalone", "offline"}:
+    if required_state not in {"connected", "degraded", "standalone", "disconnected"}:
         return None, telegram_presenters.discover_usage_message().text
     if not role and not capabilities and not tags and not free_text_parts:
         return None, telegram_presenters.discover_usage_message().text
@@ -1230,6 +1230,8 @@ async def handle_message(
     status, item_id = submission.status, submission.item_id
     if status == "duplicate":
         return
+    if status in {"admitted", "queued"}:
+        work_queue.supersede_pending_recovery(data_dir, envelope.conversation_key)
     if status == "admitted" and needs_welcome:
         rendered = telegram_presenters.welcome_message(
             approval_mode=cfg.approval_mode,

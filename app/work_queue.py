@@ -49,6 +49,7 @@ __all__ = [
     "has_claimed_for_chat",
     "has_queued_or_claimed",
     "list_user_access",
+    "list_incomplete_work_items",
     "list_worker_heartbeats",
     "mark_pending_recovery",
     "purge_old",
@@ -59,6 +60,7 @@ __all__ = [
     "record_and_enqueue",
     "record_usage",
     "record_update",
+    "recover_after_crash",
     "recover_stale_claims",
     "reset_transport_store_for_test",
     "clear_worker_heartbeat",
@@ -162,6 +164,10 @@ def claim_next(data_dir: Path, conversation_key: str, worker_id: str) -> WorkIte
 
 def claim_next_any(data_dir: Path, worker_id: str) -> WorkItemRecord | None:
     return coerce_work_item_record(_store().claim_next_any(data_dir, worker_id))
+
+
+def list_incomplete_work_items(data_dir: Path) -> list[WorkItemRecord]:
+    return coerce_work_item_records(_store().list_incomplete_work_items(data_dir))
 
 
 def complete_work_item(data_dir: Path, item_id: str) -> None:
@@ -318,6 +324,17 @@ def recover_stale_claims(
     lease_ttl_seconds: int = 300,
 ) -> int:
     return _store().recover_stale_claims(
+        data_dir,
+        lease_ttl_seconds=lease_ttl_seconds,
+    )
+
+
+def recover_after_crash(
+    data_dir: Path,
+    *,
+    lease_ttl_seconds: int = 300,
+) -> int:
+    return _store().recover_after_crash(
         data_dir,
         lease_ttl_seconds=lease_ttl_seconds,
     )

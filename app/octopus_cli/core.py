@@ -456,12 +456,9 @@ class OctopusManager:
         else:
             paths = [
                 Path("requirements.txt"),
-                Path("infra/docker/Dockerfile"),
-                Path("app"),
+                Path("infra/docker/Dockerfile.registry"),
+                Path("octopus_registry"),
                 Path("octopus_sdk"),
-                Path("skills"),
-                Path("scripts"),
-                Path("ui"),
             ]
             seed = f"{kind}:registry".encode("utf-8")
         digest = hashlib.sha256(seed)
@@ -821,7 +818,7 @@ class OctopusManager:
                 "docker",
                 "build",
                 "-f",
-                "infra/docker/Dockerfile",
+                "infra/docker/Dockerfile.registry",
                 "--label",
                 f"{MANAGED_IMAGE_KIND_LABEL}=registry-service",
                 "--label",

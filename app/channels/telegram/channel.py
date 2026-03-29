@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 
 from telegram.error import TelegramError
 
+from app import work_queue
 from app.channels.telegram.bootstrap import TelegramBootstrap
 from app.channels.telegram.bootstrap import build_bootstrap
 from app.channels.telegram.egress import TelegramChannelEgress
+from app.runtime import telegram_worker
+from app.runtime import telegram_session_io
 from app.config import BotConfig
 from app.config import BotMode
 from app.config import ProcessRole
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
@@ -22,6 +26,7 @@ from octopus_sdk.transport import TransportEgress
 from octopus_sdk.transport import TransportHealthRecord
 from octopus_sdk.transport import TransportIdentityResolver
 from octopus_sdk.transport import TransportImplementation
+from octopus_sdk.work_queue import WorkItemRecord
 
 
 class _TelegramIdentityResolver(TransportIdentityResolver):
@@ -154,24 +159,48 @@ class TelegramTransport(TransportImplementation):
             target_message_id=kw.get("target_message_id"),
         )
 
+    def worker_egress_kwargs(self, *, conversation_ref: str) -> dict[str, object]:
+        del conversation_ref
+        bot = self._bootstrap.runtime.bot_instance
+        if bot is None:
+            return {}
+        return {"bot": bot}
+
+    @asynccontextmanager
+    async def claimed_item_context(self, *, event, item: WorkItemRecord):
+        chat_id = getattr(event, "chat_id", None)
+        if chat_id is None:
+            yield
+            return
+        conversation_key = telegram_session_io.conversation_key(chat_id)
+        lock = self._bootstrap.runtime.chat_locks[chat_id]
+        async with lock:
+            if getattr(event, "action", "") not in {"recovery_discard", "recovery_replay"}:
+                work_queue.supersede_pending_recovery(
+                    self._bootstrap.runtime.config.data_dir,
+                    conversation_key,
+                )
+            yield
+
     async def start(self, *, runtime, stop_event: asyncio.Event) -> None:
         telegram_runtime = self._bootstrap.runtime
-        application = self._bootstrap.application
         telegram_runtime.submitter = runtime
         self._stop_requested.clear()
         try:
             if telegram_runtime.transport_dispatcher is None:
                 raise RuntimeError("Telegram transport requires a transport dispatcher")
-            if not hasattr(application, "bot_data"):
-                application.bot_data = {}
-            application.bot_data["dispatcher_stop_event"] = stop_event
-            await application._bootstrap_initialize(max_retries=0)
-            self._bootstrapped = True
-            if application.post_init:
-                await application.post_init(application)
+            application = self._bootstrap.application
+            if application is not None:
+                if not hasattr(application, "bot_data"):
+                    application.bot_data = {}
+                application.bot_data["dispatcher_stop_event"] = stop_event
+                await application._bootstrap_initialize(max_retries=0)
+                self._bootstrapped = True
+                if application.post_init:
+                    await application.post_init(application)
 
-            if telegram_runtime.config.process_role != ProcessRole.WORKER.value:
-                await self._start_live_updates()
+                if telegram_runtime.config.process_role != ProcessRole.WORKER.value:
+                    await self._start_live_updates()
 
             await self._wait_for_stop(stop_event)
         except asyncio.CancelledError:
@@ -184,6 +213,18 @@ class TelegramTransport(TransportImplementation):
 
     async def stop(self) -> None:
         self._stop_requested.set()
+
+    async def notify_deserialize_failure(
+        self,
+        item: WorkItemRecord,
+        *,
+        runtime,
+    ) -> None:
+        del runtime
+        await telegram_worker.notify_deserialize_failure(
+            item,
+            runtime=self._bootstrap.runtime,
+        )
 
     async def health_check(self) -> TransportHealthRecord:
         telegram_runtime = self._bootstrap.runtime

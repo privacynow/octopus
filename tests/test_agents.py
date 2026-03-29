@@ -33,11 +33,16 @@ from octopus_sdk.identity import (
     telegram_conversation_ref,
 )
 from octopus_sdk.inbound_types import deserialize_inbound
-from octopus_sdk.transport import InboundSubmissionResult
+from octopus_sdk.transport import (
+    DelegationContinuationResult,
+    InboundSubmissionResult,
+)
 from octopus_sdk.transport import TransportBindingRecord
 from app.runtime.services import build_bus_bot_services
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from octopus_sdk.providers import ProviderStateRecord, RunResult
+from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
 from app.agents.state import (
     load_registry_connection_state,
     load_runtime_registry_connection_state,
@@ -45,6 +50,7 @@ from app.agents.state import (
 )
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env
+from tests.support.handler_support import current_bot_instance
 from tests.support.service_support import build_test_bot_services
 
 
@@ -731,12 +737,16 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             return {
                 "deliveries": [
                     {
+                        "seq": 1,
+                        "cursor": "1",
                         "delivery_id": "d1",
                         "registry_id": "default",
                         "kind": "channel_input",
                         "payload": {"conversation_id": "c1", "text": "hello"},
                     },
                     {
+                        "seq": 2,
+                        "cursor": "2",
                         "delivery_id": "d2",
                         "registry_id": "default",
                         "kind": "channel_action",
@@ -842,6 +852,241 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         ("poll", "0"),
         ("accepted", ("d2",)),
         ("rejected", ("d1",)),
+    ]
+
+
+async def test_agent_runtime_poll_does_not_advance_cursor_past_retry_later(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            return {
+                "agent_id": "agent-123",
+                "slug": "product-bot",
+                "agent_token": "secret-token",
+                "poll_cursor": "0",
+                "registry_epoch": "epoch-1",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            return {"ok": True}
+
+        async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
+            calls.append(("poll", cursor))
+            return {
+                "deliveries": [
+                    {
+                        "seq": 1,
+                        "cursor": "1",
+                        "delivery_id": "d1",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    },
+                    {
+                        "seq": 2,
+                        "cursor": "2",
+                        "delivery_id": "d2",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "retry"},
+                    },
+                ],
+                "next_cursor": "2",
+                "registry_epoch": "epoch-1",
+            }
+
+        async def ack(self, delivery_ids, *, classification: str):
+            calls.append((classification, tuple(delivery_ids)))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+
+    async def handler(delivery):
+        return "accepted" if delivery["delivery_id"] == "d1" else "retry_later"
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
+    assert await runtime.sync_once() == "connected"
+
+    processed = await runtime.poll_once()
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert processed == 2
+    assert state.poll_cursor == "1"
+    assert state.registry_epoch == "epoch-1"
+    assert calls == [
+        ("poll", "0"),
+        ("accepted", ("d1",)),
+        ("retry_later", ("d2",)),
+    ]
+
+
+async def test_agent_runtime_poll_resets_cursor_and_repolls_when_registry_epoch_changes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            calls.append(("register", self.agent_token))
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            calls.append(("heartbeat", self.agent_token))
+            return {"ok": True}
+
+        async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1):
+            calls.append(("poll", cursor))
+            if cursor == "2":
+                return {"deliveries": [], "next_cursor": "2", "registry_epoch": "epoch-2"}
+            return {
+                "deliveries": [
+                    {
+                        "seq": 1,
+                        "cursor": "1",
+                        "delivery_id": "d1",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    }
+                ],
+                "next_cursor": "1",
+                "registry_epoch": "epoch-2",
+            }
+
+        async def ack(self, delivery_ids, *, classification: str):
+            calls.append((classification, tuple(delivery_ids)))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id="default",
+            registry_scope="full",
+            agent_id="agent-123",
+            agent_token="secret-token",
+            poll_cursor="2",
+            registry_epoch="epoch-1",
+            connectivity_state="connected",
+        ),
+    )
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(
+        config,
+        delivery_handler=lambda delivery: asyncio.sleep(0, result="accepted"),
+        registry=config.agent_registries[0],
+    )
+
+    assert await runtime.sync_once() == "connected"
+    processed = await runtime.poll_once()
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert processed == 1
+    assert state.poll_cursor == "1"
+    assert state.registry_epoch == "epoch-2"
+    assert calls == [
+        ("register", "secret-token"),
+        ("heartbeat", "secret-token"),
+        ("poll", "2"),
+        ("poll", "0"),
+        ("accepted", ("d1",)),
+    ]
+
+
+async def test_agent_runtime_sync_reenrolls_after_registry_auth_failure(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            calls.append(("enroll", enrollment_token))
+            return {
+                "agent_id": "agent-new",
+                "slug": "product-bot",
+                "agent_token": "new-token",
+                "poll_cursor": "0",
+                "registry_epoch": "epoch-2",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            calls.append(("register", self.agent_token))
+            if self.agent_token == "stale-token":
+                raise RegistryClientError(
+                    "Registry POST /v1/agents/register failed: HTTP 401",
+                    error_code="registry_auth_failed",
+                    operator_detail="Registry POST /v1/agents/register failed with HTTP 401.",
+                    status_code=401,
+                )
+            return {"ok": True}
+
+        async def heartbeat(self, *, connectivity_state: str, current_capacity: int, max_capacity: int, runtime_health: dict | None = None):
+            del runtime_health
+            calls.append(("heartbeat", self.agent_token))
+            return {"ok": True}
+
+    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    save_registry_connection_state(
+        tmp_path,
+        RegistryConnectionState(
+            registry_id="default",
+            registry_scope="full",
+            agent_id="agent-old",
+            agent_token="stale-token",
+            poll_cursor="42",
+            registry_epoch="epoch-1",
+            registered_slug="old-slug",
+            registered_card_hash="old-hash",
+            connectivity_state="connected",
+        ),
+    )
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registries=(make_registry_connection(),),
+    )
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
+
+    assert await runtime.sync_once() == "connected"
+    state = load_runtime_registry_connection_state(tmp_path, "default")
+
+    assert state.agent_id == "agent-new"
+    assert state.agent_token == "new-token"
+    assert state.poll_cursor == "0"
+    assert state.registry_epoch == "epoch-2"
+    assert calls == [
+        ("register", "stale-token"),
+        ("enroll", "enroll-secret"),
+        ("register", "new-token"),
+        ("heartbeat", "new-token"),
     ]
 
 
@@ -1069,6 +1314,90 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
     assert captured["text"] == "what is 2 + 3"
 
 
+async def test_admit_registry_delivery_routed_task_preserves_external_conversation_ref(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["conversation_ref"] = envelope.conversation_ref
+            captured["external_conversation_ref"] = envelope.event.external_conversation_ref
+            captured["routed_task_id"] = envelope.event.routed_task_id
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-routed-ext-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-ext-1",
+                "title": "Incoming work",
+                "instructions": "Handle this carefully.",
+                "origin_agent_id": "origin-1",
+                "external_conversation_ref": "routed-task:task-ext-1",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+    )
+
+    assert outcome == "accepted"
+    assert captured == {
+        "conversation_ref": registry_task_ref("prod", "task-ext-1"),
+        "external_conversation_ref": "routed-task:task-ext-1",
+        "routed_task_id": "task-ext-1",
+    }
+
+
+async def test_admit_registry_delivery_routed_task_preserves_authorized_actor_key(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["authorized_actor_key"] = envelope.event.authorized_actor_key
+            captured["actor_key"] = envelope.actor_key
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-routed-actor-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-actor-1",
+                "title": "Incoming work",
+                "instructions": "Handle this carefully.",
+                "origin_agent_id": "origin-1",
+                "authorized_actor_key": "telegram:12345",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+    )
+
+    assert outcome == "accepted"
+    assert captured == {
+        "authorized_actor_key": "telegram:12345",
+        "actor_key": "reg:agent:origin-1",
+    }
+
+
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[str] = []
 
@@ -1144,7 +1473,7 @@ async def test_handle_registry_routed_result_does_not_publish_parent_timeline_be
             ),
         )
 
-        assert outcome == "retry_later"
+        assert outcome == "accepted"
         assert egress_calls == []
 
 
@@ -1380,23 +1709,28 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        seen_ready_refs: list[tuple[str, str]] = []
+        captured = []
 
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del config
-                seen_ready_refs.append(
-                    (str(conversation_ref), str(kwargs.get("conversation_key", "")))
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                captured.append(
+                    (
+                        request.parent_transport_ref,
+                        request.parent_conversation_key,
+                    )
                 )
-                return False
+                return DelegationContinuationResult(
+                    status="not_matched",
+                    matched=False,
+                    resumed=False,
+                )
 
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=build_test_bot_services(),
-            submitter=current_runtime().submitter,
+            submitter=_FakeSubmitter(),
             bot=None,
-            dispatcher=_FakeDispatcher(),
         )
         qualified_ref = "slack:eng:12345"
 
@@ -1408,7 +1742,8 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "task-1",
-                    "parent_conversation_id": qualified_ref,
+                    "parent_conversation_id": "coord-slack-parent-1",
+                    "parent_transport_ref": qualified_ref,
                     "result": {
                         "status": "completed",
                         "transition_id": "task-1-complete",
@@ -1420,8 +1755,8 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
             runtime=runtime,
         )
 
-        assert outcome == "retry_later"
-        assert seen_ready_refs == [(qualified_ref, qualified_ref)]
+        assert outcome == "accepted"
+        assert captured == [(qualified_ref, qualified_ref)]
         assert await handle_registry_delivery(
             cfg,
             {
@@ -1437,6 +1772,303 @@ async def test_handle_registry_routed_result_preserves_already_qualified_future_
         ) == "rejected"
 
 
+async def test_handle_registry_routed_result_resumes_non_telegram_parent_using_explicit_transport_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        captured = []
+
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                captured.append(
+                    (
+                        request.parent_transport_ref,
+                        request.parent_conversation_key,
+                        request.parent_external_conversation_ref,
+                    )
+                )
+                return DelegationContinuationResult(
+                    status="continued",
+                    matched=True,
+                    resumed=True,
+                )
+
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=build_test_bot_services(),
+            submitter=_FakeSubmitter(),
+        )
+        parent_ref = "slack:workspace:channel-42"
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-slack-resume-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "coord-parent-1",
+                    "parent_transport_ref": parent_ref,
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "task-1-complete",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert captured == [(parent_ref, parent_ref, parent_ref)]
+
+
+async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_direct_assignment_state(
+    tmp_path: Path,
+):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        parent_ref = telegram_conversation_ref(cfg, 12345)
+        parent_key = "tg:12345"
+        save_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            SessionState(
+                provider=prov.name,
+                provider_state=ProviderStateRecord(),
+                approval_mode=cfg.approval_mode,
+                pending_delegation=PendingDelegation(
+                    conversation_ref="coord-parent-1",
+                    origin_conversation_key=parent_key,
+                    proposal_id="direct-1",
+                    title="Direct assignment",
+                    tasks=[
+                        DelegatedTask(
+                            routed_task_id="task-1",
+                            title="Investigate",
+                            target_agent_id="agent-reviewer",
+                            status="submitted",
+                        )
+                    ],
+                    status="submitted",
+                ),
+            ),
+        )
+
+        prov.run_results = [RunResult(text="Final parent answer.")]
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=current_runtime().services,
+            submitter=current_runtime().submitter,
+            bot=current_bot_instance(),
+            dispatcher=current_runtime().transport_dispatcher,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-telegram-direct-result",
+                "registry_id": "prod",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "coord-parent-1",
+                    "parent_transport_ref": parent_ref,
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "task-1-complete",
+                        "summary": "done",
+                        "full_text": "Delegated task completed successfully.",
+                    },
+                },
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert "delegated task completed successfully" in prov.run_calls[0]["prompt"].lower()
+        assert any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+        assert any(
+            "Final parent answer." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+        session = load_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            approval_mode=cfg.approval_mode,
+            default_role=cfg.role,
+            default_skills=cfg.default_skills,
+        )
+        assert session.pending_delegation is None
+
+
+async def test_direct_assign_round_trip_from_registry_store_resumes_parent_telegram_chat(
+    tmp_path: Path,
+):
+    from octopus_registry.store import RegistrySQLiteStore
+    from octopus_sdk.registry.models import (
+        AgentCard,
+        AgentRegisterRequest,
+        CoordinationActionEnvelope,
+        DirectAssignActionPayload,
+        RoutedTaskResult,
+        TargetSelector,
+    )
+
+    def _enroll_registered(store: RegistrySQLiteStore, slug: str, display_name: str) -> tuple[str, str]:
+        card = AgentCard(
+            display_name=display_name,
+            slug=slug,
+            role="developer",
+            registry_scope="full",
+            capabilities=["delegation"],
+            tags=["test"],
+            description=display_name,
+            provider="codex",
+            mode="registry",
+            connectivity_state="connected",
+            channel_capabilities=["telegram", "registry"],
+            bot_key=f"bot:{slug}",
+        )
+        enrolled = store.enroll(card)
+        store.register(
+            enrolled.agent_token,
+            AgentRegisterRequest(
+                agent_card=card,
+                connectivity_state="connected",
+                current_capacity=0,
+                max_capacity=1,
+            ),
+        )
+        return enrolled.agent_id, enrolled.agent_token
+
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+        origin_id, origin_token = _enroll_registered(store, "origin-bot", "Origin Bot")
+        target_id, target_token = _enroll_registered(store, "m2-bot", "M2 Bot")
+        parent_ref = telegram_conversation_ref(cfg, 12345)
+        parent_key = conversation_key_for_ref(parent_ref)
+        conversation = store.create_conversation(
+            target_agent_id=origin_id,
+            title="Direct assignment parent",
+            origin_channel="telegram",
+            external_conversation_ref=parent_ref,
+        )
+        action = store.add_conversation_action(
+            conversation.conversation_id,
+                CoordinationActionEnvelope(
+                    action_id="direct-assign-1",
+                    action="direct_assign",
+                    payload=DirectAssignActionPayload(
+                        selector=TargetSelector(kind="agent", value="m2-bot", preferred_agent_id=target_id),
+                        title="What is 2 + 3?",
+                        instructions="Answer the question.",
+                        message_text="what is 2 + 3?",
+                    origin_transport_ref=parent_ref,
+                ),
+            ),
+        )
+        routed_task_id = str(action.routed_tasks[0].routed_task_id)
+        target_deliveries = store.poll(target_token, cursor=0, limit=20).deliveries
+        assert target_deliveries[0].kind == "routed_task"
+
+        store.update_routed_task_result(
+            target_token,
+            routed_task_id,
+            RoutedTaskResult(
+                routed_task_id=routed_task_id,
+                status="completed",
+                transition_id=f"{routed_task_id}-complete",
+                summary="The answer is 5.",
+                full_text="5",
+            ),
+        )
+        origin_deliveries = store.poll(origin_token, cursor=0, limit=20).deliveries
+        routed_result = next(delivery for delivery in origin_deliveries if delivery.kind == "routed_result")
+
+        save_runtime_session(
+            cfg.data_dir,
+            parent_key,
+            SessionState(
+                provider=prov.name,
+                provider_state=ProviderStateRecord(),
+                approval_mode=cfg.approval_mode,
+                pending_delegation=PendingDelegation(
+                    conversation_ref=conversation.conversation_id,
+                    origin_conversation_key=parent_key,
+                    proposal_id="direct-assign-1",
+                    title="What is 2 + 3?",
+                    tasks=[
+                        DelegatedTask(
+                            routed_task_id=routed_task_id,
+                            title="What is 2 + 3?",
+                            target_agent_id=target_id,
+                            status="submitted",
+                        )
+                    ],
+                    status="submitted",
+                ),
+            ),
+        )
+
+        prov.run_results = [RunResult(text="Final parent answer.")]
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            services=current_runtime().services,
+            submitter=current_runtime().submitter,
+            bot=current_bot_instance(),
+            dispatcher=current_runtime().transport_dispatcher,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": routed_result.delivery_id,
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": routed_result.payload.as_dict(),
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+        assert any(
+            "Final parent answer." in message.get("text", "")
+            for message in current_bot_instance().sent_messages
+        )
+
+
 async def test_handle_registry_routed_result_logs_warning_when_authority_does_not_match(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1448,23 +2080,21 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del conversation_ref, config, kwargs
-                return True
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                del request
+                return DelegationContinuationResult(
+                    status="not_matched",
+                    matched=False,
+                    resumed=False,
+                )
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
-            lambda *args, **kwargs: DelegationUpdateOutcome(status="submitted", matched=False),
-        )
         services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
-            submitter=current_runtime().submitter,
-            bot=None,
-            dispatcher=_FakeDispatcher(),
+            submitter=_FakeSubmitter(),
         )
 
         with caplog.at_level(logging.WARNING):
@@ -1476,7 +2106,8 @@ async def test_handle_registry_routed_result_logs_warning_when_authority_does_no
                     "kind": "routed_result",
                     "payload": {
                         "routed_task_id": "task-1",
-                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "parent_conversation_id": "coord-telegram-parent-1",
+                        "parent_transport_ref": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
                             "transition_id": "task-1-complete",
@@ -1507,27 +2138,21 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        class _FakeDispatcher:
-            def egress_ready_for_ref(self, conversation_ref, *, config, **kwargs):
-                del conversation_ref, config, kwargs
-                return True
+        class _FakeSubmitter:
+            async def continue_delegation(self, request):
+                del request
+                return DelegationContinuationResult(
+                    status="updated",
+                    matched=True,
+                    resumed=False,
+                )
 
-        monkeypatch.setattr(
-            "app.channels.registry.delivery_transport.apply_runtime_delegation_result",
-            lambda *args, **kwargs: DelegationUpdateOutcome(
-                status="submitted",
-                matched=True,
-                ready_to_resume=False,
-            ),
-        )
         services = build_test_bot_services()
         runtime = build_registry_delivery_runtime(
             provider_name=prov.name,
             provider_state_factory=prov.new_provider_state,
             services=services,
-            submitter=current_runtime().submitter,
-            bot=None,
-            dispatcher=_FakeDispatcher(),
+            submitter=_FakeSubmitter(),
         )
 
         with caplog.at_level(logging.WARNING):
@@ -1539,7 +2164,8 @@ async def test_handle_registry_routed_result_does_not_log_warning_when_result_ma
                     "kind": "routed_result",
                     "payload": {
                         "routed_task_id": "task-1",
-                        "parent_conversation_id": "telegram:bot-1:12345",
+                        "parent_conversation_id": "coord-telegram-parent-2",
+                        "parent_transport_ref": "telegram:bot-1:12345",
                         "result": {
                             "status": "completed",
                             "transition_id": "task-1-complete",

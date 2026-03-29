@@ -23,19 +23,19 @@ from app.agents.state import (
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import build_telegram_runtime
 from app.config import BotConfig
+from octopus_registry.store import RegistrySQLiteStore
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.control_plane.processor_runner import ProcessorRunner
 from octopus_sdk.health_publication import HealthReport
 from octopus_sdk.task_routing import TaskResultReport
-from app.registry_service.store import RegistrySQLiteStore
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices, build_bus_bot_services
 from app.storage import ensure_data_dirs
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.execution import RequestExecutionOutcome
 from octopus_sdk.registry.models import HealthSummary, RoutedTaskResult, RoutedTaskUpdate, TaskRecord
-from app.workflows.execution.finalization import FinalizationContext, finalize_execution
+from octopus_sdk.workflows.execution_finalization import FinalizationContext, finalize_execution
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
 

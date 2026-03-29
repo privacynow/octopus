@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Protocol
 
 from octopus_sdk.config import BotConfigBase
-from octopus_sdk.identity import normalize_conversation_id
+from octopus_sdk.identity import normalize_conversation_id, validate_qualified_transport_ref
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.registry.models import (
     CoordinationActionResult,
@@ -188,6 +188,8 @@ class ProposeDelegationAction:
     title: str
     resume_instruction: str
     tasks: tuple[DelegationTaskDraft, ...]
+    origin_conversation_key: str = ""
+    actor_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -293,6 +295,8 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         )
         pending = PendingDelegation(
             conversation_ref=action.conversation_ref,
+            origin_conversation_key=action.origin_conversation_key,
+            actor_key=action.actor_key,
             title=action.title,
             resume_instruction=action.resume_instruction,
             tasks=list(tasks),
@@ -407,12 +411,16 @@ def build_delegation_plan(
     resume_instruction: str,
     tasks: list[dict[str, str]],
     *,
+    origin_conversation_key: str = "",
+    actor_key: str = "",
     proposal_id: str = "",
 ) -> PendingDelegation:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=None),
         ProposeDelegationAction(
             conversation_ref=conversation_ref,
+            origin_conversation_key=origin_conversation_key,
+            actor_key=actor_key,
             title=title,
             resume_instruction=resume_instruction,
             tasks=tuple(
@@ -800,22 +808,69 @@ async def submit_participant_direct_assignment(
     message_text: str = "",
     origin_channel: str,
     external_ref: str,
+    authorized_actor_key: str = "",
 ) -> CoordinationActionResult:
+    validated_origin_transport_ref = validate_qualified_transport_ref(
+        conversation_ref,
+        field_name="origin_transport_ref",
+    )
+    coordination_external_ref = external_ref
+    if conversation_ref and not conversation_ref.startswith("registry:"):
+        coordination_external_ref = conversation_ref
     conversation_id = await _coordination_conversation_id(
         runtime,
         conversation_key,
         conversation_ref=conversation_ref,
         origin_channel=origin_channel,
-        external_ref=external_ref,
+        external_ref=coordination_external_ref,
         title=f"{origin_channel.title()} {external_ref}",
     )
-    return await runtime.coordination.direct_assign(
+    result = await runtime.coordination.direct_assign(
         conversation_id,
         selector=selector,
         title=title,
         instructions=instructions,
+        origin_transport_ref=validated_origin_transport_ref,
+        authorized_actor_key=authorized_actor_key,
         message_text=message_text,
     )
+    if result.accepted and result.routed_tasks:
+        pending = build_delegation_plan(
+            conversation_id,
+            title,
+            "",
+            [
+                {
+                    "draft_id": str(result.routed_tasks[0].routed_task_id or result.action_id or title),
+                    "title": title,
+                    "target_agent_id": (
+                        str(result.routed_tasks[0].target_agent_id or "")
+                        or selector.preferred_agent_id
+                        or selector.value
+                    ),
+                    "target": (
+                        str(result.routed_tasks[0].target_agent_id or "")
+                        or selector.preferred_agent_id
+                        or selector.value
+                    ),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "instructions": instructions,
+                }
+            ],
+            origin_conversation_key=conversation_key,
+            actor_key=authorized_actor_key,
+            proposal_id=result.action_id,
+        )
+        submitted = mark_task_submitted(
+            pending,
+            routed_task_id=str(result.routed_tasks[0].routed_task_id or ""),
+            authority_ref=str(result.routed_tasks[0].authority_ref or ""),
+        )
+        session = _load_session(runtime, conversation_key)
+        session.pending_delegation = submitted.pending or pending
+        _save_session(runtime, conversation_key, session)
+    return result
 
 
 async def propose_participant_delegation(
@@ -828,13 +883,21 @@ async def propose_participant_delegation(
     intent: DelegationIntent,
     origin_channel: str,
     external_ref: str,
+    authorized_actor_key: str = "",
 ) -> ParticipantDelegationPlan:
+    validated_origin_transport_ref = validate_qualified_transport_ref(
+        conversation_ref,
+        field_name="origin_transport_ref",
+    )
+    coordination_external_ref = external_ref
+    if conversation_ref and not conversation_ref.startswith("registry:"):
+        coordination_external_ref = conversation_ref
     conversation_id = await _coordination_conversation_id(
         runtime,
         conversation_key,
         conversation_ref=conversation_ref,
         origin_channel=origin_channel,
-        external_ref=external_ref,
+        external_ref=coordination_external_ref,
         title=title,
     )
     proposal_result = await runtime.coordination.delegate_tasks(
@@ -842,6 +905,8 @@ async def propose_participant_delegation(
         intent=DelegationIntent(
             title=title,
             resume_instruction=intent.resume_instruction,
+            origin_transport_ref=validated_origin_transport_ref,
+            authorized_actor_key=authorized_actor_key,
             tasks=list(intent.tasks),
         ),
     )
@@ -864,6 +929,8 @@ async def propose_participant_delegation(
             }
             for item in intent.tasks
         ],
+        origin_conversation_key=conversation_key,
+        actor_key=authorized_actor_key,
         proposal_id=proposal_result.proposal_id or proposal_result.action_id,
     )
     previews = await preview_participant_targets(

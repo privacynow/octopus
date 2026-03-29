@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.transport import EditableHandle
 from octopus_sdk.transport import TransportCapabilities

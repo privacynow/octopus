@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import filesystem_component_for_key
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
@@ -138,6 +139,39 @@ def close_db(data_dir: Path) -> None:
 def close_all_db() -> None:
     from app import runtime_backend
     runtime_backend.session_store().close_all_db()
+
+
+def enqueue_deferred_notification(data_dir: Path, notification: DeferredNotification) -> None:
+    from app import runtime_backend
+    runtime_backend.session_store().enqueue_deferred_notification(data_dir, notification)
+
+
+def flush_deferred_notifications(
+    data_dir: Path,
+    *,
+    target_agent_id: str,
+    actor_key: str,
+    now: str | None = None,
+) -> list[DeferredNotification]:
+    from app import runtime_backend
+    return runtime_backend.session_store().flush_deferred_notifications(
+        data_dir,
+        target_agent_id=target_agent_id,
+        actor_key=actor_key,
+        now=now,
+    )
+
+
+def expire_stale_deferred_notifications(
+    data_dir: Path,
+    *,
+    now: str | None = None,
+) -> int:
+    from app import runtime_backend
+    return runtime_backend.session_store().expire_stale_deferred_notifications(
+        data_dir,
+        now=now,
+    )
 
 
 def debug_session_connection(data_dir: Path):

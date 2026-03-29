@@ -21,6 +21,7 @@ class RegistryConnectionState:
     agent_id: str = ""
     agent_token: str = ""
     poll_cursor: str = "0"
+    registry_epoch: str = ""
     registered_slug: str = ""
     registered_card_hash: str = ""
     last_successful_contact_at: str = ""
@@ -76,6 +77,7 @@ def load_registry_connection_state(
         agent_id=raw.get("agent_id", ""),
         agent_token=raw.get("agent_token", ""),
         poll_cursor=str(raw.get("poll_cursor", "0")),
+        registry_epoch=str(raw.get("registry_epoch", "")),
         registered_slug=raw.get("registered_slug", ""),
         registered_card_hash=str(raw.get("registered_card_hash", "")),
         last_successful_contact_at=raw.get("last_successful_contact_at", ""),

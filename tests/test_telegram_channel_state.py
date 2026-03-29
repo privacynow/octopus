@@ -12,7 +12,7 @@ from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.egress import TelegramChannelEgress
 from app.channels.telegram.state import TelegramCancellationRegistry, TelegramRuntime, build_telegram_runtime
 from app.runtime.services import BotServices
-from app.runtime.transport_dispatcher import TransportDispatcher
+from octopus_sdk.transport_dispatcher import TransportDispatcher
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider
 from tests.support.handler_support import MinimalFakeBot
@@ -37,14 +37,6 @@ class _RuntimeHandle:
     async def record(self, envelope):
         del envelope
         return True
-
-
-class _WorkerProcessor:
-    async def dispatch_claimed_item(self, kind: str, event, item: WorkItemRecord) -> None:
-        del kind, event, item
-
-    async def notify_deserialize_failure(self, item: WorkItemRecord) -> None:
-        del item
 
 
 class _FakeUpdater:
@@ -101,7 +93,7 @@ def _fake_transport(cfg, *, lifecycle: list[object]) -> TelegramTransport:
     transport._bootstrap = telegram_bootstrap.TelegramBootstrap(
         application=_FakeApplication(lifecycle),
         runtime=runtime,
-        worker_processor=_WorkerProcessor(),
+        execution_runtime=telegram_bootstrap._execution_runtime(runtime),
     )
     return transport
 

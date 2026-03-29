@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS agent_registry.agents (
     current_capacity            INTEGER NOT NULL DEFAULT 0,
     max_capacity                INTEGER NOT NULL DEFAULT 1,
     channel_capabilities_json   JSONB NOT NULL DEFAULT '[]'::jsonb,
+    management_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     version                     TEXT NOT NULL DEFAULT '',
     runtime_health_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at                  TEXT NOT NULL,
@@ -68,6 +69,23 @@ CREATE TABLE IF NOT EXISTS agent_registry.deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_registry_deliveries_agent_state_seq
     ON agent_registry.deliveries (target_agent_id, state, seq);
+
+CREATE TABLE IF NOT EXISTS agent_registry.management_requests (
+    request_id      TEXT PRIMARY KEY,
+    target_agent_id TEXT NOT NULL,
+    operation       TEXT NOT NULL,
+    capability      TEXT NOT NULL DEFAULT '',
+    payload_json    JSONB NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'queued',
+    delivery_id     TEXT NOT NULL DEFAULT '',
+    result_json     JSONB,
+    error_code      TEXT NOT NULL DEFAULT '',
+    error_detail    TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    completed_at    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_registry_management_requests_agent_status
+    ON agent_registry.management_requests (target_agent_id, status, created_at);
 
 CREATE TABLE IF NOT EXISTS agent_registry.conversations (
     conversation_id          TEXT PRIMARY KEY,

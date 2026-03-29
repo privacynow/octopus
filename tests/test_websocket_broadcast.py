@@ -12,9 +12,9 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
-from app.channels.registry.auth import reset_auth_attempt_limits_for_test
-from app.channels.registry import http as registry_http
-from app.channels.registry.http import app
+from octopus_registry.auth import reset_auth_attempt_limits_for_test
+import octopus_registry.server as registry_http
+from octopus_registry.server import app
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskUpdate, TimelineEventPayload, RegistryJsonRecord
 
 
@@ -375,7 +375,7 @@ def test_routed_task_status_broadcasts_task_status_event(
         target_id, target_token = _enroll_and_register(client, "ws-target-bot")
 
         # Create a routed task via the store directly
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         conversation = store.create_conversation(
             target_agent_id=origin_id,
@@ -383,7 +383,7 @@ def test_routed_task_status_broadcasts_task_status_event(
             origin_channel="registry",
             external_conversation_ref="ws-parent-conv-1",
         )
-        store.create_routed_task(
+        created = store.create_routed_task(
             RoutedTaskRequest(
                 routed_task_id="ws-task-1",
                 parent_conversation_id=conversation.conversation_id,
@@ -425,7 +425,14 @@ def test_routed_task_status_broadcasts_task_status_event(
         )
 
         assert resp.status_code == 200
-        assert len(_ws_recorder) == 2
+        assert len(_ws_recorder) == 3
+        recipient_event = next(item["event_data"] for item in _ws_recorder if item["conversation_id"] == created.recipient_conversation_id)
+        assert recipient_event["kind"] == "task.status"
+        assert recipient_event["metadata"] == {
+            "status": "running",
+            "routed_task_id": "ws-task-1",
+            "transition_id": "ws-task-1-start-http",
+        }
         timeline_event = next(item["event_data"] for item in _ws_recorder if item["event_data"]["event_id"] == "evt-ws-task-1")
         assert timeline_event["kind"] == "task.status"
         assert timeline_event["metadata"] == {
@@ -462,12 +469,15 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
         )
 
         assert create_resp.status_code == 200
-        assert len(_ws_recorder) == 1
-        assert _ws_recorder[0]["event_data"]["kind"] == "task.status"
-        assert _ws_recorder[0]["event_data"]["metadata"] == {"status": "queued", "routed_task_id": "ws-task-2"}
-        assert _ws_recorder[0]["event_data"]["seq"] > 0
+        recipient_conversation_id = create_resp.json()["recipient_conversation_id"]
+        assert len(_ws_recorder) == 2
+        assert {item["conversation_id"] for item in _ws_recorder} == {conv_id, recipient_conversation_id}
+        for item in _ws_recorder:
+            assert item["event_data"]["kind"] == "task.status"
+            assert item["event_data"]["metadata"] == {"status": "queued", "routed_task_id": "ws-task-2"}
+            assert item["event_data"]["seq"] > 0
 
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         _advance_task_lifecycle(
             store,
@@ -490,14 +500,18 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
         )
 
         assert result_resp.status_code == 200
-        assert len(_ws_recorder) == 2
-        assert _ws_recorder[1]["event_data"]["kind"] == "task.status"
-        assert _ws_recorder[1]["event_data"]["metadata"] == {
-            "status": "completed",
-            "routed_task_id": "ws-task-2",
-            "transition_id": "ws-task-2-complete",
-        }
-        assert _ws_recorder[1]["event_data"]["seq"] > 0
+        assert len(_ws_recorder) == 4
+        completion_events = [item for item in _ws_recorder if item["event_data"]["metadata"].get("transition_id") == "ws-task-2-complete"]
+        assert len(completion_events) == 2
+        assert {item["conversation_id"] for item in completion_events} == {conv_id, recipient_conversation_id}
+        for item in completion_events:
+            assert item["event_data"]["kind"] == "task.status"
+            assert item["event_data"]["metadata"] == {
+                "status": "completed",
+                "routed_task_id": "ws-task-2",
+                "transition_id": "ws-task-2-complete",
+            }
+            assert item["event_data"]["seq"] > 0
         topics = {item["topic"] for item in _ws_invalidation_recorder}
         assert {"tasks", "conversations", "summary"} <= topics
 
@@ -597,7 +611,7 @@ def test_routed_task_running_status_without_timeline_events_does_not_broadcast_p
         _ws_recorder.clear()
         _ws_invalidation_recorder.clear()
 
-        from app.channels.registry.http import get_store
+        from octopus_registry.server import get_store
         store = get_store()
         _advance_task_lifecycle(
             store,
@@ -619,11 +633,16 @@ def test_routed_task_running_status_without_timeline_events_does_not_broadcast_p
 
         assert status_resp.status_code == 200
         assert status_resp.json()["events_written"] is True
-        assert len(_ws_recorder) == 1
-        assert _ws_recorder[0]["event_data"]["metadata"] == {
+        assert len(_ws_recorder) == 2
+        assert {item["conversation_id"] for item in _ws_recorder} == {
+            conv_id,
+            status_resp.json()["recipient_conversation_id"],
+        }
+        for item in _ws_recorder:
+            assert item["event_data"]["metadata"] == {
             "status": "running",
             "routed_task_id": "ws-task-running",
             "transition_id": "ws-task-running-start-http",
-        }
+            }
         topics = {item["topic"] for item in _ws_invalidation_recorder}
         assert {"tasks", "conversations", "summary"} <= topics

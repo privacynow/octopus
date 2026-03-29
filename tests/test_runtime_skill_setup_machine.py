@@ -1,7 +1,7 @@
 """Machine tests for runtime-skill setup progression."""
 
 from octopus_sdk.sessions import AwaitingSkillSetup
-from app.workflows.runtime_skills.setup_machine import (
+from octopus_sdk.workflows.setup_machine import (
     AdvanceSetupAction,
     CancelSetupAction,
     ClearSkillSetupAction,

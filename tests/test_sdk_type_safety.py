@@ -112,7 +112,8 @@ def test_sdk_protocol_test_doubles_use_typed_boundary_signatures() -> None:
     targeted = (
         repo_root / "tests" / "test_channel_dispatcher.py",
         repo_root / "tests" / "test_runtime_dispatch_boundary.py",
-        repo_root / "tests" / "test_sdk_reference_transport.py",
+        repo_root / "octopus_sdk" / "tests" / "support.py",
+        repo_root / "octopus_sdk" / "tests" / "test_wiring_verification.py",
     )
     forbidden_patterns = (
         re.compile(r"def build_egress\(.*config:\s*Any"),
@@ -148,7 +149,7 @@ def test_sdk_boundary_tests_do_not_pass_raw_dicts_into_sdk_records() -> None:
 
 def test_registry_store_protocol_uses_no_any_or_dict_any_signatures() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    store_protocol_path = repo_root / "app" / "registry_service" / "store_base.py"
+    store_protocol_path = repo_root / "octopus_registry" / "store_base.py"
     text = store_protocol_path.read_text()
     forbidden_patterns = (
         re.compile(r"typing import .*Any"),

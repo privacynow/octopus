@@ -1,6 +1,13 @@
-"""Shared text helpers for runtime flows."""
+"""Shared text helpers and formatting ports for runtime flows."""
+
+from __future__ import annotations
 
 import re
+from typing import Protocol
+
+
+class TextFormattingPort(Protocol):
+    def summarize_text(self, text: str, limit: int = 240) -> str: ...
 
 SEND_DIRECTIVE_RE = re.compile(r"(?m)^SEND_(FILE|IMAGE):\s*(?P<path>.+?)\s*$")
 

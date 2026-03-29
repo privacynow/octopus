@@ -101,7 +101,7 @@ services:
   service:
     build:
       context: .
-      dockerfile: infra/docker/Dockerfile
+      dockerfile: infra/docker/Dockerfile.registry
     profiles:
       - registry
     environment:
@@ -117,7 +117,7 @@ services:
       default:
         aliases:
           - registry
-    command: ["uvicorn", "app.channels.registry.http:app", "--host", "0.0.0.0", "--port", "8787"]
+    command: ["python", "-m", "octopus_registry.main"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
   bot-stub:

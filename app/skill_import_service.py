@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import difflib
 import logging
 import shutil
@@ -16,31 +15,10 @@ from octopus_sdk.content_models import RuntimeSkillTrackRecord
 from app.content_seed import track_from_skill_dir
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+from octopus_sdk.workflows.skills import RegistrySkillSearchRecord, SkillMutationResult, SkillUpdateStatus
 
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class CatalogSearchResult:
-    name: str
-    display_name: str
-    description: str
-
-
-@dataclass(frozen=True)
-class SkillMutationResult:
-    name: str
-    ok: bool
-    message: str
-
-
-@dataclass(frozen=True)
-class SkillUpdateStatus:
-    name: str
-    status: str
-    has_custom_override: bool
-
 
 def _registry_source_uri(registry_url: str, skill_name: str) -> str:
     return f"{registry_url}#{skill_name}"
@@ -184,9 +162,18 @@ class SkillImportService:
     def bundled_exists(self, name: str) -> bool:
         return False
 
-    def registry_search(self, registry_url: str, query: str):
+    def registry_search(self, registry_url: str, query: str) -> list[RegistrySkillSearchRecord]:
         index = registry_client.fetch_index(registry_url)
-        return registry_client.search_index(index, query)
+        return [
+            RegistrySkillSearchRecord(
+                name=item.name,
+                display_name=item.display_name,
+                description=item.description,
+                publisher=item.publisher,
+                version=item.version,
+            )
+            for item in registry_client.search_index(index, query)
+        ]
 
     def install_bundled(self, name: str) -> SkillMutationResult:
         return SkillMutationResult(

@@ -88,6 +88,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "current_capacity",
             "max_capacity",
             "channel_capabilities_json",
+            "management_capabilities_json",
             "version",
             "runtime_health_json",
             "created_at",
@@ -120,10 +121,25 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "leased_at",
             "acked_at",
         },
+        "management_requests": {
+            "request_id",
+            "target_agent_id",
+            "operation",
+            "capability",
+            "payload_json",
+            "status",
+            "delivery_id",
+            "result_json",
+            "error_code",
+            "error_detail",
+            "created_at",
+            "completed_at",
+        },
         "conversations": {
             "conversation_id",
             "target_agent_id",
             "title",
+            "conversation_type",
             "origin_channel",
             "external_conversation_ref",
             "status",
@@ -266,6 +282,7 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
     assert defaults[("agents", "registry_scope")].startswith("'full'")
     assert "jsonb" in defaults[("agents", "channel_capabilities_json")]
     assert "jsonb" in defaults[("agents", "runtime_health_json")]
+    assert defaults[("conversations", "conversation_type")].startswith("'conversation'")
     assert defaults[("conversations", "origin_channel")].startswith("'registry'")
     assert "jsonb" in defaults[("events", "metadata_json")]
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import telegram_conversation_key
 from octopus_sdk.providers import ProviderStateRecord
@@ -117,6 +118,52 @@ def test_session_management():
         )
         assert loaded3["approval_mode"] == "off"
         assert loaded3["approval_mode_explicit"] is True
+
+
+def test_sqlite_deferred_notifications_flush_and_expire():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        store = SQLiteSessionStore()
+        store.enqueue_deferred_notification(
+            data_dir,
+            DeferredNotification(
+                notification_id="notif-live",
+                target_agent_id="agent-1",
+                actor_key="telegram:42",
+                content="live",
+                created_at="2026-03-28T00:00:00+00:00",
+                expires_at="2026-03-29T00:00:00+00:00",
+            ),
+        )
+        store.enqueue_deferred_notification(
+            data_dir,
+            DeferredNotification(
+                notification_id="notif-stale",
+                target_agent_id="agent-1",
+                actor_key="telegram:42",
+                content="stale",
+                created_at="2026-03-28T00:00:00+00:00",
+                expires_at="2026-03-28T00:00:01+00:00",
+            ),
+        )
+
+        assert store.expire_stale_deferred_notifications(
+            data_dir,
+            now="2026-03-28T00:00:02+00:00",
+        ) == 1
+        delivered = store.flush_deferred_notifications(
+            data_dir,
+            target_agent_id="agent-1",
+            actor_key="telegram:42",
+            now="2026-03-28T12:00:00+00:00",
+        )
+        assert [item.notification_id for item in delivered] == ["notif-live"]
+        assert store.flush_deferred_notifications(
+            data_dir,
+            target_agent_id="agent-1",
+            actor_key="telegram:42",
+        ) == []
 
         # fresh session for new chat
         fresh = load_session(

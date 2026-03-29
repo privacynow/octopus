@@ -656,7 +656,7 @@ def test_sdk_client_disconnect_and_fail_delivery_map_to_existing_endpoints():
 
             def json(self):
                 if url.endswith("/deregister"):
-                    return {"agent_id": "agent-1", "connectivity_state": "offline"}
+                    return {"agent_id": "agent-1", "connectivity_state": "disconnected"}
                 return {"updated": 1, "classification": "rejected"}
 
             @property

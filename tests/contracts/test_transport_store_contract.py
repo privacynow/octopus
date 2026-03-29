@@ -31,6 +31,7 @@ from app.work_queue import (
     has_claimed_for_chat,
     has_queued_or_claimed,
     list_user_access,
+    list_incomplete_work_items,
     list_worker_heartbeats,
     mark_pending_recovery,
     is_cancel_requested,
@@ -41,6 +42,7 @@ from app.work_queue import (
     record_update,
     record_usage,
     recover_stale_claims,
+    recover_after_crash,
     purge_old_usage,
     set_user_access,
     supersede_pending_recovery,
@@ -189,6 +191,26 @@ def test_claim_next_any_returns_any_chat_item(backend_and_data_dir):
     item = claim_next_any(data_dir, worker_id="w1")
     assert item is not None
     assert item.event_id in (_event(301), _event(302))
+
+
+def test_queue_exposes_durable_restart_recovery_surface(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_update(data_dir, _event(305), conversation_key=_conv(9), actor_key=_actor(42), kind="message")
+    item_id = enqueue_work_item(data_dir, conversation_key=_conv(9), event_id=_event(305))
+    claimed = claim_next_any(data_dir, worker_id="w1")
+    assert claimed is not None
+    assert claimed.id == item_id
+
+    incomplete = {item.id: item for item in list_incomplete_work_items(data_dir)}
+    assert item_id in incomplete
+    assert incomplete[item_id].state == "claimed"
+
+    recovered = recover_after_crash(data_dir, lease_ttl_seconds=0)
+    assert recovered == 1
+
+    refreshed = {item.id: item for item in list_incomplete_work_items(data_dir)}
+    assert refreshed[item_id].state == "queued"
+    assert refreshed[item_id].dispatch_mode == "recovery"
 
 
 def test_only_one_claimed_per_chat(backend_and_data_dir):

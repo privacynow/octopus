@@ -86,6 +86,7 @@ class AgentRuntime:
         provider=None,
         registry: RegistryConnectionConfig | None = None,
         channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
+        management_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
@@ -93,6 +94,7 @@ class AgentRuntime:
             raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
         self._registry = registry
         self._channel_capabilities_resolver = channel_capabilities_resolver
+        self._management_capabilities_resolver = management_capabilities_resolver
         if self._registry is None:
             self._state = RegistryConnectionState(registry_id="", registry_scope="full")
         else:
@@ -129,6 +131,11 @@ class AgentRuntime:
             return ""
         return self._registry.enroll_token
 
+    def _management_capabilities(self) -> tuple[str, ...]:
+        if self._management_capabilities_resolver is not None:
+            return self._management_capabilities_resolver()
+        return ()
+
     def requested_card(self) -> AgentCard:
         capabilities = self._effective_capabilities()
         return AgentCard(
@@ -145,6 +152,7 @@ class AgentRuntime:
             current_capacity=0,
             max_capacity=1,
             channel_capabilities=list(self._channel_capabilities()),
+            management_capabilities=list(self._management_capabilities()),
             version="",
             bot_key=bot_identity(self.config.data_dir),
         )
@@ -174,6 +182,27 @@ class AgentRuntime:
             return
         save_registry_connection_state(self.config.data_dir, self._state)
 
+    def _reset_enrollment_state(self) -> None:
+        self._state.agent_id = ""
+        self._state.agent_token = ""
+        self._state.poll_cursor = "0"
+        self._state.registry_epoch = ""
+        self._state.registered_slug = ""
+        self._state.registered_card_hash = ""
+        self._save_state()
+
+    def _apply_enrollment(self, enroll: EnrollmentResult) -> None:
+        self._state.agent_id = enroll.agent_id
+        self._state.agent_token = enroll.agent_token
+        self._state.registered_slug = enroll.slug or self.config.agent_slug
+        self._state.poll_cursor = "0"
+        self._state.registry_epoch = str(enroll.registry_epoch or "")
+        self._save_state()
+
+    @staticmethod
+    def _is_registry_auth_failure(exc: RegistryClientError) -> bool:
+        return exc.error_code == "registry_auth_failed" or exc.status_code in {401, 403}
+
     def _mark_state(
         self,
         connectivity_state: str,
@@ -201,77 +230,86 @@ class AgentRuntime:
             )
             return "degraded"
 
-        try:
-            if not self._state.agent_id or not self._state.agent_token:
-                enroll_token = self._configured_enroll_token()
-                if not enroll_token:
-                    self._mark_state(
-                        "degraded",
-                        error="registry_enroll_token_missing",
-                        detail="Registry enrollment token not configured.",
-                    )
-                    return "degraded"
-                enroll = await AgentRegistryClient(self._configured_registry_url()).enroll(
-                    self.requested_card(),
-                    enroll_token,
-                )
-                enroll = EnrollmentResult.model_validate(enroll)
-                self._state.agent_id = enroll.agent_id
-                self._state.agent_token = enroll.agent_token
-                self._state.registered_slug = enroll.slug or self.config.agent_slug
-                self._state.poll_cursor = enroll.poll_cursor or "0"
-                self._save_state()
-
-            card = self.requested_card().model_copy(
-                update={
-                    "slug": self._state.registered_slug or self.config.agent_slug,
-                    "connectivity_state": "connected",
-                }
-            )
-            client = self._client()
-            card_hash = _registered_card_hash(card)
-            if self._state.registered_card_hash != card_hash:
-                await client.register(
-                    card,
-                    connectivity_state="connected",
-                    current_capacity=0,
-                    max_capacity=1,
-                )
-                self._state.registered_card_hash = card_hash
-                self._save_state()
-            runtime_health_payload = None
+        for attempt in range(2):
             try:
-                runtime_health_payload = await self._runtime_health_payload()
-            except Exception:
-                log.exception(
-                    "Runtime health collection failed for %s; continuing without mirrored health",
-                    self.config.instance,
+                if not self._state.agent_id or not self._state.agent_token:
+                    enroll_token = self._configured_enroll_token()
+                    if not enroll_token:
+                        self._mark_state(
+                            "degraded",
+                            error="registry_enroll_token_missing",
+                            detail="Registry enrollment token not configured.",
+                        )
+                        return "degraded"
+                    enroll = await AgentRegistryClient(self._configured_registry_url()).enroll(
+                        self.requested_card(),
+                        enroll_token,
+                    )
+                    self._apply_enrollment(EnrollmentResult.model_validate(enroll))
+
+                card = self.requested_card().model_copy(
+                    update={
+                        "slug": self._state.registered_slug or self.config.agent_slug,
+                        "connectivity_state": "connected",
+                    }
                 )
-            heartbeat_kwargs = {
-                "connectivity_state": "connected",
-                "current_capacity": 0,
-                "max_capacity": 1,
-            }
-            if runtime_health_payload is not None:
-                heartbeat_kwargs["runtime_health"] = runtime_health_payload
-            await client.heartbeat(**heartbeat_kwargs)
-        except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
-            if isinstance(exc, RegistryClientError):
-                error_code = exc.error_code
-                detail = exc.operator_detail
-            elif isinstance(exc, asyncio.TimeoutError):
-                error_code = "registry_timeout"
-                detail = "Registry sync timed out."
-            else:
-                error_code = "registry_unreachable"
-                detail = f"Registry sync failed with {exc.__class__.__name__}."
-            log.warning(
-                "Agent registry sync degraded for %s: %s",
-                self.config.instance,
-                registry_error_detail(error_code, detail),
-            )
-            self._mark_state("degraded", error=error_code, detail=detail)
-            return "degraded"
+                client = self._client()
+                card_hash = _registered_card_hash(card)
+                if self._state.registered_card_hash != card_hash:
+                    await client.register(
+                        card,
+                        connectivity_state="connected",
+                        current_capacity=0,
+                        max_capacity=1,
+                    )
+                    self._state.registered_card_hash = card_hash
+                    self._save_state()
+                runtime_health_payload = None
+                try:
+                    runtime_health_payload = await self._runtime_health_payload()
+                except Exception:
+                    log.exception(
+                        "Runtime health collection failed for %s; continuing without mirrored health",
+                        self.config.instance,
+                    )
+                heartbeat_kwargs = {
+                    "connectivity_state": "connected",
+                    "current_capacity": 0,
+                    "max_capacity": 1,
+                }
+                if runtime_health_payload is not None:
+                    heartbeat_kwargs["runtime_health"] = runtime_health_payload
+                await client.heartbeat(**heartbeat_kwargs)
+                break
+            except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
+                if (
+                    isinstance(exc, RegistryClientError)
+                    and self._is_registry_auth_failure(exc)
+                    and attempt == 0
+                    and (self._state.agent_id or self._state.agent_token)
+                ):
+                    log.warning(
+                        "Registry identity for %s was rejected; clearing local state and re-enrolling.",
+                        self.config.instance,
+                    )
+                    self._reset_enrollment_state()
+                    continue
+                if isinstance(exc, RegistryClientError):
+                    error_code = exc.error_code
+                    detail = exc.operator_detail
+                elif isinstance(exc, asyncio.TimeoutError):
+                    error_code = "registry_timeout"
+                    detail = "Registry sync timed out."
+                else:
+                    error_code = "registry_unreachable"
+                    detail = f"Registry sync failed with {exc.__class__.__name__}."
+                log.warning(
+                    "Agent registry sync degraded for %s: %s",
+                    self.config.instance,
+                    registry_error_detail(error_code, detail),
+                )
+                self._mark_state("degraded", error=error_code, detail=detail)
+                return "degraded"
 
         self._mark_state("connected")
         return "connected"
@@ -287,22 +325,50 @@ class AgentRuntime:
         }
         if kind_filter is not None:
             poll_kwargs["kind_filter"] = tuple(kind_filter)
-        result = await client.poll(
-            **poll_kwargs,
-        )
+        try:
+            result = await client.poll(
+                **poll_kwargs,
+            )
+        except RegistryClientError as exc:
+            if self._is_registry_auth_failure(exc):
+                log.warning(
+                    "Registry poll identity rejected for %s; clearing local state.",
+                    self.config.instance,
+                )
+                self._reset_enrollment_state()
+                self._mark_state("degraded", error=exc.error_code, detail=exc.operator_detail)
+                return 0
+            raise
         result = DeliveryPollResult.model_validate(result)
+        poll_epoch = str(result.registry_epoch or "")
+        if poll_epoch:
+            current_epoch = str(self._state.registry_epoch or "")
+            if current_epoch and current_epoch != poll_epoch:
+                log.warning(
+                    "Registry epoch changed for %s; resetting poll cursor from %s to 0.",
+                    self.config.instance,
+                    self._state.poll_cursor or "0",
+                )
+                self._state.registry_epoch = poll_epoch
+                self._state.poll_cursor = "0"
+                self._save_state()
+                if str(poll_kwargs["cursor"] or "0") != "0":
+                    return await self.poll_once(kind_filter=kind_filter)
+            elif not current_epoch:
+                self._state.registry_epoch = poll_epoch
+                self._save_state()
         deliveries = list(result.deliveries)
         if not deliveries:
-            self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
-            self._save_state()
             return 0
 
         accepted: list[str] = []
         rejected: list[str] = []
         retry_later: list[str] = []
+        acknowledged_sequences: set[int] = set()
         for delivery in deliveries:
             delivery_payload = delivery.model_dump(mode="json")
             delivery_id = str(delivery_payload.get("delivery_id", ""))
+            delivery_seq = int(delivery.seq or delivery.cursor or 0)
             try:
                 classification = await self._delivery_handler(delivery_payload)
             except Exception:
@@ -315,17 +381,30 @@ class AgentRuntime:
                 continue
             if classification == "accepted":
                 accepted.append(delivery_id)
+                if delivery_seq > 0:
+                    acknowledged_sequences.add(delivery_seq)
             elif classification == "retry_later":
                 retry_later.append(delivery_id)
             else:
                 rejected.append(delivery_id)
+                if delivery_seq > 0:
+                    acknowledged_sequences.add(delivery_seq)
         if accepted:
             await client.ack(accepted, classification="accepted")
         if rejected:
             await client.ack(rejected, classification="rejected")
         if retry_later:
             await client.ack(retry_later, classification="retry_later")
-        self._state.poll_cursor = str(result.next_cursor or self._state.poll_cursor or "0")
+        cursor_value = int(str(self._state.poll_cursor or "0") or "0")
+        ordered_sequences = sorted(int(delivery.seq or delivery.cursor or 0) for delivery in deliveries)
+        for sequence in ordered_sequences:
+            if sequence <= cursor_value:
+                continue
+            if sequence in acknowledged_sequences and sequence == cursor_value + 1:
+                cursor_value = sequence
+                continue
+            break
+        self._state.poll_cursor = str(cursor_value)
         self._save_state()
         return len(deliveries)
 
@@ -441,6 +520,7 @@ class _ParticipantEnrollment(RegistryParticipant):
             agent_token=state.agent_token,
             slug=state.registered_slug,
             poll_cursor=state.poll_cursor,
+            registry_epoch=state.registry_epoch,
         )
 
     async def heartbeat(self) -> None:
@@ -471,6 +551,7 @@ class _ParticipantHealth(RegistryParticipantHealth):
                 agent_token=current.agent_token,
                 slug=current.registered_slug,
                 poll_cursor=current.poll_cursor,
+                registry_epoch=current.registry_epoch,
             )
         return state
 
@@ -639,6 +720,8 @@ class _ParticipantCoordination(RegistryCoordination):
         selector: TargetSelector,
         title: str,
         instructions: str,
+        origin_transport_ref: str = "",
+        authorized_actor_key: str = "",
         message_text: str = "",
     ) -> CoordinationActionResult:
         envelope = CoordinationActionEnvelope(
@@ -648,6 +731,8 @@ class _ParticipantCoordination(RegistryCoordination):
                 selector=selector,
                 title=title,
                 instructions=instructions,
+                origin_transport_ref=origin_transport_ref,
+                authorized_actor_key=authorized_actor_key,
                 message_text=message_text,
             ).model_dump(exclude_unset=True),
         )
@@ -669,6 +754,7 @@ class _ParticipantCoordination(RegistryCoordination):
             payload=DelegateTasksActionPayload(
                 title=intent.title,
                 resume_instruction=intent.resume_instruction,
+                origin_transport_ref=intent.origin_transport_ref,
                 tasks=intent.tasks,
             ).model_dump(exclude_unset=True),
         )

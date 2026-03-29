@@ -2,41 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_seed import builtin_skill_tracks
 from app.content_store import get_content_store
 from octopus_sdk.skill_types import SkillMeta, SkillRequirement
+from octopus_sdk.workflows.skills import RuntimeSkillInfoRecord
 
 
 def _requirements__track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:
-    requirements: list[SkillRequirement] = []
-    for item in record.revision.requirements:
-        key = str(item.get("key", "") or "")
-        if not key:
-            continue
-        prompt = str(item.get("prompt", "") or "")
-        help_url = item.get("help_url")
-        validate = item.get("validate")
-        requirements.append(
-            SkillRequirement(
-                key=key,
-                prompt=prompt,
-                help_url=str(help_url) if help_url else None,
-                validate=validate if isinstance(validate, dict) else None,
-            )
-        )
-    return requirements
-
-
-@dataclass(frozen=True)
-class SkillInfoRecord:
-    meta: dict[str, str]
-    body: str
-    source: str
-    providers: tuple[str, ...]
-    requirement_keys: tuple[str, ...]
+    return list(record.revision.requirements)
 
 
 class SkillCatalogService:
@@ -89,7 +63,7 @@ class SkillCatalogService:
             return []
         return _requirements__track(record)
 
-    def resolve_info(self, skill_name: str) -> SkillInfoRecord | None:
+    def resolve_info(self, skill_name: str) -> RuntimeSkillInfoRecord | None:
         record = self.resolve_track(skill_name)
         if record is None:
             return None
@@ -98,13 +72,11 @@ class SkillCatalogService:
             for provider in ("claude", "codex")
             if isinstance(record.revision.provider_config.get(provider), dict)
         )
-        return SkillInfoRecord(
-            meta={
-                "display_name": record.display_name,
-                "description": record.description,
-            },
+        return RuntimeSkillInfoRecord(
+            display_name=record.display_name,
+            description=record.description,
             body=record.revision.instruction_body,
-            source=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
+            source_kind=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
             providers=provider_names,
             requirement_keys=tuple(item.key for item in _requirements__track(record)),
         )

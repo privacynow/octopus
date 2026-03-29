@@ -1,0 +1,200 @@
+"""SDK-owned recovery replay workflows."""
+
+from __future__ import annotations
+
+import html
+from pathlib import Path
+
+from octopus_sdk.authorization import TrustTierResolverPort
+from octopus_sdk.identity import resolve_event_conversation_ref
+from octopus_sdk.inbound_types import InboundMessage, deserialize_inbound
+from octopus_sdk.messages import MessageTemplatePort
+from octopus_sdk.transport_dispatcher import TransportDispatcher
+from octopus_sdk.work_queue import ReclaimBlocked, TransportStateCorruption, WorkQueuePort
+from octopus_sdk.workflows.recovery import (
+    RecoveryActionOutcome,
+    RecoveryPort,
+    RecoveryReplayPlan,
+    WorkerRecoveryNotice,
+    WorkerRecoveryOutcome,
+)
+
+
+class RecoveryUseCases(RecoveryPort):
+    """Canonical replay/discard flows shared by channels."""
+
+    def __init__(
+        self,
+        *,
+        messages: MessageTemplatePort,
+        work_queue: WorkQueuePort,
+        trust_tier_resolver: TrustTierResolverPort,
+    ) -> None:
+        self._messages = messages
+        self._work_queue = work_queue
+        self._trust_tier_resolver = trust_tier_resolver
+
+    @staticmethod
+    def _event_conversation_ref(event: InboundMessage, *, config) -> str:
+        return resolve_event_conversation_ref(config=config, event=event)
+
+    def prepare_action(
+        self,
+        *,
+        data_dir: Path,
+        conversation_key: str,
+        event_id: str,
+        action: str,
+        worker_id: str,
+        ignore_claimed_item_id: str = "",
+        config,
+        dispatcher: TransportDispatcher | None = None,
+    ) -> RecoveryActionOutcome:
+        try:
+            recovery_item = self._work_queue.get_pending_recovery_for_update(data_dir, conversation_key, event_id)
+        except TransportStateCorruption:
+            return RecoveryActionOutcome(
+                status="error",
+                toast_message=self._messages.recovery_error_try_again(),
+                show_alert=True,
+            )
+        if recovery_item is None:
+            return RecoveryActionOutcome(
+                status="already_handled",
+                toast_message=self._messages.recovery_already_handled(),
+            )
+        if action == "recovery_discard":
+            try:
+                discard_outcome = self._work_queue.discard_recovery(data_dir, recovery_item.id)
+            except TransportStateCorruption:
+                return RecoveryActionOutcome(
+                    status="error",
+                    toast_message=self._messages.recovery_error_try_again(),
+                    show_alert=True,
+                )
+            if discard_outcome.name == "already_handled":
+                return RecoveryActionOutcome(
+                    status="already_handled",
+                    toast_message=self._messages.recovery_already_handled(),
+                )
+            if discard_outcome.name == "corruption":
+                return RecoveryActionOutcome(
+                    status="discard_error",
+                    toast_message=self._messages.recovery_error_discard_try_again(),
+                )
+            return RecoveryActionOutcome(
+                status="discarded",
+                toast_message=self._messages.recovery_discarded_confirm(),
+                edit_message=self._messages.recovery_discarded_edit(),
+            )
+        if action != "recovery_replay":
+            return RecoveryActionOutcome(
+                status="invalid_action",
+                toast_message=self._messages.recovery_unknown_action(),
+            )
+        try:
+            item = self._work_queue.reclaim_for_replay(
+                data_dir,
+                recovery_item.id,
+                worker_id,
+                ignore_claimed_item_id=ignore_claimed_item_id,
+            )
+        except TransportStateCorruption:
+            return RecoveryActionOutcome(
+                status="error",
+                toast_message=self._messages.recovery_error_try_again(),
+                show_alert=True,
+            )
+        except ReclaimBlocked:
+            return RecoveryActionOutcome(
+                status="replay_blocked",
+                edit_message=self._messages.recovery_blocked_replay_edit(),
+            )
+        if item is None:
+            return RecoveryActionOutcome(
+                status="already_handled",
+                edit_message=self._messages.recovery_already_handled_edit(),
+            )
+        payload_str = item.payload or self._work_queue.get_update_payload(data_dir, event_id)
+        if not payload_str:
+            self._work_queue.fail_work_item(data_dir, item.id, error="payload_missing")
+            return RecoveryActionOutcome(
+                status="payload_missing",
+                edit_message=self._messages.recovery_payload_missing_edit(),
+            )
+        try:
+            event = deserialize_inbound(
+                "message",
+                payload_str,
+                admission_class="internal",
+            )
+        except Exception:
+            self._work_queue.fail_work_item(data_dir, item.id, error="deserialize_error")
+            return RecoveryActionOutcome(
+                status="deserialize_failed",
+                edit_message=self._messages.recovery_replay_failed_edit(),
+            )
+        if not isinstance(event, InboundMessage):
+            self._work_queue.fail_work_item(data_dir, item.id, error="not_message")
+            return RecoveryActionOutcome(
+                status="not_message",
+                edit_message=self._messages.recovery_replay_failed_edit(),
+            )
+        try:
+            conversation_ref = self._event_conversation_ref(event, config=config)
+        except Exception:
+            self._work_queue.fail_work_item(data_dir, item.id, error="conversation_ref_invalid")
+            return RecoveryActionOutcome(
+                status="conversation_ref_invalid",
+                edit_message=self._messages.recovery_replay_failed_edit(),
+            )
+        if not conversation_ref:
+            self._work_queue.fail_work_item(data_dir, item.id, error="conversation_ref_missing")
+            return RecoveryActionOutcome(
+                status="conversation_ref_missing",
+                edit_message=self._messages.recovery_replay_failed_edit(),
+            )
+        trust_tier = self._trust_tier_resolver(
+            conversation_ref,
+            event.user,
+            config=config,
+            dispatcher=dispatcher,
+        )
+        return RecoveryActionOutcome(
+            status="replay_ready",
+            toast_message=self._messages.recovery_replaying_toast(),
+            edit_message=self._messages.recovery_replaying_edit(),
+            replay_plan=RecoveryReplayPlan(
+                item_id=item.id,
+                event=event,
+                trust_tier=trust_tier,
+            ),
+        )
+
+    def complete_replay(self, *, data_dir: Path, item_id: str) -> None:
+        self._work_queue.complete_work_item(data_dir, item_id)
+
+    def fail_replay(self, *, data_dir: Path, item_id: str, error: str = "replay_failed") -> None:
+        self._work_queue.fail_work_item(data_dir, item_id, error=error)
+
+    async def dispatch_worker_recovery(
+        self,
+        *,
+        data_dir: Path,
+        item_id: str,
+        original_text: str,
+        update_id: int,
+        bind_egress,
+        send_notice,
+    ) -> WorkerRecoveryOutcome:
+        notice = WorkerRecoveryNotice(
+            update_id=update_id,
+            preview=html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else "")),
+            prompt=self._messages.recovery_notice_prompt(),
+            run_again_label=self._messages.recovery_button_run_again(),
+            skip_label=self._messages.recovery_button_skip(),
+        )
+        await bind_egress()
+        await send_notice(notice)
+        self._work_queue.mark_pending_recovery(data_dir, item_id)
+        return WorkerRecoveryOutcome(status="pending_recovery", notice=notice)

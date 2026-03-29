@@ -6,7 +6,7 @@ import html
 from urllib.parse import urlparse
 
 from octopus_sdk.sessions import AwaitingSkillSetup
-from app.time_utils import age_seconds, utc_now
+from octopus_sdk.time_utils import age_seconds, utc_now
 
 
 def format_credential_prompt(req: dict) -> str:

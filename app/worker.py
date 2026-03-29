@@ -20,7 +20,7 @@ from typing import Awaitable, Callable
 
 from app import work_queue
 from app.runtime_health import WorkerHeartbeat
-from app.time_utils import utc_now
+from octopus_sdk.time_utils import utc_now
 from octopus_sdk.inbound_types import (
     InboundAction,
     InboundCallback,

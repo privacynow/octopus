@@ -53,6 +53,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         async def fake_submit_action(*, conversation_id, envelope):
             assert conversation_id == "conversation-1"
             assert envelope.action == "delegate_tasks"
+            assert envelope.payload["origin_transport_ref"] == telegram_conversation_ref(cfg, chat.id)
             return CoordinationActionResult(
                 conversation_id=conversation_id,
                 action_id=envelope.action_id,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -13,14 +14,20 @@ from typing import Protocol
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.execution_context import ResolvedExecutionContext
+from octopus_sdk.inbound_types import InboundAction
+from octopus_sdk.inbound_types import InboundCallback
+from octopus_sdk.inbound_types import InboundCommand
 from octopus_sdk.inbound_types import InboundEnvelope
+from octopus_sdk.inbound_types import InboundMessage
 from octopus_sdk.providers import DenialRecord
 from octopus_sdk.registry.models import ExternalConversationRef
+from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.registry.models import TransportActorKey
 from octopus_sdk.registry.models import TransportConversationKey
 from octopus_sdk.sessions import AwaitingSkillSetup
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.skill_types import SkillRequirement
+from octopus_sdk.work_queue import WorkItemRecord
 
 @dataclass(frozen=True)
 class TransportDescriptor:
@@ -58,6 +65,30 @@ class TransportCapabilities:
 class InboundSubmissionResult:
     status: str
     item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DelegationContinuationRequest:
+    parent_conversation_key: str
+    parent_transport_ref: str
+    routed_task_id: str
+    authority_ref: str
+    result: RoutedTaskResult
+    parent_external_conversation_ref: str = ""
+
+
+@dataclass(frozen=True)
+class DelegationContinuationResult:
+    status: str
+    matched: bool = False
+    resumed: bool = False
+
+
+class DelegationContinuationPort(Protocol):
+    async def continue_delegation(
+        self,
+        request: DelegationContinuationRequest,
+    ) -> DelegationContinuationResult: ...
 
 
 @dataclass(frozen=True)
@@ -226,7 +257,7 @@ class TransportEgress(ABC):
         ...
 
 
-class BotRuntimeHandle(Protocol):
+class BotRuntimeHandle(DelegationContinuationPort, Protocol):
     async def submit(
         self,
         envelope: InboundEnvelope,
@@ -244,7 +275,6 @@ class BotRuntimeHandle(Protocol):
     ) -> InboundSubmissionResult: ...
 
     async def record(self, envelope: InboundEnvelope) -> bool: ...
-
 
 class TransportImplementation(ABC):
     @property
@@ -269,12 +299,22 @@ class TransportImplementation(ABC):
     def build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> TransportEgress:
         ...
 
+    def worker_egress_kwargs(self, *, conversation_ref: str) -> dict[str, object]:
+        del conversation_ref
+        return {}
+
     def can_build_egress(self, *, conversation_ref: str, config: BotConfigBase, **kw: object) -> bool:
         try:
             self.build_egress(conversation_ref=conversation_ref, config=config, **kw)
         except RuntimeError:
             return False
         return True
+
+    def descriptor_for_ref(self, conversation_ref: str) -> TransportDescriptor | None:
+        del conversation_ref
+        if self.descriptor.accepts_transport_input:
+            return self.descriptor
+        return None
 
     async def start(
         self,
@@ -294,3 +334,22 @@ class TransportImplementation(ABC):
             transport_type=self.descriptor.transport_type,
             inbound_model=self.descriptor.inbound_model,
         )
+
+    async def notify_deserialize_failure(
+        self,
+        item: WorkItemRecord,
+        *,
+        runtime: BotRuntimeHandle,
+    ) -> None:
+        del item, runtime
+        return None
+
+    @asynccontextmanager
+    async def claimed_item_context(
+        self,
+        *,
+        event: InboundMessage | InboundAction | InboundCommand | InboundCallback,
+        item: WorkItemRecord,
+    ):
+        del event, item
+        yield

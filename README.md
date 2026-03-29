@@ -27,6 +27,23 @@ local registry.
 - Claude or Codex provider runtimes
 - SQLite by default, with optional Postgres for runtime and registry stores
 
+## Repo Layout
+
+The current codebase is split into four primary packages:
+
+- `app/`
+  - the shipped Telegram bot runtime and the `./octopus` deployment CLI
+- `octopus_registry/`
+  - the standalone registry management plane: API, websocket server, store,
+    presenters, and browser UI
+- `octopus_sdk/`
+  - shared runtime contracts, workflow implementations, registry protocols,
+    and composition helpers used by both the bot runtime and registry server
+- `octopus_sdk/testing/`
+  - test-only in-memory SDK fixtures used by wiring verification tests; these
+    are deliberately fenced away from runtime defaults and rejected by
+    `WorkflowComposer.build()`
+
 ## Quick Start
 
 1. Create a Telegram bot with `@BotFather` and copy the token.
@@ -133,10 +150,15 @@ CLI is intentionally local-first:
 
 ## Registry UI
 
-The operator UI under `ui/` is a vanilla SPA with no framework or build step.
-It is designed as an operator console, not a generic admin panel: one left rail,
-one main work surface per route, compact metadata, and the same conversation
-and task model on desktop and mobile.
+The operator UI under `octopus_registry/ui/` is a vanilla SPA with no framework
+or build step. It is designed as an operator console, not a generic admin
+panel: one left rail, one main work surface per route, compact metadata, and
+the same conversation and task model on desktop and mobile.
+
+The registry is the management plane. Bots in `app/` do not expose their own
+operator HTTP API. Instead, the registry talks to connected bots over the typed
+management protocol in `octopus_sdk.registry.management`, and management
+capabilities light up when a compatible bot is connected.
 
 Current main routes:
 
@@ -151,10 +173,15 @@ Current main routes:
 - **Conversation detail** — one composer for both replies and direct routing,
   tabs for **Conversation**, **Tasks**, and **Full activity**, compact
   operator-facing header metadata (`With`, `Assigned to`, `Started in`), plus
-  export/cancel and activity/ref actions
+  export/cancel and activity/ref actions; terminal task outcomes render inside
+  the expandable activity card body instead of duplicating a second lead block
 - **Tasks** — routed-task queue with compact summary cards, segmented status
-  filters, expandable task rows that stay open across live task refreshes, and
-  links back to the parent conversation
+  filters, expandable task rows that stay open across live task refreshes,
+  contained detail facts/summary blocks, and links back to the parent
+  conversation
+- **Agent detail task threads** — recipient-side routed-task projections are
+  shown separately from direct conversations so delegated work does not blur
+  into ordinary chat history
 - **Usage** — per-conversation token/cost rollups
 - **Capabilities**, **Skills**, **Guidance** — operator configuration and
   catalog surfaces
@@ -170,6 +197,12 @@ Conversation work now happens in one flow:
 - use **Full activity** for the full stored event stream when you need
   diagnostics
 
+Route changes now prepare the next route off-DOM and wait for its initial
+local-registry data before swapping it into `#content`. The previous route
+stays visible until the next one is ready, so the swap is old real content to
+new real content without route-transition skeletons, spinners, or partial
+header-only shells.
+
 Usage reflects provider-response costs/tokens and rolls delegated child work up
 into the parent conversation when that routed work returns usage data.
 
@@ -182,6 +215,29 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
 - `approvals`
 - `usage`
 
+Mounted routes debounce invalidation bursts, skip unchanged payloads, and avoid
+background-tab refresh churn so the operator UI does not keep repainting whole
+sections for no visible change.
+
+The current UI contract is intentionally shared rather than per-component:
+
+- list routes use the same shell structure: compact page header, `admin-shell`,
+  optional `workbench-panel` controls, then `list-shell` + `list-container`
+- shared UI primitives live in
+  [`octopus_registry/ui/js/helpers/ui.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/ui.js):
+  `UI.subscribeWithRefresh(...)`, `UI.createSegmentedControl(...)`,
+  `UI.createCursorPaginator(...)`, `UI.memoizedRender(...)`,
+  `UI.createTaskActionButtons(...)`, `UI.createAgentManagementDropdown(...)`,
+  and `UI.buildConversationTypeBadge(...)`
+- CSS spacing and padding now come from named tokens such as
+  `--card-padding`, `--panel-padding`, `--compact-card-padding`, and shared
+  `--space-*` gaps instead of per-view hardcoded pixel values
+- empty states use the same chrome across standalone list pages and nested
+  dashboard/agent-detail sections
+- conversation detail is split across
+  `conversation-detail.js`, `composer-autocomplete.js`,
+  `event-renderers.js`, and `task-board.js` rather than one monolithic file
+
 ## Runtime Notes
 
 - `app/main.py` is the runnable entrypoint
@@ -193,10 +249,20 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
   - workflow composition
   - transport stack builders
   - `octopus_sdk.bot_runtime.BotRuntime`
+- `app/runtime/composition.py` is the app-side wrapper over
+  `octopus_sdk.composition.WorkflowComposer`; app code provides concrete ports,
+  the SDK owns the workflow graph
 - `app/runtime/transport_builders.py` registers Telegram plus registry-scoped
   delivery transports behind one dispatcher
+- `octopus_sdk.transport.BotRuntimeHandle` now includes direct delegation
+  continuation; routed-task results resume the parent transport through
+  `BotRuntime.continue_delegation(...)` instead of re-entering the runtime as
+  a synthetic fresh inbound message
 - once composition is complete, `BotRuntime.run()` owns transport startup,
   worker admission, claim processing, and shutdown
+- `octopus_registry/main.py` is the standalone registry server entrypoint
+- `octopus_registry/ingress.py` is the registry-side management adapter over
+  the typed bot-management protocol in `octopus_sdk.registry.management`
 - `.deploy/bots/<slug>/.env` and `.deploy/registry/.env` are operator-owned
   deployment state
 - runtime-owned bot identity and per-registry state live under
@@ -215,8 +281,51 @@ Delegation and routed work are now structured end to end:
 
 - registry-origin direct assignment and delegation go through typed
   conversation actions
+- routed-task results resume the original parent transport through the SDK
+  continuation seam, preserving the parent transport ref/key instead of
+  fabricating a new inbound user message
 - routed tasks use explicit lifecycle transitions such as `queued`, `leased`,
   `running`, `completed`, `failed`, `cancelled`, and `timed_out`
+- recipient-side routed-task projections are typed as task threads in the
+  registry store and UI instead of being treated as ordinary conversations
+- recipient task threads receive their own live `task.status` websocket events
+  in the registry UI
+- task-thread detail resolves its routed task from
+  `external_conversation_ref = routed-task:<task_id>` instead of pretending the
+  recipient thread is the parent conversation
+
+The serialized inbound contract also carries an explicit admission class:
+
+- `external` for normal Telegram or registry-origin user/operator ingress
+- `internal` for SDK-owned replay/recovery work
+
+That lets the runtime distinguish real external access control from internal
+replay/recovery flows without transport-specific hacks.
+
+Registry UI live-refresh reconciliation follows the same rule:
+
+- keyed subtree signatures are based on the text and badges the operator can
+  see
+- relative-time fields are signed from `UI.relativeTime(...)`, not the raw ISO
+  timestamp
+- backend-only metadata is not included in signatures
+
+That keeps heartbeat and invalidate traffic from repainting rows whose visible
+content has not changed.
+
+## SDK Wiring Verification
+
+The SDK includes a dedicated wiring-verification test under
+`octopus_sdk/tests/test_wiring_verification.py`. It proves that SDK-owned
+workflow implementations can be composed without importing `app/` or
+`octopus_registry/`, but it is deliberately not a production template.
+
+- `WorkflowComposer.build()` rejects test-only implementations
+- `WorkflowComposer.build_for_testing()` is the explicit test-only path
+- `octopus_sdk/testing/` contains non-durable in-memory fixtures such as
+  `InMemoryWorkQueue` and `InMemorySessionStore`
+- those fixtures are not re-exported from `octopus_sdk/__init__.py`
+- app/runtime and registry code must not import `octopus_sdk.testing`
 
 ## Shared Workspaces
 

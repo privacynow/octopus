@@ -10,6 +10,9 @@ function renderSkillCatalog(container) {
     let registryError = '';
     let availableAgents = [];
     let currentAgentId = '';
+    const SKILL_CACHE_TTL_MS = 60000;
+    const SKILL_SEARCH_CACHE_TTL_MS = 30000;
+    const CACHE_ERROR_TTL_MS = 5000;
 
     function renderLoadingState(message = 'Loading skills…') {
         UI.clearMemoizedRender(listEl);
@@ -107,6 +110,23 @@ function renderSkillCatalog(container) {
         return String(currentQ || '').trim();
     }
 
+    function _skillCacheKey(agentId) {
+        return `skills:list:${String(agentId || '').trim()}`;
+    }
+
+    function _skillSearchCacheKey(agentId, queryText) {
+        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
+    }
+
+    function _invalidateSkillCaches(agentId = currentAgentId) {
+        const normalizedAgentId = String(agentId || '').trim();
+        if (!normalizedAgentId) return;
+        UI.invalidateCachedData([
+            _skillCacheKey(normalizedAgentId),
+            `skills:search:${normalizedAgentId}:`,
+        ]);
+    }
+
     function _filteredCatalogSkills() {
         const queryText = _queryText().toLowerCase();
         if (!queryText) {
@@ -162,6 +182,7 @@ function renderSkillCatalog(container) {
                 errorMessage: 'Failed to update the skill',
                 onClick: async () => {
                     await API.updateSkill(currentAgentId, skillName);
+                    _invalidateSkillCaches();
                     await loadSkills({ soft: true, forceCatalog: true });
                 },
             }));
@@ -175,6 +196,7 @@ function renderSkillCatalog(container) {
                 errorMessage: 'Failed to uninstall the skill',
                 onClick: async () => {
                     await API.uninstallSkill(currentAgentId, skillName);
+                    _invalidateSkillCaches();
                     await loadSkills({ soft: true, forceCatalog: true });
                 },
             }));
@@ -196,6 +218,7 @@ function renderSkillCatalog(container) {
             errorMessage: 'Failed to install the skill',
             onClick: async () => {
                 await API.installSkill(currentAgentId, skillName);
+                _invalidateSkillCaches();
                 await loadSkills({ soft: true, forceCatalog: true });
             },
         }));
@@ -353,16 +376,56 @@ function renderSkillCatalog(container) {
         }
         const queryText = _queryText();
         const shouldLoadCatalog = forceCatalog || !allSkills.length;
-        if (!soft && (shouldLoadCatalog || queryText.length >= 2)) {
+        const hadVisibleState = listEl.childElementCount > 0;
+        let hasCachedView = false;
+        if (shouldLoadCatalog) {
+            const cachedCatalog = UI.peekCachedData(_skillCacheKey(currentAgentId));
+            if (cachedCatalog) {
+                const data = Array.isArray(cachedCatalog) ? cachedCatalog : (cachedCatalog.skills || []);
+                allSkills = Array.isArray(data) ? data : [];
+                hasCachedView = true;
+            }
+        }
+        if (queryText.length >= 2) {
+            const cachedSearch = UI.peekCachedData(_skillSearchCacheKey(currentAgentId, queryText));
+            if (cachedSearch) {
+                registrySkills = Array.isArray(cachedSearch.registry) ? cachedSearch.registry : [];
+                registryError = String(cachedSearch.registry_error || '');
+                hasCachedView = true;
+            }
+        } else {
+            registrySkills = [];
+            registryError = '';
+        }
+        if (hasCachedView) {
+            renderList();
+        }
+        if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
             renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
         }
         try {
             if (shouldLoadCatalog) {
-                const data = await API.listSkills(currentAgentId);
+                const data = await UI.loadCachedData(
+                    _skillCacheKey(currentAgentId),
+                    () => API.listSkills(currentAgentId),
+                    {
+                        ttlMs: SKILL_CACHE_TTL_MS,
+                        errorTtlMs: CACHE_ERROR_TTL_MS,
+                        forceRefresh: hasCachedView || forceCatalog,
+                    },
+                );
                 allSkills = Array.isArray(data) ? data : (data.skills || []);
             }
             if (queryText.length >= 2) {
-                const search = await API.searchCatalogSkills(currentAgentId, queryText);
+                const search = await UI.loadCachedData(
+                    _skillSearchCacheKey(currentAgentId, queryText),
+                    () => API.searchCatalogSkills(currentAgentId, queryText),
+                    {
+                        ttlMs: SKILL_SEARCH_CACHE_TTL_MS,
+                        errorTtlMs: CACHE_ERROR_TTL_MS,
+                        forceRefresh: hasCachedView,
+                    },
+                );
                 registrySkills = Array.isArray(search.registry) ? search.registry : [];
                 registryError = String(search.registry_error || '');
             } else {
@@ -371,6 +434,10 @@ function renderSkillCatalog(container) {
             }
             renderList();
         } catch (err) {
+            if (hasCachedView || hadVisibleState) {
+                UI.reportError('Failed to refresh skills', err, { context: 'Skills refresh failed' });
+                return;
+            }
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
         }

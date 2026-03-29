@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
+from dataclasses import dataclass
+import time
+
 from .management_client import ManagementClientError, RegistryManagementClient
 from .store_base import AbstractRegistryStore
 from octopus_sdk.identity import conversation_key_for_ref
@@ -68,6 +73,20 @@ class RegistryIngressError(RuntimeError):
         self.detail = detail
 
 
+@dataclass
+class _ManagementReadCacheEntry:
+    expires_at: float = 0.0
+    value: object | None = None
+    error: tuple[int, str] | None = None
+    inflight: asyncio.Task[object] | None = None
+
+
+_MANAGEMENT_READ_CACHE: dict[tuple[str, ...], _ManagementReadCacheEntry] = {}
+_MANAGEMENT_CACHE_TTL_SECONDS = 60.0
+_MANAGEMENT_SEARCH_CACHE_TTL_SECONDS = 30.0
+_MANAGEMENT_ERROR_TTL_SECONDS = 5.0
+
+
 def _client(store: AbstractRegistryStore) -> RegistryManagementClient:
     return RegistryManagementClient(store)
 
@@ -85,6 +104,78 @@ def _transport_error(result: ManagementResult) -> RegistryIngressError:
     if detail.startswith("Unknown provider:"):
         return RegistryIngressError(404, "Unknown provider guidance preview target.")
     return RegistryIngressError(400, detail)
+
+
+def _management_cache_key(*parts: object) -> tuple[str, ...]:
+    return tuple(str(part or "") for part in parts)
+
+
+def _management_cache_value(value: object) -> object:
+    return copy.deepcopy(value)
+
+
+def _invalidate_management_cache(*prefixes: tuple[str, ...]) -> None:
+    if not prefixes:
+        return
+    for key in list(_MANAGEMENT_READ_CACHE):
+        if any(key[:len(prefix)] == prefix for prefix in prefixes):
+            _MANAGEMENT_READ_CACHE.pop(key, None)
+
+
+def _invalidate_skill_cache(agent_id: str) -> None:
+    _invalidate_management_cache(
+        _management_cache_key("skills:list", agent_id),
+        _management_cache_key("skills:search", agent_id),
+    )
+
+
+def _invalidate_guidance_cache(agent_id: str, provider_name: str | None = None) -> None:
+    if provider_name:
+        _invalidate_management_cache(_management_cache_key("guidance", agent_id, provider_name))
+        return
+    _invalidate_management_cache(_management_cache_key("guidance", agent_id))
+
+
+async def _cached_read(
+    key: tuple[str, ...],
+    loader,
+    *,
+    ttl_seconds: float,
+    error_ttl_seconds: float = _MANAGEMENT_ERROR_TTL_SECONDS,
+):
+    now = time.monotonic()
+    entry = _MANAGEMENT_READ_CACHE.get(key)
+    if entry and entry.inflight is None and entry.expires_at > now:
+        if entry.error is not None:
+            raise RegistryIngressError(entry.error[0], entry.error[1])
+        return _management_cache_value(entry.value)
+    if entry and entry.inflight is not None:
+        result = await entry.inflight
+        return _management_cache_value(result)
+
+    task = asyncio.create_task(loader())
+    pending = _ManagementReadCacheEntry(inflight=task)
+    _MANAGEMENT_READ_CACHE[key] = pending
+    try:
+        value = await task
+    except RegistryIngressError as exc:
+        if _MANAGEMENT_READ_CACHE.get(key) is pending:
+            _MANAGEMENT_READ_CACHE[key] = _ManagementReadCacheEntry(
+                expires_at=time.monotonic() + max(0.0, error_ttl_seconds),
+                error=(exc.status_code, exc.detail),
+            )
+        raise
+    except Exception:
+        if _MANAGEMENT_READ_CACHE.get(key) is pending:
+            _MANAGEMENT_READ_CACHE.pop(key, None)
+        raise
+
+    if _MANAGEMENT_READ_CACHE.get(key) is pending:
+        _MANAGEMENT_READ_CACHE[key] = _ManagementReadCacheEntry(
+            expires_at=time.monotonic() + max(0.0, ttl_seconds),
+            value=_management_cache_value(value),
+        )
+    return _management_cache_value(value)
 
 
 async def _send(
@@ -145,18 +236,35 @@ def _skill_mutation_payload(result) -> dict[str, object]:
 
 
 async def list_catalog_skills(store: AbstractRegistryStore, agent_id: str, query: str = "") -> dict[str, object]:
-    payload = await _send(store, agent_id=agent_id, payload=ListCatalogSkillsRequest(query=query))
-    assert isinstance(payload, ListCatalogSkillsResult)
-    return {"skills": [item.model_dump(mode="json", by_alias=True) for item in payload.items]}
+    query_text = query.strip()
+
+    async def _load() -> dict[str, object]:
+        payload = await _send(store, agent_id=agent_id, payload=ListCatalogSkillsRequest(query=query_text))
+        assert isinstance(payload, ListCatalogSkillsResult)
+        return {"skills": [item.model_dump(mode="json", by_alias=True) for item in payload.items]}
+
+    return await _cached_read(
+        _management_cache_key("skills:list", agent_id, query_text),
+        _load,
+        ttl_seconds=_MANAGEMENT_CACHE_TTL_SECONDS,
+    )
 
 
 async def search_catalog_skills(store: AbstractRegistryStore, agent_id: str, query: str) -> dict[str, object]:
     query_text = query.strip()
     if len(query_text) < 2:
         return {"catalog": [], "registry": []}
-    payload = await _send(store, agent_id=agent_id, payload=SearchCatalogSkillsRequest(query=query_text))
-    assert isinstance(payload, SearchCatalogSkillsResult)
-    return payload.results.model_dump(mode="json", by_alias=True)
+
+    async def _load() -> dict[str, object]:
+        payload = await _send(store, agent_id=agent_id, payload=SearchCatalogSkillsRequest(query=query_text))
+        assert isinstance(payload, SearchCatalogSkillsResult)
+        return payload.results.model_dump(mode="json", by_alias=True)
+
+    return await _cached_read(
+        _management_cache_key("skills:search", agent_id, query_text.lower()),
+        _load,
+        ttl_seconds=_MANAGEMENT_SEARCH_CACHE_TTL_SECONDS,
+    )
 
 
 async def catalog_skill_detail(store: AbstractRegistryStore, agent_id: str, skill_name: str) -> dict[str, object]:
@@ -206,6 +314,7 @@ async def edit_catalog_skill_draft(
     )
     assert isinstance(payload, EditCatalogSkillDraftResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -224,6 +333,7 @@ async def submit_catalog_skill(
     )
     assert isinstance(payload, SubmitCatalogSkillResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -242,6 +352,7 @@ async def approve_catalog_skill(
     )
     assert isinstance(payload, ApproveCatalogSkillResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -260,6 +371,7 @@ async def reject_catalog_skill(
     )
     assert isinstance(payload, RejectCatalogSkillResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -278,6 +390,7 @@ async def publish_catalog_skill(
     )
     assert isinstance(payload, PublishCatalogSkillResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -296,6 +409,7 @@ async def archive_catalog_skill(
     )
     assert isinstance(payload, ArchiveCatalogSkillResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)
 
 
@@ -304,6 +418,7 @@ async def install_catalog_skill(store: AbstractRegistryStore, agent_id: str, ski
     assert isinstance(payload, InstallCatalogSkillResult)
     if not payload.result.ok:
         raise RegistryIngressError(404, payload.result.message)
+    _invalidate_skill_cache(agent_id)
     return _skill_mutation_payload(payload.result)
 
 
@@ -320,6 +435,7 @@ async def uninstall_catalog_skill(
     assert isinstance(payload, UninstallCatalogSkillResult)
     if not payload.result.ok:
         raise RegistryIngressError(400, payload.result.message)
+    _invalidate_skill_cache(agent_id)
     return _skill_mutation_payload(payload.result)
 
 
@@ -328,6 +444,7 @@ async def update_catalog_skill(store: AbstractRegistryStore, agent_id: str, skil
     assert isinstance(payload, UpdateCatalogSkillResult)
     if not payload.result.ok:
         raise RegistryIngressError(400, payload.result.message)
+    _invalidate_skill_cache(agent_id)
     return _skill_mutation_payload(payload.result)
 
 
@@ -480,19 +597,26 @@ async def provider_guidance_detail(
     scope_kind: str = "system",
     scope_key: str = "",
 ) -> dict[str, object]:
-    payload = await _send(
-        store,
-        agent_id=agent_id,
-        payload=ProviderGuidanceDetailRequest(
-            provider_name=provider_name,
-            scope_kind=scope_kind,
-            scope_key=scope_key,
-        ),
+    async def _load() -> dict[str, object]:
+        payload = await _send(
+            store,
+            agent_id=agent_id,
+            payload=ProviderGuidanceDetailRequest(
+                provider_name=provider_name,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            ),
+        )
+        assert isinstance(payload, ProviderGuidanceDetailResult)
+        if payload.detail is None:
+            raise RegistryIngressError(404, f"Unknown provider guidance: {provider_name}")
+        return payload.detail.model_dump(mode="json", by_alias=True)
+
+    return await _cached_read(
+        _management_cache_key("guidance", agent_id, provider_name, scope_kind, scope_key),
+        _load,
+        ttl_seconds=_MANAGEMENT_CACHE_TTL_SECONDS,
     )
-    assert isinstance(payload, ProviderGuidanceDetailResult)
-    if payload.detail is None:
-        raise RegistryIngressError(404, f"Unknown provider guidance: {provider_name}")
-    return payload.detail.model_dump(mode="json", by_alias=True)
 
 
 async def edit_provider_guidance_draft(
@@ -518,6 +642,7 @@ async def edit_provider_guidance_draft(
     )
     assert isinstance(payload, EditProviderGuidanceDraftResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
@@ -544,6 +669,7 @@ async def submit_provider_guidance(
     )
     assert isinstance(payload, SubmitProviderGuidanceResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
@@ -570,6 +696,7 @@ async def approve_provider_guidance(
     )
     assert isinstance(payload, ApproveProviderGuidanceResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
@@ -596,6 +723,7 @@ async def reject_provider_guidance(
     )
     assert isinstance(payload, RejectProviderGuidanceResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
@@ -622,6 +750,7 @@ async def publish_provider_guidance(
     )
     assert isinstance(payload, PublishProviderGuidanceResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
@@ -648,8 +777,9 @@ async def archive_provider_guidance(
     )
     assert isinstance(payload, ArchiveProviderGuidanceResult)
     _raise_for_lifecycle(payload.result)
+    _invalidate_guidance_cache(agent_id, provider_name)
     return _mutation_payload(payload.result)
 
 
 def reset_for_test() -> None:
-    return None
+    _MANAGEMENT_READ_CACHE.clear()

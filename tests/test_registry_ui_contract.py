@@ -114,6 +114,33 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
 
+def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function peekCachedData(" in helper
+    assert "function loadCachedData(" in helper
+    assert "function invalidateCachedData(" in helper
+    assert "peekCachedData," in helper
+    assert "loadCachedData," in helper
+    assert "invalidateCachedData," in helper
+
+    assert "UI.peekCachedData(_skillCacheKey(currentAgentId))" in skill_catalog
+    assert "UI.loadCachedData(" in skill_catalog
+    assert "_invalidateSkillCaches();" in skill_catalog
+    assert "UI.peekCachedData(_guidanceCacheKey())" in guidance_editor
+    assert "UI.loadCachedData(" in guidance_editor
+    assert "_invalidateGuidanceCache();" in guidance_editor
+
+
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (

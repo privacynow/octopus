@@ -226,6 +226,15 @@ dropdowns from the same paged `/v1/agents` resource as the rest of the UI, so
 their client requests stay within the registry API's supported agent page
 limits.
 
+Those management reads now use a two-layer cache:
+
+- the registry ingress keeps a short-lived in-memory cache for skills lists,
+  skills search results, and provider-guidance detail reads, with in-flight
+  request dedupe and mutation-driven invalidation
+- the browser keeps a small stale-while-revalidate memory cache so repeat
+  visits render immediately from the last successful payload and refresh in the
+  background instead of blocking on a new bot management round-trip
+
 The current UI contract is intentionally shared rather than per-component:
 
 - list routes use the same shell structure: compact page header, `admin-shell`,

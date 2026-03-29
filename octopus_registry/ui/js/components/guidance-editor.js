@@ -3,6 +3,8 @@
  */
 function renderGuidanceEditor(container) {
     const cleanups = UI.beginCleanupScope();
+    const GUIDANCE_CACHE_TTL_MS = 60000;
+    const CACHE_ERROR_TTL_MS = 5000;
 
     function renderLoadingState(message = 'Loading guidance…') {
         UI.clearMemoizedRender(contentEl);
@@ -105,6 +107,17 @@ function renderGuidanceEditor(container) {
         agentDropdown.update(agents, currentAgentId);
     }
 
+    function _guidanceCacheKey(agentId = currentAgentId, provider = currentProvider) {
+        return `guidance:${String(agentId || '').trim()}:${String(provider || '').trim()}:system:`;
+    }
+
+    function _invalidateGuidanceCache(agentId = currentAgentId, provider = currentProvider) {
+        const normalizedAgentId = String(agentId || '').trim();
+        const normalizedProvider = String(provider || '').trim();
+        if (!normalizedAgentId || !normalizedProvider) return;
+        UI.invalidateCachedData(_guidanceCacheKey(normalizedAgentId, normalizedProvider));
+    }
+
     async function loadGuidance({ soft = false } = {}) {
         if (!currentAgentId) {
             UI.clearMemoizedRender(contentEl);
@@ -113,13 +126,30 @@ function renderGuidanceEditor(container) {
             ]);
             return;
         }
-        if (!soft) {
+        const hadVisibleState = contentEl.childElementCount > 0;
+        const cachedGuidance = UI.peekCachedData(_guidanceCacheKey());
+        const hasCachedView = Boolean(cachedGuidance);
+        if (cachedGuidance) {
+            renderGuidanceContent(cachedGuidance.guidance || cachedGuidance);
+        } else if (!soft) {
             renderLoadingState('Loading guidance…');
         }
         try {
-            const data = await API.getGuidance(currentAgentId, currentProvider);
+            const data = await UI.loadCachedData(
+                _guidanceCacheKey(),
+                () => API.getGuidance(currentAgentId, currentProvider),
+                {
+                    ttlMs: GUIDANCE_CACHE_TTL_MS,
+                    errorTtlMs: CACHE_ERROR_TTL_MS,
+                    forceRefresh: hasCachedView,
+                },
+            );
             renderGuidanceContent(data.guidance || data);
         } catch (err) {
+            if (hasCachedView || hadVisibleState) {
+                UI.reportError('Failed to refresh guidance', err, { context: 'Guidance refresh failed' });
+                return;
+            }
             UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load guidance: ' + err.message, loadGuidance)]);
         }
@@ -201,6 +231,7 @@ function renderGuidanceEditor(container) {
             saveBtn.disabled = true;
             try {
                 await API.updateGuidanceDraft(currentAgentId, currentProvider, { body: textarea.value });
+                _invalidateGuidanceCache();
                 saveBtn.textContent = 'Saved';
                 setTimeout(() => { saveBtn.textContent = 'Save draft'; }, 1600);
             } catch (err) {
@@ -233,6 +264,7 @@ function renderGuidanceEditor(container) {
             submitBtn.disabled = true;
             try {
                 await API.submitGuidance(currentAgentId, currentProvider);
+                _invalidateGuidanceCache();
                 loadGuidance();
             } catch (err) {
                 UI.reportError('Failed to submit the guidance', err, { context: 'Guidance submit failed' });
@@ -249,6 +281,7 @@ function renderGuidanceEditor(container) {
                 publishBtn.disabled = true;
                 try {
                     await API.publishGuidance(currentAgentId, currentProvider);
+                    _invalidateGuidanceCache();
                     loadGuidance();
                 } catch (err) {
                     UI.reportError('Failed to publish the guidance', err, { context: 'Guidance publish failed' });

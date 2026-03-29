@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,13 @@ from octopus_registry.store import RegistrySQLiteStore
 from octopus_sdk.registry.management import (
     ConversationSkillListingRecord,
     ConversationSkillStateResult,
+    InstallCatalogSkillResult,
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
     ManagementRequest,
     ManagementResult,
+    ProviderGuidanceDetailResult,
+    ProviderGuidanceLifecycleDetailRecord,
     RuntimeSkillCatalogItemRecord,
 )
 from octopus_sdk.identity import conversation_key_for_ref
@@ -232,3 +236,150 @@ async def test_registry_ingress_conversation_skill_state_uses_origin_transport_k
     assert payload.conversation_id == conversation.conversation_id
     assert payload.conversation_key == conversation_key_for_ref("telegram:test-bot:12345")
     assert result["conversation_key"] == conversation_key_for_ref("telegram:test-bot:12345")
+
+
+@pytest.mark.asyncio
+async def test_registry_ingress_caches_management_reads_and_dedupes_inflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_ingress.reset_for_test()
+    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    agent_id, _agent_token = _register_agent(store)
+    calls = {"count": 0}
+    release = asyncio.Event()
+
+    class _StubClient:
+        async def send(self, *, agent_id: str, payload, timeout_seconds: int = 30) -> ManagementResult:
+            calls["count"] += 1
+            await release.wait()
+            return ManagementResult(
+                request_id="request-1",
+                agent_id=agent_id,
+                success=True,
+                payload=ListCatalogSkillsResult(
+                    items=(
+                        RuntimeSkillCatalogItemRecord(
+                            name="cached-skill",
+                            display_name="Cached Skill",
+                            description="cache hit",
+                            source_kind="builtin",
+                            has_custom_override=False,
+                            requires_credentials=False,
+                            requirement_keys=[],
+                            providers=["codex"],
+                            can_activate=True,
+                            can_update=False,
+                            can_uninstall=False,
+                            lifecycle_status="published",
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(registry_ingress, "_client", lambda _store: _StubClient())
+
+    first = asyncio.create_task(registry_ingress.list_catalog_skills(store, agent_id))
+    second = asyncio.create_task(registry_ingress.list_catalog_skills(store, agent_id))
+    await asyncio.sleep(0)
+    release.set()
+    first_result, second_result = await asyncio.gather(first, second)
+    third_result = await registry_ingress.list_catalog_skills(store, agent_id)
+
+    assert calls["count"] == 1
+    assert first_result["skills"][0]["name"] == "cached-skill"
+    assert second_result["skills"][0]["name"] == "cached-skill"
+    assert third_result["skills"][0]["name"] == "cached-skill"
+
+
+@pytest.mark.asyncio
+async def test_registry_ingress_invalidates_skill_cache_after_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_ingress.reset_for_test()
+    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    agent_id, _agent_token = _register_agent(store)
+    calls: list[str] = []
+
+    class _StubClient:
+        async def send(self, *, agent_id: str, payload, timeout_seconds: int = 30) -> ManagementResult:
+            operation = str(payload.operation)
+            calls.append(operation)
+            if operation == "list_catalog_skills":
+                return ManagementResult(
+                    request_id=f"request-{len(calls)}",
+                    agent_id=agent_id,
+                    success=True,
+                    payload=ListCatalogSkillsResult(items=()),
+                )
+            return ManagementResult(
+                request_id=f"request-{len(calls)}",
+                agent_id=agent_id,
+                success=True,
+                payload=InstallCatalogSkillResult.model_validate(
+                    {
+                        "operation": "install_catalog_skill",
+                        "result": {
+                            "name": payload.skill_name,
+                            "ok": True,
+                            "message": "installed",
+                            "prompt_size_warnings": [],
+                        },
+                    }
+                ),
+            )
+
+    monkeypatch.setattr(registry_ingress, "_client", lambda _store: _StubClient())
+
+    await registry_ingress.list_catalog_skills(store, agent_id)
+    await registry_ingress.list_catalog_skills(store, agent_id)
+    await registry_ingress.install_catalog_skill(store, agent_id, "cached-skill")
+    await registry_ingress.list_catalog_skills(store, agent_id)
+
+    assert calls == [
+        "list_catalog_skills",
+        "install_catalog_skill",
+        "list_catalog_skills",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_registry_ingress_caches_guidance_detail_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_ingress.reset_for_test()
+    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    agent_id, _agent_token = _register_agent(store)
+    calls = {"count": 0}
+
+    class _StubClient:
+        async def send(self, *, agent_id: str, payload, timeout_seconds: int = 30) -> ManagementResult:
+            calls["count"] += 1
+            return ManagementResult(
+                request_id=f"request-{calls['count']}",
+                agent_id=agent_id,
+                success=True,
+                payload=ProviderGuidanceDetailResult(
+                    detail=ProviderGuidanceLifecycleDetailRecord(
+                        provider="codex",
+                        scope_kind="system",
+                        scope_key="",
+                        body="Be precise.",
+                        lifecycle_status="draft",
+                        active_revision_id="rev-1",
+                        published_revision_id="rev-1",
+                        runtime_available=True,
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(registry_ingress, "_client", lambda _store: _StubClient())
+
+    first = await registry_ingress.provider_guidance_detail(store, agent_id, "codex")
+    second = await registry_ingress.provider_guidance_detail(store, agent_id, "codex")
+
+    assert calls["count"] == 1
+    assert first["body"] == "Be precise."
+    assert second["body"] == "Be precise."

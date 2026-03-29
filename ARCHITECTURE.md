@@ -179,6 +179,22 @@ The registry server and bot runtime are separate deployable processes. The bot
 does not expose its own management HTTP API; the registry is the management
 plane and talks to connected bots over the SDK management protocol.
 
+Management reads that back the `Skills` and `Guidance` UI routes now use
+layered caching:
+
+- `octopus_registry.ingress`
+  - keeps a short-lived in-process cache for catalog list/search reads and
+    provider-guidance detail reads
+  - dedupes concurrent identical reads so one slow bot round-trip satisfies
+    multiple browser requests
+  - invalidates those cached reads when the corresponding lifecycle mutations
+    succeed
+- `octopus_registry/ui/js/helpers/ui.js`
+  - keeps a small browser memory cache for stale-while-revalidate route loads
+  - repeat visits render from the last successful management payload
+    immediately, then refresh in the background and patch the DOM with
+    `UI.memoizedRender(...)`
+
 ## SDK Surface
 
 `octopus_sdk/` is the shared import surface for contracts and reusable runtime

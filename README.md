@@ -33,6 +33,75 @@ Setup offers three modes:
 - **Advanced**: manual role, tags, description, default skills, allowed users,
   working dir, and timeout settings
 
+## First Run
+
+After setup, verify the deployment before you start tuning features.
+
+1. Run `./octopus status`.
+2. Open the registry UI at `http://localhost:<port>/ui`.
+3. Send the bot a normal Telegram message.
+4. If you chose **Safe** mode, approve the request in Telegram or the registry
+   UI.
+
+At this point the essential path is working:
+
+- Telegram user message in
+- provider execution
+- optional approval gate
+- bot reply back in the same chat
+- operator visibility in the registry UI
+
+## Deployment And Operations
+
+The shipped runtime in this repo is local-registry-first:
+
+- bots run in `BOT_AGENT_MODE=registry`
+- Telegram startup expects registry connectivity
+- the operator UI and bot runtime are designed to run together
+
+Important URLs and env values:
+
+- local registry UI: `http://localhost:<port>/ui`
+- bot-to-registry URL inside Docker: `http://registry:8787`
+- operator login secret: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
+
+Core operator commands:
+
+```bash
+./octopus
+./octopus status
+./octopus start registry
+./octopus connect
+./octopus restart bots
+./octopus redeploy registry
+./octopus shell m1
+./octopus doctor m1
+./octopus clean
+```
+
+For a persistent `~/octopus` checkout, the repo also ships non-interactive ops
+helpers under [`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops):
+
+```bash
+bash scripts/ops/backup_octopus_deploy.sh --help
+bash scripts/ops/refresh_octopus_with_backup.sh --help
+```
+
+Use the clean refresh flow when you need to redeploy without losing local
+deployment state:
+
+1. back up `~/octopus/.deploy`
+2. `git pull --ff-only`
+3. run `./octopus clean`
+4. restore `.deploy`
+5. start the registry and bots again
+6. reconnect bots to the registry
+7. verify registry health and bot freshness
+
+The runtime supports multiple registry records through indexed
+`BOT_AGENT_REGISTRY_<n>_*` env vars, but the `./octopus` CLI is intentionally
+focused on the local registry workflow.
+
 ## How People Use Octopus
 
 Octopus has two primary user roles:
@@ -50,16 +119,11 @@ For most users, Octopus is just a Telegram chat bot.
 - if routed work is used, the parent reply still comes back into the same
   Telegram chat
 
-Common user-facing commands:
+Most users can get started with:
 
 ```text
 /help
-/skills
-/skills list
-/skills add <name>
-/skills remove <name>
-/skills setup <name>
-/skills clear
+/project <name>
 ```
 
 ### Operators
@@ -68,20 +132,6 @@ Operators work through two surfaces:
 
 - the `./octopus` CLI
 - the local registry UI at `/ui`
-
-Core CLI commands:
-
-```bash
-./octopus
-./octopus status
-./octopus start registry
-./octopus connect
-./octopus restart bots
-./octopus redeploy registry
-./octopus shell m1
-./octopus doctor m1
-./octopus clean
-```
 
 Core registry UI routes:
 
@@ -95,44 +145,6 @@ Core registry UI routes:
 - **Tasks**: cross-conversation routed-task queue
 - **Usage**: per-conversation token and cost rollups
 - **Skills** and **Guidance**: operator management surfaces
-
-## Deployment Model
-
-For the shipped Telegram runtime in this repo:
-
-- bots run in `BOT_AGENT_MODE=registry`
-- Telegram startup expects registry connectivity
-- the local operator experience assumes registry-connected bots
-
-Important URLs and env values:
-
-- local registry UI: `http://localhost:<port>/ui`
-- bot-to-registry URL inside Docker: `http://registry:8787`
-- operator login secret: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
-
-The runtime supports multiple registry records through indexed
-`BOT_AGENT_REGISTRY_<n>_*` env vars, but the `./octopus` CLI is intentionally
-local-registry-first.
-
-## Clean Deploy Workflow
-
-For a persistent `~/octopus` checkout, the repo also ships non-interactive ops
-helpers under [`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops):
-
-```bash
-bash scripts/ops/backup_octopus_deploy.sh --help
-bash scripts/ops/refresh_octopus_with_backup.sh --help
-```
-
-The clean refresh flow is:
-
-1. back up `~/octopus/.deploy`
-2. `git pull --ff-only`
-3. run `./octopus clean`
-4. restore `.deploy`
-5. start the registry and bots again
-6. reconnect bots to the registry
-7. verify registry health and bot freshness
 
 ## Shared Workspaces
 
@@ -152,8 +164,8 @@ workspace with `/project <name>`.
 
 ## Skills And Guidance
 
-Skills and guidance are operator-managed capabilities, but they are not the
-main entrypoint into Octopus.
+Skills and guidance are secondary management surfaces, not the starting point
+for a new deployment.
 
 - builtin skills come with the bot runtime and can be enabled per chat through
   Telegram `/skills ...` commands or turned on by default with `BOT_SKILLS`

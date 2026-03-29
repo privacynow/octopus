@@ -19,9 +19,7 @@ from octopus_sdk.content_models import (
     ProviderGuidanceTrackRecord,
     RuntimeSkillSummary,
     RuntimeSkillTrackRecord,
-    SkillFileRecord,
     SkillRevisionRecord,
-    skill_precedence,
 )
 
 from .capability_service import (
@@ -39,6 +37,36 @@ from .store_shared.conversations import (
     get_conversation as shared_get_conversation,
     list_agent_conversations as shared_list_agent_conversations,
     list_conversations as shared_list_conversations,
+)
+from .store_shared.content import (
+    append_provider_guidance_approval as shared_append_provider_guidance_approval,
+    append_skill_approval as shared_append_skill_approval,
+    apply_provider_guidance_lifecycle_transition as shared_apply_provider_guidance_lifecycle_transition,
+    apply_skill_lifecycle_transition as shared_apply_skill_lifecycle_transition,
+    clear_published_provider_guidance_revision as shared_clear_published_provider_guidance_revision,
+    clear_published_skill_revision as shared_clear_published_skill_revision,
+    delete_skill_track as shared_delete_skill_track,
+    get_latest_provider_guidance_approval_action as shared_get_latest_provider_guidance_approval_action,
+    get_latest_skill_approval_action as shared_get_latest_skill_approval_action,
+    get_provider_guidance as shared_get_provider_guidance,
+    list_provider_guidance_approvals as shared_list_provider_guidance_approvals,
+    list_provider_guidance_revisions as shared_list_provider_guidance_revisions,
+    list_runtime_skill_summaries as shared_list_runtime_skill_summaries,
+    list_skill_approvals as shared_list_skill_approvals,
+    list_skill_revisions as shared_list_skill_revisions,
+    list_skill_summaries as shared_list_skill_summaries,
+    list_skill_tracks as shared_list_skill_tracks,
+    replace_provider_guidance as shared_replace_provider_guidance,
+    replace_skill_track as shared_replace_skill_track,
+    resolve_provider_guidance as shared_resolve_provider_guidance,
+    resolve_runtime_skill as shared_resolve_runtime_skill,
+    resolve_skill as shared_resolve_skill,
+    set_provider_guidance_revision_status as shared_set_provider_guidance_revision_status,
+    set_published_provider_guidance_revision as shared_set_published_provider_guidance_revision,
+    set_published_skill_revision as shared_set_published_skill_revision,
+    set_skill_revision_status as shared_set_skill_revision_status,
+    upsert_provider_guidance_draft as shared_upsert_provider_guidance_draft,
+    upsert_skill_draft as shared_upsert_skill_draft,
 )
 from .store_shared.delivery import (
     ack as shared_ack,
@@ -2601,129 +2629,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     # Skill / guidance persistence (registry-owned content store)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_json(raw: str, default: object) -> object:
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return default
-
-    @staticmethod
-    def _stable_json(value: object) -> str:
-        return json.dumps(value, sort_keys=True)
-
-    def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
-        return record.revision.revision_id or f"{record.slug}|{record.revision.digest}"
-
-    def _guidance_revision_id(self, record: ProviderGuidanceTrackRecord) -> str:
-        key = f"{record.provider}|{record.scope_kind}|{record.scope_key}"
-        return record.revision.revision_id or f"{key}|{record.revision.digest}"
-
-    def _upsert_registry_skill(
-        self,
-        record: RuntimeSkillTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._skill_revision_id(record)
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT published_revision_id FROM runtime_skills WHERE slug = ?",
-                (record.slug,),
-            ).fetchone()
-            published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-            conn.execute(
-                """
-                INSERT INTO runtime_skills (
-                    slug, display_name, description, source_kind, source_uri, owner_actor,
-                    visibility, is_mutable, archived, instruction_body, requirements_json,
-                    provider_config_json, files_json, active_revision_id, published_revision_id,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(slug) DO UPDATE SET
-                    display_name = excluded.display_name,
-                    description = excluded.description,
-                    source_kind = excluded.source_kind,
-                    source_uri = excluded.source_uri,
-                    owner_actor = excluded.owner_actor,
-                    visibility = excluded.visibility,
-                    is_mutable = excluded.is_mutable,
-                    archived = excluded.archived,
-                    instruction_body = excluded.instruction_body,
-                    requirements_json = excluded.requirements_json,
-                    provider_config_json = excluded.provider_config_json,
-                    files_json = excluded.files_json,
-                    active_revision_id = excluded.active_revision_id,
-                    published_revision_id = excluded.published_revision_id,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    record.slug,
-                    record.display_name,
-                    record.description,
-                    record.source_kind,
-                    record.source_uri,
-                    record.owner_actor,
-                    record.visibility,
-                    1 if record.is_mutable else 0,
-                    1 if record.archived else 0,
-                    record.revision.instruction_body,
-                    self._stable_json(record.revision.requirements),
-                    self._stable_json(record.revision.provider_config),
-                    self._stable_json(
-                        [
-                            {
-                                "relative_path": f.relative_path,
-                                "content_text": f.content_text,
-                                "content_type": f.content_type,
-                                "executable": f.executable,
-                            }
-                            for f in record.revision.files
-                        ]
-                    ),
-                    revision_id,
-                    published_revision_id,
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO skill_revisions (
-                    revision_id, slug, instruction_body, requirements_json,
-                    provider_config_json, files_json, version_label, changelog,
-                    status, created_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    revision_id,
-                    record.slug,
-                    record.revision.instruction_body,
-                    self._stable_json(record.revision.requirements),
-                    self._stable_json(record.revision.provider_config),
-                    self._stable_json(
-                        [
-                            {
-                                "relative_path": f.relative_path,
-                                "content_text": f.content_text,
-                                "content_type": f.content_type,
-                                "executable": f.executable,
-                            }
-                            for f in record.revision.files
-                        ]
-                    ),
-                    record.revision.version_label,
-                    record.revision.changelog,
-                    status,
-                    record.revision.created_by,
-                    record.revision.created_at or now,
-                ),
-            )
-
     def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="published", publish=True)
+        with self._connect() as conn:
+            shared_replace_skill_track(conn, dialect=_SQLITE_STORE_DIALECT, track=record)
 
     def delete_skill_track(
         self,
@@ -2734,199 +2642,48 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         owner_actor: str = "",
     ) -> bool:
         with self._connect() as conn:
-            before = conn.total_changes
-            conn.execute("DELETE FROM skill_revisions WHERE slug = ?", (slug,))
-            conn.execute("DELETE FROM skill_approvals WHERE slug = ?", (slug,))
-            conn.execute("DELETE FROM runtime_skills WHERE slug = ?", (slug,))
-            return conn.total_changes > before
-
-    def _skill_row_to_track(self, row: sqlite3.Row) -> RuntimeSkillTrackRecord:
-        files_data = self._parse_json(row["files_json"], [])
-        files = tuple(
-            SkillFileRecord(
-                relative_path=f.get("relative_path", ""),
-                content_text=f.get("content_text", ""),
-                content_type=f.get("content_type", "text/plain"),
-                executable=bool(f.get("executable", False)),
-            )
-            for f in files_data
-            if isinstance(f, dict)
-        )
-        # Determine the revision status skill_revisions if available
-        revision_status = row["status"] if "status" in row.keys() else "published"
-        revision = SkillRevisionRecord(
-            instruction_body=row["instruction_body"],
-            requirements=self._parse_json(row["requirements_json"], []),
-            provider_config=self._parse_json(row["provider_config_json"], {}),
-            files=files,
-            version_label=row["version_label"] if "version_label" in row.keys() else "",
-            changelog=row["changelog"] if "changelog" in row.keys() else "",
-            created_by=row["created_by"] if "created_by" in row.keys() else "",
-            created_at=row["created_at"] if "created_at" in row.keys() else "",
-            revision_id=row["revision_id"] if "revision_id" in row.keys() else row["active_revision_id"],
-            status=revision_status,
-        )
-        return RuntimeSkillTrackRecord(
-            slug=row["slug"],
-            display_name=row["display_name"],
-            description=row["description"],
-            source_kind=row["source_kind"],
-            revision=revision,
-            source_uri=row["source_uri"],
-            owner_actor=row["owner_actor"],
-            visibility=row["visibility"],
-            is_mutable=bool(row["is_mutable"]),
-            archived=bool(row["archived"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-        )
-
-    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[sqlite3.Row]:
-        revision_ref = (
-            "CASE WHEN s.published_revision_id != '' THEN s.published_revision_id ELSE s.active_revision_id END"
-            if runtime_only else "s.active_revision_id"
-        )
-        extra_where = "AND s.published_revision_id != ''" if runtime_only else ""
-        with self._connect() as conn:
-            return conn.execute(
-                f"""
-                SELECT
-                    s.slug, s.display_name, s.description, s.source_kind,
-                    s.source_uri, s.owner_actor, s.visibility, s.is_mutable,
-                    s.archived, s.active_revision_id, s.published_revision_id,
-                    rev.revision_id, rev.instruction_body, rev.requirements_json,
-                    rev.provider_config_json, rev.files_json, rev.version_label,
-                    rev.changelog, rev.status, rev.created_by, rev.created_at
-                FROM runtime_skills s
-                JOIN skill_revisions rev ON rev.revision_id = {revision_ref}
-                WHERE s.slug = ?
-                {extra_where}
-                """,
-                (slug,),
-            ).fetchall()
+            return shared_delete_skill_track(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=False)]
-        return sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
+        with self._connect() as conn:
+            return shared_list_skill_tracks(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        tracks = self.list_skill_tracks(slug)
-        return tracks[0] if tracks else None
+        with self._connect() as conn:
+            return shared_resolve_skill(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=True)]
-        records = sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
-        return records[0] if records else None
-
-    def _skill_summaries(self, *, runtime_only: bool) -> list[RuntimeSkillSummary]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT slug FROM runtime_skills ORDER BY lower(slug)").fetchall()
-        resolver = self.resolve_runtime_skill if runtime_only else self.resolve_skill
-        summaries: list[RuntimeSkillSummary] = []
-        for row in rows:
-            record = resolver(row["slug"])
-            if record is None:
-                continue
-            summaries.append(
-                RuntimeSkillSummary(
-                    slug=record.slug,
-                    display_name=record.display_name,
-                    description=record.description,
-                    source_kind=record.source_kind,
-                    source_uri=record.source_uri,
-                    visibility=record.visibility,
-                    is_mutable=record.is_mutable,
-                    digest=record.revision.digest,
-                    status=record.revision.status,
-                    runtime_available=bool(record.published_revision_id) or not record.is_mutable,
-                    has_unpublished_changes=bool(record.published_revision_id)
-                    and record.published_revision_id != record.active_revision_id,
-                )
-            )
-        return summaries
+            return shared_resolve_runtime_skill(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=False)
+        with self._connect() as conn:
+            return shared_list_skill_summaries(conn, dialect=_SQLITE_STORE_DIALECT)
 
     def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=True)
+        with self._connect() as conn:
+            return shared_list_runtime_skill_summaries(conn, dialect=_SQLITE_STORE_DIALECT)
 
     def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="draft", publish=False)
+        with self._connect() as conn:
+            shared_upsert_skill_draft(conn, dialect=_SQLITE_STORE_DIALECT, track=record)
 
     def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT revision_id, instruction_body, requirements_json, provider_config_json,
-                       files_json, version_label, changelog, status, created_by, created_at
-                FROM skill_revisions
-                WHERE slug = ?
-                ORDER BY created_at DESC, revision_id DESC
-                """,
-                (slug,),
-            ).fetchall()
-        return [
-            SkillRevisionRecord(
-                instruction_body=row["instruction_body"],
-                requirements=self._parse_json(row["requirements_json"], []),
-                provider_config=self._parse_json(row["provider_config_json"], {}),
-                files=tuple(
-                    SkillFileRecord(
-                        relative_path=f.get("relative_path", ""),
-                        content_text=f.get("content_text", ""),
-                        content_type=f.get("content_type", "text/plain"),
-                        executable=bool(f.get("executable", False)),
-                    )
-                    for f in self._parse_json(row["files_json"], [])
-                    if isinstance(f, dict)
-                ),
-                version_label=row["version_label"],
-                changelog=row["changelog"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_revisions(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT record_id, revision_id, action, actor, note, created_at
-                FROM skill_approvals
-                WHERE slug = ?
-                ORDER BY created_at DESC, record_id DESC
-                """,
-                (slug,),
-            ).fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_approvals(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT action
-                FROM skill_approvals
-                WHERE slug = ? AND revision_id = ?
-                ORDER BY created_at DESC, record_id DESC
-                LIMIT 1
-                """,
-                (slug, revision_id),
-            ).fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_skill_approval_action(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+            )
 
     def append_skill_approval(
         self,
@@ -2937,46 +2694,39 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         actor: str,
         note: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{slug}|{revision_id}|{action}|{now}"
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO skill_approvals (
-                    record_id, slug, revision_id, action, actor, note, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (record_id, slug, revision_id, action, actor, note, now),
+            return shared_append_skill_approval(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
             )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
 
     def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE skill_revisions SET status = ? WHERE slug = ? AND revision_id = ?",
-                (status, slug, revision_id),
+            shared_set_skill_revision_status(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                status=status,
             )
 
     def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE runtime_skills SET published_revision_id = ?, updated_at = ? WHERE slug = ?",
-                (revision_id, utcnow_iso(), slug),
+            shared_set_published_skill_revision(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
             )
 
     def clear_published_skill_revision(self, slug: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE runtime_skills SET published_revision_id = '', updated_at = ? WHERE slug = ?",
-                (utcnow_iso(), slug),
-            )
+            shared_clear_published_skill_revision(conn, dialect=_SQLITE_STORE_DIALECT, slug=slug)
 
     def apply_skill_lifecycle_transition(
         self,
@@ -2989,116 +2739,26 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         actor: str = "",
         note: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{slug}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn:
-            if set_status is not None:
-                conn.execute(
-                    "UPDATE skill_revisions SET status = ? WHERE slug = ? AND revision_id = ?",
-                    (set_status, slug, revision_id),
-                )
-            if published_pointer == "set_active":
-                conn.execute(
-                    "UPDATE runtime_skills SET published_revision_id = ?, updated_at = ? WHERE slug = ?",
-                    (revision_id, now, slug),
-                )
-            elif published_pointer == "clear":
-                conn.execute(
-                    "UPDATE runtime_skills SET published_revision_id = '', updated_at = ? WHERE slug = ?",
-                    (now, slug),
-                )
-            if approval_action is not None:
-                conn.execute(
-                    """
-                    INSERT INTO skill_approvals (
-                        record_id, slug, revision_id, action, actor, note, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (record_id, slug, revision_id, approval_action, actor, note, now),
-                )
-                record = LifecycleApprovalRecord(
-                    record_id=record_id,
-                    revision_id=revision_id,
-                    action=approval_action,
-                    actor=actor,
-                    note=note,
-                    created_at=now,
-                )
-        return record
-
-    # --- Provider guidance ---
-
-    def _upsert_registry_guidance(
-        self,
-        record: ProviderGuidanceTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._guidance_revision_id(record)
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT published_revision_id FROM provider_guidance WHERE provider = ? AND scope_kind = ? AND scope_key = ?",
-                (record.provider, record.scope_kind, record.scope_key),
-            ).fetchone()
-            published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-            conn.execute(
-                """
-                INSERT INTO provider_guidance (
-                    provider, scope_kind, scope_key, content, format, is_mutable,
-                    active_revision_id, published_revision_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider, scope_kind, scope_key) DO UPDATE SET
-                    content = excluded.content,
-                    format = excluded.format,
-                    is_mutable = excluded.is_mutable,
-                    active_revision_id = excluded.active_revision_id,
-                    published_revision_id = excluded.published_revision_id,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    record.provider,
-                    record.scope_kind,
-                    record.scope_key,
-                    record.revision.content,
-                    record.revision.format,
-                    1 if record.is_mutable else 0,
-                    revision_id,
-                    published_revision_id,
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO guidance_revisions (
-                    revision_id, provider, scope_kind, scope_key, content, format,
-                    status, created_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    revision_id,
-                    record.provider,
-                    record.scope_kind,
-                    record.scope_key,
-                    record.revision.content,
-                    record.revision.format,
-                    status,
-                    record.revision.created_by,
-                    record.revision.created_at or now,
-                ),
+            return shared_apply_skill_lifecycle_transition(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
             )
 
     def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="published", publish=True)
+        with self._connect() as conn:
+            shared_replace_provider_guidance(conn, dialect=_SQLITE_STORE_DIALECT, track=record)
 
     def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="draft", publish=False)
+        with self._connect() as conn:
+            shared_upsert_provider_guidance_draft(conn, dialect=_SQLITE_STORE_DIALECT, track=record)
 
     def get_provider_guidance(
         self,
@@ -3108,77 +2768,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                    g.active_revision_id, g.published_revision_id,
-                    rev.content, rev.format, rev.created_by, rev.created_at,
-                    rev.status, rev.revision_id
-                FROM provider_guidance g
-                JOIN guidance_revisions rev ON rev.revision_id = g.active_revision_id
-                WHERE g.provider = ? AND g.scope_kind = ? AND g.scope_key = ?
-                """,
-                (provider, scope_kind, scope_key),
-            ).fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
-
-    def _runtime_provider_guidance(
-        self,
-        provider: str,
-        *,
-        scope_kind: str,
-        scope_key: str,
-    ) -> ProviderGuidanceTrackRecord | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                    g.active_revision_id, g.published_revision_id,
-                    rev.content, rev.format, rev.created_by, rev.created_at,
-                    rev.status, rev.revision_id
-                FROM provider_guidance g
-                JOIN guidance_revisions rev ON rev.revision_id = g.published_revision_id
-                WHERE g.provider = ? AND g.scope_kind = ? AND g.scope_key = ? AND g.published_revision_id != ''
-                """,
-                (provider, scope_kind, scope_key),
-            ).fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
+            return shared_get_provider_guidance(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def resolve_provider_guidance(
         self,
@@ -3186,11 +2782,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         *,
         instance_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
-        if instance_key:
-            match = self._runtime_provider_guidance(provider, scope_kind="instance", scope_key=instance_key)
-            if match is not None:
-                return match
-        return self._runtime_provider_guidance(provider, scope_kind="system", scope_key="")
+        with self._connect() as conn:
+            return shared_resolve_provider_guidance(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                instance_key=instance_key,
+            )
 
     def list_provider_guidance_revisions(
         self,
@@ -3200,26 +2798,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[ProviderGuidanceRevisionRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT revision_id, content, format, created_by, created_at, status
-                FROM guidance_revisions
-                WHERE provider = ? AND scope_kind = ? AND scope_key = ?
-                ORDER BY created_at DESC, revision_id DESC
-                """,
-                (provider, scope_kind, scope_key),
-            ).fetchall()
-        return [
-            ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
+            return shared_list_provider_guidance_revisions(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def list_provider_guidance_approvals(
         self,
@@ -3229,26 +2814,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT record_id, revision_id, action, actor, note, created_at
-                FROM guidance_approvals
-                WHERE provider = ? AND scope_kind = ? AND scope_key = ?
-                ORDER BY created_at DESC, record_id DESC
-                """,
-                (provider, scope_kind, scope_key),
-            ).fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
+            return shared_list_provider_guidance_approvals(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def get_latest_provider_guidance_approval_action(
         self,
@@ -3259,17 +2831,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> str:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT action
-                FROM guidance_approvals
-                WHERE provider = ? AND scope_kind = ? AND scope_key = ? AND revision_id = ?
-                ORDER BY created_at DESC, record_id DESC
-                LIMIT 1
-                """,
-                (provider, scope_kind, scope_key, revision_id),
-            ).fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_provider_guidance_approval_action(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def append_provider_guidance_approval(
         self,
@@ -3282,25 +2851,18 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{action}|{now}"
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO guidance_approvals (
-                    record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, now),
+            return shared_append_provider_guidance_approval(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
 
     def set_provider_guidance_revision_status(
         self,
@@ -3312,9 +2874,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE guidance_revisions SET status = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ? AND revision_id = ?",
-                (status, provider, scope_kind, scope_key, revision_id),
+            shared_set_provider_guidance_revision_status(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                status=status,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
 
     def set_published_provider_guidance_revision(
@@ -3326,9 +2893,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE provider_guidance SET published_revision_id = ?, updated_at = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ?",
-                (revision_id, utcnow_iso(), provider, scope_kind, scope_key),
+            shared_set_published_provider_guidance_revision(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
 
     def clear_published_provider_guidance_revision(
@@ -3339,9 +2910,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE provider_guidance SET published_revision_id = '', updated_at = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ?",
-                (utcnow_iso(), provider, scope_kind, scope_key),
+            shared_clear_published_provider_guidance_revision(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
 
     def apply_provider_guidance_lifecycle_transition(
@@ -3357,43 +2931,17 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn:
-            if set_status is not None:
-                conn.execute(
-                    "UPDATE guidance_revisions SET status = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ? AND revision_id = ?",
-                    (set_status, provider, scope_kind, scope_key, revision_id),
-                )
-            if published_pointer == "set_active":
-                conn.execute(
-                    "UPDATE provider_guidance SET published_revision_id = ?, updated_at = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ?",
-                    (revision_id, now, provider, scope_kind, scope_key),
-                )
-            elif published_pointer == "clear":
-                conn.execute(
-                    "UPDATE provider_guidance SET published_revision_id = '', updated_at = ? WHERE provider = ? AND scope_kind = ? AND scope_key = ?",
-                    (now, provider, scope_kind, scope_key),
-                )
-            if approval_action is not None:
-                conn.execute(
-                    """
-                    INSERT INTO guidance_approvals (
-                        record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (record_id, provider, scope_kind, scope_key, revision_id, approval_action, actor, note, now),
-                )
-                record = LifecycleApprovalRecord(
-                    record_id=record_id,
-                    revision_id=revision_id,
-                    action=approval_action,
-                    actor=actor,
-                    note=note,
-                    created_at=now,
-                )
-        return record
+            return shared_apply_provider_guidance_lifecycle_transition(
+                conn,
+                dialect=_SQLITE_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )

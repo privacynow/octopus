@@ -825,13 +825,14 @@ shape is:
   - backend-neutral domain slices for:
     - agents
     - conversations
+    - content/guidance lifecycle
     - deliveries
     - routed-task orchestration
     - task queries
     - summary/usage/approvals
 
 The backend entry points still own connection lifecycles and backend-native
-write helpers, but shared registry business logic is now extracted by domain
+write/transaction helpers, but shared registry business logic is now extracted by domain
 instead of being duplicated wholesale between SQLite and Postgres.
 
 ## Architecture Rules

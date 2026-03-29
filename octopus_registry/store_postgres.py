@@ -17,9 +17,7 @@ from octopus_sdk.content_models import (
     ProviderGuidanceTrackRecord,
     RuntimeSkillSummary,
     RuntimeSkillTrackRecord,
-    SkillFileRecord,
     SkillRevisionRecord,
-    skill_precedence,
 )
 
 from psycopg.rows import dict_row
@@ -41,6 +39,36 @@ from .store_shared.conversations import (
     get_conversation as shared_get_conversation,
     list_agent_conversations as shared_list_agent_conversations,
     list_conversations as shared_list_conversations,
+)
+from .store_shared.content import (
+    append_provider_guidance_approval as shared_append_provider_guidance_approval,
+    append_skill_approval as shared_append_skill_approval,
+    apply_provider_guidance_lifecycle_transition as shared_apply_provider_guidance_lifecycle_transition,
+    apply_skill_lifecycle_transition as shared_apply_skill_lifecycle_transition,
+    clear_published_provider_guidance_revision as shared_clear_published_provider_guidance_revision,
+    clear_published_skill_revision as shared_clear_published_skill_revision,
+    delete_skill_track as shared_delete_skill_track,
+    get_latest_provider_guidance_approval_action as shared_get_latest_provider_guidance_approval_action,
+    get_latest_skill_approval_action as shared_get_latest_skill_approval_action,
+    get_provider_guidance as shared_get_provider_guidance,
+    list_provider_guidance_approvals as shared_list_provider_guidance_approvals,
+    list_provider_guidance_revisions as shared_list_provider_guidance_revisions,
+    list_runtime_skill_summaries as shared_list_runtime_skill_summaries,
+    list_skill_approvals as shared_list_skill_approvals,
+    list_skill_revisions as shared_list_skill_revisions,
+    list_skill_summaries as shared_list_skill_summaries,
+    list_skill_tracks as shared_list_skill_tracks,
+    replace_provider_guidance as shared_replace_provider_guidance,
+    replace_skill_track as shared_replace_skill_track,
+    resolve_provider_guidance as shared_resolve_provider_guidance,
+    resolve_runtime_skill as shared_resolve_runtime_skill,
+    resolve_skill as shared_resolve_skill,
+    set_provider_guidance_revision_status as shared_set_provider_guidance_revision_status,
+    set_published_provider_guidance_revision as shared_set_published_provider_guidance_revision,
+    set_published_skill_revision as shared_set_published_skill_revision,
+    set_skill_revision_status as shared_set_skill_revision_status,
+    upsert_provider_guidance_draft as shared_upsert_provider_guidance_draft,
+    upsert_skill_draft as shared_upsert_skill_draft,
 )
 from .store_shared.delivery import (
     ack as shared_ack,
@@ -2487,136 +2515,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
     # Skill / guidance persistence (registry-owned content store)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _parse_json(raw: object, default: object) -> object:
-        if raw is None:
-            return default
-        if isinstance(raw, (list, dict)):
-            return raw
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return default
-
-    @staticmethod
-    def _stable_json(value: object) -> str:
-        return json.dumps(value, sort_keys=True)
-
-    def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
-        return record.revision.revision_id or f"{record.slug}|{record.revision.digest}"
-
-    def _guidance_revision_id(self, record: ProviderGuidanceTrackRecord) -> str:
-        key = f"{record.provider}|{record.scope_kind}|{record.scope_key}"
-        return record.revision.revision_id or f"{key}|{record.revision.digest}"
-
-    def _upsert_registry_skill(
-        self,
-        record: RuntimeSkillTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._skill_revision_id(record)
-        files_json = self._stable_json(
-            [
-                {
-                    "relative_path": f.relative_path,
-                    "content_text": f.content_text,
-                    "content_type": f.content_type,
-                    "executable": f.executable,
-                }
-                for f in record.revision.files
-            ]
-        )
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT published_revision_id FROM {_SCHEMA}.runtime_skills WHERE slug = %s",
-                    (record.slug,),
-                )
-                existing = cur.fetchone()
-                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.runtime_skills (
-                        slug, display_name, description, source_kind, source_uri, owner_actor,
-                        visibility, is_mutable, archived, instruction_body, requirements_json,
-                        provider_config_json, files_json, active_revision_id, published_revision_id,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(slug) DO UPDATE SET
-                        display_name = EXCLUDED.display_name,
-                        description = EXCLUDED.description,
-                        source_kind = EXCLUDED.source_kind,
-                        source_uri = EXCLUDED.source_uri,
-                        owner_actor = EXCLUDED.owner_actor,
-                        visibility = EXCLUDED.visibility,
-                        is_mutable = EXCLUDED.is_mutable,
-                        archived = EXCLUDED.archived,
-                        instruction_body = EXCLUDED.instruction_body,
-                        requirements_json = EXCLUDED.requirements_json,
-                        provider_config_json = EXCLUDED.provider_config_json,
-                        files_json = EXCLUDED.files_json,
-                        active_revision_id = EXCLUDED.active_revision_id,
-                        published_revision_id = EXCLUDED.published_revision_id,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        record.slug,
-                        record.display_name,
-                        record.description,
-                        record.source_kind,
-                        record.source_uri,
-                        record.owner_actor,
-                        record.visibility,
-                        record.is_mutable,
-                        record.archived,
-                        record.revision.instruction_body,
-                        self._stable_json(record.revision.requirements),
-                        self._stable_json(record.revision.provider_config),
-                        files_json,
-                        revision_id,
-                        published_revision_id,
-                        now,
-                        now,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.skill_revisions (
-                        revision_id, slug, instruction_body, requirements_json,
-                        provider_config_json, files_json, version_label, changelog,
-                        status, created_by, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(revision_id) DO UPDATE SET
-                        instruction_body = EXCLUDED.instruction_body,
-                        requirements_json = EXCLUDED.requirements_json,
-                        provider_config_json = EXCLUDED.provider_config_json,
-                        files_json = EXCLUDED.files_json,
-                        version_label = EXCLUDED.version_label,
-                        changelog = EXCLUDED.changelog,
-                        status = EXCLUDED.status,
-                        created_by = EXCLUDED.created_by,
-                        created_at = EXCLUDED.created_at
-                    """,
-                    (
-                        revision_id,
-                        record.slug,
-                        record.revision.instruction_body,
-                        self._stable_json(record.revision.requirements),
-                        self._stable_json(record.revision.provider_config),
-                        files_json,
-                        record.revision.version_label,
-                        record.revision.changelog,
-                        status,
-                        record.revision.created_by,
-                        record.revision.created_at or now,
-                    ),
-                )
-
     def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="published", publish=True)
+        with self._connect() as conn, _write_tx(conn):
+            shared_replace_skill_track(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def delete_skill_track(
         self,
@@ -2627,207 +2528,48 @@ class RegistryPostgresStore(AbstractRegistryStore):
         owner_actor: str = "",
     ) -> bool:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(f"DELETE FROM {_SCHEMA}.skill_revisions WHERE slug = %s", (slug,))
-                cur.execute(f"DELETE FROM {_SCHEMA}.skill_approvals WHERE slug = %s", (slug,))
-                cur.execute(f"DELETE FROM {_SCHEMA}.runtime_skills WHERE slug = %s", (slug,))
-                return cur.rowcount > 0
-
-    def _skill_row_to_track(self, row: dict[str, object]) -> RuntimeSkillTrackRecord:
-        files_data = self._parse_json(row.get("files_json", "[]"), [])
-        files = tuple(
-            SkillFileRecord(
-                relative_path=f.get("relative_path", ""),
-                content_text=f.get("content_text", ""),
-                content_type=f.get("content_type", "text/plain"),
-                executable=bool(f.get("executable", False)),
-            )
-            for f in files_data
-            if isinstance(f, dict)
-        )
-        revision = SkillRevisionRecord(
-            instruction_body=row.get("instruction_body", ""),
-            requirements=self._parse_json(row.get("requirements_json", "[]"), []),
-            provider_config=self._parse_json(row.get("provider_config_json", "{}"), {}),
-            files=files,
-            version_label=row.get("version_label", ""),
-            changelog=row.get("changelog", ""),
-            created_by=row.get("created_by", ""),
-            created_at=row.get("created_at", ""),
-            revision_id=row.get("revision_id", row.get("active_revision_id", "")),
-            status=row.get("status", "published"),
-        )
-        return RuntimeSkillTrackRecord(
-            slug=row["slug"],
-            display_name=row.get("display_name", ""),
-            description=row.get("description", ""),
-            source_kind=row.get("source_kind", "custom"),
-            revision=revision,
-            source_uri=row.get("source_uri", ""),
-            owner_actor=row.get("owner_actor", ""),
-            visibility=row.get("visibility", "private"),
-            is_mutable=bool(row.get("is_mutable", True)),
-            archived=bool(row.get("archived", False)),
-            active_revision_id=row.get("active_revision_id", ""),
-            published_revision_id=row.get("published_revision_id", ""),
-        )
-
-    def _skill_rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[dict[str, object]]:
-        revision_ref = (
-            "CASE WHEN s.published_revision_id != '' THEN s.published_revision_id ELSE s.active_revision_id END"
-            if runtime_only else "s.active_revision_id"
-        )
-        extra_where = "AND s.published_revision_id != ''" if runtime_only else ""
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        s.slug, s.display_name, s.description, s.source_kind,
-                        s.source_uri, s.owner_actor, s.visibility, s.is_mutable,
-                        s.archived, s.active_revision_id, s.published_revision_id,
-                        rev.revision_id, rev.instruction_body, rev.requirements_json,
-                        rev.provider_config_json, rev.files_json, rev.version_label,
-                        rev.changelog, rev.status, rev.created_by, rev.created_at
-                    FROM {_SCHEMA}.runtime_skills s
-                    JOIN {_SCHEMA}.skill_revisions rev ON rev.revision_id = {revision_ref}
-                    WHERE s.slug = %s
-                    {extra_where}
-                    """,
-                    (slug,),
-                )
-                return cur.fetchall()
+            return shared_delete_skill_track(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=False)]
-        return sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
+        with self._connect() as conn:
+            return shared_list_skill_tracks(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        tracks = self.list_skill_tracks(slug)
-        return tracks[0] if tracks else None
+        with self._connect() as conn:
+            return shared_resolve_skill(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
-        records = [self._skill_row_to_track(row) for row in self._skill_rows_for_slug(slug, runtime_only=True)]
-        records = sorted(records, key=lambda r: skill_precedence(r.source_kind), reverse=True)
-        return records[0] if records else None
-
-    def _skill_summaries(self, *, runtime_only: bool) -> list[RuntimeSkillSummary]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(f"SELECT slug FROM {_SCHEMA}.runtime_skills ORDER BY lower(slug)")
-                slugs = cur.fetchall()
-        resolver = self.resolve_runtime_skill if runtime_only else self.resolve_skill
-        summaries: list[RuntimeSkillSummary] = []
-        for row in slugs:
-            record = resolver(row["slug"])
-            if record is None:
-                continue
-            summaries.append(
-                RuntimeSkillSummary(
-                    slug=record.slug,
-                    display_name=record.display_name,
-                    description=record.description,
-                    source_kind=record.source_kind,
-                    source_uri=record.source_uri,
-                    visibility=record.visibility,
-                    is_mutable=record.is_mutable,
-                    digest=record.revision.digest,
-                    status=record.revision.status,
-                    runtime_available=bool(record.published_revision_id) or not record.is_mutable,
-                    has_unpublished_changes=bool(record.published_revision_id)
-                    and record.published_revision_id != record.active_revision_id,
-                )
-            )
-        return summaries
+            return shared_resolve_runtime_skill(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=False)
+        with self._connect() as conn:
+            return shared_list_skill_summaries(conn, dialect=_POSTGRES_STORE_DIALECT)
 
     def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
-        return self._skill_summaries(runtime_only=True)
+        with self._connect() as conn:
+            return shared_list_runtime_skill_summaries(conn, dialect=_POSTGRES_STORE_DIALECT)
 
     def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
-        self._upsert_registry_skill(record, status="draft", publish=False)
+        with self._connect() as conn, _write_tx(conn):
+            shared_upsert_skill_draft(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT revision_id, instruction_body, requirements_json, provider_config_json,
-                           files_json, version_label, changelog, status, created_by, created_at
-                    FROM {_SCHEMA}.skill_revisions
-                    WHERE slug = %s
-                    ORDER BY created_at DESC, revision_id DESC
-                    """,
-                    (slug,),
-                )
-                rows = cur.fetchall()
-        return [
-            SkillRevisionRecord(
-                instruction_body=row["instruction_body"],
-                requirements=self._parse_json(row["requirements_json"], []),
-                provider_config=self._parse_json(row["provider_config_json"], {}),
-                files=tuple(
-                    SkillFileRecord(
-                        relative_path=f.get("relative_path", ""),
-                        content_text=f.get("content_text", ""),
-                        content_type=f.get("content_type", "text/plain"),
-                        executable=bool(f.get("executable", False)),
-                    )
-                    for f in self._parse_json(row["files_json"], [])
-                    if isinstance(f, dict)
-                ),
-                version_label=row["version_label"],
-                changelog=row["changelog"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_revisions(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT record_id, revision_id, action, actor, note, created_at
-                    FROM {_SCHEMA}.skill_approvals
-                    WHERE slug = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    """,
-                    (slug,),
-                )
-                rows = cur.fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+            return shared_list_skill_approvals(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT action
-                    FROM {_SCHEMA}.skill_approvals
-                    WHERE slug = %s AND revision_id = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    LIMIT 1
-                    """,
-                    (slug, revision_id),
-                )
-                row = cur.fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_skill_approval_action(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+            )
 
     def append_skill_approval(
         self,
@@ -2838,50 +2580,39 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor: str,
         note: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{slug}|{revision_id}|{action}|{now}"
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.skill_approvals (
-                        record_id, slug, revision_id, action, actor, note, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (record_id, slug, revision_id, action, actor, note, now),
-                )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
+            return shared_append_skill_approval(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
+            )
 
     def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
-                    (status, slug, revision_id),
-                )
+            shared_set_skill_revision_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                status=status,
+            )
 
     def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
-                    (revision_id, utcnow_iso(), slug),
-                )
+            shared_set_published_skill_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+            )
 
     def clear_published_skill_revision(self, slug: str) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
-                    (utcnow_iso(), slug),
-                )
+            shared_clear_published_skill_revision(conn, dialect=_POSTGRES_STORE_DIALECT, slug=slug)
 
     def apply_skill_lifecycle_transition(
         self,
@@ -2894,125 +2625,26 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor: str = "",
         note: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{slug}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                if set_status is not None:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE slug = %s AND revision_id = %s",
-                        (set_status, slug, revision_id),
-                    )
-                if published_pointer == "set_active":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = %s, updated_at = %s WHERE slug = %s",
-                        (revision_id, now, slug),
-                    )
-                elif published_pointer == "clear":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.runtime_skills SET published_revision_id = '', updated_at = %s WHERE slug = %s",
-                        (now, slug),
-                    )
-                if approval_action is not None:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.skill_approvals (
-                            record_id, slug, revision_id, action, actor, note, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (record_id, slug, revision_id, approval_action, actor, note, now),
-                    )
-                    record = LifecycleApprovalRecord(
-                        record_id=record_id,
-                        revision_id=revision_id,
-                        action=approval_action,
-                        actor=actor,
-                        note=note,
-                        created_at=now,
-                    )
-        return record
-
-    # --- Provider guidance ---
-
-    def _upsert_registry_guidance(
-        self,
-        record: ProviderGuidanceTrackRecord,
-        *,
-        status: str,
-        publish: bool,
-    ) -> None:
-        now = utcnow_iso()
-        revision_id = self._guidance_revision_id(record)
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT published_revision_id FROM {_SCHEMA}.provider_guidance WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (record.provider, record.scope_kind, record.scope_key),
-                )
-                existing = cur.fetchone()
-                published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.provider_guidance (
-                        provider, scope_kind, scope_key, content, format, is_mutable,
-                        active_revision_id, published_revision_id, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(provider, scope_kind, scope_key) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        format = EXCLUDED.format,
-                        is_mutable = EXCLUDED.is_mutable,
-                        active_revision_id = EXCLUDED.active_revision_id,
-                        published_revision_id = EXCLUDED.published_revision_id,
-                        updated_at = EXCLUDED.updated_at
-                    """,
-                    (
-                        record.provider,
-                        record.scope_kind,
-                        record.scope_key,
-                        record.revision.content,
-                        record.revision.format,
-                        record.is_mutable,
-                        revision_id,
-                        published_revision_id,
-                        now,
-                        now,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.guidance_revisions (
-                        revision_id, provider, scope_kind, scope_key, content, format,
-                        status, created_by, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(revision_id) DO UPDATE SET
-                        content = EXCLUDED.content,
-                        format = EXCLUDED.format,
-                        status = EXCLUDED.status,
-                        created_by = EXCLUDED.created_by,
-                        created_at = EXCLUDED.created_at
-                    """,
-                    (
-                        revision_id,
-                        record.provider,
-                        record.scope_kind,
-                        record.scope_key,
-                        record.revision.content,
-                        record.revision.format,
-                        status,
-                        record.revision.created_by,
-                        record.revision.created_at or now,
-                    ),
-                )
+            return shared_apply_skill_lifecycle_transition(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                slug=slug,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
+            )
 
     def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="published", publish=True)
+        with self._connect() as conn, _write_tx(conn):
+            shared_replace_provider_guidance(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
-        self._upsert_registry_guidance(record, status="draft", publish=False)
+        with self._connect() as conn, _write_tx(conn):
+            shared_upsert_provider_guidance_draft(conn, dialect=_POSTGRES_STORE_DIALECT, track=record)
 
     def get_provider_guidance(
         self,
@@ -3022,81 +2654,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                        g.active_revision_id, g.published_revision_id,
-                        rev.content, rev.format, rev.created_by, rev.created_at,
-                        rev.status, rev.revision_id
-                    FROM {_SCHEMA}.provider_guidance g
-                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.active_revision_id
-                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                row = cur.fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
-
-    def _runtime_provider_guidance(
-        self,
-        provider: str,
-        *,
-        scope_kind: str,
-        scope_key: str,
-    ) -> ProviderGuidanceTrackRecord | None:
-        with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT
-                        g.provider, g.scope_kind, g.scope_key, g.is_mutable,
-                        g.active_revision_id, g.published_revision_id,
-                        rev.content, rev.format, rev.created_by, rev.created_at,
-                        rev.status, rev.revision_id
-                    FROM {_SCHEMA}.provider_guidance g
-                    JOIN {_SCHEMA}.guidance_revisions rev ON rev.revision_id = g.published_revision_id
-                    WHERE g.provider = %s AND g.scope_kind = %s AND g.scope_key = %s AND g.published_revision_id != ''
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                row = cur.fetchone()
-        if row is None:
-            return None
-        return ProviderGuidanceTrackRecord(
-            provider=row["provider"],
-            scope_kind=row["scope_kind"],
-            scope_key=row["scope_key"],
-            is_mutable=bool(row["is_mutable"]),
-            active_revision_id=row["active_revision_id"],
-            published_revision_id=row["published_revision_id"],
-            revision=ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
-            ),
-        )
+            return shared_get_provider_guidance(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def resolve_provider_guidance(
         self,
@@ -3104,11 +2668,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         instance_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
-        if instance_key:
-            match = self._runtime_provider_guidance(provider, scope_kind="instance", scope_key=instance_key)
-            if match is not None:
-                return match
-        return self._runtime_provider_guidance(provider, scope_kind="system", scope_key="")
+        with self._connect() as conn:
+            return shared_resolve_provider_guidance(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                instance_key=instance_key,
+            )
 
     def list_provider_guidance_revisions(
         self,
@@ -3118,28 +2684,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[ProviderGuidanceRevisionRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT revision_id, content, format, created_by, created_at, status
-                    FROM {_SCHEMA}.guidance_revisions
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
-                    ORDER BY created_at DESC, revision_id DESC
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                rows = cur.fetchall()
-        return [
-            ProviderGuidanceRevisionRecord(
-                content=row["content"],
-                format=row["format"],
-                created_by=row["created_by"],
-                created_at=row["created_at"],
-                revision_id=row["revision_id"],
-                status=row["status"],
+            return shared_list_provider_guidance_revisions(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def list_provider_guidance_approvals(
         self,
@@ -3149,28 +2700,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> list[LifecycleApprovalRecord]:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT record_id, revision_id, action, actor, note, created_at
-                    FROM {_SCHEMA}.guidance_approvals
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    """,
-                    (provider, scope_kind, scope_key),
-                )
-                rows = cur.fetchall()
-        return [
-            LifecycleApprovalRecord(
-                record_id=row["record_id"],
-                revision_id=row["revision_id"],
-                action=row["action"],
-                actor=row["actor"],
-                note=row["note"],
-                created_at=row["created_at"],
+            return shared_list_provider_guidance_approvals(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
             )
-            for row in rows
-        ]
 
     def get_latest_provider_guidance_approval_action(
         self,
@@ -3181,19 +2717,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> str:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT action
-                    FROM {_SCHEMA}.guidance_approvals
-                    WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s
-                    ORDER BY created_at DESC, record_id DESC
-                    LIMIT 1
-                    """,
-                    (provider, scope_kind, scope_key, revision_id),
-                )
-                row = cur.fetchone()
-        return str(row["action"]) if row is not None else ""
+            return shared_get_latest_provider_guidance_approval_action(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def append_provider_guidance_approval(
         self,
@@ -3206,26 +2737,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord:
-        now = utcnow_iso()
-        record_id = f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{action}|{now}"
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.guidance_approvals (
-                        record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, now),
-                )
-        return LifecycleApprovalRecord(
-            record_id=record_id,
-            revision_id=revision_id,
-            action=action,
-            actor=actor,
-            note=note,
-            created_at=now,
-        )
+            return shared_append_provider_guidance_approval(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                action=action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def set_provider_guidance_revision_status(
         self,
@@ -3237,11 +2760,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
-                    (status, provider, scope_kind, scope_key, revision_id),
-                )
+            shared_set_provider_guidance_revision_status(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                status=status,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def set_published_provider_guidance_revision(
         self,
@@ -3252,11 +2779,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (revision_id, utcnow_iso(), provider, scope_kind, scope_key),
-                )
+            shared_set_published_provider_guidance_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def clear_published_provider_guidance_revision(
         self,
@@ -3266,11 +2796,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_key: str = "",
     ) -> None:
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                    (utcnow_iso(), provider, scope_kind, scope_key),
-                )
+            shared_clear_published_provider_guidance_revision(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )
 
     def apply_provider_guidance_lifecycle_transition(
         self,
@@ -3285,44 +2817,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
         scope_kind: str = "system",
         scope_key: str = "",
     ) -> LifecycleApprovalRecord | None:
-        record: LifecycleApprovalRecord | None = None
-        now = utcnow_iso()
-        record_id = (
-            f"{provider}|{scope_kind}|{scope_key}|{revision_id}|{approval_action}|{now}"
-            if approval_action is not None else ""
-        )
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                if set_status is not None:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.guidance_revisions SET status = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s AND revision_id = %s",
-                        (set_status, provider, scope_kind, scope_key, revision_id),
-                    )
-                if published_pointer == "set_active":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = %s, updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                        (revision_id, now, provider, scope_kind, scope_key),
-                    )
-                elif published_pointer == "clear":
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.provider_guidance SET published_revision_id = '', updated_at = %s WHERE provider = %s AND scope_kind = %s AND scope_key = %s",
-                        (now, provider, scope_kind, scope_key),
-                    )
-                if approval_action is not None:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.guidance_approvals (
-                            record_id, provider, scope_kind, scope_key, revision_id, action, actor, note, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (record_id, provider, scope_kind, scope_key, revision_id, approval_action, actor, note, now),
-                    )
-                    record = LifecycleApprovalRecord(
-                        record_id=record_id,
-                        revision_id=revision_id,
-                        action=approval_action,
-                        actor=actor,
-                        note=note,
-                        created_at=now,
-                    )
-        return record
+            return shared_apply_provider_guidance_lifecycle_transition(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                provider=provider,
+                revision_id=revision_id,
+                set_status=set_status,
+                published_pointer=published_pointer,
+                approval_action=approval_action,
+                actor=actor,
+                note=note,
+                scope_kind=scope_kind,
+                scope_key=scope_key,
+            )

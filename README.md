@@ -250,7 +250,8 @@ shared domain slices” pattern:
   - backend-specific SQL/connection protocol used by shared store code
 - `octopus_registry/store_shared/`
   - backend-neutral domain slices for summary/usage/approvals, agents,
-    conversations, deliveries, routed-task orchestration, and task queries
+    conversations, deliveries, routed-task orchestration, task queries, and
+    content/guidance lifecycle
 
 Backend-specific files still own connection handling and backend-native write
 helpers, but the shared domain logic now lives once instead of being

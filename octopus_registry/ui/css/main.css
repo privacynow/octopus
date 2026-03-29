@@ -1612,23 +1612,7 @@ select {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    margin-top: 10px;
-}
-
-.event-card-lead {
-    margin-top: 10px;
-    padding: 0.76rem 0.82rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg);
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    line-height: 1.5;
-    white-space: pre-wrap;
-}
-
-.event-card-lead strong {
-    color: var(--text);
+    margin-top: var(--space-2);
 }
 
 .delegation-milestone-list {
@@ -1663,6 +1647,13 @@ select {
     color: var(--text-secondary);
     white-space: pre-wrap;
     margin: 0;
+}
+
+.event-text-block-outcome {
+    padding: 0.76rem 0.82rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
 }
 
 .conversation-task-view {
@@ -1823,8 +1814,8 @@ select {
 
 .task-item-detail {
     display: grid;
-    gap: var(--space-3);
-    padding: 0 1rem 0.92rem;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3) var(--space-3);
     border-top: 1px solid var(--border);
 }
 
@@ -1837,6 +1828,21 @@ select {
 .task-item-summary {
     color: var(--text-secondary);
     white-space: pre-wrap;
+    line-height: 1.5;
+    padding: 0.76rem 0.82rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.task-item-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--space-2);
+}
+
+.task-item-facts .metadata-item {
+    padding: 0.72rem 0.82rem;
 }
 
 .admin-shell {

@@ -201,7 +201,7 @@ function renderTaskList(container) {
         }
 
         const facts = document.createElement('div');
-        facts.className = 'metadata-grid';
+        facts.className = 'task-item-facts';
         [
             ['Origin', UI.visibleLabel(task.origin_display_name, task.origin_agent_id) || '—'],
             ['Target', UI.visibleLabel(task.target_display_name, task.target_agent_id) || '—'],

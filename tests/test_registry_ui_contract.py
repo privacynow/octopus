@@ -258,6 +258,26 @@ def test_conversation_detail_is_split_into_supporting_modules() -> None:
     assert "function _parseConversationTargetSelector(" in autocomplete
 
 
+def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_leads() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+    task_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const leadText = _eventLeadText(" not in event_renderers
+    assert "event-card-lead" not in event_renderers
+    assert "content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';" in event_renderers
+    assert ".event-text-block-outcome {" in css
+    assert "facts.className = 'task-item-facts';" in task_list
+    assert ".task-item-facts {" in css
+
+
 def test_components_use_shared_refresh_and_do_not_duplicate_ws_invalidation_plumbing() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     component_dir = repo_root / "octopus_registry" / "ui" / "js" / "components"

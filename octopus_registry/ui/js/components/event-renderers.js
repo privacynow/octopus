@@ -76,14 +76,6 @@ function _createConversationEventElement(event, convoId, taskContext = []) {
             break;
     }
 
-    const leadText = _eventLeadText(kind, event, taskContext);
-    if (leadText) {
-        const lead = document.createElement('div');
-        lead.className = 'event-card-lead';
-        lead.textContent = leadText;
-        card.appendChild(lead);
-    }
-
     const startExpanded = kind === 'approval.requested' || _shouldStartExpanded(kind, event);
     if (_shouldStackSummary(kind, event)) {
         header.classList.add('event-card-header-stacked');
@@ -326,9 +318,9 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
         progress.appendChild(fill);
         body.appendChild(progress);
     }
-    if (event.content && !terminalWithOutcome) {
+    if (event.content) {
         const content = document.createElement('div');
-        content.className = 'event-text-block';
+        content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';
         content.innerHTML = `<p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
@@ -576,32 +568,6 @@ function _taskStatusPhrase(status) {
     }
 }
 
-function _eventLeadText(kind, event, taskContext = []) {
-    const metadata = event.metadata || {};
-    if (kind === 'task.status') {
-        const status = String(metadata.status || '').trim().toLowerCase();
-        const content = String(event.content || '').trim();
-        if (content && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status)) {
-            return content;
-        }
-        return '';
-    }
-    if (kind === 'delegation.submitted' || kind === 'delegation.completed') {
-        const tasks = Array.isArray(metadata.tasks) ? metadata.tasks : [];
-        if (!tasks.length) return '';
-        if (tasks.length === 1) {
-            const task = tasks[0];
-            const target = _delegationTaskTargetLabel(task, taskContext);
-            const title = String(task.title || '').trim();
-            if (title && target) {
-                return `${kind === 'delegation.completed' ? 'Handled by' : 'Assigned to'} ${target}: ${title}`;
-            }
-            if (title) return title;
-        }
-    }
-    return '';
-}
-
 function _originChannelLabel(originChannel) {
     const value = String(originChannel || '').trim();
     return value || '';
@@ -615,9 +581,7 @@ function _formatConversationStatusLabel(status) {
 
 function _shouldStartExpanded(kind, event) {
     if (kind !== 'task.status') return false;
-    const status = String((event.metadata && event.metadata.status) || '').trim().toLowerCase();
-    const hasOutcome = Boolean(String(event.content || '').trim());
-    return hasOutcome && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
+    return false;
 }
 
 function _shouldStackSummary(kind, event) {

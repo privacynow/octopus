@@ -199,19 +199,18 @@ If a remote registry connection fails:
 
 ## Repo Layout
 
-The codebase is split into four main packages:
+The codebase is split into three main packages:
 
 - `app/`: shipped Telegram bot runtime and the `./octopus` CLI
 - `octopus_registry/`: standalone registry service, websocket layer, store,
   ingress, and operator SPA
-- `octopus_sdk/`: shared runtime contracts, workflows, registry protocols, and
-  composition seams
-- `octopus_sdk/testing/`: test-only SDK fixtures used by wiring verification
+- `octopus_sdk/`: shared runtime contracts, workflows, registry protocols,
+  composition seams, and test-only fixtures (`octopus_sdk/testing/`)
 
 ## Documentation
 
 - [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md):
-  system shape, ports, stores, interaction flows, and operator SPA model
+  registry, bot SDK, bot implementation, extending Octopus, and cross-cutting concerns
 - [docs/manual/README.md](/Users/tinker/output/bots/telegram-agent-bot/docs/manual/README.md):
   operator and user manual
 - [docs/registry-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-guide.md):

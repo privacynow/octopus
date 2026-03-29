@@ -20,16 +20,13 @@ function renderGuidanceEditor(container) {
     agentBar.className = 'route-controls';
     providerPanel.appendChild(agentBar);
 
-    const agentSelect = document.createElement('select');
-    agentSelect.className = 'search-input';
-    agentSelect.setAttribute('aria-label', 'Managed bot');
+    const agentDropdown = UI.createAgentManagementDropdown([], '', (nextAgentId) => {
+        currentAgentId = nextAgentId;
+        _writeAgentId(currentAgentId);
+        loadGuidance();
+    });
+    const agentSelect = agentDropdown.element;
     agentBar.appendChild(agentSelect);
-
-    const providerBar = document.createElement('div');
-    providerBar.className = 'segmented-control';
-    providerBar.setAttribute('role', 'tablist');
-    providerBar.setAttribute('aria-label', 'Guidance provider');
-    providerPanel.appendChild(providerBar);
 
     const contentEl = document.createElement('div');
     contentEl.className = 'editor-shell';
@@ -38,11 +35,23 @@ function renderGuidanceEditor(container) {
     let currentProvider = 'claude';
     let currentAgentId = '';
     let availableAgents = [];
-    let reloadDebounce = null;
     const providers = [
         ['claude', 'Claude'],
         ['codex', 'Codex'],
     ];
+    const providerControl = UI.createSegmentedControl(
+        providers.map(([value, label]) => ({ key: value, value, label })),
+        (provider) => {
+            currentProvider = provider;
+            loadGuidance();
+        },
+        {
+            label: 'Guidance provider',
+            value: currentProvider,
+        },
+    );
+    const providerBar = providerControl.element;
+    providerPanel.appendChild(providerBar);
 
     function _readAgentId() {
         try {
@@ -78,55 +87,21 @@ function renderGuidanceEditor(container) {
 
     function _renderAgentOptions() {
         const agents = _managementAgents('provider_guidance');
-        UI.reconcileChildren(agentSelect, agents.map((agent) => {
-            const option = document.createElement('option');
-            option.value = agent.agent_id || '';
-            option.textContent = UI.visibleLabel(agent.display_name, agent.agent_id) || agent.slug || agent.agent_id || 'Bot';
-            return option;
-        }));
-        agentSelect.disabled = agents.length <= 1;
         if (!agents.length) {
             currentAgentId = '';
+            agentDropdown.update([], '');
             return;
         }
         if (!agents.some((agent) => agent.agent_id === currentAgentId)) {
             currentAgentId = agents[0].agent_id || '';
             _writeAgentId(currentAgentId);
         }
-        agentSelect.value = currentAgentId;
+        agentDropdown.update(agents, currentAgentId);
     }
-
-    function syncProviderButtons() {
-        providerBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const active = btn.dataset.value === currentProvider;
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
-
-    function applyProvider(provider) {
-        currentProvider = provider;
-        syncProviderButtons();
-        loadGuidance();
-    }
-
-    providers.forEach(([value, label]) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn';
-        btn.dataset.value = value;
-        btn.textContent = label;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(currentProvider === value));
-        btn.tabIndex = currentProvider === value ? 0 : -1;
-        btn.addEventListener('click', () => applyProvider(value));
-        providerBar.appendChild(btn);
-    });
-    UI.bindSegmentedControlKeyboard(providerBar, (target) => applyProvider(target.dataset.value || 'claude'));
 
     async function loadGuidance() {
         if (!currentAgentId) {
+            UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [
                 UI.renderEmptyState('No connected bot advertises provider guidance management.', true),
             ]);
@@ -136,6 +111,7 @@ function renderGuidanceEditor(container) {
             const data = await API.getGuidance(currentAgentId, currentProvider);
             renderGuidanceContent(data.guidance || data);
         } catch (err) {
+            UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load guidance: ' + err.message, loadGuidance)]);
         }
     }
@@ -154,12 +130,19 @@ function renderGuidanceEditor(container) {
             _renderAgentOptions();
             await loadGuidance();
         } catch (err) {
+            UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);
         }
     }
 
     function renderGuidanceContent(guidance) {
+        UI.memoizedRender(contentEl, {
+            provider: currentProvider,
+            agentId: currentAgentId,
+            guidance,
+        }, (state) => {
         const nodes = [];
+        const currentGuidance = state.guidance || {};
 
         const statusPanel = document.createElement('section');
         statusPanel.className = 'editor-panel';
@@ -175,8 +158,8 @@ function renderGuidanceEditor(container) {
         titleWrap.appendChild(title);
         statusHead.appendChild(titleWrap);
         const badge = document.createElement('span');
-        badge.className = `badge badge-${guidance.status || guidance.lifecycle_status || 'draft'}`;
-        badge.textContent = String(guidance.status || guidance.lifecycle_status || 'draft').replace(/_/g, ' ');
+        badge.className = `badge badge-${currentGuidance.status || currentGuidance.lifecycle_status || 'draft'}`;
+        badge.textContent = String(currentGuidance.status || currentGuidance.lifecycle_status || 'draft').replace(/_/g, ' ');
         statusHead.appendChild(badge);
         statusPanel.appendChild(statusHead);
         nodes.push(statusPanel);
@@ -193,7 +176,7 @@ function renderGuidanceEditor(container) {
         const textarea = document.createElement('textarea');
         textarea.className = 'guidance-textarea';
         textarea.rows = 14;
-        textarea.value = guidance.draft_body || guidance.instruction_body || guidance.body || '';
+        textarea.value = currentGuidance.draft_body || currentGuidance.instruction_body || currentGuidance.body || '';
         textarea.setAttribute('aria-label', 'Guidance draft');
         editorPanel.appendChild(textarea);
 
@@ -266,8 +249,18 @@ function renderGuidanceEditor(container) {
 
         editorPanel.appendChild(actions);
         nodes.push(editorPanel);
-
-        UI.reconcileChildren(contentEl, nodes);
+        return nodes;
+        }, {
+            signatureFn(state) {
+                const currentGuidance = state.guidance || {};
+                return {
+                    provider: String(state.provider || ''),
+                    agentId: String(state.agentId || ''),
+                    status: String(currentGuidance.status || currentGuidance.lifecycle_status || 'draft'),
+                    draft: String(currentGuidance.draft_body || currentGuidance.instruction_body || currentGuidance.body || ''),
+                };
+            },
+        });
     }
 
     function showPreview(text) {
@@ -303,19 +296,7 @@ function renderGuidanceEditor(container) {
         document.body.appendChild(overlay);
     }
 
-    syncProviderButtons();
-    agentSelect.addEventListener('change', () => {
-        currentAgentId = agentSelect.value;
-        _writeAgentId(currentAgentId);
-        loadGuidance();
-    });
-
     container.__routeReady = loadAgents();
-
-    const unsub = WS.subscribe('agents', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadAgents({ soft: true }), 600);
-    });
-    cleanups.add(() => clearTimeout(reloadDebounce));
-    cleanups.add(unsub);
+    providerControl.setActive(currentProvider);
+    UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ soft: true }), 600);
 }

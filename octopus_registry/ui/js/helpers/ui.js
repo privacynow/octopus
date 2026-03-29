@@ -3,6 +3,7 @@ window.UI = (() => {
     const EVENT_PAGE_LIMIT = 50;
     let toastRegion = null;
     let activeCleanupBag = null;
+    const memoizedSignatures = new WeakMap();
 
     function esc(str) {
         if (str === null || str === undefined) return '';
@@ -323,20 +324,6 @@ window.UI = (() => {
         return card;
     }
 
-    function createSkeletonNodes(count, type) {
-        const cls = type === 'row' ? 'skeleton skeleton-row' : 'skeleton skeleton-card';
-        return Array.from({ length: count }, (_, index) => {
-            const div = document.createElement('div');
-            div.className = cls;
-            div.dataset.key = `skeleton-${type}-${index}`;
-            return div;
-        });
-    }
-
-    function renderSkeletons(container, count, type) {
-        createSkeletonNodes(count, type).forEach((node) => container.appendChild(node));
-    }
-
     function createErrorCard(message, retryFn) {
         const card = document.createElement('div');
         card.className = 'error-card';
@@ -393,6 +380,280 @@ window.UI = (() => {
         } catch {
             return String(value);
         }
+    }
+
+    function subscribeWithRefresh(cleanups, topic, loader, delay = 350) {
+        let timer = null;
+        const unsub = WS.subscribe(topic, () => {
+            if (isBackgrounded()) return;
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                void loader();
+            }, delay);
+        });
+        const dispose = () => {
+            clearTimeout(timer);
+            if (typeof unsub === 'function') {
+                unsub();
+            }
+        };
+        if (cleanups && typeof cleanups.add === 'function') {
+            cleanups.add(dispose);
+        }
+        return dispose;
+    }
+
+    function createSegmentedControl(options, onChange, { label = '', value = '' } = {}) {
+        const group = document.createElement('div');
+        group.className = 'segmented-control';
+        group.setAttribute('role', 'tablist');
+        if (label) {
+            group.setAttribute('aria-label', label);
+        }
+        const buttons = new Map();
+
+        function setActive(nextValue) {
+            const normalizedValue = String(nextValue ?? '');
+            group.querySelectorAll('.segmented-control-btn').forEach((btn) => {
+                const active = String(btn.dataset.value || '') === normalizedValue;
+                btn.classList.toggle('active', active);
+                btn.setAttribute('aria-selected', String(active));
+                btn.tabIndex = active ? 0 : -1;
+            });
+        }
+
+        (options || []).forEach((option, index) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'segmented-control-btn';
+            btn.dataset.key = String(option.key ?? option.value ?? option.label ?? index);
+            btn.dataset.value = String(option.value ?? '');
+            btn.textContent = String(option.label ?? option.value ?? '');
+            btn.setAttribute('role', 'tab');
+            if (option.id) btn.id = option.id;
+            if (option.controls) btn.setAttribute('aria-controls', option.controls);
+            if (option.title) btn.title = option.title;
+            group.appendChild(btn);
+            buttons.set(String(option.value ?? ''), btn);
+            btn.addEventListener('click', () => {
+                const nextValue = String(option.value ?? '');
+                setActive(nextValue);
+                if (typeof onChange === 'function') {
+                    onChange(nextValue, option, btn);
+                }
+            });
+        });
+
+        bindSegmentedControlKeyboard(group, (target) => {
+            const nextValue = String(target.dataset.value || '');
+            setActive(nextValue);
+            if (typeof onChange === 'function') {
+                const match = (options || []).find((option) => String(option.value ?? '') === nextValue) || null;
+                onChange(nextValue, match, target);
+            }
+        });
+        setActive(value);
+
+        return { element: group, setActive, buttons };
+    }
+
+    function createCursorPaginator(container, loadFn, { initialCursor = 0 } = {}) {
+        let cursor = initialCursor;
+        let cursorStack = [];
+
+        function reset(nextCursor = initialCursor) {
+            cursor = nextCursor;
+            cursorStack = [];
+        }
+
+        function clear() {
+            reconcileChildren(container, []);
+        }
+
+        function render({ hasMore = false, nextCursor = 0, info = '' } = {}) {
+            const wrapper = document.createElement('div');
+            renderPagination(wrapper, {
+                hasPrev: cursorStack.length > 0,
+                hasNext: !!hasMore,
+                info,
+                onPrev: () => {
+                    cursor = cursorStack.pop() || initialCursor;
+                    loadFn();
+                },
+                onNext: () => {
+                    cursorStack.push(cursor);
+                    cursor = nextCursor;
+                    loadFn();
+                },
+            });
+            reconcileChildren(container, Array.from(wrapper.childNodes));
+        }
+
+        return {
+            get cursor() {
+                return cursor;
+            },
+            get hasPrev() {
+                return cursorStack.length > 0;
+            },
+            get stackLength() {
+                return cursorStack.length;
+            },
+            reset,
+            clear,
+            render,
+        };
+    }
+
+    function _buildSignatureValue(data, { signatureFn, signatureFields, timestampFields = [] } = {}) {
+        if (typeof signatureFn === 'function') {
+            return signatureFn(data);
+        }
+        if (!Array.isArray(signatureFields) || !signatureFields.length || !data || typeof data !== 'object') {
+            return data;
+        }
+        const normalized = {};
+        signatureFields.forEach((field) => {
+            if (!field) return;
+            const raw = data[field];
+            normalized[field] = timestampFields.includes(field) ? relativeTime(raw) : raw;
+        });
+        return normalized;
+    }
+
+    function memoizedRender(container, data, renderFn, options = {}) {
+        const signature = dataSignature(_buildSignatureValue(data, options));
+        if (memoizedSignatures.get(container) === signature) {
+            return { changed: false, signature };
+        }
+        const rendered = renderFn(data);
+        const nodes = Array.isArray(rendered)
+            ? rendered
+            : rendered
+                ? [rendered]
+                : [];
+        reconcileChildren(container, nodes);
+        memoizedSignatures.set(container, signature);
+        return { changed: true, signature };
+    }
+
+    function clearMemoizedRender(container) {
+        if (!container || (typeof container !== 'object' && typeof container !== 'function')) {
+            return;
+        }
+        memoizedSignatures.delete(container);
+    }
+
+    function createTaskActionButtons(taskId, conversationId, status, onComplete, {
+        cancelLabel = 'Cancel',
+        retryLabel = 'Retry',
+    } = {}) {
+        const actions = document.createElement('div');
+        actions.className = 'task-action-row';
+        const statusText = document.createElement('span');
+        statusText.className = 'task-action-status';
+        actions.appendChild(statusText);
+
+        async function perform(button, action, pendingText, successText, failureText) {
+            button.disabled = true;
+            statusText.textContent = pendingText;
+            try {
+                await API.conversationAction(conversationId, action, { routed_task_id: taskId });
+                statusText.textContent = successText;
+                if (typeof onComplete === 'function') {
+                    onComplete({ action, ok: true, statusText, actions });
+                }
+            } catch (err) {
+                button.disabled = false;
+                statusText.textContent = failureText;
+                reportError(
+                    action === 'cancel_task' ? 'Failed to cancel the task' : 'Failed to retry the task',
+                    err,
+                    { context: action === 'cancel_task' ? 'Task cancel failed' : 'Task retry failed' },
+                );
+                if (typeof onComplete === 'function') {
+                    onComplete({ action, ok: false, statusText, actions, error: err });
+                }
+            }
+        }
+
+        if (taskId && conversationId && ['queued', 'submitted', 'leased', 'running'].includes(status || '')) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn btn-sm btn-danger';
+            cancelBtn.textContent = cancelLabel;
+            cancelBtn.addEventListener('click', (event) => {
+                if (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                void perform(cancelBtn, 'cancel_task', 'Cancelling…', 'Cancel requested.', 'Cancel failed.');
+            });
+            actions.appendChild(cancelBtn);
+        }
+
+        if (taskId && conversationId && ['failed', 'cancelled', 'timed_out'].includes(status || '')) {
+            const retryBtn = document.createElement('button');
+            retryBtn.type = 'button';
+            retryBtn.className = 'btn btn-sm';
+            retryBtn.textContent = retryLabel;
+            retryBtn.addEventListener('click', (event) => {
+                if (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                void perform(retryBtn, 'retry_task', 'Retrying…', 'Retry queued.', 'Retry failed.');
+            });
+            actions.appendChild(retryBtn);
+        }
+
+        return { element: actions, statusText };
+    }
+
+    function createAgentManagementDropdown(agents, selectedId, onChange, { label = 'Managed bot' } = {}) {
+        const select = document.createElement('select');
+        select.className = 'search-input';
+        select.setAttribute('aria-label', label);
+        select.addEventListener('change', () => {
+            if (typeof onChange === 'function') {
+                onChange(select.value);
+            }
+        });
+
+        function update(nextAgents, nextSelectedId) {
+            const options = (nextAgents || []).map((agent) => {
+                const option = document.createElement('option');
+                option.value = agent.agent_id || '';
+                option.textContent = visibleLabel(agent.display_name, agent.agent_id) || agent.slug || agent.agent_id || 'Bot';
+                return option;
+            });
+            reconcileChildren(select, options);
+            select.disabled = options.length <= 1;
+            const targetValue = String(nextSelectedId || '');
+            if (targetValue && options.some((option) => option.value === targetValue)) {
+                select.value = targetValue;
+            } else if (options.length) {
+                select.value = options[0].value;
+            } else {
+                select.value = '';
+            }
+        }
+
+        update(agents, selectedId);
+        return { element: select, update };
+    }
+
+    function buildConversationTypeBadge(value) {
+        const conversationType = typeof value === 'string'
+            ? value
+            : String((value && value.conversation_type) || 'conversation');
+        if (conversationType !== 'task_thread') {
+            return null;
+        }
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-task-thread';
+        badge.textContent = 'Task thread';
+        return badge;
     }
 
     function isBackgrounded() {
@@ -576,10 +837,16 @@ window.UI = (() => {
         renderStatCard,
         isOpaqueIdentifier,
         visibleLabel,
-        createSkeletonNodes,
-        renderSkeletons,
         renderPagination,
         dataSignature,
+        subscribeWithRefresh,
+        createSegmentedControl,
+        createCursorPaginator,
+        memoizedRender,
+        clearMemoizedRender,
+        createTaskActionButtons,
+        createAgentManagementDropdown,
+        buildConversationTypeBadge,
         isBackgrounded,
         reconcileChildren,
         bindSegmentedControlKeyboard,

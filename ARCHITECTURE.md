@@ -580,6 +580,19 @@ Important SPA primitives:
 
 - `octopus_registry/ui/js/helpers/ui.js`
   - `UI.reconcileChildren(...)` wraps `morphdom` for keyed DOM reconciliation
+  - `UI.subscribeWithRefresh(...)` centralizes websocket
+    subscribe/debounce/background-tab suppression for invalidation-driven views
+  - `UI.createSegmentedControl(...)` owns segmented-tab/button construction and
+    keyboard behavior
+  - `UI.createCursorPaginator(...)` owns cursor stack state and pagination
+    rendering
+  - `UI.memoizedRender(...)` centralizes signature-based skip-if-unchanged
+    rendering for lists, rails, and section bodies
+  - `UI.createTaskActionButtons(...)` centralizes routed-task cancel/retry
+    controls
+  - `UI.createAgentManagementDropdown(...)` centralizes managed-agent selector
+    rendering
+  - `UI.buildConversationTypeBadge(...)` centralizes `task_thread` badges
   - `UI.bindSegmentedControlKeyboard(...)` centralizes arrow-key navigation for
     segmented controls
 - `octopus_registry/ui/js/router.js`
@@ -590,8 +603,8 @@ Important SPA primitives:
   - updates nav state only after the new route is ready to mount
 - route components
   - publish an initial route-ready promise for their first real data load
+  - keep the previous route visible until the next route has real initial data
   - do not paint first-mount skeleton cards/rows during route transitions
-  - keep initial shells static until real data is ready
   - reconcile only the sections whose data actually changed during live refresh
   - sign keyed subtrees from rendered labels, badges, and visible counters
     rather than raw `updated_at` / `last_heartbeat_at` values
@@ -617,8 +630,34 @@ The registry store writes task-status events to both the origin parent
 conversation and the recipient task thread, and the websocket layer now
 broadcasts both streams so M2-side task-thread detail stays live.
 
-Conversation detail in `octopus_registry/ui/js/components/conversation-detail.js` is also the
-main operator entrypoint for structured coordination today:
+The route shells also use one shared layout vocabulary:
+
+- compact page header
+- `admin-shell`
+- optional `workbench-panel` control block
+- `list-shell`
+- `list-container`
+
+CSS spacing/padding is now tokenized in `octopus_registry/ui/css/main.css`
+(`--card-padding`, `--panel-padding`, `--compact-card-padding`, shared
+`--space-*` gaps, shared row paddings) so empty states and list spacing render
+the same way across agents, conversations, tasks, approvals, and nested
+dashboard/detail sections.
+
+Conversation detail is split into focused modules:
+
+- `octopus_registry/ui/js/components/conversation-detail.js`
+  - route shell, metadata/header rendering, websocket wiring, and view
+    switching
+- `octopus_registry/ui/js/components/composer-autocomplete.js`
+  - `@agent` / `@cap:` / `@role:` target parsing and replacement helpers
+- `octopus_registry/ui/js/components/event-renderers.js`
+  - activity/event card renderers and event-summary helpers
+- `octopus_registry/ui/js/components/task-board.js`
+  - conversation task-card rendering and recipient-thread task-board helpers
+
+Conversation detail remains the main operator entrypoint for structured
+coordination today:
 
 - normal conversation messages still go through `POST /v1/conversations/{id}/messages`
 - a leading selector such as `@m2`, `@cap:review`, or `@role:reviewer` routes

@@ -4,7 +4,6 @@
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
     let searchTimeout = null;
-    let reloadDebounce = null;
     let currentQ = '';
     let allSkills = [];
     let availableAgents = [];
@@ -27,9 +26,12 @@ function renderSkillCatalog(container) {
     controls.className = 'route-controls';
     workbench.appendChild(controls);
 
-    const agentSelect = document.createElement('select');
-    agentSelect.className = 'search-input';
-    agentSelect.setAttribute('aria-label', 'Managed bot');
+    const agentDropdown = UI.createAgentManagementDropdown([], '', (nextAgentId) => {
+        currentAgentId = nextAgentId;
+        _writeAgentId(currentAgentId);
+        loadSkills();
+    });
+    const agentSelect = agentDropdown.element;
     controls.appendChild(agentSelect);
 
     const searchInput = document.createElement('input');
@@ -81,23 +83,17 @@ function renderSkillCatalog(container) {
 
     function _renderAgentOptions() {
         const agents = _managementAgents('skill_catalog');
-        UI.reconcileChildren(agentSelect, agents.map((agent) => {
-            const option = document.createElement('option');
-            option.value = agent.agent_id || '';
-            option.textContent = UI.visibleLabel(agent.display_name, agent.agent_id) || agent.slug || agent.agent_id || 'Bot';
-            return option;
-        }));
-        agentSelect.disabled = agents.length <= 1;
         if (!agents.length) {
             currentAgentId = '';
             allSkills = [];
+            agentDropdown.update([], '');
             return;
         }
         if (!agents.some((agent) => agent.agent_id === currentAgentId)) {
             currentAgentId = agents[0].agent_id || '';
             _writeAgentId(currentAgentId);
         }
-        agentSelect.value = currentAgentId;
+        agentDropdown.update(agents, currentAgentId);
     }
 
     function renderList() {
@@ -119,13 +115,18 @@ function renderSkillCatalog(container) {
         }
 
         if (!filtered.length) {
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [
                 UI.renderEmptyState(allSkills.length ? 'No skills match this search.' : 'No runtime skills available.', true),
             ]);
             return;
         }
 
-        const rows = filtered.map((skill) => {
+        UI.memoizedRender(listEl, {
+            agentId: currentAgentId,
+            query: currentQ,
+            skills: filtered,
+        }, (state) => state.skills.map((skill) => {
             const shellRow = document.createElement('div');
             shellRow.className = 'list-row-shell';
             shellRow.dataset.key = skill.slug || skill.name || skill.display_name || '';
@@ -165,9 +166,19 @@ function renderSkillCatalog(container) {
             });
             shellRow.appendChild(actionBtn);
             return shellRow;
+        }), {
+            signatureFn(state) {
+                return {
+                    agentId: String(state.agentId || ''),
+                    query: String(state.query || ''),
+                    skills: (state.skills || []).map((skill) => ({
+                        slug: String(skill.slug || skill.name || skill.display_name || ''),
+                        description: String(skill.description || skill.display_name || ''),
+                        status: String(skill.status || ''),
+                    })),
+                };
+            },
         });
-
-        UI.reconcileChildren(listEl, rows);
     }
 
     async function loadSkills({ soft = false } = {}) {
@@ -181,6 +192,7 @@ function renderSkillCatalog(container) {
             allSkills = Array.isArray(data) ? data : (data.skills || []);
             renderList();
         } catch (err) {
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load skills: ' + err.message, loadSkills)]);
         }
     }
@@ -199,6 +211,7 @@ function renderSkillCatalog(container) {
             _renderAgentOptions();
             await loadSkills({ soft: true });
         } catch (err) {
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);
         }
     }
@@ -211,20 +224,8 @@ function renderSkillCatalog(container) {
         }, 250);
     });
 
-    agentSelect.addEventListener('change', () => {
-        currentAgentId = agentSelect.value;
-        _writeAgentId(currentAgentId);
-        loadSkills();
-    });
-
     container.__routeReady = loadAgents();
 
-    const unsub = WS.subscribe('agents', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadAgents({ soft: true }), 600);
-    });
-
     cleanups.add(() => clearTimeout(searchTimeout));
-    cleanups.add(() => clearTimeout(reloadDebounce));
-    cleanups.add(unsub);
+    UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ soft: true }), 600);
 }

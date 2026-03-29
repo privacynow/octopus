@@ -9,34 +9,11 @@ function renderTaskList(container) {
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
     }
 
-    let cursor = 0;
-    let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentStatus = UI.readQueryParam('status', '');
     let summaryLoaded = false;
     let listLoaded = false;
-    let lastSummarySignature = '';
-    let lastTaskListSignature = '';
     const expandedTaskIds = new Set();
-
-    function isOpaqueIdentifier(value) {
-        const text = String(value || '').trim();
-        if (!text) return false;
-        if (/^[0-9a-f]{24,}$/i.test(text)) return true;
-        if (/^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)) return true;
-        if (text.length >= 24 && !/[A-Z]/.test(text) && /^[a-z0-9._:-]+$/i.test(text)) return true;
-        return false;
-    }
-
-    function visibleLabel(...candidates) {
-        for (const candidate of candidates) {
-            const text = String(candidate || '').trim();
-            if (!text) continue;
-            if (isOpaqueIdentifier(text)) continue;
-            return text;
-        }
-        return '';
-    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -47,57 +24,44 @@ function renderTaskList(container) {
     summaryRail.className = 'summary-rail';
     container.appendChild(summaryRail);
 
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
     const workbench = document.createElement('section');
     workbench.className = 'workbench-panel';
-    container.appendChild(workbench);
+    shell.appendChild(workbench);
 
     const controls = document.createElement('div');
     controls.className = 'route-controls';
     workbench.appendChild(controls);
 
-    const statusBar = document.createElement('div');
-    statusBar.className = 'segmented-control';
-    statusBar.setAttribute('role', 'tablist');
-    statusBar.setAttribute('aria-label', 'Task status filter');
-    controls.appendChild(statusBar);
-
     const statuses = [
-        ['all', '', 'All'],
-        ['queued', 'queued', 'Queued'],
-        ['running', 'running', 'Running'],
-        ['completed', 'completed', 'Done'],
-        ['failed', 'failed', 'Needs follow-up'],
-        ['cancelled', 'cancelled', 'Cancelled'],
+        { key: 'all', value: '', label: 'All' },
+        { key: 'queued', value: 'queued', label: 'Queued' },
+        { key: 'running', value: 'running', label: 'Running' },
+        { key: 'completed', value: 'completed', label: 'Done' },
+        { key: 'failed', value: 'failed', label: 'Needs follow-up' },
+        { key: 'cancelled', value: 'cancelled', label: 'Cancelled' },
     ];
+    const statusControl = UI.createSegmentedControl(statuses, (value) => applyStatusFilter(value), {
+        label: 'Task status filter',
+        value: currentStatus,
+    });
+    const statusBar = statusControl.element;
+    controls.appendChild(statusBar);
 
     function applyStatusFilter(value) {
         currentStatus = value;
-        cursor = 0;
-        cursorStack = [];
-        syncStatusButtons();
+        paginator.reset();
+        statusControl.setActive(currentStatus);
         UI.updateQueryParams({ status: currentStatus });
         loadList();
     }
 
-    statuses.forEach(([key, value, label]) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn';
-        btn.dataset.key = key;
-        btn.dataset.value = value;
-        btn.textContent = label;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(currentStatus === value));
-        btn.tabIndex = currentStatus === value ? 0 : -1;
-        if (currentStatus === value) btn.classList.add('active');
-        btn.addEventListener('click', () => applyStatusFilter(value));
-        statusBar.appendChild(btn);
-    });
-    UI.bindSegmentedControlKeyboard(statusBar, (target) => applyStatusFilter(target.dataset.value || ''));
-
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
-    workbench.appendChild(listShell);
+    shell.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.className = 'list-container list-container-loose';
@@ -106,16 +70,7 @@ function renderTaskList(container) {
     const pagEl = document.createElement('div');
     pagEl.className = 'pagination-shell';
     listShell.appendChild(pagEl);
-
-    function syncStatusButtons() {
-        statusBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const match = statuses.find(([key]) => key === btn.dataset.key);
-            const active = !!match && currentStatus === match[1];
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
+    const paginator = UI.createCursorPaginator(pagEl, () => loadList());
 
     function renderSummary(summary) {
         const items = [
@@ -141,16 +96,11 @@ function renderTaskList(container) {
                 href: '/ui/tasks?status=failed',
             },
         ];
-        const signature = UI.dataSignature(items);
-        if (summaryLoaded && signature === lastSummarySignature) {
-            return;
-        }
-        UI.reconcileChildren(summaryRail, items.map((item) => {
+        UI.memoizedRender(summaryRail, items, (nextItems) => nextItems.map((item) => {
             const card = UI.renderStatCard(item);
             card.dataset.key = item.key;
             return card;
         }));
-        lastSummarySignature = signature;
     }
 
     function _taskSummary(task) {
@@ -162,9 +112,9 @@ function renderTaskList(container) {
     }
 
     function _taskListSignature(tasks, data) {
-        return JSON.stringify({
+        return UI.dataSignature({
             status: currentStatus,
-            cursor,
+            cursor: paginator.cursor,
             hasMore: !!(data && data.has_more),
             nextCursor: data && data.next_cursor ? String(data.next_cursor) : '',
             tasks: (tasks || []).map((task) => ({
@@ -178,56 +128,6 @@ function renderTaskList(container) {
                 conversation: String(task.parent_conversation_title || task.parent_conversation_id || ''),
             })),
         });
-    }
-
-    function _attachTaskActions(actions, task, statusText) {
-        if (['queued', 'submitted', 'leased', 'running'].includes(task.status || '')) {
-            const cancelBtn = document.createElement('button');
-            cancelBtn.type = 'button';
-            cancelBtn.className = 'btn btn-sm btn-danger';
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.addEventListener('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                cancelBtn.disabled = true;
-                statusText.textContent = 'Cancelling…';
-                try {
-                    await API.conversationAction(task.parent_conversation_id, 'cancel_task', {
-                        routed_task_id: task.routed_task_id,
-                    });
-                    statusText.textContent = 'Cancel requested.';
-                } catch (err) {
-                    cancelBtn.disabled = false;
-                    statusText.textContent = 'Cancel failed.';
-                    UI.reportError('Failed to cancel the task', err, { context: 'Task cancel failed' });
-                }
-            });
-            actions.appendChild(cancelBtn);
-        }
-
-        if (['failed', 'cancelled', 'timed_out'].includes(task.status || '')) {
-            const retryBtn = document.createElement('button');
-            retryBtn.type = 'button';
-            retryBtn.className = 'btn btn-sm';
-            retryBtn.textContent = 'Retry';
-            retryBtn.addEventListener('click', async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                retryBtn.disabled = true;
-                statusText.textContent = 'Retrying…';
-                try {
-                    await API.conversationAction(task.parent_conversation_id, 'retry_task', {
-                        routed_task_id: task.routed_task_id,
-                    });
-                    statusText.textContent = 'Retry queued.';
-                } catch (err) {
-                    retryBtn.disabled = false;
-                    statusText.textContent = 'Retry failed.';
-                    UI.reportError('Failed to retry the task', err, { context: 'Task retry failed' });
-                }
-            });
-            actions.appendChild(retryBtn);
-        }
     }
 
     function createTaskItem(task) {
@@ -263,8 +163,8 @@ function renderTaskList(container) {
         const meta = document.createElement('span');
         meta.className = 'task-item-meta';
         meta.textContent = [
-            visibleLabel(task.target_display_name, task.target_agent_id) || 'Assigned agent',
-            visibleLabel(task.parent_conversation_title),
+            UI.visibleLabel(task.target_display_name, task.target_agent_id) || 'Assigned agent',
+            UI.visibleLabel(task.parent_conversation_title),
             UI.relativeTime(task.updated_at || task.created_at),
         ].filter(Boolean).join(' · ');
         primary.appendChild(meta);
@@ -303,9 +203,9 @@ function renderTaskList(container) {
         const facts = document.createElement('div');
         facts.className = 'metadata-grid';
         [
-            ['Origin', visibleLabel(task.origin_display_name, task.origin_agent_id) || '—'],
-            ['Target', visibleLabel(task.target_display_name, task.target_agent_id) || '—'],
-            ['Conversation', visibleLabel(task.parent_conversation_title) || 'Current thread'],
+            ['Origin', UI.visibleLabel(task.origin_display_name, task.origin_agent_id) || '—'],
+            ['Target', UI.visibleLabel(task.target_display_name, task.target_agent_id) || '—'],
+            ['Conversation', UI.visibleLabel(task.parent_conversation_title) || 'Current thread'],
         ].forEach(([label, value]) => {
             const fact = document.createElement('div');
             fact.className = 'metadata-item';
@@ -324,11 +224,15 @@ function renderTaskList(container) {
             e.stopPropagation();
         });
         actions.appendChild(openLink);
-
-        const statusText = document.createElement('span');
-        statusText.className = 'task-action-status';
-        actions.appendChild(statusText);
-        _attachTaskActions(actions, task, statusText);
+        const taskActions = UI.createTaskActionButtons(
+            task.routed_task_id,
+            task.parent_conversation_id,
+            task.status || '',
+            null,
+        );
+        if (taskActions.element.childElementCount > 1) {
+            Array.from(taskActions.element.childNodes).forEach((node) => actions.appendChild(node));
+        }
         detail.appendChild(actions);
 
         item.appendChild(detail);
@@ -347,42 +251,14 @@ function renderTaskList(container) {
         return item;
     }
 
-    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
-            hasPrev,
-            hasNext,
-            info: '',
-            onPrev,
-            onNext,
-        });
-        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
-    }
-
     function renderList(tasks, data) {
         const nextSignature = _taskListSignature(tasks, data);
-        if (listLoaded && nextSignature === lastTaskListSignature) {
-            renderPaginationState({
-                hasPrev: cursorStack.length > 0,
-                hasNext: !!data.has_more,
-                onPrev: () => {
-                    cursor = cursorStack.pop() || 0;
-                    loadList();
-                },
-                onNext: () => {
-                    cursorStack.push(cursor);
-                    cursor = data.next_cursor;
-                    loadList();
-                },
-            });
-            return;
-        }
 
         if (!tasks.length) {
             expandedTaskIds.clear();
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.renderEmptyState(currentStatus ? 'No tasks in this state.' : 'No tasks yet.', true)]);
-            UI.reconcileChildren(pagEl, []);
-            lastTaskListSignature = nextSignature;
+            paginator.clear();
             return;
         }
 
@@ -391,22 +267,13 @@ function renderTaskList(container) {
             if (!visibleTaskIds.has(taskId)) expandedTaskIds.delete(taskId);
         });
 
-        UI.reconcileChildren(listEl, tasks.map(createTaskItem));
-        renderPaginationState({
-            hasPrev: cursorStack.length > 0,
-            hasNext: !!data.has_more,
-            onPrev: () => {
-                cursor = cursorStack.pop() || 0;
-                loadList();
-            },
-            onNext: () => {
-                cursorStack.push(cursor);
-                cursor = data.next_cursor;
-                loadList();
+        UI.memoizedRender(listEl, { signature: nextSignature, tasks }, (state) => state.tasks.map(createTaskItem), {
+            signatureFn(state) {
+                return state.signature;
             },
         });
+        paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
         listLoaded = true;
-        lastTaskListSignature = nextSignature;
     }
 
     async function loadSummary({ soft = false } = {}) {
@@ -419,12 +286,13 @@ function renderTaskList(container) {
                 UI.reportError('Failed to refresh task summary', err, { context: 'Task summary soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(summaryRail);
             UI.reconcileChildren(summaryRail, [UI.createErrorCard('Failed to load task summary: ' + err.message, loadSummary)]);
         }
     }
 
     async function loadList({ soft = false } = {}) {
-        const params = { cursor, limit };
+        const params = { cursor: paginator.cursor, limit };
         if (currentStatus) params.status = currentStatus;
         try {
             const data = await API.listTasks(params);
@@ -434,23 +302,17 @@ function renderTaskList(container) {
                 UI.reportError('Failed to refresh tasks', err, { context: 'Task list soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load tasks: ' + err.message, loadList)]);
-            UI.reconcileChildren(pagEl, []);
+            paginator.clear();
         }
     }
 
-    let reloadDebounce = null;
-    cleanups.add(WS.subscribe('tasks', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => {
-            loadSummary({ soft: true });
-            loadList({ soft: true });
-        }, 350);
-    }));
+    UI.subscribeWithRefresh(cleanups, 'tasks', () => {
+        loadSummary({ soft: true });
+        loadList({ soft: true });
+    }, 350);
 
-    syncStatusButtons();
+    statusControl.setActive(currentStatus);
     container.__routeReady = Promise.allSettled([loadSummary(), loadList()]);
-
-    cleanups.add(() => clearTimeout(reloadDebounce));
 }

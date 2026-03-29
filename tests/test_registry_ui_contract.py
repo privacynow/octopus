@@ -82,11 +82,11 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "externalRef.startsWith('routed-task:')" in detail
     assert "API.getTask(taskId)" in detail
     assert "conversationsLoaded = false" in agent_detail
-    assert "lastConversationSignature = ''" in agent_detail
     assert "document.getElementById('agent-conversations-list')" not in agent_detail
     assert "conversationListEl = list" in agent_detail
     assert "taskThreadListEl = taskList" in agent_detail
     assert "conversationPaginationEl = pag" in agent_detail
+    assert "conversationPaginator = UI.createCursorPaginator" in agent_detail
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
@@ -182,5 +182,106 @@ def test_agent_list_uses_disconnected_not_offline_filter() -> None:
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
     ).read_text(encoding="utf-8")
 
-    assert "['disconnected', 'disconnected', 'Disconnected']" in agent_list
-    assert "['offline', 'offline', 'Offline']" not in agent_list
+    assert "label: 'Disconnected'" in agent_list
+    assert "value: 'disconnected'" in agent_list
+    assert "label: 'Offline'" not in agent_list
+    assert "value: 'offline'" not in agent_list
+
+
+def test_ui_helpers_cover_shared_registry_patterns() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+
+    for marker in [
+        "function subscribeWithRefresh(",
+        "function createSegmentedControl(",
+        "function createCursorPaginator(",
+        "function memoizedRender(",
+        "function createTaskActionButtons(",
+        "function createAgentManagementDropdown(",
+        "function buildConversationTypeBadge(",
+    ]:
+        assert marker in helper
+
+    assert "function createSkeletonNodes(" not in helper
+    assert "function renderSkeletons(" not in helper
+
+
+def test_layout_spacing_uses_shared_css_tokens() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "--card-padding: 20px;" in css
+    assert "--panel-padding: 16px;" in css
+    assert "--compact-card-padding: 12px;" in css
+    assert ".workspace-header-compact {\n    gap: var(--space-2);\n}" in css
+    assert ".list-shell {\n    display: grid;\n    gap: var(--space-3);\n}" in css
+    assert ".agent-detail-grid {\n    display: grid;\n    gap: var(--space-3);\n}" in css
+    assert ".workspace-section .list-container" not in css
+    assert ".dashboard-grid .list-container" not in css
+    assert "gap: 10px" not in css
+    assert "row-gap: 6px" not in css
+
+
+def test_conversation_detail_is_split_into_supporting_modules() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    index_html = (
+        repo_root / "octopus_registry" / "ui" / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert '/ui/js/components/composer-autocomplete.js' in index_html
+    assert '/ui/js/components/event-renderers.js' in index_html
+    assert '/ui/js/components/task-board.js' in index_html
+
+    conversation_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
+    task_board = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "task-board.js"
+    ).read_text(encoding="utf-8")
+    autocomplete = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "composer-autocomplete.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function _createConversationEventElement(" not in conversation_detail
+    assert "function _createConversationTaskCard(" not in conversation_detail
+    assert "function _parseConversationTargetSelector(" not in conversation_detail
+    assert "function _createConversationEventElement(" in event_renderers
+    assert "function _createConversationTaskCard(" in task_board
+    assert "function _parseConversationTargetSelector(" in autocomplete
+
+
+def test_components_use_shared_refresh_and_do_not_duplicate_ws_invalidation_plumbing() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    component_dir = repo_root / "octopus_registry" / "ui" / "js" / "components"
+    helper = (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function subscribeWithRefresh(" in helper
+
+    for name in [
+        "capability-list.js",
+        "usage-view.js",
+        "skill-catalog.js",
+        "guidance-editor.js",
+        "agent-list.js",
+        "approval-list.js",
+        "conversation-list.js",
+        "task-list.js",
+        "agent-detail.js",
+        "dashboard.js",
+    ]:
+        text = (component_dir / name).read_text(encoding="utf-8")
+        assert "UI.subscribeWithRefresh(" in text
+        assert "WS.subscribe(" not in text
+
+    conversation_detail = (component_dir / "conversation-detail.js").read_text(encoding="utf-8")
+    assert "WS.subscribe(`conversation:${convoId}`" in conversation_detail

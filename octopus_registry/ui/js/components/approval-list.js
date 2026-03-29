@@ -3,11 +3,13 @@
  */
 function renderApprovalList(container) {
     const cleanups = UI.beginCleanupScope();
-    let cursor = 0;
-    let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let hasLoaded = false;
-    let lastApprovalSignature = '';
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -23,64 +25,28 @@ function renderApprovalList(container) {
     shellWrap.appendChild(shell);
 
     const listEl = document.createElement('div');
-    listEl.className = 'approval-list';
+    listEl.className = 'list-container';
     shell.appendChild(listEl);
 
     const pagEl = document.createElement('div');
     pagEl.className = 'pagination-shell';
     shell.appendChild(pagEl);
-
-    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
-            hasPrev,
-            hasNext,
-            info: '',
-            onPrev,
-            onNext,
-        });
-        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
-    }
+    const paginator = UI.createCursorPaginator(pagEl, () => loadPage());
 
     function renderRows(data) {
         const approvals = data.approvals || data || [];
-        const signature = UI.dataSignature({
-            cursor,
-            hasMore: !!data.has_more,
-            nextCursor: data.next_cursor || 0,
-            approvals: approvals.map((item) => ({
-                id: String(item.request_id || item.approval_id || item.conversation_id || ''),
-                title: String(item.conversation_title || ''),
-                target: String(item.target_display_name || item.target_agent_id || ''),
-                requestKind: String(item.request_kind || ''),
-                createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
-                expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
-            })),
-        });
-        if (hasLoaded && signature === lastApprovalSignature) {
-            renderPaginationState({
-                hasPrev: cursorStack.length > 0,
-                hasNext: !!data.has_more,
-                onPrev: () => {
-                    cursor = cursorStack.pop() || 0;
-                    loadPage();
-                },
-                onNext: () => {
-                    cursorStack.push(cursor);
-                    cursor = data.next_cursor;
-                    loadPage();
-                },
-            });
-            return;
-        }
         if (!approvals.length) {
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.renderEmptyState('No approvals waiting.', true)]);
-            UI.reconcileChildren(pagEl, []);
-            lastApprovalSignature = signature;
+            paginator.clear();
             return;
         }
 
-        const cards = approvals.map((item) => {
+        UI.memoizedRender(listEl, {
+            cursor: paginator.cursor,
+            approvals,
+        }, (state) => {
+        const cards = state.approvals.map((item) => {
             const card = document.createElement('article');
             card.className = 'approval-card';
             card.dataset.key = item.request_id || item.approval_id || item.conversation_id;
@@ -191,46 +157,48 @@ function renderApprovalList(container) {
             card.appendChild(actions);
             return card;
         });
-
-        UI.reconcileChildren(listEl, cards);
-        renderPaginationState({
-            hasPrev: cursorStack.length > 0,
-            hasNext: !!data.has_more,
-            onPrev: () => {
-                cursor = cursorStack.pop() || 0;
-                loadPage();
-            },
-            onNext: () => {
-                cursorStack.push(cursor);
-                cursor = data.next_cursor;
-                loadPage();
+        const grid = document.createElement('div');
+        grid.className = 'approval-list';
+        grid.dataset.key = 'approval-list';
+        UI.reconcileChildren(grid, cards);
+        return [grid];
+        }, {
+            signatureFn(state) {
+                return {
+                    cursor: state.cursor,
+                    approvals: (state.approvals || []).map((item) => ({
+                        id: String(item.request_id || item.approval_id || item.conversation_id || ''),
+                        title: String(item.conversation_title || ''),
+                        target: String(item.target_display_name || item.target_agent_id || ''),
+                        requestKind: String(item.request_kind || ''),
+                        actor: String(item.actor || ''),
+                        trust: String(item.trust_tier || ''),
+                        createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
+                        expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
+                        content: String(item.content || ''),
+                    })),
+                };
             },
         });
+        paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
         hasLoaded = true;
-        lastApprovalSignature = signature;
     }
 
     async function loadPage({ soft = false } = {}) {
         try {
-            const data = await API.listApprovals({ cursor, limit });
+            const data = await API.listApprovals({ cursor: paginator.cursor, limit });
             renderRows(data);
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh approvals', err, { context: 'Approval list soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load approvals: ' + err.message, loadPage)]);
-            UI.reconcileChildren(pagEl, []);
+            paginator.clear();
         }
     }
 
-    let reloadDebounce = null;
-    cleanups.add(WS.subscribe('approvals', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
-    }));
-
     container.__routeReady = loadPage();
-    cleanups.add(() => clearTimeout(reloadDebounce));
+    UI.subscribeWithRefresh(cleanups, 'approvals', () => loadPage({ soft: true }), 350);
 }

@@ -3,15 +3,17 @@
  */
 function renderAgentList(container) {
     const cleanups = UI.beginCleanupScope();
-    let cursor = 0;
     const limit = UI.DEFAULT_PAGE_LIMIT;
-    let cursorStack = [];
     let nameFilter = UI.readQueryParam('q', '');
     let stateFilter = UI.readQueryParam('state', '');
     let hasLoaded = false;
     let activeConversationOpen = '';
     let searchTimeout = null;
-    let lastListSignature = '';
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -38,43 +40,26 @@ function renderAgentList(container) {
     searchInput.setAttribute('title', 'Press / to focus search');
     controls.appendChild(searchInput);
 
-    const stateBar = document.createElement('div');
-    stateBar.className = 'segmented-control';
-    stateBar.setAttribute('role', 'tablist');
-    stateBar.setAttribute('aria-label', 'Agent state filter');
-    controls.appendChild(stateBar);
-
     const states = [
-        ['all', '', 'All'],
-        ['connected', 'connected', 'Connected'],
-        ['degraded', 'degraded', 'Degraded'],
-        ['disconnected', 'disconnected', 'Disconnected'],
+        { key: 'all', value: '', label: 'All' },
+        { key: 'connected', value: 'connected', label: 'Connected' },
+        { key: 'degraded', value: 'degraded', label: 'Degraded' },
+        { key: 'disconnected', value: 'disconnected', label: 'Disconnected' },
     ];
+    const stateControl = UI.createSegmentedControl(states, (value) => applyStateFilter(value), {
+        label: 'Agent state filter',
+        value: stateFilter,
+    });
+    const stateBar = stateControl.element;
+    controls.appendChild(stateBar);
 
     function applyStateFilter(value) {
         stateFilter = value;
-        cursor = 0;
-        cursorStack = [];
-        syncStateButtons();
+        paginator.reset();
+        stateControl.setActive(stateFilter);
         UI.updateQueryParams({ q: nameFilter, state: stateFilter });
         loadPage();
     }
-
-    states.forEach(([key, value, label]) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn';
-        btn.dataset.key = key;
-        btn.dataset.value = value;
-        btn.textContent = label;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(stateFilter === value));
-        btn.tabIndex = stateFilter === value ? 0 : -1;
-        if (stateFilter === value) btn.classList.add('active');
-        btn.addEventListener('click', () => applyStateFilter(value));
-        stateBar.appendChild(btn);
-    });
-    UI.bindSegmentedControlKeyboard(stateBar, (target) => applyStateFilter(target.dataset.value || ''));
 
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
@@ -89,6 +74,7 @@ function renderAgentList(container) {
     pagEl.id = 'agent-list-pagination';
     pagEl.className = 'pagination-shell';
     listShell.appendChild(pagEl);
+    const paginator = UI.createCursorPaginator(pagEl, () => loadPage());
 
     searchInput.value = nameFilter;
 
@@ -96,77 +82,27 @@ function renderAgentList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             nameFilter = searchInput.value.trim();
-            cursor = 0;
-            cursorStack = [];
+            paginator.reset();
             UI.updateQueryParams({ q: nameFilter, state: stateFilter });
             loadPage();
         }, 250);
     });
 
-    function syncStateButtons() {
-        stateBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const match = states.find(([key]) => key === btn.dataset.key);
-            const active = !!match && stateFilter === match[1];
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
-
-    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
-            hasPrev,
-            hasNext,
-            info: '',
-            onPrev,
-            onNext,
-        });
-        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
-    }
-
     function renderRows(agents, hasMore, nextCursor) {
-        const signature = UI.dataSignature({
-            q: nameFilter,
-            state: stateFilter,
-            cursor,
-            hasMore: !!hasMore,
-            nextCursor: nextCursor || 0,
-            agents: (agents || []).map((agent) => ({
-                id: String(agent.agent_id || ''),
-                state: String(agent.connectivity_state || ''),
-                heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
-                display: String(agent.display_name || agent.slug || ''),
-                role: String(agent.role || ''),
-                provider: String(agent.provider || ''),
-            })),
-        });
-        if (hasLoaded && signature === lastListSignature) {
-            renderPaginationState({
-                hasPrev: cursorStack.length > 0,
-                hasNext: !!hasMore,
-                onPrev: () => {
-                    cursor = cursorStack.pop() || 0;
-                    loadPage();
-                },
-                onNext: () => {
-                    cursorStack.push(cursor);
-                    cursor = nextCursor;
-                    loadPage();
-                },
-            });
-            return;
-        }
-
         if (!agents.length) {
             const emptyMessage = nameFilter || stateFilter ? 'No agents match this view.' : 'No agents enrolled.';
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
-            UI.reconcileChildren(pagEl, []);
-            lastListSignature = signature;
+            paginator.clear();
             return;
         }
 
-        const rows = agents.map((agent) => {
+        UI.memoizedRender(listEl, {
+            q: nameFilter,
+            state: stateFilter,
+            cursor: paginator.cursor,
+            agents,
+        }, (state) => state.agents.map((agent) => {
             const shell = document.createElement('div');
             shell.className = 'list-row-shell';
             shell.dataset.key = agent.agent_id;
@@ -220,28 +156,29 @@ function renderAgentList(container) {
             shell.appendChild(actionBtn);
 
             return shell;
-        });
-        UI.reconcileChildren(listEl, rows);
-
-        renderPaginationState({
-            hasPrev: cursorStack.length > 0,
-            hasNext: !!hasMore,
-            onPrev: () => {
-                cursor = cursorStack.pop() || 0;
-                loadPage();
+        }), {
+            signatureFn(state) {
+                return {
+                    q: String(state.q || ''),
+                    state: String(state.state || ''),
+                    cursor: state.cursor,
+                    agents: (state.agents || []).map((agent) => ({
+                        id: String(agent.agent_id || ''),
+                        state: String(agent.connectivity_state || ''),
+                        heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
+                        display: String(agent.display_name || agent.slug || ''),
+                        role: String(agent.role || ''),
+                        provider: String(agent.provider || ''),
+                    })),
+                };
             },
-            onNext: () => {
-                cursorStack.push(cursor);
-                cursor = nextCursor;
-                loadPage();
-            },
         });
-        lastListSignature = signature;
+        paginator.render({ hasMore: !!hasMore, nextCursor });
     }
 
     async function loadPage({ soft = false } = {}) {
         try {
-            const data = await API.listAgents({ cursor, limit, q: nameFilter, state: stateFilter });
+            const data = await API.listAgents({ cursor: paginator.cursor, limit, q: nameFilter, state: stateFilter });
             renderRows(data.agents || data || [], data.has_more, data.next_cursor);
             hasLoaded = true;
         } catch (err) {
@@ -249,21 +186,15 @@ function renderAgentList(container) {
                 UI.reportError('Failed to refresh agents', err, { context: 'Agent list soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load agents: ' + err.message, loadPage)]);
-            UI.reconcileChildren(pagEl, []);
+            paginator.clear();
         }
     }
 
-    let reloadDebounce = null;
-    cleanups.add(WS.subscribe('agents', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadPage({ soft: true }), 350);
-    }));
-
-    syncStateButtons();
+    stateControl.setActive(stateFilter);
     container.__routeReady = loadPage();
 
     cleanups.add(() => clearTimeout(searchTimeout));
-    cleanups.add(() => clearTimeout(reloadDebounce));
+    UI.subscribeWithRefresh(cleanups, 'agents', () => loadPage({ soft: true }), 350);
 }

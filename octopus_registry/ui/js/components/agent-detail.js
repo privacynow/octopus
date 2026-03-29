@@ -4,29 +4,16 @@
 function renderAgentDetail(container, params) {
     const agentId = params.id;
     const cleanups = UI.beginCleanupScope();
-    let convosCursor = 0;
-    let convosCursorStack = [];
     const convosLimit = UI.DEFAULT_PAGE_LIMIT;
     let detailLoaded = false;
     let conversationsLoaded = false;
     let agentDisplayName = '';
     let openConversationBusy = false;
-    let lastDetailSignature = '';
-    let lastConversationSignature = '';
     let conversationListEl = null;
     let taskThreadListEl = null;
     let taskThreadGroupEl = null;
     let conversationPaginationEl = null;
-
-    function buildConversationTypeBadge(item) {
-        if (String(item.conversation_type || 'conversation') !== 'task_thread') {
-            return null;
-        }
-        const badge = document.createElement('span');
-        badge.className = 'badge badge-task-thread';
-        badge.textContent = 'Task thread';
-        return badge;
-    }
+    let conversationPaginator = null;
 
     const header = document.createElement('header');
     header.className = 'workspace-header workspace-header-compact';
@@ -226,6 +213,7 @@ function renderAgentDetail(container, params) {
         pag.className = 'pagination-shell';
         conversationPaginationEl = pag;
         section.appendChild(pag);
+        conversationPaginator = UI.createCursorPaginator(pag, () => loadConversations());
         return section;
     }
 
@@ -233,48 +221,15 @@ function renderAgentDetail(container, params) {
         const list = conversationListEl;
         const taskList = taskThreadListEl;
         const taskThreadsGroup = taskThreadGroupEl;
-        const pag = conversationPaginationEl;
-        if (!list || !taskList || !taskThreadsGroup || !pag) return;
-
-        const signature = UI.dataSignature({
-            cursor: convosCursor,
-            hasMore: !!data.has_more,
-            nextCursor: data.next_cursor || 0,
-            conversations: (conversations || []).map((item) => ({
-                id: String(item.conversation_id || ''),
-                type: String(item.conversation_type || 'conversation'),
-                status: String(item.status || ''),
-                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
-                title: String(item.title || ''),
-                origin: String(item.origin_channel || ''),
-            })),
-        });
-        if (conversationsLoaded && signature === lastConversationSignature) {
-            const wrapper = document.createElement('div');
-            UI.renderPagination(wrapper, {
-                hasPrev: convosCursorStack.length > 0,
-                hasNext: !!data.has_more,
-                info: '',
-                onPrev: () => {
-                    convosCursor = convosCursorStack.pop() || 0;
-                    loadConversations();
-                },
-                onNext: () => {
-                    convosCursorStack.push(convosCursor);
-                    convosCursor = data.next_cursor;
-                    loadConversations();
-                },
-            });
-            UI.reconcileChildren(pag, Array.from(wrapper.childNodes));
-            return;
-        }
+        if (!list || !taskList || !taskThreadsGroup || !conversationPaginator) return;
 
         if (!conversations.length) {
+            UI.clearMemoizedRender(list);
+            UI.clearMemoizedRender(taskList);
             UI.reconcileChildren(list, [UI.renderEmptyState('No conversations.', true)]);
             UI.reconcileChildren(taskList, []);
             taskThreadsGroup.hidden = true;
-            UI.reconcileChildren(pag, []);
-            lastConversationSignature = signature;
+            conversationPaginator.clear();
             return;
         }
 
@@ -299,7 +254,7 @@ function renderAgentDetail(container, params) {
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
-                trailing: buildConversationTypeBadge(item),
+                trailing: UI.buildConversationTypeBadge(item),
                 className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
                 signature: rowSignature,
             });
@@ -315,53 +270,61 @@ function renderAgentDetail(container, params) {
         );
 
         if (directConversations.length) {
-            UI.reconcileChildren(list, buildRows(directConversations));
+            UI.memoizedRender(list, directConversations, buildRows, {
+                signatureFn(items) {
+                    return (items || []).map((item) => ({
+                        id: String(item.conversation_id || ''),
+                        type: String(item.conversation_type || 'conversation'),
+                        status: String(item.status || ''),
+                        updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
+                        title: String(item.title || ''),
+                        origin: String(item.origin_channel || ''),
+                    }));
+                },
+            });
         } else {
+            UI.clearMemoizedRender(list);
             UI.reconcileChildren(list, [UI.renderEmptyState('No direct conversations.', true)]);
         }
 
         if (taskThreads.length) {
             taskThreadsGroup.hidden = false;
-            UI.reconcileChildren(taskList, buildRows(taskThreads));
+            UI.memoizedRender(taskList, taskThreads, buildRows, {
+                signatureFn(items) {
+                    return (items || []).map((item) => ({
+                        id: String(item.conversation_id || ''),
+                        type: String(item.conversation_type || 'conversation'),
+                        status: String(item.status || ''),
+                        updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
+                        title: String(item.title || ''),
+                        origin: String(item.origin_channel || ''),
+                    }));
+                },
+            });
         } else {
             taskThreadsGroup.hidden = true;
+            UI.clearMemoizedRender(taskList);
             UI.reconcileChildren(taskList, []);
         }
 
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
-            hasPrev: convosCursorStack.length > 0,
-            hasNext: !!data.has_more,
-            info: '',
-            onPrev: () => {
-                convosCursor = convosCursorStack.pop() || 0;
-                loadConversations();
-            },
-            onNext: () => {
-                convosCursorStack.push(convosCursor);
-                convosCursor = data.next_cursor;
-                loadConversations();
-            },
-        });
-        UI.reconcileChildren(pag, Array.from(wrapper.childNodes));
+        conversationPaginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
         conversationsLoaded = true;
-        lastConversationSignature = signature;
     }
 
     async function loadConversations({ soft = false } = {}) {
         const list = conversationListEl;
-        const pag = conversationPaginationEl;
-        if (!list || !pag) return;
+        if (!list || !conversationPaginator) return;
         try {
-            const data = await API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit });
+            const data = await API.getAgentConversations(agentId, { cursor: conversationPaginator.cursor, limit: convosLimit });
             renderConversationRows(data.conversations || data || [], data);
         } catch (err) {
             if (soft && conversationsLoaded) {
                 UI.reportError('Failed to refresh agent conversations', err, { context: 'Agent detail conversation soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(list);
             UI.reconcileChildren(list, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadConversations)]);
-            UI.reconcileChildren(pag, []);
+            conversationPaginator.clear();
         }
     }
 
@@ -397,42 +360,35 @@ function renderAgentDetail(container, params) {
             agentDisplayName = agent.display_name || agent.slug || 'Agent';
             openConversationBusy = false;
 
-            if (detailLoaded && signature === lastDetailSignature) {
-                return;
-            }
-
             buildHeader(agent);
-            UI.reconcileChildren(content, [
+            const detailRender = UI.memoizedRender(content, signature, () => [
                 buildOverviewCard(agent),
                 buildWorkersCard(workers),
                 buildConversationsSection(),
-            ]);
+            ], {
+                signatureFn(value) {
+                    return value;
+                },
+            });
             detailLoaded = true;
-            lastDetailSignature = signature;
-            conversationsLoaded = false;
-            lastConversationSignature = '';
-            await loadConversations();
+            if (detailRender.changed) {
+                conversationsLoaded = false;
+                UI.clearMemoizedRender(conversationListEl);
+                UI.clearMemoizedRender(taskThreadListEl);
+                if (conversationPaginator) {
+                    conversationPaginator.reset();
+                }
+            }
+            await loadConversations({ soft: detailRender.changed ? false : soft });
         } catch (err) {
+            UI.clearMemoizedRender(content);
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load agent: ' + err.message, loadDetail)]);
         }
     }
 
-    let detailReload = null;
-    let convosReload = null;
-    cleanups.add(WS.subscribe(`agent:${agentId}`, () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(detailReload);
-        detailReload = setTimeout(() => loadDetail({ soft: true }), 300);
-    }));
-    cleanups.add(WS.subscribe('conversations', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(convosReload);
-        convosReload = setTimeout(() => loadConversations({ soft: true }), 350);
-    }));
-
     container.__routeReady = loadDetail();
-    cleanups.add(() => clearTimeout(detailReload));
-    cleanups.add(() => clearTimeout(convosReload));
+    UI.subscribeWithRefresh(cleanups, `agent:${agentId}`, () => loadDetail({ soft: true }), 300);
+    UI.subscribeWithRefresh(cleanups, 'conversations', () => loadConversations({ soft: true }), 350);
 }
 
 function renderAgentConversations(container, params) {

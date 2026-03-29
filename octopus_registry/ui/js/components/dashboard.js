@@ -135,11 +135,6 @@ function renderDashboard(container) {
     }
 
     let hasLoaded = false;
-    let lastSummarySignature = '';
-    let lastNeedsAttentionSignature = '';
-    let lastConversationSignature = '';
-    let lastRunningSignature = '';
-    let lastAgentSignature = '';
     const dashboardState = {
         summary: null,
         approvals: { approvals: [] },
@@ -180,14 +175,11 @@ function renderDashboard(container) {
                 href: '/ui/agents',
             },
         ];
-        const signature = UI.dataSignature(items);
-        if (signature === lastSummarySignature) return;
-        UI.reconcileChildren(summaryRailHost, items.map((item) => {
+        UI.memoizedRender(summaryRailHost, items, (nextItems) => nextItems.map((item) => {
             const card = UI.renderStatCard(item);
             card.dataset.key = item.key;
             return card;
         }));
-        lastSummarySignature = signature;
     }
 
     function renderNeedsAttentionSection() {
@@ -218,28 +210,27 @@ function renderDashboard(container) {
             { tasks: dashboardState.failedTasks.tasks || dashboardState.failedTasks || [] },
             dashboardState.agents,
         );
-        const signature = UI.dataSignature({ approvals, failedTasks, riskyAgents });
-        if (signature === lastNeedsAttentionSignature) return;
-        UI.reconcileChildren(needsAttentionHost, needsAttentionRows.length ? [createSection(
+        UI.memoizedRender(needsAttentionHost, { approvals, failedTasks, riskyAgents }, () => (
+            needsAttentionRows.length ? [createSection(
                 'needs-attention',
                 'Needs attention',
                 '/ui/approvals',
                 needsAttentionRows,
                 'Nothing urgent right now.',
-            )] : []);
-        lastNeedsAttentionSignature = signature;
+            )] : []
+        ));
     }
 
     function renderConversationSection() {
         const conversationsData = dashboardState.conversations;
-        const signature = UI.dataSignature((conversationsData.conversations || []).slice(0, 6).map((item) => ({
+        const rowsState = (conversationsData.conversations || []).slice(0, 6).map((item) => ({
             id: String(item.conversation_id || ''),
             title: String(item.title || ''),
             status: String(item.status || ''),
             updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
             target: String(item.target_display_name || item.target_agent_id || ''),
             type: String(item.conversation_type || 'conversation'),
-        })));
+        }));
         const conversationRows = (conversationsData.conversations || []).slice(0, 6).map((item) => createRow({
             key: item.conversation_id,
             title: item.title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Conversation',
@@ -251,15 +242,15 @@ function renderDashboard(container) {
             badgeClass: 'badge-' + (item.status || 'open'),
             href: '/ui/conversations/' + item.conversation_id,
         }));
-        if (signature === lastConversationSignature) return;
-        UI.reconcileChildren(conversationsHost, conversationRows.length ? [createSection(
+        UI.memoizedRender(conversationsHost, rowsState, () => (
+            conversationRows.length ? [createSection(
                 'open-conversations',
                 'Open conversations',
                 '/ui/conversations?status=open',
                 conversationRows,
                 'No open conversations.',
-            )] : []);
-        lastConversationSignature = signature;
+            )] : []
+        ));
     }
 
     function renderRunningSection() {
@@ -267,14 +258,14 @@ function renderDashboard(container) {
             tasks: dashboardState.runningTasks.tasks || dashboardState.runningTasks || [],
             running_tasks: dashboardState.runningTasks.tasks || dashboardState.runningTasks || [],
         };
-        const signature = UI.dataSignature((tasksData.running_tasks || tasksData.tasks || []).slice(0, 6).map((item) => ({
+        const rowsState = (tasksData.running_tasks || tasksData.tasks || []).slice(0, 6).map((item) => ({
             id: String(item.routed_task_id || ''),
             title: String(item.title || ''),
             status: String(item.status || ''),
             updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
             target: String(item.target_display_name || item.target_agent_id || ''),
             conversation: String(item.parent_conversation_id || ''),
-        })));
+        }));
         const runningRows = (tasksData.running_tasks || tasksData.tasks || []).slice(0, 6).map((item) => createRow({
             key: item.routed_task_id,
             title: item.title || 'Running task',
@@ -286,27 +277,27 @@ function renderDashboard(container) {
             badgeClass: 'badge-' + (item.status || 'running'),
             href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
         }));
-        if (signature === lastRunningSignature) return;
-        UI.reconcileChildren(runningTasksHost, runningRows.length ? [createSection(
+        UI.memoizedRender(runningTasksHost, rowsState, () => (
+            runningRows.length ? [createSection(
                 'running-tasks',
                 'Running tasks',
                 '/ui/tasks?status=running',
                 runningRows,
                 'No running tasks.',
-            )] : []);
-        lastRunningSignature = signature;
+            )] : []
+        ));
     }
 
     function renderAgentSection() {
         const agentsData = dashboardState.agents;
-        const signature = UI.dataSignature((agentsData.agents || agentsData || []).slice(0, 6).map((item) => ({
+        const rowsState = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => ({
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
             state: String(item.connectivity_state || ''),
             heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
             role: String(item.role || ''),
             provider: String(item.provider || ''),
-        })));
+        }));
         const agentRows = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => createRow({
             key: item.agent_id,
             title: item.display_name || item.slug || 'Agent',
@@ -319,15 +310,15 @@ function renderDashboard(container) {
             badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
             href: '/ui/agents/' + item.agent_id,
         }));
-        if (signature === lastAgentSignature) return;
-        UI.reconcileChildren(agentsHost, agentRows.length ? [createSection(
+        UI.memoizedRender(agentsHost, rowsState, () => (
+            agentRows.length ? [createSection(
                 'agents',
                 'Agents',
                 '/ui/agents',
                 agentRows,
                 'No agents available.',
-            )] : []);
-        lastAgentSignature = signature;
+            )] : []
+        ));
     }
 
     function renderDashboardView() {
@@ -369,6 +360,11 @@ function renderDashboard(container) {
                 UI.reportError('Failed to refresh dashboard', err, { context: 'Dashboard soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(summaryRailHost);
+            UI.clearMemoizedRender(needsAttentionHost);
+            UI.clearMemoizedRender(conversationsHost);
+            UI.clearMemoizedRender(runningTasksHost);
+            UI.clearMemoizedRender(agentsHost);
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load dashboard: ' + err.message, loadSnapshot)]);
         }
     }
@@ -456,24 +452,11 @@ function renderDashboard(container) {
         }
     }
 
-    const reloadDebounces = Object.create(null);
-
-    function scheduleRefresh(key, loader) {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(reloadDebounces[key]);
-        reloadDebounces[key] = setTimeout(() => {
-            void loader({ soft: true });
-        }, 350);
-    }
-
-    cleanups.add(WS.subscribe('summary', () => scheduleRefresh('summary', refreshSummaryOnly)));
-    cleanups.add(WS.subscribe('agents', () => scheduleRefresh('agents', refreshAgents)));
-    cleanups.add(WS.subscribe('conversations', () => scheduleRefresh('conversations', refreshConversations)));
-    cleanups.add(WS.subscribe('tasks', () => scheduleRefresh('tasks', refreshTasks)));
-    cleanups.add(WS.subscribe('approvals', () => scheduleRefresh('approvals', refreshApprovals)));
+    UI.subscribeWithRefresh(cleanups, 'summary', () => refreshSummaryOnly({ soft: true }), 350);
+    UI.subscribeWithRefresh(cleanups, 'agents', () => refreshAgents({ soft: true }), 350);
+    UI.subscribeWithRefresh(cleanups, 'conversations', () => refreshConversations({ soft: true }), 350);
+    UI.subscribeWithRefresh(cleanups, 'tasks', () => refreshTasks({ soft: true }), 350);
+    UI.subscribeWithRefresh(cleanups, 'approvals', () => refreshApprovals({ soft: true }), 350);
 
     container.__routeReady = loadSnapshot();
-    cleanups.add(() => {
-        Object.values(reloadDebounces).forEach((timer) => clearTimeout(timer));
-    });
 }

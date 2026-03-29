@@ -19,37 +19,21 @@ function renderUsageView(container) {
     controls.className = 'route-controls';
     shell.appendChild(controls);
 
-    const rangeBar = document.createElement('div');
-    rangeBar.className = 'segmented-control';
-    rangeBar.setAttribute('role', 'tablist');
-    rangeBar.setAttribute('aria-label', 'Usage date range');
-    controls.appendChild(rangeBar);
-
     const ranges = [
         { label: 'Today', value: '1d' },
         { label: '7 days', value: '7d' },
         { label: '30 days', value: '30d' },
     ];
 
-    function applyRange(value) {
+    const rangeControl = UI.createSegmentedControl(ranges, (value) => {
         currentRange = value;
-        syncRangeButtons();
         loadUsage();
-    }
-
-    ranges.forEach((range) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn' + (range.value === currentRange ? ' active' : '');
-        btn.textContent = range.label;
-        btn.dataset.value = range.value;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(range.value === currentRange));
-        btn.tabIndex = range.value === currentRange ? 0 : -1;
-        btn.addEventListener('click', () => applyRange(range.value));
-        rangeBar.appendChild(btn);
+    }, {
+        label: 'Usage date range',
+        value: currentRange,
     });
-    UI.bindSegmentedControlKeyboard(rangeBar, (target) => applyRange(target.dataset.value || '7d'));
+    const rangeBar = rangeControl.element;
+    controls.appendChild(rangeBar);
 
     const summaryEl = document.createElement('section');
     summaryEl.className = 'summary-rail';
@@ -62,15 +46,6 @@ function renderUsageView(container) {
     const tableEl = document.createElement('div');
     tableEl.id = 'usage-table';
     tableShell.appendChild(tableEl);
-
-    function syncRangeButtons() {
-        rangeBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const active = btn.dataset.value === currentRange;
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
 
     function _rangeToParams(range) {
         const now = new Date();
@@ -96,7 +71,7 @@ function renderUsageView(container) {
             ['completion', (daily.completion_tokens || 0).toLocaleString(), 'Completion tokens'],
             ['cost', '$' + (daily.cost_usd || 0).toFixed(4), 'Total cost'],
         ];
-        UI.reconcileChildren(summaryEl, items.map(([key, value, label]) => {
+        UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map(([key, value, label]) => {
             const card = UI.renderStatCard({ value, label });
             card.dataset.key = key;
             return card;
@@ -105,10 +80,12 @@ function renderUsageView(container) {
 
     function renderTable(rows) {
         if (!rows.length) {
+            UI.clearMemoizedRender(tableEl);
             UI.reconcileChildren(tableEl, [UI.renderEmptyState('No usage for this range.', true)]);
             return;
         }
 
+        UI.memoizedRender(tableEl, rows, (nextRows) => {
         const wrap = document.createElement('div');
         wrap.className = 'table-wrap';
         wrap.dataset.key = 'usage-table-wrap';
@@ -121,7 +98,7 @@ function renderUsageView(container) {
         table.appendChild(thead);
 
         const tbody = document.createElement('tbody');
-        rows.forEach((item) => {
+        nextRows.forEach((item) => {
             const tr = document.createElement('tr');
             tr.dataset.key = item.conversation_id || '';
 
@@ -147,7 +124,18 @@ function renderUsageView(container) {
         });
         table.appendChild(tbody);
         wrap.appendChild(table);
-        UI.reconcileChildren(tableEl, [wrap]);
+        return [wrap];
+        }, {
+            signatureFn(nextRows) {
+                return (nextRows || []).map((item) => ({
+                    id: String(item.conversation_id || ''),
+                    title: String(item.title || ''),
+                    prompt: Number(item.prompt_tokens || 0),
+                    completion: Number(item.completion_tokens || 0),
+                    cost: Number(item.cost_usd || 0),
+                }));
+            },
+        });
     }
 
     async function loadUsage({ soft = false } = {}) {
@@ -163,18 +151,13 @@ function renderUsageView(container) {
                 UI.reportError('Failed to refresh usage', err, { context: 'Usage soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(summaryEl);
+            UI.clearMemoizedRender(tableEl);
             UI.reconcileChildren(summaryEl, []);
             UI.reconcileChildren(tableEl, [UI.createErrorCard('Failed to load usage: ' + err.message, loadUsage)]);
         }
     }
 
-    let reloadDebounce = null;
-    cleanups.add(WS.subscribe('usage', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(() => loadUsage({ soft: true }), 500);
-    }));
-
-    syncRangeButtons();
+    UI.subscribeWithRefresh(cleanups, 'usage', () => loadUsage({ soft: true }), 500);
     container.__routeReady = loadUsage();
-    cleanups.add(() => clearTimeout(reloadDebounce));
 }

@@ -5,17 +5,15 @@ function renderConversationList(container) {
     const cleanups = UI.beginCleanupScope();
     const QUICK_START_INLINE_LIMIT = 8;
     const CONVERSATION_TYPES = [
-        ['all', '', 'All'],
-        ['conversation', 'conversation', 'Conversations'],
-        ['task_thread', 'task_thread', 'Task threads'],
+        { key: 'all', value: '', label: 'All' },
+        { key: 'conversation', value: 'conversation', label: 'Conversations' },
+        { key: 'task_thread', value: 'task_thread', label: 'Task threads' },
     ];
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
         cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
     }
-    let cursor = 0;
-    let cursorStack = [];
     const limit = UI.DEFAULT_PAGE_LIMIT;
     let currentQ = UI.readQueryParam('q', '');
     let currentStatus = UI.readQueryParam('status', '');
@@ -24,17 +22,19 @@ function renderConversationList(container) {
     let hasLoaded = false;
     let quickStartLoaded = false;
     let openingConversationFor = '';
-    let lastQuickStartSignature = '';
-    let lastListSignature = '';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = '<h2>Conversations</h2>';
     container.appendChild(header);
 
+    const shell = document.createElement('section');
+    shell.className = 'admin-shell';
+    container.appendChild(shell);
+
     const workbench = document.createElement('section');
     workbench.className = 'workbench-panel';
-    container.appendChild(workbench);
+    shell.appendChild(workbench);
 
     const quickStart = document.createElement('section');
     quickStart.className = 'quickstart-strip';
@@ -52,79 +52,45 @@ function renderConversationList(container) {
     searchInput.setAttribute('title', 'Press / to focus search');
     controls.appendChild(searchInput);
 
-    const statusBar = document.createElement('div');
-    statusBar.className = 'segmented-control';
-    statusBar.setAttribute('role', 'tablist');
-    statusBar.setAttribute('aria-label', 'Conversation status filter');
-    controls.appendChild(statusBar);
-
-    const typeBar = document.createElement('div');
-    typeBar.className = 'segmented-control';
-    typeBar.setAttribute('role', 'tablist');
-    typeBar.setAttribute('aria-label', 'Conversation type filter');
-    controls.appendChild(typeBar);
-
     const statuses = [
-        ['all', '', 'All'],
-        ['open', 'open', 'Open'],
-        ['running', 'running', 'Running'],
-        ['completed', 'completed', 'Done'],
-        ['failed', 'failed', 'Needs follow-up'],
+        { key: 'all', value: '', label: 'All' },
+        { key: 'open', value: 'open', label: 'Open' },
+        { key: 'running', value: 'running', label: 'Running' },
+        { key: 'completed', value: 'completed', label: 'Done' },
+        { key: 'failed', value: 'failed', label: 'Needs follow-up' },
     ];
+    const statusControl = UI.createSegmentedControl(statuses, (value) => applyStatus(value), {
+        label: 'Conversation status filter',
+        value: currentStatus,
+    });
+    const statusBar = statusControl.element;
+    controls.appendChild(statusBar);
+    const typeControl = UI.createSegmentedControl(CONVERSATION_TYPES, (value) => applyType(value), {
+        label: 'Conversation type filter',
+        value: currentType,
+    });
+    const typeBar = typeControl.element;
+    controls.appendChild(typeBar);
 
     function applyStatus(value) {
         currentStatus = value;
-        cursor = 0;
-        cursorStack = [];
-        syncStatusButtons();
+        paginator.reset();
+        statusControl.setActive(currentStatus);
         UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
         loadPage();
     }
 
     function applyType(value) {
         currentType = value;
-        cursor = 0;
-        cursorStack = [];
-        syncTypeButtons();
+        paginator.reset();
+        typeControl.setActive(currentType);
         UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
         loadPage();
     }
 
-    statuses.forEach(([key, value, label]) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn';
-        btn.dataset.key = key;
-        btn.dataset.value = value;
-        btn.textContent = label;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(currentStatus === value));
-        btn.tabIndex = currentStatus === value ? 0 : -1;
-        if (currentStatus === value) btn.classList.add('active');
-        btn.addEventListener('click', () => applyStatus(value));
-        statusBar.appendChild(btn);
-    });
-    UI.bindSegmentedControlKeyboard(statusBar, (target) => applyStatus(target.dataset.value || ''));
-
-    CONVERSATION_TYPES.forEach(([key, value, label]) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'segmented-control-btn';
-        btn.dataset.key = key;
-        btn.dataset.value = value;
-        btn.textContent = label;
-        btn.setAttribute('role', 'tab');
-        btn.setAttribute('aria-selected', String(currentType === value));
-        btn.tabIndex = currentType === value ? 0 : -1;
-        if (currentType === value) btn.classList.add('active');
-        btn.addEventListener('click', () => applyType(value));
-        typeBar.appendChild(btn);
-    });
-    UI.bindSegmentedControlKeyboard(typeBar, (target) => applyType(target.dataset.value || ''));
-
     const listShell = document.createElement('section');
     listShell.className = 'list-shell';
-    container.appendChild(listShell);
+    shell.appendChild(listShell);
 
     const listEl = document.createElement('div');
     listEl.className = 'list-container';
@@ -133,6 +99,7 @@ function renderConversationList(container) {
     const pagEl = document.createElement('div');
     pagEl.className = 'pagination-shell';
     listShell.appendChild(pagEl);
+    const paginator = UI.createCursorPaginator(pagEl, () => loadPage());
 
     searchInput.value = currentQ;
 
@@ -140,69 +107,20 @@ function renderConversationList(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
-            cursor = 0;
-            cursorStack = [];
+            paginator.reset();
             UI.updateQueryParams({ q: currentQ, status: currentStatus, type: currentType });
             loadPage();
         }, 250);
     });
 
-    function syncStatusButtons() {
-        statusBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const match = statuses.find(([key]) => key === btn.dataset.key);
-            const active = !!match && currentStatus === match[1];
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
-
-    function syncTypeButtons() {
-        typeBar.querySelectorAll('.segmented-control-btn').forEach((btn) => {
-            const match = CONVERSATION_TYPES.find(([key]) => key === btn.dataset.key);
-            const active = !!match && currentType === match[1];
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-selected', String(active));
-            btn.tabIndex = active ? 0 : -1;
-        });
-    }
-
-    function buildConversationTypeBadge(item) {
-        if (String(item.conversation_type || 'conversation') !== 'task_thread') {
-            return null;
-        }
-        const badge = document.createElement('span');
-        badge.className = 'badge badge-task-thread';
-        badge.textContent = 'Task thread';
-        return badge;
-    }
-
-    function renderPaginationState({ hasPrev, hasNext, onPrev, onNext }) {
-        const wrapper = document.createElement('div');
-        UI.renderPagination(wrapper, {
-            hasPrev,
-            hasNext,
-            info: '',
-            onPrev,
-            onNext,
-        });
-        UI.reconcileChildren(pagEl, Array.from(wrapper.childNodes));
-    }
-
     function renderQuickStart(agents, { hasOverflow = false } = {}) {
-        const signature = UI.dataSignature({
+        UI.memoizedRender(quickStart, {
             hasOverflow: !!hasOverflow,
-            agents: (agents || []).map((agent) => ({
-                id: String(agent.agent_id || ''),
-                label: String(agent.display_name || agent.slug || agent.agent_id || ''),
-            })),
-        });
-        if (quickStartLoaded && signature === lastQuickStartSignature) {
-            return;
-        }
-        const shell = document.createElement('div');
-        shell.className = 'quickstart-shell';
-        shell.dataset.key = 'quickstart-shell';
+            agents: agents || [],
+        }, (state) => {
+        const quickShell = document.createElement('div');
+        quickShell.className = 'quickstart-shell';
+        quickShell.dataset.key = 'quickstart-shell';
 
         const head = document.createElement('div');
         head.className = 'workbench-row';
@@ -223,16 +141,16 @@ function renderConversationList(container) {
         links.appendChild(approvalsLink);
 
         head.appendChild(links);
-        shell.appendChild(head);
+        quickShell.appendChild(head);
 
         const row = document.createElement('div');
         row.className = 'quickstart-row';
         row.dataset.key = 'quickstart-row';
 
-        if (!agents.length) {
+        if (!state.agents.length) {
             row.appendChild(UI.renderEmptyState('No connected agents.', true));
         } else {
-            agents.forEach((agent) => {
+            state.agents.forEach((agent) => {
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'quickstart-chip';
@@ -259,7 +177,7 @@ function renderConversationList(container) {
                 row.appendChild(button);
             });
 
-            if (hasOverflow) {
+            if (state.hasOverflow) {
                 const moreLink = document.createElement('a');
                 moreLink.href = '/ui/agents?state=connected';
                 moreLink.className = 'quickstart-chip';
@@ -269,9 +187,19 @@ function renderConversationList(container) {
             }
         }
 
-        shell.appendChild(row);
-        UI.reconcileChildren(quickStart, [shell]);
-        lastQuickStartSignature = signature;
+        quickShell.appendChild(row);
+        return [quickShell];
+        }, {
+            signatureFn(state) {
+                return {
+                    hasOverflow: !!state.hasOverflow,
+                    agents: (state.agents || []).map((agent) => ({
+                        id: String(agent.agent_id || ''),
+                        label: String(agent.display_name || agent.slug || agent.agent_id || ''),
+                    })),
+                };
+            },
+        });
     }
 
     async function loadQuickStart({ soft = false } = {}) {
@@ -287,54 +215,27 @@ function renderConversationList(container) {
                 UI.reportError('Failed to refresh connected agents', err, { context: 'Conversation quick start soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(quickStart);
             UI.reconcileChildren(quickStart, [UI.createErrorCard('Failed to load connected agents: ' + err.message, loadQuickStart)]);
         }
     }
 
     function renderRows(conversations, data) {
-        const signature = UI.dataSignature({
+        if (!conversations.length) {
+            const emptyMessage = currentQ || currentStatus ? 'No conversations match this view.' : 'No conversations yet.';
+            UI.clearMemoizedRender(listEl);
+            UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
+            paginator.clear();
+            return;
+        }
+
+        UI.memoizedRender(listEl, {
             q: currentQ,
             status: currentStatus,
             type: currentType,
-            cursor,
-            hasMore: !!data.has_more,
-            nextCursor: data.next_cursor || 0,
-            conversations: (conversations || []).map((item) => ({
-                id: String(item.conversation_id || ''),
-                type: String(item.conversation_type || 'conversation'),
-                status: String(item.status || ''),
-                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
-                title: String(item.title || ''),
-                target: String(item.target_display_name || item.target_agent_id || ''),
-                origin: String(item.origin_channel || ''),
-            })),
-        });
-        if (hasLoaded && signature === lastListSignature) {
-            renderPaginationState({
-                hasPrev: cursorStack.length > 0,
-                hasNext: !!data.has_more,
-                onPrev: () => {
-                    cursor = cursorStack.pop() || 0;
-                    loadPage();
-                },
-                onNext: () => {
-                    cursorStack.push(cursor);
-                    cursor = data.next_cursor;
-                    loadPage();
-                },
-            });
-            return;
-        }
-
-        if (!conversations.length) {
-            const emptyMessage = currentQ || currentStatus ? 'No conversations match this view.' : 'No conversations yet.';
-            UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
-            UI.reconcileChildren(pagEl, []);
-            lastListSignature = signature;
-            return;
-        }
-
-        const rows = conversations.map((item) => {
+            cursor: paginator.cursor,
+            conversations,
+        }, (state) => state.conversations.map((item) => {
             const rowSignature = UI.dataSignature({
                 id: String(item.conversation_id || ''),
                 type: String(item.conversation_type || 'conversation'),
@@ -359,34 +260,38 @@ function renderConversationList(container) {
                 sublabelNode: sub,
                 badgeText: item.status || 'open',
                 badgeClass: 'badge-' + (item.status || 'open'),
-                trailing: buildConversationTypeBadge(item),
+                trailing: UI.buildConversationTypeBadge(item),
                 className: item.conversation_type === 'task_thread' ? 'list-row-task-thread' : '',
                 signature: rowSignature,
             });
             row.dataset.key = item.conversation_id;
             return row;
+        }), {
+            signatureFn(state) {
+                return {
+                    q: String(state.q || ''),
+                    status: String(state.status || ''),
+                    type: String(state.type || ''),
+                    cursor: state.cursor,
+                    conversations: (state.conversations || []).map((item) => ({
+                        id: String(item.conversation_id || ''),
+                        type: String(item.conversation_type || 'conversation'),
+                        status: String(item.status || ''),
+                        updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
+                        title: String(item.title || ''),
+                        target: String(item.target_display_name || item.target_agent_id || ''),
+                        origin: String(item.origin_channel || ''),
+                    })),
+                };
+            },
         });
-        UI.reconcileChildren(listEl, rows);
 
-        renderPaginationState({
-            hasPrev: cursorStack.length > 0,
-            hasNext: !!data.has_more,
-            onPrev: () => {
-                cursor = cursorStack.pop() || 0;
-                loadPage();
-            },
-            onNext: () => {
-                cursorStack.push(cursor);
-                cursor = data.next_cursor;
-                loadPage();
-            },
-        });
+        paginator.render({ hasMore: !!data.has_more, nextCursor: data.next_cursor });
         hasLoaded = true;
-        lastListSignature = signature;
     }
 
     async function loadPage({ soft = false } = {}) {
-        const params = { cursor, limit };
+        const params = { cursor: paginator.cursor, limit };
         if (currentQ) params.q = currentQ;
         if (currentStatus) params.status = currentStatus;
         if (currentType) params.conversation_type = currentType;
@@ -398,29 +303,17 @@ function renderConversationList(container) {
                 UI.reportError('Failed to refresh conversations', err, { context: 'Conversation list soft refresh failed' });
                 return;
             }
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load conversations: ' + err.message, loadPage)]);
-            UI.reconcileChildren(pagEl, []);
+            paginator.clear();
         }
     }
 
-    let quickStartReload = null;
-    let listReload = null;
-    cleanups.add(WS.subscribe('agents', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(quickStartReload);
-        quickStartReload = setTimeout(() => loadQuickStart({ soft: true }), 350);
-    }));
-    cleanups.add(WS.subscribe('conversations', () => {
-        if (UI.isBackgrounded()) return;
-        clearTimeout(listReload);
-        listReload = setTimeout(() => loadPage({ soft: true }), 350);
-    }));
-
-    syncStatusButtons();
-    syncTypeButtons();
+    statusControl.setActive(currentStatus);
+    typeControl.setActive(currentType);
     container.__routeReady = Promise.allSettled([loadQuickStart(), loadPage()]);
 
     cleanups.add(() => clearTimeout(searchTimeout));
-    cleanups.add(() => clearTimeout(quickStartReload));
-    cleanups.add(() => clearTimeout(listReload));
+    UI.subscribeWithRefresh(cleanups, 'agents', () => loadQuickStart({ soft: true }), 350);
+    UI.subscribeWithRefresh(cleanups, 'conversations', () => loadPage({ soft: true }), 350);
 }

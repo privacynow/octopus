@@ -25,11 +25,12 @@ function renderCapabilityList(container) {
         try {
             const caps = await API.listCapabilities();
             if (!caps || caps.length === 0) {
+                UI.clearMemoizedRender(listEl);
                 UI.reconcileChildren(listEl, [UI.renderEmptyState('No capabilities declared.', true)]);
                 return;
             }
 
-            const rows = caps.map((c, index) => {
+            UI.memoizedRender(listEl, caps, (nextCaps) => nextCaps.map((c, index) => {
                 // Toggle switch
                 const enabled = c.enabled !== false;
                 const capName = c.name || c.capability_name;
@@ -84,20 +85,21 @@ function renderCapabilityList(container) {
                     );
                 });
                 return row;
+            }), {
+                signatureFn(nextCaps) {
+                    return (nextCaps || []).map((item) => ({
+                        name: String(item.name || item.capability_name || ''),
+                        enabled: item.enabled !== false,
+                        declaredBy: Array.isArray(item.declared_by_agents) ? item.declared_by_agents.join('|') : '',
+                    }));
+                },
             });
-            UI.reconcileChildren(listEl, rows);
         } catch (err) {
+            UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load capabilities: ' + err.message, loadCapabilities)]);
         }
     }
 
     container.__routeReady = loadCapabilities();
-
-    let reloadDebounce = null;
-    const unsub = WS.subscribe('agents', () => {
-        clearTimeout(reloadDebounce);
-        reloadDebounce = setTimeout(loadCapabilities, 600);
-    });
-    cleanups.add(() => clearTimeout(reloadDebounce));
-    cleanups.add(unsub);
+    UI.subscribeWithRefresh(cleanups, 'agents', loadCapabilities, 600);
 }

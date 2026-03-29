@@ -217,6 +217,25 @@ Mounted routes debounce invalidation bursts, skip unchanged payloads, and avoid
 background-tab refresh churn so the operator UI does not keep repainting whole
 sections for no visible change.
 
+The current UI contract is intentionally shared rather than per-component:
+
+- list routes use the same shell structure: compact page header, `admin-shell`,
+  optional `workbench-panel` controls, then `list-shell` + `list-container`
+- shared UI primitives live in
+  [`octopus_registry/ui/js/helpers/ui.js`](/Users/tinker/output/bots/telegram-agent-bot/octopus_registry/ui/js/helpers/ui.js):
+  `UI.subscribeWithRefresh(...)`, `UI.createSegmentedControl(...)`,
+  `UI.createCursorPaginator(...)`, `UI.memoizedRender(...)`,
+  `UI.createTaskActionButtons(...)`, `UI.createAgentManagementDropdown(...)`,
+  and `UI.buildConversationTypeBadge(...)`
+- CSS spacing and padding now come from named tokens such as
+  `--card-padding`, `--panel-padding`, `--compact-card-padding`, and shared
+  `--space-*` gaps instead of per-view hardcoded pixel values
+- empty states use the same chrome across standalone list pages and nested
+  dashboard/agent-detail sections
+- conversation detail is split across
+  `conversation-detail.js`, `composer-autocomplete.js`,
+  `event-renderers.js`, and `task-board.js` rather than one monolithic file
+
 ## Runtime Notes
 
 - `app/main.py` is the runnable entrypoint

@@ -1697,7 +1697,7 @@ async def test_registry_channel_action_recovery_discard_discards_pending_recover
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_discard",
-                    "payload": {"update_id": 600},
+                    "payload": {"recovery_id": _event(600)},
                 },
             },
             runtime=_registry_delivery_runtime(cfg, prov),
@@ -1745,7 +1745,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_replay",
-                    "payload": {"update_id": 601},
+                    "payload": {"recovery_id": _event(601)},
                 },
             },
             runtime=_registry_delivery_runtime(cfg, prov),
@@ -1761,7 +1761,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
         assert row["state"] == "done"
 
 
-async def test_registry_recovery_notice_timeline_uses_sdk_error_metadata(monkeypatch):
+async def test_registry_recovery_notice_timeline_uses_sdk_approval_metadata(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -1771,15 +1771,26 @@ async def test_registry_recovery_notice_timeline_uses_sdk_error_metadata(monkeyp
         }
         ) as (_, cfg, prov):
             import app.runtime.telegram_ingress as th
-            from app.channels.registry.egress import RegistryChannelEgress
+            from octopus_sdk.event_sink import RegistryEventSink
 
             published: list[dict[str, object]] = []
 
-            async def fake_publish_event(self, **kwargs):
+            async def fake_publish(self, kind, *, event_id, actor="", content="", metadata=None):
                 del self
-                published.append(kwargs)
+                published.append({
+                    "kind": kind,
+                    "event_id": event_id,
+                    "actor": actor,
+                    "content": content,
+                    "metadata": metadata or {},
+                })
 
-            monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+            async def fake_ensure_conversation(self):
+                del self
+                return "registry-conv-2"
+
+            monkeypatch.setattr(RegistryEventSink, "_publish", fake_publish)
+            monkeypatch.setattr(RegistryEventSink, "_ensure_conversation", fake_ensure_conversation)
 
             event = InboundMessage(
                 user=InboundUser(id=_actor(42), username="registry-ui"),
@@ -1805,11 +1816,14 @@ async def test_registry_recovery_notice_timeline_uses_sdk_error_metadata(monkeyp
                     execution_runtime=current_execution_runtime(),
                 )
 
-            recovery_events = [item for item in published if item["kind"] == "error" and item.get("metadata", {}).get("error_type") == "recovery"]
+            recovery_events = [item for item in published if item["kind"] == "approval.requested"]
             assert recovery_events
             assert recovery_events[0]["metadata"] == {
-                "error_type": "recovery",
-                "message": "Execution paused. Choose how to continue.",
+                "request_kind": "recovery",
+                "actor_key": _actor(42),
+                "trust_tier": "trusted",
+                "expires_at": None,
+                "recovery_id": _event(8123),
             }
 
 

@@ -9,10 +9,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
-from fastapi.encoders import jsonable_encoder
 from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
 
 from .auth import (
     AuthContext,
@@ -58,6 +56,7 @@ from .ingress import (
     catalog_skill_detail,
     catalog_skill_lifecycle_detail,
     clear_conversation_skills,
+    conversation_settings_state,
     conversation_skill_state,
     deactivate_conversation_skill,
     diff_catalog_skill,
@@ -71,7 +70,10 @@ from .ingress import (
     publish_provider_guidance,
     reject_catalog_skill,
     reject_provider_guidance,
+    reset_conversation,
     search_catalog_skills,
+    set_conversation_setting,
+    submit_conversation_skill_credential,
     submit_catalog_skill,
     submit_provider_guidance,
     uninstall_catalog_skill,
@@ -84,6 +86,24 @@ from .store_base import (
     CapabilityDisabledError,
     RegistryScopeError,
     validated_routed_task_request,
+)
+from .http_support import (
+    ConversationResetRequest,
+    ConversationSettingUpdateRequest,
+    ConversationSkillCredentialRequest,
+    ConversationSkillMutationRequest,
+    LifecycleActionRequest,
+    ProviderGuidanceDraftUpdateRequest,
+    ProviderGuidancePreviewRequest,
+    RuntimeSkillDraftUpdateRequest,
+    float_value as _float_value,
+    int_value as _int_value,
+    json_payload as _json_payload,
+    operator_actor_key as _operator_actor_key,
+    paginated_response as _paginated_response,
+    require_own_resource as _require_own_resource,
+    scoped_agent_id as _scoped_agent_id,
+    secure_html_response as _secure_html_response,
 )
 
 _REGISTRY_UI_SECURITY_HEADERS = {
@@ -104,51 +124,7 @@ _REGISTRY_UI_SECURITY_HEADERS = {
 }
 
 log = logging.getLogger(__name__)
-
-
-class ConversationSkillMutationRequest(BaseModel):
-    actor_key: str = Field(..., min_length=1, description="Actor performing the skill mutation")
-    confirm: bool = Field(default=False, description="Confirm activation when the prompt budget warning has already been acknowledged")
-
-
-class ProviderGuidancePreviewRequest(BaseModel):
-    role: str = Field(default="", description="Role/persona text to include")
-    active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
-    compact_mode: bool = Field(default=False, description="Whether compact-mode instructions should be appended")
-
-
-class LifecycleActionRequest(BaseModel):
-    actor_key: str = Field(..., min_length=1, description="Actor performing the lifecycle action")
-    note: str = Field(default="", description="Optional lifecycle note")
-
-
-class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
-    body: str = Field(..., min_length=1, description="Draft instruction body")
-    description: str = Field(default="", description="Optional skill description override")
-    changelog: str = Field(default="", description="Optional changelog entry")
-
-
-class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
-    body: str = Field(..., min_length=1, description="Draft provider-guidance body")
-    scope_kind: str = Field(default="system", description="Guidance scope kind")
-    scope_key: str = Field(default="", description="Guidance scope key")
-
-
 from octopus_sdk.identity import normalize_conversation_id
-
-
-def _int_value(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _float_value(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def get_store() -> AbstractRegistryStore:
@@ -157,14 +133,6 @@ def get_store() -> AbstractRegistryStore:
 
 def get_authority() -> StoreBackedRegistryAuthority:
     return get_registry_authority()
-
-
-def _secure_html_response(content: str, *, status_code: int = 200) -> HTMLResponse:
-    return HTMLResponse(
-        content,
-        status_code=status_code,
-        headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
-    )
 
 
 @asynccontextmanager
@@ -176,10 +144,6 @@ async def _registry_lifespan(app: FastAPI):
 
 app = FastAPI(title="Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
-
-
-
-# In-process WebSocket pub/sub manager (single-process only)
 _ws_manager = WebSocketManager()
 
 
@@ -231,8 +195,6 @@ async def _broadcast_invalidations(
 @app.websocket("/v1/ws")
 async def websocket_feed(ws: WebSocket) -> None:
     """Real-time event feed. v1: operator session cookie auth only."""
-    # Authenticate via session cookie — WebSocket connections carry cookies
-    # but cannot send custom headers, so we check the session cookie only.
     session = ws.session if hasattr(ws, "session") else {}
     if not session.get("ui_authenticated"):
         await ws.close(code=4001, reason="Authentication required")
@@ -253,13 +215,7 @@ async def websocket_feed(ws: WebSocket) -> None:
 
 def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
     if isinstance(exc, RegistryScopeError):
-        return HTTPException(
-            status_code=403,
-            detail={
-                "error_code": "registry_scope_not_permitted",
-                "message": str(exc),
-            },
-        )
+        return HTTPException(status_code=403, detail={"error_code": "registry_scope_not_permitted", "message": str(exc)})
     detail = str(exc).strip().lower()
     if detail == "unknown agent token":
         return HTTPException(status_code=401, detail="Invalid or expired agent token.")
@@ -573,36 +529,6 @@ async def deregister(
 # ---------------------------------------------------------------------------
 # Resource-oriented routes (Phase 3 of registry UI rebuild)
 # ---------------------------------------------------------------------------
-
-
-def _require_own_resource(auth: AuthContext, owner_agent_id: str) -> None:
-    """For agent-token callers, verify the resource belongs to them. Operators pass through."""
-    if auth.is_agent and auth.agent_id != owner_agent_id:
-        raise HTTPException(status_code=403, detail="Not authorized for this agent resource.")
-
-
-def _scoped_agent_id(auth: AuthContext) -> str | None:
-    """Return agent_id for scoping list queries, or None for operators (all data)."""
-    return auth.agent_id if auth.is_agent else None
-
-
-def _paginated_response(key: str, items: list[Any], cursor: int, limit: int) -> dict[str, Any]:
-    """Wrap a list result with offset-based pagination metadata.
-
-    Stores fetch ``limit + 1`` rows; the extra row signals *has_more*.
-    """
-    has_more = len(items) > limit
-    if has_more:
-        items = items[:limit]
-    return {
-        key: items,
-        "next_cursor": cursor + limit if has_more else None,
-        "has_more": has_more,
-    }
-
-
-def _json_payload(value: Any) -> Any:
-    return jsonable_encoder(value)
 
 
 def _conversation_agent_scope(
@@ -1201,7 +1127,7 @@ async def api_catalog_skill_edit_draft(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             body=payload.body,
             description=payload.description or None,
             changelog=payload.changelog,
@@ -1223,7 +1149,7 @@ async def api_catalog_skill_submit(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1243,7 +1169,7 @@ async def api_catalog_skill_approve(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1263,7 +1189,7 @@ async def api_catalog_skill_reject(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1283,7 +1209,7 @@ async def api_catalog_skill_publish(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1303,7 +1229,7 @@ async def api_catalog_skill_archive(
             store,
             agent_id,
             skill_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1395,14 +1321,21 @@ async def api_conversation_activate_skill(
         conversation_id=conversation_id,
     )
     try:
-        return await activate_conversation_skill(
+        result = await activate_conversation_skill(
             store,
             agent_id,
             scoped_conversation_id,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             skill_name=skill_name,
             confirm=payload.confirm,
         )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.skill.activated",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -1422,13 +1355,20 @@ async def api_conversation_deactivate_skill(
         conversation_id=conversation_id,
     )
     try:
-        return await deactivate_conversation_skill(
+        result = await deactivate_conversation_skill(
             store,
             agent_id,
             scoped_conversation_id,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             skill_name=skill_name,
         )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.skill.deactivated",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -1447,12 +1387,135 @@ async def api_conversation_clear_skills(
         conversation_id=conversation_id,
     )
     try:
-        return await clear_conversation_skills(
+        result = await clear_conversation_skills(
             store,
             agent_id,
             scoped_conversation_id,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
         )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.skills.cleared",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/agents/{agent_id}/conversations/{conversation_id:path}/skills/{skill_name}/credential")
+async def api_conversation_submit_skill_credential(
+    agent_id: str,
+    conversation_id: str,
+    skill_name: str,
+    payload: ConversationSkillCredentialRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    scoped_conversation_id = _conversation_agent_scope(
+        store,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    try:
+        result = await submit_conversation_skill_credential(
+            store,
+            agent_id,
+            scoped_conversation_id,
+            actor_key=_operator_actor_key(payload.actor_key),
+            skill_name=skill_name,
+            value=payload.value,
+        )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.skill.credential",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.get("/v1/agents/{agent_id}/conversations/{conversation_id:path}/settings")
+async def api_conversation_settings(
+    agent_id: str,
+    conversation_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    scoped_conversation_id = _conversation_agent_scope(
+        store,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    try:
+        return await conversation_settings_state(store, agent_id, scoped_conversation_id)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/agents/{agent_id}/conversations/{conversation_id:path}/settings")
+async def api_conversation_update_settings(
+    agent_id: str,
+    conversation_id: str,
+    payload: ConversationSettingUpdateRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    scoped_conversation_id = _conversation_agent_scope(
+        store,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    try:
+        result = await set_conversation_setting(
+            store,
+            agent_id,
+            scoped_conversation_id,
+            actor_key=_operator_actor_key(payload.actor_key),
+            setting=payload.setting,
+            value=payload.value,
+        )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.settings.updated",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/agents/{agent_id}/conversations/{conversation_id:path}/reset")
+async def api_conversation_reset(
+    agent_id: str,
+    conversation_id: str,
+    payload: ConversationResetRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    scoped_conversation_id = _conversation_agent_scope(
+        store,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+    )
+    try:
+        result = await reset_conversation(
+            store,
+            agent_id,
+            scoped_conversation_id,
+            actor_key=_operator_actor_key(payload.actor_key),
+        )
+        await _broadcast_invalidations(
+            topics=(f"conversation:{scoped_conversation_id}", "conversations"),
+            reason="conversation.reset",
+            conversation_id=scoped_conversation_id,
+            agent_id=agent_id,
+        )
+        return result
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
@@ -1512,7 +1575,7 @@ async def api_provider_guidance_edit_draft(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             body=payload.body,
             scope_kind=payload.scope_kind,
             scope_key=payload.scope_key,
@@ -1534,7 +1597,7 @@ async def api_provider_guidance_submit(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1554,7 +1617,7 @@ async def api_provider_guidance_approve(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1574,7 +1637,7 @@ async def api_provider_guidance_reject(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1594,7 +1657,7 @@ async def api_provider_guidance_publish(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
@@ -1614,11 +1677,13 @@ async def api_provider_guidance_archive(
             store,
             agent_id,
             provider_name,
-            actor_key=payload.actor_key,
+            actor_key=_operator_actor_key(payload.actor_key),
             note=payload.note,
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 def _render_login_html(title: str, error: str = "") -> str:
     error_block = f'<p class="error">{error}</p>' if error else ""
     return f"""<!DOCTYPE html>
@@ -1664,7 +1729,10 @@ def ui_login_page(request: Request):
     settings = load_settings()
     if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
-    return _secure_html_response(_render_login_html(settings.display_name or "Agent Registry"))
+    return _secure_html_response(
+        _render_login_html(settings.display_name or "Agent Registry"),
+        headers=_REGISTRY_UI_SECURITY_HEADERS,
+    )
 
 
 @app.post("/ui/login")
@@ -1675,7 +1743,8 @@ async def ui_login(request: Request, password: str = Form(default="")):
     enforce_auth_attempt_limit(request, "registry-ui-login")
     if not ui_password_matches(password, settings=settings):
         return _secure_html_response(
-            _render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
+            _render_login_html(settings.display_name or "Agent Registry", error="Incorrect password."),
+            headers=_REGISTRY_UI_SECURITY_HEADERS,
         )
     clear_auth_attempt_limit(request, "registry-ui-login")
     mark_ui_session_authenticated(request)

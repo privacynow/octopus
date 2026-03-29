@@ -90,10 +90,11 @@ class ApprovalMetadata(BaseModel):
 class ApprovalRequestedMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    request_kind: Literal["preflight", "retry", "delegation"]
+    request_kind: Literal["preflight", "retry", "delegation", "recovery"]
     actor_key: str = Field(..., min_length=1)
     trust_tier: str = Field(..., min_length=1)
     expires_at: str | None = None
+    recovery_id: str | None = None
 
 
 class DelegationTaskSummary(BaseModel):

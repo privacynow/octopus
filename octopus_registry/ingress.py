@@ -26,9 +26,12 @@ from octopus_sdk.registry.management import (
     CatalogSkillLifecycleDetailRequest,
     CatalogSkillLifecycleDetailResult,
     ClearConversationSkillsRequest,
+    ConversationSettingsStateRequest,
+    ConversationSettingsStateResult,
     ConversationSkillStateRequest,
     ConversationSkillStateResult,
     DeactivateConversationSkillRequest,
+    DeactivateConversationSkillResult,
     DiffCatalogSkillRequest,
     DiffCatalogSkillResult,
     EditCatalogSkillDraftRequest,
@@ -49,12 +52,18 @@ from octopus_sdk.registry.management import (
     PublishCatalogSkillResult,
     PublishProviderGuidanceRequest,
     PublishProviderGuidanceResult,
+    ResetConversationRequest,
+    ResetConversationResult,
     RejectCatalogSkillRequest,
     RejectCatalogSkillResult,
     RejectProviderGuidanceRequest,
     RejectProviderGuidanceResult,
     SearchCatalogSkillsRequest,
     SearchCatalogSkillsResult,
+    SetConversationSettingRequest,
+    SetConversationSettingResult,
+    SubmitConversationSkillCredentialRequest,
+    SubmitConversationSkillCredentialResult,
     SubmitCatalogSkillRequest,
     SubmitCatalogSkillResult,
     SubmitProviderGuidanceRequest,
@@ -478,6 +487,11 @@ async def conversation_skill_state(
             item.model_dump(mode="json", by_alias=True)
             for item in payload.listing.active_skill_details
         ],
+        "pending_setup": (
+            payload.pending_setup.model_dump(mode="json", by_alias=True)
+            if payload.pending_setup is not None
+            else None
+        ),
     }
 
 
@@ -564,6 +578,108 @@ async def clear_conversation_skills(
     if result.status == "foreign_setup":
         raise RegistryIngressError(409, "credential_setup_in_progress")
     return {"status": result.status}
+
+
+async def submit_conversation_skill_credential(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    conversation_id: str,
+    *,
+    actor_key: str,
+    skill_name: str,
+    value: str,
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=SubmitConversationSkillCredentialRequest(
+            conversation_id=conversation_id,
+            conversation_key=_conversation_management_key(store, conversation_id=conversation_id),
+            actor_key=actor_key,
+            skill_name=skill_name,
+            value=value,
+        ),
+    )
+    assert isinstance(payload, SubmitConversationSkillCredentialResult)
+    result = payload.result
+    response: dict[str, object] = {
+        "status": result.status,
+        "skill_name": result.skill_name,
+    }
+    if result.validation_key:
+        response["validation_key"] = result.validation_key
+    if result.validation_error:
+        response["validation_error"] = result.validation_error
+    if result.next_requirement is not None:
+        response["next_requirement"] = result.next_requirement.model_dump(mode="json", by_alias=True)
+    return response
+
+
+async def conversation_settings_state(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    conversation_id: str,
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=ConversationSettingsStateRequest(
+            conversation_id=conversation_id,
+            conversation_key=_conversation_management_key(store, conversation_id=conversation_id),
+        ),
+    )
+    assert isinstance(payload, ConversationSettingsStateResult)
+    return payload.state.model_dump(mode="json", by_alias=True)
+
+
+async def set_conversation_setting(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    conversation_id: str,
+    *,
+    actor_key: str,
+    setting: str,
+    value: str = "",
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=SetConversationSettingRequest(
+            conversation_id=conversation_id,
+            conversation_key=_conversation_management_key(store, conversation_id=conversation_id),
+            actor_key=actor_key,
+            setting=setting,
+            value=value,
+        ),
+    )
+    assert isinstance(payload, SetConversationSettingResult)
+    return {
+        "result": payload.result.model_dump(mode="json", by_alias=True),
+        "state": payload.state.model_dump(mode="json", by_alias=True),
+    }
+
+
+async def reset_conversation(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    conversation_id: str,
+    *,
+    actor_key: str,
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=ResetConversationRequest(
+            conversation_id=conversation_id,
+            conversation_key=_conversation_management_key(store, conversation_id=conversation_id),
+            actor_key=actor_key,
+        ),
+    )
+    assert isinstance(payload, ResetConversationResult)
+    return {
+        "result": payload.result.model_dump(mode="json", by_alias=True),
+        "state": payload.state.model_dump(mode="json", by_alias=True),
+    }
 
 
 async def preview_provider_guidance(

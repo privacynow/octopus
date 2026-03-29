@@ -27,7 +27,7 @@ class RecoveryActionOutcome:
 
 @dataclass(frozen=True)
 class WorkerRecoveryNotice:
-    update_id: int
+    recovery_id: str
     preview: str
     prompt: str
     run_again_label: str
@@ -64,7 +64,8 @@ class RecoveryPort(Protocol):
         data_dir: Path,
         item_id: str,
         original_text: str,
-        update_id: int,
+        recovery_id: str,
         bind_egress: Callable[[], Awaitable[None]],
         send_notice: Callable[[WorkerRecoveryNotice], Awaitable[None]],
+        publish_notice: Callable[[WorkerRecoveryNotice], Awaitable[None]] | None = None,
     ) -> WorkerRecoveryOutcome: ...

@@ -183,18 +183,21 @@ class RecoveryUseCases(RecoveryPort):
         data_dir: Path,
         item_id: str,
         original_text: str,
-        update_id: int,
+        recovery_id: str,
         bind_egress,
         send_notice,
+        publish_notice=None,
     ) -> WorkerRecoveryOutcome:
         notice = WorkerRecoveryNotice(
-            update_id=update_id,
+            recovery_id=str(recovery_id or "").strip(),
             preview=html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else "")),
             prompt=self._messages.recovery_notice_prompt(),
             run_again_label=self._messages.recovery_button_run_again(),
             skip_label=self._messages.recovery_button_skip(),
         )
         await bind_egress()
+        if publish_notice is not None:
+            await publish_notice(notice)
         await send_notice(notice)
         self._work_queue.mark_pending_recovery(data_dir, item_id)
         return WorkerRecoveryOutcome(status="pending_recovery", notice=notice)

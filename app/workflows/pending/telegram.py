@@ -250,10 +250,9 @@ async def handle_recovery_callback(update: Update, context, *, runtime: Telegram
         rendered = telegram_presenters.recovery_invalid_action_message()
         await query.answer(rendered.text)
         return
-    action, update_id_str = parts
-    try:
-        update_id = int(update_id_str)
-    except (ValueError, TypeError):
+    action, recovery_id = parts
+    recovery_id = str(recovery_id or "").strip()
+    if not recovery_id:
         rendered = telegram_presenters.recovery_invalid_action_message()
         await query.answer(rendered.text)
         return
@@ -261,7 +260,7 @@ async def handle_recovery_callback(update: Update, context, *, runtime: Telegram
     await handle_recovery_action(
         update.effective_chat.id,
         action,
-        update_id,
+        recovery_id,
         query.message,
         answer_action=query.answer,
         runtime=runtime,
@@ -271,7 +270,7 @@ async def handle_recovery_callback(update: Update, context, *, runtime: Telegram
 async def handle_recovery_action(
     chat_id: int | str,
     action: str,
-    update_id: int,
+    recovery_id: str,
     message,
     *,
     answer_action=None,
@@ -288,7 +287,7 @@ async def handle_recovery_action(
     outcome = _flows().recovery.replay.prepare_action(
         data_dir=data_dir,
         conversation_key=_conversation_key(chat_id),
-        event_id=_event_key(update_id),
+        event_id=_event_key(recovery_id),
         action=action,
         worker_id=runtime.state.boot_id,
         ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
@@ -410,8 +409,8 @@ async def handle_worker_pending_action(
         )
         return True
     if event.action in {"recovery_replay", "recovery_discard"}:
-        update_id = int(params.get("update_id") or 0)
-        if update_id <= 0:
+        recovery_id = str(params.get("recovery_id") or "").strip()
+        if not recovery_id:
             rendered = telegram_presenters.recovery_invalid_action_message()
             await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
@@ -421,7 +420,7 @@ async def handle_worker_pending_action(
         await handle_recovery_action(
             runtime_chat,
             event.action,
-            update_id,
+            recovery_id,
             channel_message,
             cancel_event=cancel_event,
             runtime=runtime,

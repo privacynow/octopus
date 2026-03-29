@@ -106,9 +106,9 @@ class _DispatchEgress(TransportEgress):
         prompt: str,
         run_again_label: str,
         skip_label: str,
-        update_id: int,
+        recovery_id: str,
     ) -> None:
-        del preview, prompt, run_again_label, skip_label, update_id
+        del preview, prompt, run_again_label, skip_label, recovery_id
 
     async def show_foreign_setup(self, foreign_setup) -> None:
         del foreign_setup

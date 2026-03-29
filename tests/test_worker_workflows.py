@@ -337,14 +337,14 @@ async def test_recovery_workflow_binds_and_sends_notice_before_marking_pending_r
                 (item_id,),
             ).fetchone()
             calls.append(f"send:{row['state']}")
-            assert notice.update_id == 8102
+            assert notice.recovery_id == telegram_event_id(8102)
             assert "recover me" in notice.preview
 
         result = await composition.workflows().recovery.replay.dispatch_worker_recovery(
             data_dir=data_dir,
             item_id=item_id,
             original_text="recover me",
-            update_id=8102,
+            recovery_id=telegram_event_id(8102),
             bind_egress=bind_egress,
             send_notice=send_notice,
         )
@@ -379,7 +379,7 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
                     prompt="Recover?",
                     run_again_label="Run again",
                     skip_label="Skip",
-                    update_id=0,
+                    recovery_id="recovery-event-1",
                 )
             )
             return SimpleNamespace(status="pending_recovery")
@@ -394,8 +394,8 @@ async def test_worker_recovery_for_routed_task_skips_bind_and_notice(monkeypatch
             del title, config
             calls.append("bind")
 
-        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, update_id):
-            del preview, prompt, run_again_label, skip_label, update_id
+        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, recovery_id):
+            del preview, prompt, run_again_label, skip_label, recovery_id
             calls.append("send")
 
         monkeypatch.setattr(RegistryChannelEgress, "bind", fake_bind)
@@ -443,7 +443,7 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
                     prompt="Recover?",
                     run_again_label="Run again",
                     skip_label="Skip",
-                    update_id=8102,
+                    recovery_id=telegram_event_id(8102),
                 )
             )
             return SimpleNamespace(status="pending_recovery")
@@ -458,8 +458,8 @@ async def test_worker_recovery_for_conversation_still_binds_and_sends_notice(mon
             del title, config
             calls.append("bind")
 
-        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, update_id):
-            del preview, prompt, run_again_label, skip_label, update_id
+        async def fake_send_recovery_notice(self, *, preview, prompt, run_again_label, skip_label, recovery_id):
+            del preview, prompt, run_again_label, skip_label, recovery_id
             calls.append("send")
 
         monkeypatch.setattr(

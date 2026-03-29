@@ -136,10 +136,10 @@ class TelegramChannelEgress(TransportEgress):
         prompt: str,
         run_again_label: str,
         skip_label: str,
-        update_id: int,
+        recovery_id: str,
     ) -> None:
         keyboard = telegram_presenters.recovery_notice_markup(
-            update_id,
+            recovery_id,
             run_again_label,
             skip_label,
         )

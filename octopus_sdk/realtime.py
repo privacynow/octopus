@@ -67,7 +67,7 @@ class RealtimeProgressEnvelope(BaseModel):
 class RealtimeInvalidationPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    topic: CollectionTopic
+    topic: str = Field(..., min_length=1)
     reason: str = Field(..., min_length=1)
     conversation_id: str = ""
     agent_id: str = ""

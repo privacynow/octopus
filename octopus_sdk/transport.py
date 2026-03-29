@@ -186,7 +186,7 @@ class TransportEgress(ABC):
         prompt: str,
         run_again_label: str,
         skip_label: str,
-        update_id: int,
+        recovery_id: str,
     ) -> None:
         ...
 

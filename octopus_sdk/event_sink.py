@@ -62,8 +62,9 @@ class NoOpEventSink:
         trust_tier: str,
         expires_at: str = "",
         request_id: str = "",
+        recovery_id: str = "",
     ) -> None:
-        del content, request_kind, actor_key, trust_tier, expires_at, request_id
+        del content, request_kind, actor_key, trust_tier, expires_at, request_id, recovery_id
 
     async def on_bot_reply(self, content: str) -> None:
         pass
@@ -141,7 +142,7 @@ class RegistryEventSink:
         content: str = "",
         metadata: dict | None = None,
     ) -> None:
-        if not should_publish_event(self._config, kind):
+        if kind != "approval.requested" and not should_publish_event(self._config, kind):
             return
         conversation_id = await self._ensure_conversation()
         if conversation_id is None:
@@ -244,6 +245,7 @@ class RegistryEventSink:
         trust_tier: str,
         expires_at: str = "",
         request_id: str = "",
+        recovery_id: str = "",
     ) -> None:
         await self._publish(
             "approval.requested",
@@ -254,6 +256,7 @@ class RegistryEventSink:
                 "actor_key": actor_key,
                 "trust_tier": trust_tier,
                 "expires_at": expires_at or None,
+                "recovery_id": str(recovery_id or "").strip() or None,
             },
         )
 

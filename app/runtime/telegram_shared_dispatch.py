@@ -261,10 +261,10 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
         parts = data.split(":", 1)
         if len(parts) != 2:
             return None
-        try:
-            params["update_id"] = int(parts[1])
-        except (TypeError, ValueError):
+        recovery_id = str(parts[1] or "").strip()
+        if not recovery_id:
             return None
+        params["recovery_id"] = recovery_id
         return _telegram_action(event, parts[0], params=params)
     if data.startswith("delegation_"):
         parsed = parse_delegation_callback(data)

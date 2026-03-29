@@ -9,6 +9,7 @@ from octopus_sdk.bot_runtime import WorkflowComposition
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
+from octopus_sdk.workflows.conversation import SettingMutationOutcome
 from octopus_sdk.registry.management import (
     ActivateConversationSkillRequest,
     ActivateConversationSkillResult,
@@ -26,6 +27,10 @@ from octopus_sdk.registry.management import (
     CatalogSkillLifecycleDetailResult,
     ClearConversationSkillsRequest,
     ClearConversationSkillsResult,
+    ConversationSettingsStateRecord,
+    ConversationSettingsStateRequest,
+    ConversationSettingsStateResult,
+    ConversationSkillSetupPromptRecord,
     ConversationSkillStateRequest,
     ConversationSkillStateResult,
     DeactivateConversationSkillRequest,
@@ -42,6 +47,8 @@ from octopus_sdk.registry.management import (
     ListCatalogSkillsResult,
     ManagementRequest,
     ManagementResult,
+    ResetConversationRequest,
+    ResetConversationResult,
     PreviewProviderGuidanceRequest,
     PreviewProviderGuidanceResult,
     ProviderGuidanceDetailRequest,
@@ -54,8 +61,12 @@ from octopus_sdk.registry.management import (
     RejectCatalogSkillResult,
     RejectProviderGuidanceRequest,
     RejectProviderGuidanceResult,
+    SetConversationSettingRequest,
+    SetConversationSettingResult,
     SearchCatalogSkillsRequest,
     SearchCatalogSkillsResult,
+    SubmitConversationSkillCredentialRequest,
+    SubmitConversationSkillCredentialResult,
     SubmitCatalogSkillRequest,
     SubmitCatalogSkillResult,
     SubmitProviderGuidanceRequest,
@@ -66,6 +77,9 @@ from octopus_sdk.registry.management import (
     UpdateCatalogSkillResult,
     conversation_skill_listing_record,
     conversation_skill_mutation_outcome_record,
+    conversation_skill_setup_advance_outcome_record,
+    conversation_reset_outcome_record,
+    conversation_setting_mutation_record,
     provider_guidance_lifecycle_detail_record,
     provider_guidance_lifecycle_mutation_record,
     provider_guidance_preview_record,
@@ -75,6 +89,7 @@ from octopus_sdk.registry.management import (
     runtime_skill_lifecycle_mutation_record,
     runtime_skill_mutation_outcome_record,
     runtime_skill_search_results_record,
+    skill_requirement_record,
 )
 from octopus_sdk.workflows.skills import PromptWarningContext
 
@@ -152,7 +167,74 @@ def _conversation_skill_state_result(
         conversation_id=request.conversation_id,
         conversation_key=request.conversation_key,
         listing=conversation_skill_listing_record(listing),
+        pending_setup=(
+            ConversationSkillSetupPromptRecord(
+                skill_name=str(session.awaiting_skill_setup.skill or ""),
+                actor_key=str(session.awaiting_skill_setup.actor_key or ""),
+                requirement=(
+                    skill_requirement_record(session.awaiting_skill_setup.remaining[0])
+                    if session.awaiting_skill_setup.remaining
+                    else None
+                ),
+            )
+            if session.awaiting_skill_setup is not None and session.awaiting_skill_setup.remaining
+            else None
+        ),
     )
+
+
+def _conversation_settings_state(
+    context: ManagementExecutionContext,
+    *,
+    conversation_id: str,
+    conversation_key: str,
+    session: SessionState | None = None,
+) -> ConversationSettingsStateRecord:
+    sessions = context.workflows.sessions
+    if sessions is None:
+        raise RuntimeError("Workflow composition does not provide a session runtime.")
+    current_session = session or _session_for_request(context, conversation_key=conversation_key)
+    resolved = sessions.resolve_context(
+        current_session,
+        config=context.config,
+        provider_name=context.config.provider_name,
+        trust_tier="trusted",
+    )
+    model_state = context.workflows.conversation.settings.model_profile_state(
+        current_session,
+        context.config,
+        "trusted",
+        resolved.effective_model or context.config.model,
+    )
+    return ConversationSettingsStateRecord(
+        conversation_id=conversation_id,
+        conversation_key=conversation_key,
+        role=str(current_session.role or ""),
+        default_role=str(context.config.role or ""),
+        approval_mode=str(current_session.approval_mode or context.config.approval_mode),
+        approval_mode_explicit=bool(current_session.approval_mode_explicit),
+        compact_mode=current_session.compact_mode,
+        effective_compact_mode=bool(
+            context.config.compact_mode if current_session.compact_mode is None else current_session.compact_mode
+        ),
+        model_profile=str(current_session.model_profile or ""),
+        current_profile=str(model_state.current_profile or ""),
+        effective_model=str(resolved.effective_model or context.config.model or ""),
+        available_model_profiles=list(model_state.available_profiles),
+        file_policy=str(current_session.file_policy or ""),
+        effective_file_policy=str(resolved.file_policy or "edit"),
+        project_id=str(current_session.project_id or ""),
+        available_projects=[str(project.name) for project in context.config.projects],
+    )
+
+
+def _compact_mode_value(value: str) -> bool | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"on", "true", "1"}:
+        return True
+    if normalized in {"off", "false", "0"}:
+        return False
+    return None
 
 
 async def execute_management_request(
@@ -413,6 +495,138 @@ async def execute_management_request(
                 success=True,
                 payload=ClearConversationSkillsResult(
                     result=conversation_skill_mutation_outcome_record(outcome)
+                ),
+            )
+        if isinstance(payload, SubmitConversationSkillCredentialRequest):
+            session = _session_for_request(context, conversation_key=payload.conversation_key)
+            outcome = await context.workflows.runtime_skills.setup.submit_credential_value(
+                session,
+                actor_key=payload.actor_key,
+                raw_value=payload.value,
+            )
+            if outcome.mutated:
+                _save_session(context, conversation_key=payload.conversation_key, session=session)
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=SubmitConversationSkillCredentialResult(
+                    result=conversation_skill_setup_advance_outcome_record(outcome)
+                ),
+            )
+        if isinstance(payload, ConversationSettingsStateRequest):
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=ConversationSettingsStateResult(
+                    state=_conversation_settings_state(
+                        context,
+                        conversation_id=payload.conversation_id,
+                        conversation_key=payload.conversation_key,
+                    ),
+                ),
+            )
+        if isinstance(payload, SetConversationSettingRequest):
+            session = _session_for_request(context, conversation_key=payload.conversation_key)
+            settings = context.workflows.conversation.settings
+            if payload.setting == "approval_mode":
+                outcome = settings.set_approval_mode(session, str(payload.value or "").strip())
+            elif payload.setting == "compact_mode":
+                compact_mode = _compact_mode_value(payload.value)
+                if compact_mode is None:
+                    outcome = SettingMutationOutcome(
+                        status="invalid",
+                        message="Compact mode must be on or off.",
+                    )
+                else:
+                    outcome = settings.set_compact_mode(session, compact_mode)
+            elif payload.setting == "role":
+                outcome = settings.set_role(
+                    session,
+                    str(payload.value or "").strip(),
+                    default_role=context.config.role,
+                )
+            elif payload.setting == "model_profile":
+                requested_value = str(payload.value or "").strip()
+                if requested_value == "inherit":
+                    requested_value = ""
+                outcome = settings.set_model_profile(
+                    session,
+                    requested_value,
+                    cfg=context.config,
+                    provider_name=context.config.provider_name,
+                    trust_tier="trusted",
+                )
+            elif payload.setting == "project":
+                outcome = settings.set_project(
+                    session,
+                    str(payload.value or "").strip(),
+                    cfg=context.config,
+                    provider_state_factory=context.provider_state_factory,
+                    conversation_key=payload.conversation_key,
+                )
+            elif payload.setting == "file_policy":
+                requested_value = str(payload.value or "").strip()
+                if requested_value == "inherit":
+                    requested_value = ""
+                outcome = settings.set_file_policy(
+                    session,
+                    requested_value,
+                    cfg=context.config,
+                    provider_name=context.config.provider_name,
+                    trust_tier="trusted",
+                    provider_state_factory=context.provider_state_factory,
+                    conversation_key=payload.conversation_key,
+                )
+            else:
+                outcome = SettingMutationOutcome(
+                    status="invalid",
+                    message=f"Unsupported setting: {payload.setting}",
+                )
+            if outcome.mutated:
+                _save_session(context, conversation_key=payload.conversation_key, session=session)
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=SetConversationSettingResult(
+                    result=conversation_setting_mutation_record(payload.setting, outcome),
+                    state=_conversation_settings_state(
+                        context,
+                        conversation_id=payload.conversation_id,
+                        conversation_key=payload.conversation_key,
+                        session=session,
+                    ),
+                ),
+            )
+        if isinstance(payload, ResetConversationRequest):
+            session = _session_for_request(context, conversation_key=payload.conversation_key)
+            outcome = context.workflows.conversation.control.reset_session(
+                session,
+                actor_key=payload.actor_key,
+                provider_name=context.config.provider_name,
+                provider_state_factory=context.provider_state_factory,
+                approval_mode_default=context.config.approval_mode,
+                default_role=context.config.role,
+                default_skills=context.config.default_skills,
+                conversation_key=payload.conversation_key,
+            )
+            next_session = outcome.replacement_session or session
+            if outcome.replacement_session is not None:
+                _save_session(context, conversation_key=payload.conversation_key, session=outcome.replacement_session)
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=ResetConversationResult(
+                    result=conversation_reset_outcome_record(outcome),
+                    state=_conversation_settings_state(
+                        context,
+                        conversation_id=payload.conversation_id,
+                        conversation_key=payload.conversation_key,
+                        session=next_session,
+                    ),
                 ),
             )
         if isinstance(payload, PreviewProviderGuidanceRequest):

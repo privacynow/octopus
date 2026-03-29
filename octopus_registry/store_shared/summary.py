@@ -205,7 +205,16 @@ def list_approvals(
             "actor": row["actor"],
             "content": row["content"],
             "created_at": _stringify_timestamp(row["created_at"]),
-            **decode_json_field(row["metadata_json"], {}),
+            **(
+                lambda metadata: (
+                    {
+                        **{key: value for key, value in metadata.items() if key != "update_id"},
+                        "recovery_id": metadata.get("recovery_id") or str(metadata.get("update_id") or ""),
+                    }
+                    if metadata.get("request_kind") == "recovery"
+                    else metadata
+                )
+            )(decode_json_field(row["metadata_json"], {})),
         }
         for row in rows
     ])

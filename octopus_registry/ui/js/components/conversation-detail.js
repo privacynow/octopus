@@ -35,6 +35,17 @@ function renderConversationDetail(container, params) {
     let suggestionIndex = -1;
     let suggestionEngine = null;
     let relatedTasksReloadDebounce = null;
+    let conversationSkills = null;
+    let conversationSettings = null;
+    let availableConversationSkills = [];
+    let managementReloadDebounce = null;
+    let pendingSkillSetup = null;
+    let managementSupport = {
+        skills: true,
+        settings: true,
+    };
+    let skillsStatusMessage = '';
+    let settingsStatusMessage = '';
 
     const page = document.createElement('section');
     page.className = 'conversation-page';
@@ -97,6 +108,19 @@ function renderConversationDetail(container, params) {
     cancelBtn.className = 'btn btn-sm btn-danger';
     cancelBtn.textContent = 'Cancel';
     actionGroup.appendChild(cancelBtn);
+
+    const managementPanel = document.createElement('section');
+    managementPanel.className = 'conversation-management-grid';
+    managementPanel.hidden = true;
+    shell.appendChild(managementPanel);
+
+    const skillsPanel = document.createElement('section');
+    skillsPanel.className = 'card conversation-management-card';
+    managementPanel.appendChild(skillsPanel);
+
+    const settingsPanel = document.createElement('section');
+    settingsPanel.className = 'card conversation-management-card';
+    managementPanel.appendChild(settingsPanel);
 
     const layout = document.createElement('div');
     layout.className = 'conversation-layout';
@@ -276,6 +300,670 @@ function renderConversationDetail(container, params) {
             suggestionEngine = null;
         }
         updateComposerAssist();
+    }
+
+    function managementAgentId() {
+        return String((meta && meta.target_agent_id) || '').trim();
+    }
+
+    function managementConversationPath() {
+        return convoId;
+    }
+
+    function isCapabilityUnavailableError(err) {
+        const message = String((err && err.message) || '');
+        return message.startsWith('409:');
+    }
+
+    function resetManagementView() {
+        managementPanel.hidden = !managementAgentId();
+        renderSkillsPanel();
+        renderSettingsPanel();
+    }
+
+    function syncPendingSetupFromState(skillsState) {
+        const setup = skillsState && skillsState.pending_setup;
+        if (!setup || !setup.requirement) {
+            if (pendingSkillSetup && pendingSkillSetup.ownerActor === 'reg:registry-ui') {
+                pendingSkillSetup = null;
+            }
+            return;
+        }
+        pendingSkillSetup = {
+            skillName: String(setup.skill_name || ''),
+            ownerActor: String(setup.actor_key || ''),
+            requirement: setup.requirement,
+            validationError: pendingSkillSetup ? String(pendingSkillSetup.validationError || '') : '',
+        };
+    }
+
+    function renderSkillsPanel() {
+        const agentId = managementAgentId();
+        managementPanel.hidden = !agentId;
+        if (!agentId) {
+            UI.clearMemoizedRender(skillsPanel);
+            UI.reconcileChildren(skillsPanel, []);
+            return;
+        }
+        const skillState = conversationSkills || { active_skills: [], active_skill_details: [], pending_setup: null };
+        const activeNames = new Set(skillState.active_skills || []);
+        const activatable = (availableConversationSkills || []).filter((item) => item && item.can_activate && !activeNames.has(item.name));
+        const pendingSetupSignature = pendingSkillSetup ? {
+            skillName: String(pendingSkillSetup.skillName || ''),
+            ownerActor: String(pendingSkillSetup.ownerActor || ''),
+            requirementKey: String((pendingSkillSetup.requirement && pendingSkillSetup.requirement.key) || ''),
+            validationError: String(pendingSkillSetup.validationError || ''),
+        } : null;
+
+        UI.memoizedRender(skillsPanel, {
+            supported: managementSupport.skills,
+            skillState,
+            activatable,
+            pendingSetup: pendingSetupSignature,
+            statusMessage: String(skillsStatusMessage || ''),
+        }, (state) => {
+            const nodes = [];
+            const header = document.createElement('div');
+            header.className = 'workspace-header-main';
+            header.innerHTML = '<div class="workspace-title-group"><h3 class="editor-section-title">Conversation skills</h3></div>';
+            if (state.supported && (state.skillState.active_skills || []).length) {
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'btn btn-sm';
+                clearBtn.type = 'button';
+                clearBtn.textContent = 'Clear all';
+                clearBtn.addEventListener('click', async () => {
+                    clearBtn.disabled = true;
+                    try {
+                        const result = await API.clearConversationSkills(agentId, managementConversationPath());
+                        skillsStatusMessage = result.status === 'cleared' ? 'Cleared active skills.' : String(result.status || 'Updated');
+                        pendingSkillSetup = null;
+                        scheduleConversationManagementRefresh();
+                    } catch (err) {
+                        UI.reportError('Failed to clear conversation skills', err, { context: 'Conversation skill clear failed' });
+                    }
+                    clearBtn.disabled = false;
+                });
+                header.appendChild(clearBtn);
+            }
+            nodes.push(header);
+
+            if (!state.supported) {
+                nodes.push(UI.renderEmptyState('This bot does not expose conversation skills in the registry.', true));
+                return nodes;
+            }
+
+            if (state.statusMessage) {
+                const status = document.createElement('div');
+                status.className = 'conversation-management-status';
+                status.textContent = state.statusMessage;
+                nodes.push(status);
+            }
+
+            if (state.pendingSetup) {
+                const foreignSetup = String(state.pendingSetup.ownerActor || '') && state.pendingSetup.ownerActor !== 'reg:registry-ui';
+                const setupBox = document.createElement('div');
+                setupBox.className = 'conversation-setup-box';
+                const requirement = pendingSkillSetup && pendingSkillSetup.requirement ? pendingSkillSetup.requirement : null;
+                setupBox.innerHTML = `<strong>${foreignSetup ? 'Credential setup in progress elsewhere' : 'Credential setup required'}</strong>`;
+                const description = document.createElement('p');
+                description.className = 'conversation-setup-copy';
+                if (foreignSetup) {
+                    description.textContent = `Another operator started setup for ${state.pendingSetup.skillName || 'this skill'} (${state.pendingSetup.ownerActor}). Finish it there or cancel the active setup first.`;
+                    setupBox.appendChild(description);
+                } else if (requirement) {
+                    description.textContent = requirement.prompt || `Enter the next credential value for ${state.pendingSetup.skillName || 'this skill'}.`;
+                    setupBox.appendChild(description);
+                    if (requirement.help_url) {
+                        const help = document.createElement('a');
+                        help.className = 'section-link';
+                        help.href = requirement.help_url;
+                        help.target = '_blank';
+                        help.rel = 'noreferrer';
+                        help.textContent = 'Open setup help';
+                        setupBox.appendChild(help);
+                    }
+                    const form = document.createElement('form');
+                    form.className = 'conversation-setup-form';
+                    const input = document.createElement('input');
+                    input.type = 'password';
+                    input.className = 'input';
+                    input.placeholder = requirement.key || 'Credential value';
+                    input.autocomplete = 'off';
+                    form.appendChild(input);
+                    const actions = document.createElement('div');
+                    actions.className = 'event-card-actions';
+                    const submit = document.createElement('button');
+                    submit.className = 'btn btn-sm btn-primary';
+                    submit.type = 'submit';
+                    submit.textContent = 'Submit value';
+                    actions.appendChild(submit);
+                    const cancelSetup = document.createElement('button');
+                    cancelSetup.className = 'btn btn-sm';
+                    cancelSetup.type = 'button';
+                    cancelSetup.textContent = 'Cancel setup';
+                    cancelSetup.addEventListener('click', async () => {
+                        cancelSetup.disabled = true;
+                        try {
+                            await API.conversationAction(convoId, 'cancel_conversation');
+                            pendingSkillSetup = null;
+                            skillsStatusMessage = 'Cancelled pending credential setup.';
+                            scheduleConversationManagementRefresh();
+                        } catch (err) {
+                            UI.reportError('Failed to cancel the setup', err, { context: 'Conversation skill setup cancel failed' });
+                        }
+                        cancelSetup.disabled = false;
+                    });
+                    actions.appendChild(cancelSetup);
+                    if (state.pendingSetup.validationError) {
+                        const error = document.createElement('span');
+                        error.className = 'action-status';
+                        error.textContent = state.pendingSetup.validationError;
+                        actions.appendChild(error);
+                    }
+                    form.appendChild(actions);
+                    form.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        submit.disabled = true;
+                        try {
+                            const result = await API.submitConversationSkillCredential(
+                                agentId,
+                                managementConversationPath(),
+                                state.pendingSetup.skillName,
+                                { value: input.value },
+                            );
+                            if (result.status === 'validation_failed') {
+                                pendingSkillSetup = Object.assign({}, pendingSkillSetup || {}, {
+                                    validationError: String(result.validation_error || 'Validation failed.'),
+                                });
+                                submit.disabled = false;
+                                renderSkillsPanel();
+                                return;
+                            }
+                            if (result.status === 'next_requirement' && result.next_requirement) {
+                                pendingSkillSetup = {
+                                    skillName: String(result.skill_name || state.pendingSetup.skillName || ''),
+                                    ownerActor: 'reg:registry-ui',
+                                    requirement: result.next_requirement,
+                                    validationError: '',
+                                };
+                                submit.disabled = false;
+                                renderSkillsPanel();
+                                return;
+                            }
+                            pendingSkillSetup = null;
+                            skillsStatusMessage = result.status === 'ready'
+                                ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the skill'}.`
+                                : String(result.status || 'Updated');
+                            scheduleConversationManagementRefresh();
+                        } catch (err) {
+                            UI.reportError('Failed to submit the credential value', err, { context: 'Conversation skill credential submit failed' });
+                        }
+                        submit.disabled = false;
+                    });
+                    setupBox.appendChild(form);
+                }
+                nodes.push(setupBox);
+            }
+
+            const activeSection = document.createElement('div');
+            activeSection.className = 'conversation-management-section';
+            const activeTitle = document.createElement('div');
+            activeTitle.className = 'detail-label';
+            activeTitle.textContent = 'Active skills';
+            activeSection.appendChild(activeTitle);
+            const activeSkills = state.skillState.active_skill_details || [];
+            if (!activeSkills.length) {
+                activeSection.appendChild(UI.renderEmptyState('No active skills in this conversation.', true));
+            } else {
+                const list = document.createElement('div');
+                list.className = 'conversation-skill-list';
+                activeSkills.forEach((skill) => {
+                    const row = document.createElement('div');
+                    row.className = 'settings-row';
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(skill.description || skill.source_kind || '')}</span></div>`;
+                    const actions = document.createElement('div');
+                    actions.className = 'event-card-actions';
+                    const deactivate = document.createElement('button');
+                    deactivate.className = 'btn btn-sm';
+                    deactivate.type = 'button';
+                    deactivate.textContent = 'Deactivate';
+                    deactivate.addEventListener('click', async () => {
+                        deactivate.disabled = true;
+                        try {
+                            const result = await API.deactivateConversationSkill(agentId, managementConversationPath(), skill.name);
+                            skillsStatusMessage = result.status === 'removed'
+                                ? `Deactivated ${skill.display_name || skill.name}.`
+                                : String(result.status || 'Updated');
+                            pendingSkillSetup = null;
+                            scheduleConversationManagementRefresh();
+                        } catch (err) {
+                            UI.reportError('Failed to deactivate the skill', err, { context: 'Conversation skill deactivate failed' });
+                        }
+                        deactivate.disabled = false;
+                    });
+                    actions.appendChild(deactivate);
+                    row.appendChild(actions);
+                    list.appendChild(row);
+                });
+                activeSection.appendChild(list);
+            }
+            nodes.push(activeSection);
+
+            const activateSection = document.createElement('div');
+            activateSection.className = 'conversation-management-section';
+            const activateTitle = document.createElement('div');
+            activateTitle.className = 'detail-label';
+            activateTitle.textContent = 'Activate skill';
+            activateSection.appendChild(activateTitle);
+            if (!state.activatable.length) {
+                activateSection.appendChild(UI.renderEmptyState('No additional activatable skills are available.', true));
+            } else {
+                const controls = document.createElement('div');
+                controls.className = 'conversation-management-form';
+                const select = document.createElement('select');
+                select.className = 'input';
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Choose a skill';
+                select.appendChild(placeholder);
+                state.activatable.forEach((skill) => {
+                    const option = document.createElement('option');
+                    option.value = skill.name;
+                    option.textContent = skill.display_name || skill.name;
+                    select.appendChild(option);
+                });
+                controls.appendChild(select);
+                const activateBtn = document.createElement('button');
+                activateBtn.className = 'btn btn-sm btn-primary';
+                activateBtn.type = 'button';
+                activateBtn.textContent = 'Activate';
+                        activateBtn.addEventListener('click', async () => {
+                            const skillName = select.value;
+                            if (!skillName) return;
+                            activateBtn.disabled = true;
+                            try {
+                        const runActivation = async (confirm) => API.activateConversationSkill(
+                            agentId,
+                            managementConversationPath(),
+                            skillName,
+                            confirm ? { confirm: true } : {},
+                        );
+                        let result = await runActivation(false);
+                        if (result.status === 'needs_confirmation') {
+                            activateBtn.disabled = false;
+                            UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
+                                try {
+                                    const confirmed = await runActivation(true);
+                                    if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
+                                        pendingSkillSetup = {
+                                            skillName,
+                                            ownerActor: 'reg:registry-ui',
+                                            requirement: confirmed.first_requirement,
+                                            validationError: '',
+                                        };
+                                        skillsStatusMessage = `Setup required for ${skillName}.`;
+                                        renderSkillsPanel();
+                                        return;
+                                    }
+                                    pendingSkillSetup = null;
+                                    skillsStatusMessage = confirmed.status === 'activated'
+                                        ? `Activated ${skillName}.`
+                                        : String(confirmed.status || 'Updated');
+                                    scheduleConversationManagementRefresh();
+                                } catch (err) {
+                                    UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activation confirm failed' });
+                                }
+                            });
+                            return;
+                        }
+                        if (result.status === 'needs_setup' && result.first_requirement) {
+                            pendingSkillSetup = {
+                                skillName,
+                                ownerActor: 'reg:registry-ui',
+                                requirement: result.first_requirement,
+                                validationError: '',
+                            };
+                            skillsStatusMessage = `Setup required for ${skillName}.`;
+                            activateBtn.disabled = false;
+                            renderSkillsPanel();
+                            return;
+                        }
+                        if (result.status === 'foreign_setup') {
+                            pendingSkillSetup = {
+                                skillName,
+                                ownerActor: String(result.foreign_setup_user || ''),
+                                requirement: null,
+                                validationError: '',
+                            };
+                            activateBtn.disabled = false;
+                            renderSkillsPanel();
+                            return;
+                        }
+                        pendingSkillSetup = null;
+                        skillsStatusMessage = result.status === 'activated'
+                            ? `Activated ${skillName}.`
+                            : String(result.status || 'Updated');
+                        scheduleConversationManagementRefresh();
+                    } catch (err) {
+                        UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activate failed' });
+                    }
+                    activateBtn.disabled = false;
+                });
+                controls.appendChild(activateBtn);
+                activateSection.appendChild(controls);
+            }
+            nodes.push(activateSection);
+            return nodes;
+        }, {
+            signatureFn(state) {
+                return {
+                    supported: Boolean(state.supported),
+                    active: (state.skillState.active_skills || []).join('|'),
+                    available: (state.activatable || []).map((item) => `${item.name}:${item.lifecycle_status || ''}`).join('|'),
+                    pending: state.pendingSetup,
+                    statusMessage: String(state.statusMessage || ''),
+                };
+            },
+        });
+    }
+
+    function renderSettingsPanel() {
+        const agentId = managementAgentId();
+        managementPanel.hidden = !agentId;
+        if (!agentId) {
+            UI.clearMemoizedRender(settingsPanel);
+            UI.reconcileChildren(settingsPanel, []);
+            return;
+        }
+
+        UI.memoizedRender(settingsPanel, {
+            supported: managementSupport.settings,
+            settings: conversationSettings,
+            statusMessage: String(settingsStatusMessage || ''),
+        }, (state) => {
+            const nodes = [];
+            const header = document.createElement('div');
+            header.className = 'workspace-header-main';
+            header.innerHTML = '<div class="workspace-title-group"><h3 class="editor-section-title">Conversation settings</h3></div>';
+            if (state.supported && state.settings) {
+                const reset = document.createElement('button');
+                reset.className = 'btn btn-sm btn-danger';
+                reset.type = 'button';
+                reset.textContent = 'Reset conversation';
+                reset.addEventListener('click', () => {
+                    UI.showConfirm('Reset Conversation', 'Start a fresh session in this conversation?', async () => {
+                        reset.disabled = true;
+                        try {
+                            const result = await API.resetConversation(agentId, managementConversationPath());
+                            conversationSettings = result.state || conversationSettings;
+                            settingsStatusMessage = String((result.result && result.result.message) || 'Conversation reset.');
+                            pendingSkillSetup = null;
+                            scheduleConversationManagementRefresh();
+                        } catch (err) {
+                            UI.reportError('Failed to reset the conversation', err, { context: 'Conversation reset failed' });
+                        }
+                        reset.disabled = false;
+                    });
+                });
+                header.appendChild(reset);
+            }
+            nodes.push(header);
+
+            if (!state.supported) {
+                nodes.push(UI.renderEmptyState('This bot does not expose conversation settings in the registry.', true));
+                return nodes;
+            }
+            if (!state.settings) {
+                nodes.push(UI.renderEmptyState('Loading conversation settings…', true));
+                return nodes;
+            }
+            if (state.statusMessage) {
+                const status = document.createElement('div');
+                status.className = 'conversation-management-status';
+                status.textContent = state.statusMessage;
+                nodes.push(status);
+            }
+
+            function buildSelectRow(label, sublabel, currentValue, options, onSave) {
+                const row = document.createElement('div');
+                row.className = 'settings-row';
+                const copy = document.createElement('div');
+                copy.className = 'settings-row-main';
+                copy.innerHTML = `<strong class="settings-row-label">${UI.esc(label)}</strong><span class="settings-row-sublabel">${UI.esc(sublabel)}</span>`;
+                row.appendChild(copy);
+                const controls = document.createElement('div');
+                controls.className = 'event-card-actions';
+                const select = document.createElement('select');
+                select.className = 'input input-compact';
+                options.forEach((option) => {
+                    const el = document.createElement('option');
+                    el.value = option.value;
+                    el.textContent = option.label;
+                    if (option.value === currentValue) {
+                        el.selected = true;
+                    }
+                    select.appendChild(el);
+                });
+                controls.appendChild(select);
+                const save = document.createElement('button');
+                save.className = 'btn btn-sm';
+                save.type = 'button';
+                save.textContent = 'Apply';
+                save.addEventListener('click', async () => {
+                    save.disabled = true;
+                    try {
+                        await onSave(select.value);
+                    } finally {
+                        save.disabled = false;
+                    }
+                });
+                controls.appendChild(save);
+                row.appendChild(controls);
+                return row;
+            }
+
+            async function updateSetting(setting, value, successMessage) {
+                try {
+                    const response = await API.updateConversationSetting(agentId, managementConversationPath(), {
+                        setting,
+                        value,
+                    });
+                    conversationSettings = response.state || conversationSettings;
+                    settingsStatusMessage = String((response.result && response.result.message) || successMessage || 'Updated');
+                    renderSettingsPanel();
+                } catch (err) {
+                    UI.reportError(`Failed to update ${setting.replace(/_/g, ' ')}`, err, { context: 'Conversation setting update failed' });
+                }
+            }
+
+            nodes.push(buildSelectRow(
+                'Approval mode',
+                'Control whether this conversation requires manual approval before running tool-heavy work.',
+                state.settings.approval_mode || 'on',
+                [
+                    { value: 'on', label: 'On' },
+                    { value: 'off', label: 'Off' },
+                ],
+                (value) => updateSetting('approval_mode', value, 'Approval mode updated.'),
+            ));
+
+            nodes.push(buildSelectRow(
+                'Compact mode',
+                'Choose whether replies should stay terse and compressed.',
+                state.settings.effective_compact_mode ? 'on' : 'off',
+                [
+                    { value: 'on', label: 'On' },
+                    { value: 'off', label: 'Off' },
+                ],
+                (value) => updateSetting('compact_mode', value, 'Compact mode updated.'),
+            ));
+
+            nodes.push(buildSelectRow(
+                'Model profile',
+                state.settings.effective_model
+                    ? `Current effective model: ${state.settings.effective_model}`
+                    : 'Use the inherited model or override it for this conversation.',
+                state.settings.model_profile || 'inherit',
+                [
+                    { value: 'inherit', label: 'Inherit default' },
+                    ...(state.settings.available_model_profiles || []).map((profile) => ({ value: profile, label: profile })),
+                ],
+                (value) => updateSetting('model_profile', value, 'Model profile updated.'),
+            ));
+
+            nodes.push(buildSelectRow(
+                'File policy',
+                `Current effective policy: ${state.settings.effective_file_policy || 'edit'}`,
+                state.settings.file_policy || 'inherit',
+                [
+                    { value: 'inherit', label: 'Inherit default' },
+                    { value: 'inspect', label: 'Inspect' },
+                    { value: 'edit', label: 'Edit' },
+                ],
+                (value) => updateSetting('file_policy', value, 'File policy updated.'),
+            ));
+
+            nodes.push(buildSelectRow(
+                'Project',
+                'Switch the conversation into a configured project workspace.',
+                state.settings.project_id || 'clear',
+                [
+                    { value: 'clear', label: 'No project' },
+                    ...(state.settings.available_projects || []).map((project) => ({ value: project, label: project })),
+                ],
+                (value) => updateSetting('project', value, 'Project updated.'),
+            ));
+
+            const roleRow = document.createElement('div');
+            roleRow.className = 'settings-row';
+            roleRow.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">Role</strong><span class="settings-row-sublabel">Free-form role/persona text. Leave blank to inherit the instance default.</span></div>`;
+            const roleControls = document.createElement('div');
+            roleControls.className = 'event-card-actions';
+            const roleInput = document.createElement('input');
+            roleInput.type = 'text';
+            roleInput.className = 'input input-compact';
+            roleInput.value = state.settings.role || '';
+            roleInput.placeholder = state.settings.default_role || 'Default role';
+            roleControls.appendChild(roleInput);
+            const roleSave = document.createElement('button');
+            roleSave.className = 'btn btn-sm';
+            roleSave.type = 'button';
+            roleSave.textContent = 'Save';
+            roleSave.addEventListener('click', async () => {
+                roleSave.disabled = true;
+                await updateSetting('role', roleInput.value, 'Role updated.');
+                roleSave.disabled = false;
+            });
+            roleControls.appendChild(roleSave);
+            const roleReset = document.createElement('button');
+            roleReset.className = 'btn btn-sm';
+            roleReset.type = 'button';
+            roleReset.textContent = 'Reset';
+            roleReset.addEventListener('click', async () => {
+                roleReset.disabled = true;
+                await updateSetting('role', '', 'Role reset.');
+                roleReset.disabled = false;
+            });
+            roleControls.appendChild(roleReset);
+            roleRow.appendChild(roleControls);
+            nodes.push(roleRow);
+
+            return nodes;
+        }, {
+            signatureFn(state) {
+                const settings = state.settings || {};
+                return {
+                    supported: Boolean(state.supported),
+                    role: String(settings.role || ''),
+                    defaultRole: String(settings.default_role || ''),
+                    approvalMode: String(settings.approval_mode || ''),
+                    compactMode: String(settings.compact_mode),
+                    effectiveCompactMode: Boolean(settings.effective_compact_mode),
+                    modelProfile: String(settings.model_profile || ''),
+                    currentProfile: String(settings.current_profile || ''),
+                    effectiveModel: String(settings.effective_model || ''),
+                    filePolicy: String(settings.file_policy || ''),
+                    effectiveFilePolicy: String(settings.effective_file_policy || ''),
+                    projectId: String(settings.project_id || ''),
+                    availableProjects: (settings.available_projects || []).join('|'),
+                    availableProfiles: (settings.available_model_profiles || []).join('|'),
+                    statusMessage: String(state.statusMessage || ''),
+                };
+            },
+        });
+    }
+
+    async function loadConversationSkills({ soft = false } = {}) {
+        const agentId = managementAgentId();
+        if (!agentId) {
+            conversationSkills = null;
+            availableConversationSkills = [];
+            resetManagementView();
+            return;
+        }
+        try {
+            const [skillState, catalogData] = await Promise.all([
+                API.getConversationSkills(agentId, managementConversationPath()),
+                API.listSkills(agentId),
+            ]);
+            conversationSkills = skillState;
+            availableConversationSkills = catalogData.skills || catalogData || [];
+            managementSupport.skills = true;
+            syncPendingSetupFromState(skillState);
+            renderSkillsPanel();
+        } catch (err) {
+            if (isCapabilityUnavailableError(err)) {
+                managementSupport.skills = false;
+                conversationSkills = null;
+                availableConversationSkills = [];
+                pendingSkillSetup = null;
+                renderSkillsPanel();
+                return;
+            }
+            if (soft && conversationSkills) {
+                UI.reportError('Failed to refresh conversation skills', err, { context: 'Conversation skill refresh failed' });
+                return;
+            }
+            UI.clearMemoizedRender(skillsPanel);
+            UI.reconcileChildren(skillsPanel, [UI.createErrorCard('Failed to load conversation skills: ' + err.message, loadConversationSkills)]);
+        }
+    }
+
+    async function loadConversationSettings({ soft = false } = {}) {
+        const agentId = managementAgentId();
+        if (!agentId) {
+            conversationSettings = null;
+            resetManagementView();
+            return;
+        }
+        try {
+            conversationSettings = await API.getConversationSettings(agentId, managementConversationPath());
+            managementSupport.settings = true;
+            renderSettingsPanel();
+        } catch (err) {
+            if (isCapabilityUnavailableError(err)) {
+                managementSupport.settings = false;
+                conversationSettings = null;
+                renderSettingsPanel();
+                return;
+            }
+            if (soft && conversationSettings) {
+                UI.reportError('Failed to refresh conversation settings', err, { context: 'Conversation settings refresh failed' });
+                return;
+            }
+            UI.clearMemoizedRender(settingsPanel);
+            UI.reconcileChildren(settingsPanel, [UI.createErrorCard('Failed to load conversation settings: ' + err.message, loadConversationSettings)]);
+        }
+    }
+
+    function scheduleConversationManagementRefresh() {
+        if (UI.isBackgrounded()) return;
+        clearTimeout(managementReloadDebounce);
+        managementReloadDebounce = setTimeout(() => {
+            void loadConversationSkills({ soft: true });
+            void loadConversationSettings({ soft: true });
+            void loadConversation();
+        }, 350);
     }
 
     function clearProgressBanner() {
@@ -856,6 +1544,9 @@ function renderConversationDetail(container, params) {
         try {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
+            managementPanel.hidden = !managementAgentId();
+            void loadConversationSkills({ soft: true });
+            void loadConversationSettings({ soft: true });
         } catch (err) {
             UI.reconcileChildren(metaCard, [UI.createErrorCard('Failed to load conversation metadata', loadConversation)]);
         }
@@ -970,6 +1661,16 @@ function renderConversationDetail(container, params) {
 
     const unsub = WS.subscribe(`conversation:${convoId}`, (msg) => {
         if (UI.isBackgrounded()) return;
+        if (msg.type === 'invalidate') {
+            const invalidation = msg.data || {};
+            if (!invalidation.conversation_id || String(invalidation.conversation_id) === String(convoId)) {
+                scheduleConversationManagementRefresh();
+                if (activeView === 'tasks') {
+                    scheduleRelatedTasksRefresh();
+                }
+            }
+            return;
+        }
         if (msg.type === 'progress' && msg.data) {
             showProgressBanner(msg.data.content || '');
             liveRegion.textContent = 'Agent progress update';
@@ -1036,6 +1737,7 @@ function renderConversationDetail(container, params) {
     }
     cleanups.add(() => clearTimeout(progressTimer));
     cleanups.add(() => clearTimeout(relatedTasksReloadDebounce));
+    cleanups.add(() => clearTimeout(managementReloadDebounce));
     updateComposerAssist();
     container.__routeReady = Promise.allSettled(initialLoads);
 

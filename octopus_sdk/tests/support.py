@@ -135,9 +135,9 @@ class StubEgress(TransportEgress):
         prompt: str,
         run_again_label: str,
         skip_label: str,
-        update_id: int,
+        recovery_id: str,
     ) -> None:
-        del run_again_label, skip_label, update_id
+        del run_again_label, skip_label, recovery_id
         self.recovery_notices.append((preview, prompt))
 
     def typing_target(self) -> TransportEgress:

@@ -652,7 +652,9 @@ Conversation detail is split into focused modules:
 - `octopus_registry/ui/js/components/composer-autocomplete.js`
   - `@agent` / `@cap:` / `@role:` target parsing and replacement helpers
 - `octopus_registry/ui/js/components/event-renderers.js`
-  - activity/event card renderers and event-summary helpers
+  - activity/event card renderers and event-summary helpers; delegation
+    milestones and terminal task outcomes render in the card body instead of
+    duplicating an external lead block
 - `octopus_registry/ui/js/components/task-board.js`
   - conversation task-card rendering and recipient-thread task-board helpers
 
@@ -664,11 +666,15 @@ coordination today:
   through typed `direct_assign` actions from the same main composer
 - the default `Conversation` tab stays human-first while still surfacing
   delegation milestones and terminal task status events
+- terminal task status content now lives inside the expandable event-card body,
+  so completed/failed task rows expand to reveal the real outcome instead of
+  repeating the same text above the toggle
 - the conversation header uses operator-facing metadata (`With`, `Assigned to`,
   `Started in`) while demoting raw refs into a copy action and turning event
   counts into an `Activity (n)` action
 - the `Tasks` tab renders routed work as first-class task objects with task
-  actions
+  actions and compact detail panels (`summary` + fact grid) instead of a loose
+  full-width metadata stack
 - when the current conversation is a recipient `task_thread`, the `Tasks` tab
   resolves the single routed task via `routed-task:<task_id>` instead of
   querying by parent conversation id

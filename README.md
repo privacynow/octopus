@@ -173,10 +173,12 @@ Current main routes:
 - **Conversation detail** — one composer for both replies and direct routing,
   tabs for **Conversation**, **Tasks**, and **Full activity**, compact
   operator-facing header metadata (`With`, `Assigned to`, `Started in`), plus
-  export/cancel and activity/ref actions
+  export/cancel and activity/ref actions; terminal task outcomes render inside
+  the expandable activity card body instead of duplicating a second lead block
 - **Tasks** — routed-task queue with compact summary cards, segmented status
-  filters, expandable task rows that stay open across live task refreshes, and
-  links back to the parent conversation
+  filters, expandable task rows that stay open across live task refreshes,
+  contained detail facts/summary blocks, and links back to the parent
+  conversation
 - **Agent detail task threads** — recipient-side routed-task projections are
   shown separately from direct conversations so delegated work does not blur
   into ordinary chat history

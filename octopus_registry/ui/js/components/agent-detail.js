@@ -405,6 +405,8 @@ function renderAgentDetail(container, params) {
             ]);
             detailLoaded = true;
             lastDetailSignature = signature;
+            conversationsLoaded = false;
+            lastConversationSignature = '';
             await loadConversations();
         } catch (err) {
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load agent: ' + err.message, loadDetail)]);

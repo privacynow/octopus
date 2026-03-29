@@ -81,6 +81,8 @@ def test_conversation_views_distinguish_task_threads() -> None:
     ).read_text(encoding="utf-8")
     assert "externalRef.startsWith('routed-task:')" in detail
     assert "API.getTask(taskId)" in detail
+    assert "conversationsLoaded = false" in agent_detail
+    assert "lastConversationSignature = ''" in agent_detail
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

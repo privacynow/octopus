@@ -9,6 +9,11 @@ function renderSkillCatalog(container) {
     let availableAgents = [];
     let currentAgentId = '';
 
+    function renderLoadingState(message = 'Loading skills…') {
+        UI.clearMemoizedRender(listEl);
+        UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
+    }
+
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = '<h2>Skills</h2>';
@@ -187,6 +192,9 @@ function renderSkillCatalog(container) {
             renderList();
             return;
         }
+        if (!soft) {
+            renderLoadingState('Loading skills…');
+        }
         try {
             const data = await API.listSkills(currentAgentId);
             allSkills = Array.isArray(data) ? data : (data.skills || []);
@@ -202,6 +210,7 @@ function renderSkillCatalog(container) {
             agentSelect.disabled = true;
         }
         try {
+            const previousAgentId = currentAgentId;
             const data = await API.listAgents({ limit: 100 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
@@ -209,7 +218,8 @@ function renderSkillCatalog(container) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            void loadSkills({ soft: true });
+            const agentChanged = previousAgentId !== currentAgentId;
+            void loadSkills({ soft: soft && !agentChanged });
         } catch (err) {
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);

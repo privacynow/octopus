@@ -85,10 +85,14 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
     ).read_text(encoding="utf-8")
 
-    assert "void loadSkills({ soft: true });" in skill_catalog
-    assert "await loadSkills({ soft: true });" not in skill_catalog
-    assert "void loadGuidance();" in guidance_editor
-    assert "await loadGuidance();" not in guidance_editor
+    assert "await loadSkills(" not in skill_catalog
+    assert "await loadGuidance(" not in guidance_editor
+    assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
+    assert "renderLoadingState('Loading skills…');" in skill_catalog
+    assert "void loadSkills({ soft: soft && !agentChanged });" in skill_catalog
+    assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
+    assert "renderLoadingState('Loading guidance…');" in guidance_editor
+    assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
 
 
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:

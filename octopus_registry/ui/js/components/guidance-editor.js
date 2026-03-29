@@ -3,6 +3,12 @@
  */
 function renderGuidanceEditor(container) {
     const cleanups = UI.beginCleanupScope();
+
+    function renderLoadingState(message = 'Loading guidance…') {
+        UI.clearMemoizedRender(contentEl);
+        UI.reconcileChildren(contentEl, [UI.renderEmptyState(message, true)]);
+    }
+
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = '<h2>Guidance</h2>';
@@ -99,13 +105,16 @@ function renderGuidanceEditor(container) {
         agentDropdown.update(agents, currentAgentId);
     }
 
-    async function loadGuidance() {
+    async function loadGuidance({ soft = false } = {}) {
         if (!currentAgentId) {
             UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [
                 UI.renderEmptyState('No connected bot advertises provider guidance management.', true),
             ]);
             return;
+        }
+        if (!soft) {
+            renderLoadingState('Loading guidance…');
         }
         try {
             const data = await API.getGuidance(currentAgentId, currentProvider);
@@ -121,6 +130,7 @@ function renderGuidanceEditor(container) {
             agentSelect.disabled = true;
         }
         try {
+            const previousAgentId = currentAgentId;
             const data = await API.listAgents({ limit: 100 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
@@ -128,7 +138,8 @@ function renderGuidanceEditor(container) {
                 currentAgentId = requested;
             }
             _renderAgentOptions();
-            void loadGuidance();
+            const agentChanged = previousAgentId !== currentAgentId;
+            void loadGuidance({ soft: soft && !agentChanged });
         } catch (err) {
             UI.clearMemoizedRender(contentEl);
             UI.reconcileChildren(contentEl, [UI.createErrorCard('Failed to load managed bots: ' + err.message, loadAgents)]);

@@ -149,4 +149,4 @@ def test_store_backed_authority_passes_core_authority_profile(tmp_path: Path) ->
 
     disconnected = authority.disconnect_agent(enrollment.agent_id)
     assert disconnected.agent_id == enrollment.agent_id
-    assert disconnected.connectivity_state == "offline"
+    assert disconnected.connectivity_state == "disconnected"

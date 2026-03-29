@@ -744,7 +744,7 @@ def _parse_discovery_query(
             required_state = value.lower()
         else:
             free_text_parts.append(token)
-    if required_state not in {"connected", "degraded", "standalone", "offline"}:
+    if required_state not in {"connected", "degraded", "standalone", "disconnected"}:
         return None, telegram_presenters.discover_usage_message().text
     if not role and not capabilities and not tags and not free_text_parts:
         return None, telegram_presenters.discover_usage_message().text

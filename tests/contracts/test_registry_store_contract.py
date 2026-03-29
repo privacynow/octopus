@@ -431,7 +431,7 @@ def test_search_agents_by_capability(store):
     assert misses == []
 
 
-def test_search_agents_excludes_offline(store):
+def test_search_agents_excludes_disconnected(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.deregister(agent_token)
 
@@ -750,11 +750,11 @@ def test_list_agents_supports_query_and_connectivity_filters(store):
 
     q_hits = store.list_agents(q="review")
     connected_hits = store.list_agents(connectivity_state="connected")
-    offline_hits = store.list_agents(connectivity_state="offline")
+    disconnected_hits = store.list_agents(connectivity_state="disconnected")
 
     assert [item.slug for item in q_hits] == ["alpha-reviewer"]
     assert {item.slug for item in connected_hits} == {"alpha-reviewer"}
-    assert [item.agent_id for item in offline_hits] == [beta_id]
+    assert [item.agent_id for item in disconnected_hits] == [beta_id]
 
 
 def test_routed_task_status_requires_explicit_non_empty_status(store):

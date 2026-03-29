@@ -353,9 +353,17 @@ def conversation_status_for_event(kind: str, current_status: str = "") -> str:
     return current_status or "open"
 
 
+def canonical_registry_connectivity_state(connectivity_state: str) -> str:
+    """Return the canonical operator-facing registry connectivity state."""
+    value = str(connectivity_state or "").strip()
+    if value == "offline":
+        return "disconnected"
+    return value
+
+
 def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str) -> str:
-    """Return offline when the last heartbeat is older than the offline threshold."""
-    effective_state = connectivity_state
+    """Return disconnected when the last heartbeat is older than the registry threshold."""
+    effective_state = canonical_registry_connectivity_state(connectivity_state)
     if not last_heartbeat_at:
         return effective_state
     try:
@@ -363,7 +371,7 @@ def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str
         if heartbeat_dt.tzinfo is None:
             heartbeat_dt = heartbeat_dt.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) - heartbeat_dt > timedelta(seconds=_OFFLINE_AFTER_SECONDS):
-            return "offline"
+            return "disconnected"
     except ValueError:
         pass
     return effective_state
@@ -589,7 +597,7 @@ class AbstractRegistryStore(Protocol):
         """Return the current result for a management request once reported."""
 
     def deregister(self, agent_token: str) -> AgentRecord:
-        """Mark an agent offline while preserving its durable registry identity."""
+        """Mark an agent disconnected while preserving its durable registry identity."""
 
     def get_capability_override(self, capability_name: str) -> bool | None:
         """Return True/False for an override row, or None when no override exists."""

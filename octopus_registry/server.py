@@ -560,7 +560,7 @@ async def deregister(
     if agent_id:
         await _ws_manager.broadcast_heartbeat(
             agent_id,
-            _json_payload({"agent_id": agent_id, "connectivity_state": result.get("connectivity_state", "offline")}),
+            _json_payload({"agent_id": agent_id, "connectivity_state": result.get("connectivity_state", "disconnected")}),
         )
     await _broadcast_invalidations(
         topics=("agents", "summary"),

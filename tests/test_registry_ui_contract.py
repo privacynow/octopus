@@ -174,3 +174,13 @@ def test_conversation_compact_mode_keeps_timeline_scrollable() -> None:
 
     compact_rule = ".conversation-panel.conversation-panel-compact .chat-timeline {\n    flex: 1 1 auto;\n    overflow-y: auto;\n}"
     assert compact_rule in css
+
+
+def test_agent_list_uses_disconnected_not_offline_filter() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "['disconnected', 'disconnected', 'Disconnected']" in agent_list
+    assert "['offline', 'offline', 'Offline']" not in agent_list

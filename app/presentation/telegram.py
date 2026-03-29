@@ -1202,7 +1202,7 @@ def doctor_report_message(lines: Iterable[str], prompt_weight_count: int | None)
 
 def discover_usage_message() -> TelegramRenderedMessage:
     return _html_message(
-        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
+        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|disconnected>]\n"
         "Example: <code>/discover role:developer capability:python tag:backend schema review</code>"
     )
 

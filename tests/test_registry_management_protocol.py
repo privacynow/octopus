@@ -142,7 +142,7 @@ def test_management_request_round_trip_polls_delivery_and_persists_result(tmp_pa
 @pytest.mark.asyncio
 async def test_registry_management_client_requires_connected_agent(tmp_path: Path) -> None:
     store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
-    agent_id, _agent_token = _register_agent(store, connectivity_state="offline")
+    agent_id, _agent_token = _register_agent(store, connectivity_state="disconnected")
 
     client = RegistryManagementClient(store)
     with pytest.raises(ManagementClientError) as excinfo:

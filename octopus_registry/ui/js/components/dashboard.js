@@ -115,7 +115,7 @@ function renderDashboard(container) {
                 href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
             }));
         });
-        const riskyAgents = (agentsData.agents || agentsData || []).filter((agent) => ['degraded', 'disconnected', 'offline'].includes(agent.connectivity_state || ''));
+        const riskyAgents = (agentsData.agents || agentsData || []).filter((agent) => ['degraded', 'disconnected'].includes(agent.connectivity_state || ''));
         riskyAgents.slice(0, 2).forEach((item) => {
             rows.push(createRow({
                 key: `agent:${item.agent_id}`,
@@ -206,7 +206,7 @@ function renderDashboard(container) {
             updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
         }));
         const riskyAgents = ((dashboardState.agents.agents || dashboardState.agents || []).filter(
-            (agent) => ['degraded', 'disconnected', 'offline'].includes(agent.connectivity_state || ''),
+            (agent) => ['degraded', 'disconnected'].includes(agent.connectivity_state || ''),
         )).slice(0, 2).map((item) => ({
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),

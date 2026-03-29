@@ -55,6 +55,7 @@ from .store_base import (
     validated_search_query,
     decode_json_field,
     delivery_kinds_for_registry_scope,
+    canonical_registry_connectivity_state,
     effective_connectivity_state,
     hash_agent_token,
     registry_scope_for_agent_row,
@@ -415,7 +416,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         card.get("description", ""),
                         card.get("provider", ""),
                         card.get("mode", "registry"),
-                        card.get("connectivity_state", "degraded"),
+                        canonical_registry_connectivity_state(card.get("connectivity_state", "degraded")),
                         card.get("current_capacity", 0),
                         card.get("max_capacity", 1),
                         _jsonb(card.get("channel_capabilities", [])),
@@ -489,7 +490,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         card.description or row["description"],
                         card.provider or row["provider"],
                         card.mode or row["mode"],
-                        register_payload.connectivity_state or row["connectivity_state"],
+                        canonical_registry_connectivity_state(
+                            register_payload.connectivity_state or row["connectivity_state"]
+                        ),
                         row["current_capacity"] if register_payload.current_capacity is None else register_payload.current_capacity,
                         row["max_capacity"] if register_payload.max_capacity is None else register_payload.max_capacity,
                         _jsonb(card.channel_capabilities or current_channel_capabilities),
@@ -528,7 +531,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     WHERE agent_token = %s
                     """,
                     (
-                        heartbeat_payload.connectivity_state or row["connectivity_state"],
+                        canonical_registry_connectivity_state(
+                            heartbeat_payload.connectivity_state or row["connectivity_state"]
+                        ),
                         row["current_capacity"] if heartbeat_payload.current_capacity is None else heartbeat_payload.current_capacity,
                         row["max_capacity"] if heartbeat_payload.max_capacity is None else heartbeat_payload.max_capacity,
                         now,
@@ -597,9 +602,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         WHERE CASE
                             WHEN coalesce(last_heartbeat_at, '') != ''
                                  AND last_heartbeat_at::timestamptz < %s::timestamptz
-                            THEN 'offline'
+                            THEN 'disconnected'
+                            WHEN connectivity_state = 'offline' THEN 'disconnected'
                             ELSE connectivity_state
-                        END != 'offline'
+                        END != 'disconnected'
                     ),
                     declared AS (
                         SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
@@ -677,7 +683,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         CASE
                             WHEN coalesce(a.last_heartbeat_at, '') != ''
                                  AND a.last_heartbeat_at::timestamptz < %s::timestamptz
-                            THEN 'offline'
+                            THEN 'disconnected'
+                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
                             ELSE a.connectivity_state
                         END AS effective_state
                     FROM {_SCHEMA}.agents a
@@ -870,7 +877,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     SELECT
                         a.*,
                         CASE
-                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < %s THEN 'offline'
+                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < %s THEN 'disconnected'
+                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
                             ELSE a.connectivity_state
                         END AS effective_state
                     FROM {_SCHEMA}.agents a
@@ -1816,14 +1824,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     UPDATE {_SCHEMA}.agents
-                    SET connectivity_state = 'offline', updated_at = %s, last_heartbeat_at = %s
+                    SET connectivity_state = 'disconnected', updated_at = %s, last_heartbeat_at = %s
                     WHERE agent_token = %s
                     """,
                     (now, now, agent_token_hash),
                 )
         return _record(
             AgentRecord,
-            {"agent_id": row["agent_id"], "connectivity_state": "offline"},
+            {"agent_id": row["agent_id"], "connectivity_state": "disconnected"},
         )
 
     def list_agents(

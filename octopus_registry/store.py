@@ -55,6 +55,7 @@ from .store_base import (
     validated_search_query,
     decode_json_field,
     delivery_kinds_for_registry_scope,
+    canonical_registry_connectivity_state,
     effective_connectivity_state,
     ensure_json,
     hash_agent_token,
@@ -612,7 +613,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     card.description,
                     card.provider,
                     card.mode,
-                    card.connectivity_state,
+                    canonical_registry_connectivity_state(card.connectivity_state),
                     card.current_capacity,
                     card.max_capacity,
                     ensure_json(card.channel_capabilities),
@@ -682,7 +683,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     card.description or row["description"],
                     card.provider or row["provider"],
                     card.mode or row["mode"],
-                    register_payload.connectivity_state or row["connectivity_state"],
+                    canonical_registry_connectivity_state(
+                        register_payload.connectivity_state or row["connectivity_state"]
+                    ),
                     row["current_capacity"] if register_payload.current_capacity is None else register_payload.current_capacity,
                     row["max_capacity"] if register_payload.max_capacity is None else register_payload.max_capacity,
                     ensure_json(card.channel_capabilities or current_channel_capabilities),
@@ -721,7 +724,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 WHERE agent_token = ?
                 """,
                 (
-                    heartbeat_payload.connectivity_state or row["connectivity_state"],
+                    canonical_registry_connectivity_state(
+                        heartbeat_payload.connectivity_state or row["connectivity_state"]
+                    ),
                     row["current_capacity"] if heartbeat_payload.current_capacity is None else heartbeat_payload.current_capacity,
                     row["max_capacity"] if heartbeat_payload.max_capacity is None else heartbeat_payload.max_capacity,
                     now,
@@ -786,9 +791,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     SELECT slug, skills_json
                     FROM agents
                     WHERE CASE
-                        WHEN last_heartbeat_at != '' AND last_heartbeat_at < ? THEN 'offline'
+                        WHEN last_heartbeat_at != '' AND last_heartbeat_at < ? THEN 'disconnected'
+                        WHEN connectivity_state = 'offline' THEN 'disconnected'
                         ELSE connectivity_state
-                    END != 'offline'
+                    END != 'disconnected'
                 ),
                 declared AS (
                     SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
@@ -870,7 +876,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     SELECT
                         a.*,
                         CASE
-                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'offline'
+                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'disconnected'
+                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
                             ELSE a.connectivity_state
                         END AS effective_state
                     FROM agents a
@@ -1017,13 +1024,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             """
             WITH agent_rows AS (
                 SELECT
-                    a.*,
-                    CASE
-                        WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'offline'
-                        ELSE a.connectivity_state
-                    END AS effective_state
-                FROM agents a
-            )
+                        a.*,
+                        CASE
+                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'disconnected'
+                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
+                            ELSE a.connectivity_state
+                        END AS effective_state
+                    FROM agents a
+                )
             SELECT *
             FROM agent_rows
             WHERE effective_state = 'connected'
@@ -1959,14 +1967,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 UPDATE agents
-                SET connectivity_state = 'offline', updated_at = ?, last_heartbeat_at = ?
+                SET connectivity_state = 'disconnected', updated_at = ?, last_heartbeat_at = ?
                 WHERE agent_token = ?
                 """,
                 (now, now, agent_token_hash),
             )
             return _record(
                 AgentRecord,
-                {"agent_id": row["agent_id"], "connectivity_state": "offline"},
+                {"agent_id": row["agent_id"], "connectivity_state": "disconnected"},
             )
 
     def list_agents(

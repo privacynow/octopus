@@ -317,9 +317,9 @@ def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_
     assert filtered.status_code == 200
     assert [item["slug"] for item in filtered.json()["agents"]] == ["alpha-reviewer"]
 
-    offline = client.get("/v1/agents?state=offline")
-    assert offline.status_code == 200
-    assert [item["slug"] for item in offline.json()["agents"]] == ["beta-builder"]
+    disconnected = client.get("/v1/agents?state=disconnected")
+    assert disconnected.status_code == 200
+    assert [item["slug"] for item in disconnected.json()["agents"]] == ["beta-builder"]
 
 
 def test_registry_channel_only_agent_gets_403_on_discovery(monkeypatch, tmp_path: Path):

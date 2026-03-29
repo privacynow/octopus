@@ -49,7 +49,6 @@ function renderAgentList(container) {
         ['connected', 'connected', 'Connected'],
         ['degraded', 'degraded', 'Degraded'],
         ['disconnected', 'disconnected', 'Disconnected'],
-        ['offline', 'offline', 'Offline'],
     ];
 
     function applyStateFilter(value) {

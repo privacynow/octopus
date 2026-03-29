@@ -458,7 +458,7 @@ flowchart TD
 |---|---|---|
 | Telegram transport | `app/channels/telegram` | Telegram transport implementation, presenters, Telegram ingress normalization, and Telegram-specific rendering |
 | Registry bot transport | `app/channels/registry` | bot-side registry conversation/task transport implementations, registry egress, registry delivery transport |
-| Registry server | `octopus_registry` | standalone management-plane process: registry HTTP routes, websocket manager, presenters, store/authority layer, management ingress, and the operator SPA |
+| Registry server | `octopus_registry` | standalone management-plane process: registry HTTP routes, websocket manager, store/authority layer, management ingress, and the operator SPA |
 | Agent runtime | `app/agents` | registry enrollment/state loops, delivery handling, delegation helpers, registry authority clients |
 | Runtime composition | `app/runtime` | profile validation, shared service composition, participant runtime, transport stack assembly, runtime health, app-side workflow port wiring |
 | Providers | `app/providers` | Codex and Claude implementations over the SDK provider protocol |
@@ -810,6 +810,29 @@ The runtime transport-store classes now live directly in
 `app/work_queue_sqlite_impl.py` and `app/work_queue_postgres_impl.py`; the old
 wrapper modules were removed so backend selection imports the concrete impl
 module once instead of delegating through a second file.
+
+The registry store is no longer just two monolithic backend files. The current
+shape is:
+
+- `octopus_registry/store.py`
+  - SQLite registry-store entry point
+- `octopus_registry/store_postgres.py`
+  - Postgres registry-store entry point
+- `octopus_registry/store_dialect.py`
+  - backend protocol for placeholders, JSON extraction, query execution, and
+    table qualification
+- `octopus_registry/store_shared/`
+  - backend-neutral domain slices for:
+    - agents
+    - conversations
+    - deliveries
+    - routed-task orchestration
+    - task queries
+    - summary/usage/approvals
+
+The backend entry points still own connection lifecycles and backend-native
+write helpers, but shared registry business logic is now extracted by domain
+instead of being duplicated wholesale between SQLite and Postgres.
 
 ## Architecture Rules
 

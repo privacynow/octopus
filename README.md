@@ -35,7 +35,7 @@ The current codebase is split into four primary packages:
   - the shipped Telegram bot runtime and the `./octopus` deployment CLI
 - `octopus_registry/`
   - the standalone registry management plane: API, websocket server, store,
-    presenters, and browser UI
+    authority layer, and browser UI
 - `octopus_sdk/`
   - shared runtime contracts, workflow implementations, registry protocols,
     and composition helpers used by both the bot runtime and registry server
@@ -238,6 +238,23 @@ The current UI contract is intentionally shared rather than per-component:
   and `UI.buildConversationTypeBadge(...)`
 - CSS spacing and padding now come from named tokens such as
   `--card-padding`, `--panel-padding`, `--compact-card-padding`, and shared
+
+The registry persistence layer now follows the same “thin backend entry point +
+shared domain slices” pattern:
+
+- `octopus_registry/store.py`
+  - SQLite-backed registry store entry point
+- `octopus_registry/store_postgres.py`
+  - Postgres-backed registry store entry point
+- `octopus_registry/store_dialect.py`
+  - backend-specific SQL/connection protocol used by shared store code
+- `octopus_registry/store_shared/`
+  - backend-neutral domain slices for summary/usage/approvals, agents,
+    conversations, deliveries, routed-task orchestration, and task queries
+
+Backend-specific files still own connection handling and backend-native write
+helpers, but the shared domain logic now lives once instead of being
+reimplemented in both stores.
   `--space-*` gaps instead of per-view hardcoded pixel values
 - empty states use the same chrome across standalone list pages and nested
   dashboard/agent-detail sections

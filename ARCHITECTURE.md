@@ -24,17 +24,18 @@ flowchart LR
     User["Telegram user"] --> TG["Telegram"]
 
     CLI --> Deploy[".deploy/ + Docker"]
-    Deploy --> Bot["Bot runtime<br/>(app/)"]
-    Deploy --> Registry["Registry server<br/>(octopus_registry/)"]
+    Deploy --> Bot["Bot runtime<br/>(app/ + octopus_sdk/)"]
+    Deploy --> Registry["Registry server<br/>(octopus_registry/ + octopus_sdk/)"]
 
     TG <--> Bot
     Browser --> Registry
     Bot <--> Registry
     Bot --> Provider["Claude / Codex"]
-    Bot --> SDK["octopus_sdk/"]
-    Registry --> SDK
     Registry -.-> Postgres["Postgres (optional)"]
 ```
+
+`octopus_sdk/` is a shared library embedded in both Bot and Registry at
+build time. It is not a separately deployed system.
 
 ---
 
@@ -174,7 +175,9 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Identity helpers (actor keys, conversation keys, transport refs)
 - Testing fence (`octopus_sdk/testing/` — non-durable, non-production)
 
-### Package structure
+### Package structure (import direction)
+
+Arrows show import direction: A → B means A imports from B.
 
 ```mermaid
 flowchart TB
@@ -199,17 +202,20 @@ flowchart TB
 
     runtime --> execution
     runtime --> transport
-    runtime --> composition
     execution --> providers
     execution --> sessions
     execution --> events
+    dispatcher --> transport
     composition --> workflows
-    transport --> dispatcher
     runtime --> participant
     participant --> authority_client
     participant --> management
     testing -.-> composition
 ```
+
+Note: `BotRuntime` does NOT import `composition.py`. The `WorkflowComposer`
+builds a `WorkflowComposition` object that is injected into `BotRuntime` at
+construction time by the application layer.
 
 ### Transport contract
 
@@ -338,28 +344,46 @@ This section describes the shipped Telegram bot built on the SDK.
 
 ### Composition root
 
+The orchestrator is `app/runtime/services.py`. It builds the runtime in
+three stages:
+
 ```mermaid
 flowchart TD
     main["app/main.py"]
     startup["startup.py<br/>Validate config + profile"]
-    services["services.py<br/>Build control plane + bus"]
-    composition["composition.py<br/>Wire WorkflowComposer<br/>with app port implementations"]
-    builders["transport_builders.py<br/>Register Telegram +<br/>registry transports"]
-    bot_services["bot_services.py<br/>Assemble BotRuntime"]
+    services["services.py<br/>Orchestrates assembly"]
+
+    subgraph stage1 ["Stage 1: Build bot services"]
+        bot_services["bot_services.py"]
+        composition["composition.py<br/>(workflow wiring)"]
+        bot_services --> composition
+    end
+
+    subgraph stage2 ["Stage 2: Build transports"]
+        builders["transport_builders.py<br/>Register Telegram +<br/>registry transports"]
+    end
+
     runtime["BotRuntime.run()"]
 
     main --> startup
     startup --> services
-    services --> composition
-    composition --> builders
-    builders --> bot_services
-    bot_services --> runtime
+    services --> stage1
+    services --> stage2
+    services --> runtime
 ```
 
-`app/runtime/composition.py` is a thin wrapper over `WorkflowComposer`. It
-supplies concrete app-side port implementations (SQLite session store, content
-store, credential service, etc.) to the SDK-owned builder. It does not own
-business logic.
+1. `services.py` calls `bot_services.py` which internally uses
+   `composition.py` to wire the `WorkflowComposer` with app-side port
+   implementations (SQLite session store, content store, credential
+   service, etc.)
+2. `services.py` calls `transport_builders.py` to register Telegram
+   and registry transports with the dispatcher
+3. `services.py` constructs `BotRuntime` with the assembled services
+   and transports, then calls `runtime.run()`
+
+`composition.py` is a thin wrapper over `WorkflowComposer`. It does not
+own business logic. It is used inside `bot_services.py`, not as a
+system-wide composition root.
 
 ### Telegram request flow
 
@@ -466,7 +490,8 @@ flowchart TB
 
 ### Implementation steps
 
-1. `pip install octopus-sdk` (or add as local dependency)
+1. Add `octopus_sdk/` to the Python path (local dependency — not yet
+   published as a distributable package)
 2. Implement `SlackTransport(TransportImplementation)`
 3. Implement storage backends for required ports
 4. Compose with `WorkflowComposer().with_messages(...).with_sessions(...).build()`
@@ -525,7 +550,9 @@ carries structured delegation intent. Direct assignment from the UI uses
 1. `app/` imports `octopus_sdk/`. SDK imports neither `app/` nor `octopus_registry/`.
 2. `octopus_registry/` imports `octopus_sdk/`. Never `app/`.
 3. `app/` never imports `octopus_registry/`.
-4. Composition root is `app/runtime/composition.py` — thin wrapper, no business logic.
+4. Assembly is orchestrated by `app/runtime/services.py`. Workflow wiring
+   uses `app/runtime/composition.py` (thin wrapper over `WorkflowComposer`,
+   no business logic).
 5. Execution orchestration is SDK-owned in `octopus_sdk/execution.py`.
 6. Transport implementations own ingress/egress only. Workflow dispatch is SDK-native.
 7. Coordination uses typed SDK/registry contracts, not provider text conventions.

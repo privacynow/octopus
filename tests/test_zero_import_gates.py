@@ -76,6 +76,8 @@ DELETED_MODULE_PATHS = (
     "app/time_utils.py",
     "app/control_plane/bus_base.py",
     "octopus_registry/presenters.py",
+    "app/work_queue_sqlite.py",
+    "app/work_queue_postgres.py",
 )
 
 

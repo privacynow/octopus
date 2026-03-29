@@ -567,7 +567,7 @@ Core browser routes today:
 
 | Route | Main purpose |
 |---|---|
-| `/ui` | dashboard summary + attention lists |
+| `/ui` | dashboard summary + attention lists + recent completed task rollup |
 | `/ui/approvals` | pending approval queue |
 | `/ui/agents` | agent roster with direct open-conversation actions |
 | `/ui/agents/{id}` | agent overview, workers, inline conversations |
@@ -615,7 +615,7 @@ Important SPA primitives:
 The current component split matches operator jobs rather than raw resource
 types:
 
-- dashboard: summary + immediate follow-up
+- dashboard: summary + immediate follow-up + recent completed work
 - conversations: start/reopen work and inspect active threads
 - conversation detail: human conversation, routed work, and diagnostics in one
   workspace
@@ -805,6 +805,11 @@ Current defaults:
 - bot runtime uses SQLite by default and Postgres when `BOT_DATABASE_URL` is set
 - registry uses SQLite by default and Postgres when `REGISTRY_DATABASE_URL` is set
 - SQLite and Postgres are kept aligned by shared tests and contract coverage
+
+The runtime transport-store classes now live directly in
+`app/work_queue_sqlite_impl.py` and `app/work_queue_postgres_impl.py`; the old
+wrapper modules were removed so backend selection imports the concrete impl
+module once instead of delegating through a second file.
 
 ## Architecture Rules
 

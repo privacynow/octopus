@@ -202,7 +202,7 @@ function renderSkillCatalog(container) {
             agentSelect.disabled = true;
         }
         try {
-            const data = await API.listAgents({ limit: 200 });
+            const data = await API.listAgents({ limit: 100 });
             availableAgents = Array.isArray(data) ? data : (data.agents || []);
             const requested = _readAgentId();
             if (requested) {

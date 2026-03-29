@@ -61,6 +61,42 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         assert "__routeReady" in text, f"{name} must publish an initial route readiness promise"
 
 
+def test_management_views_request_agent_pages_with_supported_limit() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "API.listAgents({ limit: 100 })" in skill_catalog
+    assert "API.listAgents({ limit: 200 })" not in skill_catalog
+    assert "API.listAgents({ limit: 100 })" in guidance_editor
+    assert "API.listAgents({ limit: 200 })" not in guidance_editor
+
+
+def test_conversation_empty_state_avoids_repeating_route_title() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Nothing here yet." in conversation_list
+    assert "No conversations yet." not in conversation_list
+
+
+def test_dashboard_surfaces_recently_completed_tasks() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Recently completed" in dashboard
+    assert "completed_since_iso: recentCompletedSinceIso()" in dashboard
+    assert "status: 'completed'" in dashboard
+
+
 def test_conversation_views_distinguish_task_threads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (

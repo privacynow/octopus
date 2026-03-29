@@ -3,6 +3,7 @@
  */
 function renderDashboard(container) {
     const cleanups = UI.beginCleanupScope();
+    const RECENT_COMPLETED_WINDOW_MS = 24 * 60 * 60 * 1000;
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
@@ -44,6 +45,10 @@ function renderDashboard(container) {
     const runningTasksHost = document.createElement('div');
     runningTasksHost.dataset.key = 'running-tasks-host';
     workGrid.appendChild(runningTasksHost);
+
+    const recentTasksHost = document.createElement('div');
+    recentTasksHost.dataset.key = 'recent-tasks-host';
+    workGrid.appendChild(recentTasksHost);
 
     const agentsHost = document.createElement('div');
     agentsHost.dataset.key = 'agents-host';
@@ -141,8 +146,13 @@ function renderDashboard(container) {
         conversations: { conversations: [] },
         failedTasks: { tasks: [] },
         runningTasks: { tasks: [] },
+        recentCompletedTasks: { tasks: [] },
         agents: { agents: [] },
     };
+
+    function recentCompletedSinceIso() {
+        return new Date(Date.now() - RECENT_COMPLETED_WINDOW_MS).toISOString();
+    }
 
     function renderSummaryRail(summary) {
         const items = [
@@ -288,6 +298,40 @@ function renderDashboard(container) {
         ));
     }
 
+    function renderRecentCompletedSection() {
+        const tasksData = {
+            tasks: dashboardState.recentCompletedTasks.tasks || dashboardState.recentCompletedTasks || [],
+        };
+        const rowsState = (tasksData.tasks || []).slice(0, 6).map((item) => ({
+            id: String(item.routed_task_id || ''),
+            title: String(item.title || ''),
+            status: String(item.status || ''),
+            updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
+            target: String(item.target_display_name || item.target_agent_id || ''),
+            conversation: String(item.parent_conversation_id || ''),
+        }));
+        const completedRows = (tasksData.tasks || []).slice(0, 6).map((item) => createRow({
+            key: item.routed_task_id,
+            title: item.title || 'Completed task',
+            subtitle: [
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
+                UI.relativeTime(item.updated_at || item.created_at),
+            ].filter(Boolean).join(' · '),
+            badge: item.status || 'completed',
+            badgeClass: 'badge-' + (item.status || 'completed'),
+            href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
+        }));
+        UI.memoizedRender(recentTasksHost, rowsState, () => (
+            completedRows.length ? [createSection(
+                'recent-tasks',
+                'Recently completed',
+                '/ui/tasks?status=completed',
+                completedRows,
+                'No recently completed tasks.',
+            )] : []
+        ));
+    }
+
     function renderAgentSection() {
         const agentsData = dashboardState.agents;
         const rowsState = (agentsData.agents || agentsData || []).slice(0, 6).map((item) => ({
@@ -327,10 +371,11 @@ function renderDashboard(container) {
         renderNeedsAttentionSection();
         renderConversationSection();
         renderRunningSection();
+        renderRecentCompletedSection();
         renderAgentSection();
     }
 
-    function applySnapshot({ summary, approvals, conversations, failedTasks, runningTasks, agents }) {
+    function applySnapshot({ summary, approvals, conversations, failedTasks, runningTasks, recentCompletedTasks, agents }) {
         if (!dashboardGrid.isConnected) {
             UI.reconcileChildren(content, [dashboardGrid]);
         }
@@ -339,21 +384,23 @@ function renderDashboard(container) {
         dashboardState.conversations = conversations;
         dashboardState.failedTasks = { tasks: failedTasks.tasks || failedTasks || [] };
         dashboardState.runningTasks = { tasks: runningTasks.tasks || runningTasks || [] };
+        dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
         dashboardState.agents = agents;
         renderDashboardView();
     }
 
     async function loadSnapshot({ soft = false } = {}) {
         try {
-            const [summary, approvals, conversations, failedTasks, runningTasks, agents] = await Promise.all([
+            const [summary, approvals, conversations, failedTasks, runningTasks, recentCompletedTasks, agents] = await Promise.all([
                 API.getSummary(),
                 API.listApprovals({ limit: 4 }),
                 API.listConversations({ limit: 6, status: 'open' }),
                 API.listTasks({ limit: 6, status: 'failed' }),
                 API.listTasks({ limit: 6, status: 'running' }).catch(() => ({ tasks: [] })),
+                API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
                 API.listAgents({ limit: 8 }),
             ]);
-            applySnapshot({ summary, approvals, conversations, failedTasks, runningTasks, agents });
+            applySnapshot({ summary, approvals, conversations, failedTasks, runningTasks, recentCompletedTasks, agents });
             hasLoaded = true;
         } catch (err) {
             if (soft && hasLoaded) {
@@ -364,6 +411,7 @@ function renderDashboard(container) {
             UI.clearMemoizedRender(needsAttentionHost);
             UI.clearMemoizedRender(conversationsHost);
             UI.clearMemoizedRender(runningTasksHost);
+            UI.clearMemoizedRender(recentTasksHost);
             UI.clearMemoizedRender(agentsHost);
             UI.reconcileChildren(content, [UI.createErrorCard('Failed to load dashboard: ' + err.message, loadSnapshot)]);
         }
@@ -417,17 +465,20 @@ function renderDashboard(container) {
 
     async function refreshTasks({ soft = false } = {}) {
         try {
-            const [summary, failedTasks, runningTasks] = await Promise.all([
+            const [summary, failedTasks, runningTasks, recentCompletedTasks] = await Promise.all([
                 API.getSummary(),
                 API.listTasks({ limit: 6, status: 'failed' }),
                 API.listTasks({ limit: 6, status: 'running' }).catch(() => ({ tasks: [] })),
+                API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
             ]);
             dashboardState.summary = summary;
             dashboardState.failedTasks = { tasks: failedTasks.tasks || failedTasks || [] };
             dashboardState.runningTasks = { tasks: runningTasks.tasks || runningTasks || [] };
+            dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
             renderSummaryRail(summary);
             renderNeedsAttentionSection();
             renderRunningSection();
+            renderRecentCompletedSection();
         } catch (err) {
             if (soft && hasLoaded) {
                 UI.reportError('Failed to refresh dashboard tasks', err, { context: 'Dashboard task refresh failed' });

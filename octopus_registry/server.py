@@ -988,6 +988,7 @@ def resource_list_tasks(
     limit: int = Query(default=25, ge=1, le=100),
     status: str = Query(default=""),
     parent_conversation_id: str = Query(default=""),
+    completed_since_iso: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
@@ -997,6 +998,7 @@ def resource_list_tasks(
         cursor=cursor,
         limit=limit,
         status=status,
+        completed_since_iso=completed_since_iso,
     )
     return _json_payload(_paginated_response("tasks", tasks, cursor, limit))
 

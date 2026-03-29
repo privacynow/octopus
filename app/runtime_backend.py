@@ -55,7 +55,7 @@ def init(config: BotConfig) -> None:
     if config.database_url:
         from app.control_plane.postgres_impl import PostgresControlPlaneStore
         from app.storage_postgres import PostgresSessionStore
-        from app.work_queue_postgres import PostgresTransportStore
+        from app.work_queue_postgres_impl import PostgresTransportStore
         _backend = _Backend(
             PostgresSessionStore(
                 config.database_url,
@@ -79,7 +79,7 @@ def init(config: BotConfig) -> None:
     else:
         from app.control_plane.sqlite_impl import SQLiteControlPlaneStore
         from app.storage_sqlite import SQLiteSessionStore
-        from app.work_queue_sqlite import SQLiteTransportStore
+        from app.work_queue_sqlite_impl import SQLiteTransportStore
         _backend = _Backend(SQLiteSessionStore(), SQLiteTransportStore(), SQLiteControlPlaneStore())
 
 
@@ -101,5 +101,5 @@ def reset_for_test() -> None:
             log.debug("Control-plane store close failed during reset", exc_info=True)
     from app.control_plane.sqlite_impl import SQLiteControlPlaneStore
     from app.storage_sqlite import SQLiteSessionStore
-    from app.work_queue_sqlite import SQLiteTransportStore
+    from app.work_queue_sqlite_impl import SQLiteTransportStore
     _backend = _Backend(SQLiteSessionStore(), SQLiteTransportStore(), SQLiteControlPlaneStore())

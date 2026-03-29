@@ -1606,7 +1606,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 transition = "time_out"
             else:
                 raise ValueError(f"Unsupported routed task result status: {requested_status}")
-            completed_at = now
+            completed_at = validated_payload["completed_at"] or now
             decision = apply_task_transition(
                 self._task_snapshot__row(task),
                 TaskTransitionRequest(
@@ -2907,6 +2907,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
+        completed_since_iso: str = "",
     ) -> list[TaskRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
@@ -2928,6 +2929,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 if status:
                     where_clauses.append("t.status = %s")
                     params.append(status)
+                if completed_since_iso:
+                    where_clauses.append("COALESCE(t.result_json->>'completed_at', t.updated_at) >= %s")
+                    params.append(completed_since_iso)
                 if where_clauses:
                     sql += " WHERE " + " AND ".join(where_clauses)
                 sql += " ORDER BY t.updated_at DESC LIMIT %s OFFSET %s"
@@ -3324,17 +3328,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 lines.append(row["content"])
                 lines.append("")
         return "\n".join(lines)
-
-    def purge_old_events(self, older_than_days: int = 30) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"DELETE FROM {_SCHEMA}.events WHERE created_at < %s",
-                    (cutoff,),
-                )
-                count = cur.rowcount
-        return count
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

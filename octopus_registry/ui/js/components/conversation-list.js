@@ -222,7 +222,7 @@ function renderConversationList(container) {
 
     function renderRows(conversations, data) {
         if (!conversations.length) {
-            const emptyMessage = currentQ || currentStatus ? 'No conversations match this view.' : 'No conversations yet.';
+            const emptyMessage = currentQ || currentStatus || currentType ? 'No conversations match this view.' : 'Nothing here yet.';
             UI.clearMemoizedRender(listEl);
             UI.reconcileChildren(listEl, [UI.renderEmptyState(emptyMessage, true)]);
             paginator.clear();

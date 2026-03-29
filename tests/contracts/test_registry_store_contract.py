@@ -743,6 +743,56 @@ def test_list_tasks_can_filter_by_parent_conversation_id(store):
     assert [task.routed_task_id for task in tasks] == [first.routed_task_id]
 
 
+def test_list_tasks_can_filter_by_completed_since_iso(store):
+    old_task_id = "task-completed-old"
+    recent_task_id = "task-completed-recent"
+
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id=old_task_id,
+    )
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, old_task_id)
+    store.update_routed_task_result(
+        target_token,
+        old_task_id,
+        RoutedTaskResult(
+            routed_task_id=old_task_id,
+            status="completed",
+            transition_id=f"{old_task_id}-complete",
+            summary="done",
+            full_text="Older completion",
+            completed_at="2026-03-15T00:00:00+00:00",
+        ),
+    )
+
+    _routed, _origin_id, _target_id, target_token, _conversation_id = _create_routed_task(
+        store,
+        routed_task_id=recent_task_id,
+    )
+    _lease_routed_task(store, target_token)
+    _start_routed_task(store, target_token, recent_task_id)
+    store.update_routed_task_result(
+        target_token,
+        recent_task_id,
+        RoutedTaskResult(
+            routed_task_id=recent_task_id,
+            status="completed",
+            transition_id=f"{recent_task_id}-complete",
+            summary="done",
+            full_text="Recent completion",
+            completed_at="2026-03-16T00:30:00+00:00",
+        ),
+    )
+
+    tasks = store.list_tasks(
+        status="completed",
+        completed_since_iso="2026-03-16T00:00:00+00:00",
+    )
+
+    assert [task.routed_task_id for task in tasks] == [recent_task_id]
+
+
 def test_list_agents_supports_query_and_connectivity_filters(store):
     _enroll(store, "alpha-reviewer")
     beta_id, beta_token = _enroll(store, "beta-builder")

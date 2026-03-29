@@ -1762,7 +1762,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 transition = "time_out"
             else:
                 raise ValueError(f"Unsupported routed task result status: {requested_status}")
-            completed_at = now
+            completed_at = validated_payload.completed_at or now
             decision = apply_task_transition(
                 self._task_snapshot__row(task),
                 TaskTransitionRequest(
@@ -3001,6 +3001,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
+        completed_since_iso: str = "",
     ) -> list[TaskRecord]:
         fetch_limit = limit + 1
         with self._connect() as conn:
@@ -3021,6 +3022,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if status:
                 where_clauses.append("t.status = ?")
                 params.append(status)
+            if completed_since_iso:
+                where_clauses.append("COALESCE(json_extract(t.result_json, '$.completed_at'), t.updated_at) >= ?")
+                params.append(completed_since_iso)
             if where_clauses:
                 sql += " WHERE " + " AND ".join(where_clauses)
             sql += " ORDER BY t.updated_at DESC LIMIT ? OFFSET ?"
@@ -3390,16 +3394,6 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 lines.append(row["content"])
                 lines.append("")
         return "\n".join(lines)
-
-    def purge_old_events(self, older_than_days: int = 30) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM events WHERE created_at < ?",
-                (cutoff,),
-            )
-            count = cursor.rowcount
-        return count
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

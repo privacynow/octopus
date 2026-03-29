@@ -2118,6 +2118,78 @@ def test_registry_list_tasks_can_filter_by_parent_conversation_id(monkeypatch, t
     assert [task["routed_task_id"] for task in filtered.json()["tasks"]] == ["task-filter-1"]
 
 
+def test_registry_list_tasks_can_filter_by_completed_since_iso(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    origin_id, origin_token = _enroll_and_register(client, "Origin Bot", "origin-bot-completed-filter")
+    target_id, target_token = _enroll_and_register(client, "Target Bot", "target-bot-completed-filter")
+    conversation = _create_conversation(client, origin_token, origin_id, "conv-completed-filter", title="Completed filter")
+
+    for task_id, completed_at in (
+        ("task-completed-old", "2026-03-15T00:00:00+00:00"),
+        ("task-completed-recent", "2026-03-16T00:30:00+00:00"),
+    ):
+        routed = client.post(
+            "/v1/agents/routed-tasks",
+            headers={"Authorization": f"Bearer {origin_token}"},
+            json={
+                "routed_task_id": task_id,
+                "parent_conversation_id": conversation["conversation_id"],
+                "origin_agent_id": origin_id,
+                "target_agent_id": target_id,
+                "title": f"Task {task_id}",
+                "instructions": "Do work.",
+                "created_at": "2026-03-15T00:00:00+00:00",
+            },
+        )
+        assert routed.status_code == 200
+
+        poll = client.get(
+            "/v1/agents/poll",
+            headers={"Authorization": f"Bearer {target_token}"},
+            params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+        )
+        assert poll.status_code == 200
+
+        started = client.post(
+            f"/v1/agents/routed-tasks/{task_id}/status",
+            headers={"Authorization": f"Bearer {target_token}"},
+            json={
+                "status": "running",
+                "transition_id": f"{task_id}-running",
+                "summary": "In progress",
+                "timeline_events": [],
+            },
+        )
+        assert started.status_code == 200
+
+        completed = client.post(
+            f"/v1/agents/routed-tasks/{task_id}/result",
+            headers={"Authorization": f"Bearer {target_token}"},
+            json={
+                "status": "completed",
+                "transition_id": f"{task_id}-complete",
+                "summary": "Done",
+                "full_text": "Finished",
+                "completed_at": completed_at,
+            },
+        )
+        assert completed.status_code == 200
+
+    filtered = client.get(
+        "/v1/tasks",
+        params={
+            "status": "completed",
+            "completed_since_iso": "2026-03-16T00:00:00+00:00",
+            "limit": 10,
+        },
+    )
+    assert filtered.status_code == 200
+    assert [task["routed_task_id"] for task in filtered.json()["tasks"]] == ["task-completed-recent"]
+
+
 def test_registry_create_routed_task_requires_title(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

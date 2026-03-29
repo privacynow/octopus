@@ -163,13 +163,15 @@ capabilities light up when a compatible bot is connected.
 Current main routes:
 
 - **Dashboard** — dense overview of what needs attention now: open
-  conversations, running work, follow-up items, and agent health
+  conversations, running work, recently completed work from the last day,
+  follow-up items, and agent health
 - **Approvals** — pending operator decisions with direct approve/reject/open
   actions
 - **Agents** — roster with search + state filters and direct
   **Open conversation** actions
 - **Conversations** — compact quick-start row for connected agents, server-side
-  search/status filters, and a list of active threads
+  search/status filters, and a list of active threads; the empty state stays
+  contextual instead of repeating the route title
 - **Conversation detail** — one composer for both replies and direct routing,
   tabs for **Conversation**, **Tasks**, and **Full activity**, compact
   operator-facing header metadata (`With`, `Assigned to`, `Started in`), plus
@@ -218,6 +220,11 @@ Realtime comes from `/v1/ws` and uses explicit typed topics:
 Mounted routes debounce invalidation bursts, skip unchanged payloads, and avoid
 background-tab refresh churn so the operator UI does not keep repainting whole
 sections for no visible change.
+
+The Skills and Guidance management routes both source their managed-agent
+dropdowns from the same paged `/v1/agents` resource as the rest of the UI, so
+their client requests stay within the registry API's supported agent page
+limits.
 
 The current UI contract is intentionally shared rather than per-component:
 

@@ -537,6 +537,34 @@ Important current behavior:
 - direct operator routing and delegated coordination share the same action
   surface and backend state model
 
+### Skills And Guidance Surfaces
+
+The current system has three distinct skill/guidance surfaces, and they should
+not be conflated:
+
+- **runtime catalog**
+  - builtin and imported runtime skills exposed by the bot
+  - surfaced to Telegram through `/skills ...`
+  - builtin skills are usable without registry installation
+- **conversation skill activation**
+  - per-conversation skill enable/disable state
+  - backed by conversation skill activation workflows and management endpoints
+  - currently exposed to end users through Telegram commands such as
+    `/skills add <name>` and `/skills remove <name>`
+- **operator catalog/lifecycle UI**
+  - browser `Skills` page and related lifecycle endpoints
+  - shows catalog rows, registry search matches, install/update/uninstall, and
+    custom-skill lifecycle state
+  - does not currently provide a browser CTA for activating a skill into a
+    specific conversation
+
+Provider guidance is separate again:
+
+- it is operator-managed provider instruction state, not an end-user skill
+- it is surfaced in Telegram through `/guidance ...` commands and in the
+  browser through the `Guidance` route
+- it requires a connected bot that advertises `provider_guidance`
+
 ### Realtime Model
 
 The websocket manager in `octopus_registry/ws.py` uses typed SDK

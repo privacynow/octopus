@@ -170,8 +170,7 @@ function renderTaskList(container) {
             tasks: (tasks || []).map((task) => ({
                 id: String(task.routed_task_id || ''),
                 status: String(task.status || ''),
-                updatedAt: String(task.updated_at || ''),
-                createdAt: String(task.created_at || ''),
+                updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
                 summary: String(_taskSummary(task) || ''),
                 title: String(_taskLabel(task) || ''),
                 origin: String(task.origin_display_name || task.origin_agent_id || ''),
@@ -238,8 +237,7 @@ function renderTaskList(container) {
         item.dataset.signature = UI.dataSignature({
             id: String(task.routed_task_id || ''),
             status: String(task.status || ''),
-            updatedAt: String(task.updated_at || ''),
-            createdAt: String(task.created_at || ''),
+            updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
             title: String(_taskLabel(task) || ''),
             summary: String(_taskSummary(task) || ''),
             origin: String(task.origin_display_name || task.origin_agent_id || ''),

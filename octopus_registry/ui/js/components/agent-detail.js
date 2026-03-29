@@ -240,8 +240,7 @@ function renderAgentDetail(container, params) {
                 id: String(item.conversation_id || ''),
                 type: String(item.conversation_type || 'conversation'),
                 status: String(item.status || ''),
-                updatedAt: String(item.updated_at || ''),
-                createdAt: String(item.created_at || ''),
+                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
                 title: String(item.title || ''),
                 origin: String(item.origin_channel || ''),
             })),
@@ -280,8 +279,7 @@ function renderAgentDetail(container, params) {
                 id: String(item.conversation_id || ''),
                 type: String(item.conversation_type || 'conversation'),
                 status: String(item.status || ''),
-                updatedAt: String(item.updated_at || ''),
-                createdAt: String(item.created_at || ''),
+                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
                 title: String(item.title || ''),
                 origin: String(item.origin_channel || ''),
             });
@@ -380,7 +378,7 @@ function renderAgentDetail(container, params) {
                     role: String(agent.role || ''),
                     provider: String(agent.provider || ''),
                     connectivity: String(agent.connectivity_state || ''),
-                    heartbeat: String(agent.last_heartbeat_at || ''),
+                    heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),
                     capabilities: (agent.capabilities || []).map((capability) => String(capability || '')),
@@ -389,7 +387,7 @@ function renderAgentDetail(container, params) {
                     id: String(worker.worker_id || ''),
                     role: String(worker.process_role || ''),
                     current: String(worker.current_item_id || ''),
-                    lastSeen: String(worker.last_seen_at || ''),
+                    lastSeenLabel: worker.last_seen_at ? UI.relativeTime(worker.last_seen_at) : '',
                 })),
             });
             agentDisplayName = agent.display_name || agent.slug || 'Agent';

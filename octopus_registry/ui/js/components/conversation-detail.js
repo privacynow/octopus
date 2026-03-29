@@ -615,7 +615,7 @@ function renderConversationDetail(container, params) {
             target: String(conversationWith || ''),
             assignedTo: String(assignedTo || ''),
             origin: String(data.origin_channel || 'registry'),
-            updatedAt: String(data.updated_at || ''),
+            updatedLabel: data.updated_at ? UI.relativeTime(data.updated_at) : '',
         });
         if (metaSignature === lastMetaSignature) {
             return;
@@ -762,8 +762,7 @@ function renderConversationDetail(container, params) {
         const nextSignature = UI.dataSignature((tasks || []).map((task) => ({
             id: String(task.routed_task_id || ''),
             status: String(task.status || ''),
-            updatedAt: String(task.updated_at || ''),
-            createdAt: String(task.created_at || ''),
+            updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
             title: String(task.title || ''),
             summary: String(task.summary || task.result_summary || task.result_text || task.instructions || ''),
             target: String(task.target_display_name || task.target_agent_id || ''),
@@ -1530,8 +1529,7 @@ function _createConversationTaskCard(task, convoId, { compact = false } = {}) {
         id: String(task.routed_task_id || ''),
         compact: Boolean(compact),
         status: String(task.status || ''),
-        updatedAt: String(task.updated_at || ''),
-        createdAt: String(task.created_at || ''),
+        updatedLabel: UI.relativeTime(task.updated_at || task.created_at),
         title: String(task.title || task.routed_task_id || ''),
         summary: String(task.summary || task.result_summary || task.result_text || task.instructions || ''),
         target: String(task.target_display_name || task.target_agent_id || ''),

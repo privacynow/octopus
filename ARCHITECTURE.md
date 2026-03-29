@@ -546,6 +546,14 @@ topics; conversation detail also renders progress updates. Mounted routes deboun
 bursts, skip unchanged payloads with view-level signatures, and suppress background-tab refresh
 churn instead of rebuilding visible DOM on every invalidate event.
 
+Signature rule:
+
+- subtree-skip signatures must track rendered output, not raw backend timestamps
+- heartbeat and update fields are signed as the same `UI.relativeTime(...)`
+  labels the DOM shows, so a background heartbeat does not repaint a row that
+  still reads `just now` or `2m ago`
+- fields that are not rendered at all are excluded from signatures entirely
+
 ### SPA Shell And Route Model
 
 The registry UI is a route-driven operator console:
@@ -585,6 +593,8 @@ Important SPA primitives:
   - do not paint first-mount skeleton cards/rows during route transitions
   - keep initial shells static until real data is ready
   - reconcile only the sections whose data actually changed during live refresh
+  - sign keyed subtrees from rendered labels, badges, and visible counters
+    rather than raw `updated_at` / `last_heartbeat_at` values
 - `Fuse.js` is used for `@target` suggestion ranking in conversation detail
 - theme state is owned in `octopus_registry/ui/js/app.js` and applies to both light and dark
   modes without a separate mobile app

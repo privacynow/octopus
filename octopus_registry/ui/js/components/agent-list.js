@@ -136,7 +136,7 @@ function renderAgentList(container) {
             agents: (agents || []).map((agent) => ({
                 id: String(agent.agent_id || ''),
                 state: String(agent.connectivity_state || ''),
-                heartbeat: String(agent.last_heartbeat_at || ''),
+                heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                 display: String(agent.display_name || agent.slug || ''),
                 role: String(agent.role || ''),
                 provider: String(agent.provider || ''),
@@ -175,7 +175,7 @@ function renderAgentList(container) {
                 id: String(agent.agent_id || ''),
                 display: String(agent.display_name || agent.slug || ''),
                 state: String(agent.connectivity_state || ''),
-                heartbeat: String(agent.last_heartbeat_at || ''),
+                heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                 role: String(agent.role || ''),
                 provider: String(agent.provider || ''),
             });

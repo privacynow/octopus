@@ -195,15 +195,15 @@ function renderDashboard(container) {
             id: String(item.request_id || item.conversation_id || ''),
             title: String(item.conversation_title || ''),
             target: String(item.target_display_name || item.target_agent_id || ''),
-            createdAt: String(item.created_at || ''),
-            expiresAt: String(item.expires_at || ''),
+            createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
+            expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
         }));
         const failedTasks = (dashboardState.failedTasks.tasks || []).slice(0, 3).map((item) => ({
             id: String(item.routed_task_id || ''),
             title: String(item.title || ''),
             target: String(item.target_display_name || item.target_agent_id || ''),
             status: String(item.status || ''),
-            updatedAt: String(item.updated_at || item.created_at || ''),
+            updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
         }));
         const riskyAgents = ((dashboardState.agents.agents || dashboardState.agents || []).filter(
             (agent) => ['degraded', 'disconnected', 'offline'].includes(agent.connectivity_state || ''),
@@ -211,7 +211,7 @@ function renderDashboard(container) {
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
             status: String(item.connectivity_state || ''),
-            heartbeat: String(item.last_heartbeat_at || ''),
+            heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
         }));
         const needsAttentionRows = buildNeedsAttention(
             dashboardState.approvals,
@@ -236,7 +236,7 @@ function renderDashboard(container) {
             id: String(item.conversation_id || ''),
             title: String(item.title || ''),
             status: String(item.status || ''),
-            updatedAt: String(item.updated_at || item.created_at || ''),
+            updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
             target: String(item.target_display_name || item.target_agent_id || ''),
             type: String(item.conversation_type || 'conversation'),
         })));
@@ -271,7 +271,7 @@ function renderDashboard(container) {
             id: String(item.routed_task_id || ''),
             title: String(item.title || ''),
             status: String(item.status || ''),
-            updatedAt: String(item.updated_at || item.created_at || ''),
+            updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
             target: String(item.target_display_name || item.target_agent_id || ''),
             conversation: String(item.parent_conversation_id || ''),
         })));
@@ -303,7 +303,7 @@ function renderDashboard(container) {
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
             state: String(item.connectivity_state || ''),
-            heartbeat: String(item.last_heartbeat_at || ''),
+            heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
             role: String(item.role || ''),
             provider: String(item.provider || ''),
         })));

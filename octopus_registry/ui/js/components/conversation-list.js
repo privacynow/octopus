@@ -195,7 +195,6 @@ function renderConversationList(container) {
             agents: (agents || []).map((agent) => ({
                 id: String(agent.agent_id || ''),
                 label: String(agent.display_name || agent.slug || agent.agent_id || ''),
-                state: String(agent.connectivity_state || ''),
             })),
         });
         if (quickStartLoaded && signature === lastQuickStartSignature) {
@@ -304,10 +303,10 @@ function renderConversationList(container) {
                 id: String(item.conversation_id || ''),
                 type: String(item.conversation_type || 'conversation'),
                 status: String(item.status || ''),
-                updatedAt: String(item.updated_at || ''),
-                createdAt: String(item.created_at || ''),
+                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
                 title: String(item.title || ''),
                 target: String(item.target_display_name || item.target_agent_id || ''),
+                origin: String(item.origin_channel || ''),
             })),
         });
         if (hasLoaded && signature === lastListSignature) {
@@ -340,8 +339,7 @@ function renderConversationList(container) {
                 id: String(item.conversation_id || ''),
                 type: String(item.conversation_type || 'conversation'),
                 status: String(item.status || ''),
-                updatedAt: String(item.updated_at || ''),
-                createdAt: String(item.created_at || ''),
+                updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
                 title: String(item.title || ''),
                 target: String(item.target_display_name || item.target_agent_id || ''),
                 origin: String(item.origin_channel || ''),

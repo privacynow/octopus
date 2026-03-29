@@ -94,3 +94,62 @@ def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
     assert "fromEl.dataset.signature === toEl.dataset.signature" in helper
     assert "signature: rowSignature" in conversation_list
     assert "item.dataset.signature" in task_list
+
+
+def test_live_refresh_signatures_use_rendered_time_labels_not_raw_timestamps() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    files = {
+        "agent-list.js": [
+            "heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : ''",
+        ],
+        "agent-detail.js": [
+            "heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : ''",
+            "lastSeenLabel: worker.last_seen_at ? UI.relativeTime(worker.last_seen_at) : ''",
+            "updatedLabel: UI.relativeTime(item.updated_at || item.created_at)",
+        ],
+        "dashboard.js": [
+            "heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : ''",
+            "updatedLabel: UI.relativeTime(item.updated_at || item.created_at)",
+        ],
+        "task-list.js": [
+            "updatedLabel: UI.relativeTime(task.updated_at || task.created_at)",
+        ],
+        "approval-list.js": [
+            "createdLabel: item.created_at ? UI.relativeTime(item.created_at) : ''",
+            "expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : ''",
+        ],
+        "conversation-detail.js": [
+            "updatedLabel: data.updated_at ? UI.relativeTime(data.updated_at) : ''",
+            "updatedLabel: UI.relativeTime(task.updated_at || task.created_at)",
+        ],
+        "conversation-list.js": [
+            "updatedLabel: UI.relativeTime(item.updated_at || item.created_at)",
+        ],
+    }
+
+    forbidden = {
+        "heartbeat: String(",
+        "lastSeen: String(",
+        "updatedAt: String(",
+        "createdAt: String(",
+        "expiresAt: String(",
+    }
+
+    for name, markers in files.items():
+        text = (
+            repo_root
+            / "octopus_registry"
+            / "ui"
+            / "js"
+            / "components"
+            / name
+        ).read_text(encoding="utf-8")
+        for marker in markers:
+            assert marker in text, f"{name} must sign rendered time labels"
+        for marker in forbidden:
+            assert marker not in text, f"{name} must not sign raw timestamp churn"
+
+    conversation_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
+    ).read_text(encoding="utf-8")
+    assert "state: String(agent.connectivity_state || '')" not in conversation_list

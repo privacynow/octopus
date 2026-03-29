@@ -276,6 +276,17 @@ The serialized inbound contract also carries an explicit admission class:
 That lets the runtime distinguish real external access control from internal
 replay/recovery flows without transport-specific hacks.
 
+Registry UI live-refresh reconciliation follows the same rule:
+
+- keyed subtree signatures are based on the text and badges the operator can
+  see
+- relative-time fields are signed from `UI.relativeTime(...)`, not the raw ISO
+  timestamp
+- backend-only metadata is not included in signatures
+
+That keeps heartbeat and invalidate traffic from repainting rows whose visible
+content has not changed.
+
 ## SDK Wiring Verification
 
 The SDK includes a dedicated wiring-verification test under

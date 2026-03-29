@@ -53,8 +53,8 @@ function renderApprovalList(container) {
                 title: String(item.conversation_title || ''),
                 target: String(item.target_display_name || item.target_agent_id || ''),
                 requestKind: String(item.request_kind || ''),
-                createdAt: String(item.created_at || ''),
-                expiresAt: String(item.expires_at || ''),
+                createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
+                expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
             })),
         });
         if (hasLoaded && signature === lastApprovalSignature) {
@@ -91,8 +91,8 @@ function renderApprovalList(container) {
                 requestKind: String(item.request_kind || ''),
                 actor: String(item.actor || ''),
                 trust: String(item.trust_tier || ''),
-                createdAt: String(item.created_at || ''),
-                expiresAt: String(item.expires_at || ''),
+                createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
+                expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
                 content: String(item.content || ''),
             });
 

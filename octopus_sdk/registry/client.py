@@ -353,7 +353,7 @@ class RegistryClient:
         result: ManagementResult,
     ) -> ManagementResult:
         payload = _validated_model(result, ManagementResult)
-        body = payload.model_dump(exclude_unset=True, by_alias=True)
+        body = payload.model_dump(by_alias=True)
         response = await self._request(
             "POST",
             f"/v1/agents/management-requests/{request_id}/result",

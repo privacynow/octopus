@@ -75,7 +75,7 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "conversation_type" in agent_detail
     assert "Task thread" in agent_detail
     assert "No direct conversations." in agent_detail
-    assert "agent-task-threads-list" in agent_detail
+    assert "taskThreadsGroup.hidden = false" in agent_detail
     detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
     ).read_text(encoding="utf-8")
@@ -83,6 +83,10 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "API.getTask(taskId)" in detail
     assert "conversationsLoaded = false" in agent_detail
     assert "lastConversationSignature = ''" in agent_detail
+    assert "document.getElementById('agent-conversations-list')" not in agent_detail
+    assert "conversationListEl = list" in agent_detail
+    assert "taskThreadListEl = taskList" in agent_detail
+    assert "conversationPaginationEl = pag" in agent_detail
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
@@ -160,3 +164,13 @@ def test_live_refresh_signatures_use_rendered_time_labels_not_raw_timestamps() -
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-list.js"
     ).read_text(encoding="utf-8")
     assert "state: String(agent.connectivity_state || '')" not in conversation_list
+
+
+def test_conversation_compact_mode_keeps_timeline_scrollable() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    compact_rule = ".conversation-panel.conversation-panel-compact .chat-timeline {\n    flex: 1 1 auto;\n    overflow-y: auto;\n}"
+    assert compact_rule in css

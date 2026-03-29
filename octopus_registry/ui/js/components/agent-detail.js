@@ -13,6 +13,10 @@ function renderAgentDetail(container, params) {
     let openConversationBusy = false;
     let lastDetailSignature = '';
     let lastConversationSignature = '';
+    let conversationListEl = null;
+    let taskThreadListEl = null;
+    let taskThreadGroupEl = null;
+    let conversationPaginationEl = null;
 
     function buildConversationTypeBadge(item) {
         if (String(item.conversation_type || 'conversation') !== 'task_thread') {
@@ -196,40 +200,40 @@ function renderAgentDetail(container, params) {
         conversationsLabel.textContent = 'Conversations';
         conversationsGroup.appendChild(conversationsLabel);
         const list = document.createElement('div');
-        list.id = 'agent-conversations-list';
         list.className = 'list-container';
+        conversationListEl = list;
         conversationsGroup.appendChild(list);
         groups.appendChild(conversationsGroup);
 
         const taskThreadsGroup = document.createElement('div');
-        taskThreadsGroup.id = 'agent-task-threads-group';
         taskThreadsGroup.className = 'agent-detail-conversation-group';
         taskThreadsGroup.dataset.key = 'task-threads';
         taskThreadsGroup.hidden = true;
+        taskThreadGroupEl = taskThreadsGroup;
         const taskThreadsLabel = document.createElement('div');
         taskThreadsLabel.className = 'agent-detail-conversation-group-title';
         taskThreadsLabel.textContent = 'Task threads';
         taskThreadsGroup.appendChild(taskThreadsLabel);
         const taskList = document.createElement('div');
-        taskList.id = 'agent-task-threads-list';
         taskList.className = 'list-container';
+        taskThreadListEl = taskList;
         taskThreadsGroup.appendChild(taskList);
         groups.appendChild(taskThreadsGroup);
 
         section.appendChild(groups);
 
         const pag = document.createElement('div');
-        pag.id = 'agent-conversations-pagination';
         pag.className = 'pagination-shell';
+        conversationPaginationEl = pag;
         section.appendChild(pag);
         return section;
     }
 
     function renderConversationRows(conversations, data) {
-        const list = document.getElementById('agent-conversations-list');
-        const taskList = document.getElementById('agent-task-threads-list');
-        const taskThreadsGroup = document.getElementById('agent-task-threads-group');
-        const pag = document.getElementById('agent-conversations-pagination');
+        const list = conversationListEl;
+        const taskList = taskThreadListEl;
+        const taskThreadsGroup = taskThreadGroupEl;
+        const pag = conversationPaginationEl;
         if (!list || !taskList || !taskThreadsGroup || !pag) return;
 
         const signature = UI.dataSignature({
@@ -345,8 +349,8 @@ function renderAgentDetail(container, params) {
     }
 
     async function loadConversations({ soft = false } = {}) {
-        const list = document.getElementById('agent-conversations-list');
-        const pag = document.getElementById('agent-conversations-pagination');
+        const list = conversationListEl;
+        const pag = conversationPaginationEl;
         if (!list || !pag) return;
         try {
             const data = await API.getAgentConversations(agentId, { cursor: convosCursor, limit: convosLimit });

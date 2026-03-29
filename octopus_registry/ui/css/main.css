@@ -1353,8 +1353,8 @@ select {
 }
 
 .conversation-panel.conversation-panel-compact .chat-timeline {
-    flex: 0 0 auto;
-    overflow: visible;
+    flex: 1 1 auto;
+    overflow-y: auto;
 }
 
 .chat-timeline,

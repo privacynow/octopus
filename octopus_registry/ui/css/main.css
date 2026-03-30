@@ -1261,11 +1261,18 @@ select {
     gap: var(--space-3);
 }
 
-.dashboard-work-grid {
+.dashboard-board {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
     gap: var(--space-3);
     align-items: start;
+}
+
+.dashboard-column {
+    display: grid;
+    gap: var(--space-3);
+    align-content: start;
+    min-width: 0;
 }
 
 .conversation-screen {
@@ -2239,7 +2246,7 @@ select {
         padding: var(--space-5);
     }
 
-    .dashboard-work-grid,
+    .dashboard-board,
     .task-board,
     .task-board-conversation {
         grid-template-columns: 1fr;

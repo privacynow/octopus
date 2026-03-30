@@ -157,9 +157,38 @@ def test_dashboard_surfaces_recently_completed_tasks() -> None:
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
     ).read_text(encoding="utf-8")
 
-    assert "Recently completed" in dashboard
+    assert "createGroupedSection(" in dashboard
+    assert "'Tasks'" in dashboard
+    assert "label: 'Recently completed'" in dashboard
     assert "completed_since_iso: recentCompletedSinceIso()" in dashboard
     assert "status: 'completed'" in dashboard
+    assert "status: 'cancelled'" in dashboard
+    assert "status: 'timed_out'" in dashboard
+    assert "function renderRunningSection(" not in dashboard
+    assert "function renderRecentCompletedSection(" not in dashboard
+
+
+def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "dashboardBoard.className = 'dashboard-board';" in dashboard
+    assert "primaryColumn.className = 'dashboard-column';" in dashboard
+    assert "secondaryColumn.className = 'dashboard-column';" in dashboard
+    assert "function refreshSnapshot(" in dashboard
+    assert "refreshSummaryOnly" not in dashboard
+    assert "refreshAgents" not in dashboard
+    assert "refreshConversations" not in dashboard
+    assert "refreshTasks" not in dashboard
+    assert "refreshApprovals" not in dashboard
+    assert ".dashboard-board {" in css
+    assert ".dashboard-column {" in css
+    assert ".dashboard-work-grid {" not in css
 
 
 def test_conversation_views_distinguish_task_threads() -> None:

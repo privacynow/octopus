@@ -96,12 +96,10 @@ from .http_support import (
     ProviderGuidanceDraftUpdateRequest,
     ProviderGuidancePreviewRequest,
     RuntimeSkillDraftUpdateRequest,
-    float_value as _float_value,
-    int_value as _int_value,
+    aggregate_usage_rows as _aggregate_usage_rows,
     json_payload as _json_payload,
     operator_actor_key as _operator_actor_key,
     paginated_response as _paginated_response,
-    provider_reports_cost as _provider_reports_cost,
     require_own_resource as _require_own_resource,
     scoped_agent_id as _scoped_agent_id,
     secure_html_response as _secure_html_response,
@@ -1000,39 +998,7 @@ def resource_usage(
         since_iso = since
     until_iso = until or ""
     rows = store.get_usage_summary(since_iso, until_iso=until_iso)
-    daily_total = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "cost_available": False}
-    by_conversation: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        metadata = row.get("metadata") or {}
-        prompt_tokens = _int_value(metadata.get("prompt_tokens"))
-        completion_tokens = _int_value(metadata.get("completion_tokens"))
-        cost_usd = _float_value(metadata.get("cost_usd"))
-        cost_available = _provider_reports_cost(metadata)
-        daily_total["prompt_tokens"] += prompt_tokens
-        daily_total["completion_tokens"] += completion_tokens
-        if cost_available:
-            daily_total["cost_usd"] += cost_usd
-            daily_total["cost_available"] = True
-        item = by_conversation.setdefault(
-            row["conversation_id"],
-            {"conversation_id": row["conversation_id"], "title": row.get("title", ""), "prompt_tokens": 0,
-             "completion_tokens": 0, "cost_usd": 0.0, "cost_available": False},
-        )
-        item["prompt_tokens"] += prompt_tokens
-        item["completion_tokens"] += completion_tokens
-        if cost_available:
-            item["cost_usd"] += cost_usd
-            item["cost_available"] = True
-    return {
-        "daily_total": daily_total,
-        "by_conversation": sorted(
-            by_conversation.values(),
-            key=lambda item: (
-                -(item["prompt_tokens"] + item["completion_tokens"]),
-                item["conversation_id"],
-            ),
-        ),
-    }
+    return _aggregate_usage_rows(rows)
 
 
 @app.get("/v1/summary")

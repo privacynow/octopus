@@ -853,6 +853,8 @@ async def test_modern_schema_new():
     assert any("draft response item" in u for u in progress1.updates)
     assert result1.prompt_tokens == 11779
     assert result1.completion_tokens == 17
+    assert result1.cached_prompt_tokens == 4480
+    assert result1.cached_completion_tokens is None
     assert result1.cost_usd == 0.0
 
 

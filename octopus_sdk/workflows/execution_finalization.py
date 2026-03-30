@@ -142,6 +142,8 @@ async def finalize_execution(
                     follow_up_questions=(),
                     prompt_tokens=outcome.prompt_tokens,
                     completion_tokens=outcome.completion_tokens,
+                    cached_prompt_tokens=outcome.cached_prompt_tokens,
+                    cached_completion_tokens=outcome.cached_completion_tokens,
                     cost_usd=outcome.cost_usd,
                     provider=context.config.provider_name,
                 ),

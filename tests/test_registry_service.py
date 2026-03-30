@@ -1329,6 +1329,7 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
                     "metadata": {
                         "prompt_tokens": 11,
                         "completion_tokens": 7,
+                        "cached_prompt_tokens": 5,
                         "cost_usd": 0.25,
                         "provider": "codex",
                     },
@@ -1436,6 +1437,10 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
     assert payload["usage_24h"] == {
         "prompt_tokens": 14,
         "completion_tokens": 9,
+        "cached_prompt_tokens": 5,
+        "cached_completion_tokens": 0,
+        "cached_prompt_tokens_available": True,
+        "cached_completion_tokens_available": False,
         "cost_usd": 0.5,
         "cost_available": True,
     }
@@ -1495,6 +1500,7 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
             "full_text": "4",
             "prompt_tokens": 13,
             "completion_tokens": 5,
+            "cached_prompt_tokens": 8,
             "cost_usd": 0.17,
             "provider": "codex",
             "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -1509,6 +1515,10 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
     assert payload["daily_total"] == {
         "prompt_tokens": 13,
         "completion_tokens": 5,
+        "cached_prompt_tokens": 8,
+        "cached_completion_tokens": 0,
+        "cached_prompt_tokens_available": True,
+        "cached_completion_tokens_available": False,
         "cost_usd": 0.0,
         "cost_available": False,
     }
@@ -1518,6 +1528,10 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
         "title": "Usage rollup conversation",
         "prompt_tokens": 13,
         "completion_tokens": 5,
+        "cached_prompt_tokens": 8,
+        "cached_completion_tokens": 0,
+        "cached_prompt_tokens_available": True,
+        "cached_completion_tokens_available": False,
         "cost_usd": 0.0,
         "cost_available": False,
     }

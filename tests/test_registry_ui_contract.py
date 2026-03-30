@@ -211,6 +211,26 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "value: String(summary.agents?.connected || 0)" not in dashboard
 
 
+def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
+
+    assert "cached_prompt_tokens_available" in usage_view
+    assert "cached_completion_tokens_available" in usage_view
+    assert "uncached" in usage_view
+    assert "cached in" in dashboard
+    assert "Input uncached" in event_renderers
+    assert "Reply uncached" in event_renderers
+
+
 def test_conversation_views_distinguish_task_threads() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_list = (

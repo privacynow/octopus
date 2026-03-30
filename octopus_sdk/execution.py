@@ -130,6 +130,8 @@ class RequestExecutionOutcome:
     denials: tuple[DenialRecord, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int | None = None
+    cached_completion_tokens: int | None = None
     cost_usd: float = 0.0
 
 
@@ -491,6 +493,8 @@ async def execute_request(
     await event_sink.on_provider_response(
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        cached_prompt_tokens=result.cached_prompt_tokens,
+        cached_completion_tokens=result.cached_completion_tokens,
         cost_usd=result.cost_usd,
         provider=prov.name,
     )
@@ -547,6 +551,8 @@ async def execute_request(
             denials=tuple(result.denials),
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
+            cached_prompt_tokens=result.cached_prompt_tokens,
+            cached_completion_tokens=result.cached_completion_tokens,
             cost_usd=result.cost_usd,
         )
 
@@ -582,6 +588,8 @@ async def execute_request(
         reply_text=cleaned_reply,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        cached_prompt_tokens=result.cached_prompt_tokens,
+        cached_completion_tokens=result.cached_completion_tokens,
         cost_usd=result.cost_usd,
     )
 

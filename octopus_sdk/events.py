@@ -43,6 +43,8 @@ class ProviderResponseMetadata(BaseModel):
 
     prompt_tokens: int = Field(..., ge=0)
     completion_tokens: int = Field(..., ge=0)
+    cached_prompt_tokens: int | None = Field(default=None, ge=0)
+    cached_completion_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float = Field(..., ge=0.0)
     provider: str = Field(..., min_length=1)
 
@@ -129,6 +131,12 @@ class TaskStatusMetadata(BaseModel):
     status: str = Field(..., min_length=1)
     progress: int | None = None
     transition_id: str = ""
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    cached_prompt_tokens: int | None = Field(default=None, ge=0)
+    cached_completion_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0.0)
+    provider: str | None = None
 
 
 class ErrorMetadata(BaseModel):

@@ -218,9 +218,24 @@ function renderDashboard(container) {
     function renderSummaryRail(summary) {
         const promptTokens = Number(summary.usage_24h?.prompt_tokens || 0);
         const completionTokens = Number(summary.usage_24h?.completion_tokens || 0);
+        const cachedPromptTokens = Number(summary.usage_24h?.cached_prompt_tokens || 0);
+        const cachedCompletionTokens = Number(summary.usage_24h?.cached_completion_tokens || 0);
+        const cachedPromptAvailable = summary.usage_24h?.cached_prompt_tokens_available === true;
+        const cachedCompletionAvailable = summary.usage_24h?.cached_completion_tokens_available === true;
         const totalTokens = promptTokens + completionTokens;
         const unhealthyAgents = Number(summary.agents?.degraded || 0) + Number(summary.agents?.disconnected || 0);
         const costAvailable = summary.usage_24h?.cost_available !== false;
+        let tokenDetail = `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
+        if (cachedPromptAvailable || cachedCompletionAvailable) {
+            const detailParts = [tokenDetail];
+            if (cachedPromptAvailable) {
+                detailParts.push(`${cachedPromptTokens.toLocaleString()} cached in`);
+            }
+            if (cachedCompletionAvailable) {
+                detailParts.push(`${cachedCompletionTokens.toLocaleString()} cached out`);
+            }
+            tokenDetail = detailParts.join(' · ');
+        }
         const items = [
             {
                 key: 'queued-backlog',
@@ -240,7 +255,7 @@ function renderDashboard(container) {
                 key: 'tokens-24h',
                 value: totalTokens.toLocaleString(),
                 label: 'Tokens · 24h',
-                detail: `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`,
+                detail: tokenDetail,
                 href: '/ui/usage',
             },
             {

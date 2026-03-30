@@ -47,6 +47,22 @@ function renderUsageView(container) {
     tableEl.id = 'usage-table';
     tableShell.appendChild(tableEl);
 
+    function tokenDetail(total, cached, available) {
+        if (!available) {
+            return '';
+        }
+        const uncached = Math.max(0, Number(total || 0) - Number(cached || 0));
+        return `${uncached.toLocaleString()} uncached · ${Number(cached || 0).toLocaleString()} cached`;
+    }
+
+    function tokenCell(total, cached, available) {
+        if (!available) {
+            return Number(total || 0).toLocaleString();
+        }
+        const uncached = Math.max(0, Number(total || 0) - Number(cached || 0));
+        return `${Number(total || 0).toLocaleString()} total · ${uncached.toLocaleString()} uncached · ${Number(cached || 0).toLocaleString()} cached`;
+    }
+
     function _rangeToParams(range) {
         const now = new Date();
         const since = new Date(now);
@@ -68,13 +84,36 @@ function renderUsageView(container) {
     function renderSummary(daily) {
         const costAvailable = daily.cost_available !== false;
         const items = [
-            ['prompt', (daily.prompt_tokens || 0).toLocaleString(), 'Prompt tokens'],
-            ['completion', (daily.completion_tokens || 0).toLocaleString(), 'Completion tokens'],
-            ['cost', costAvailable ? ('$' + (daily.cost_usd || 0).toFixed(4)) : '—', costAvailable ? 'Total cost' : 'Cost unavailable'],
+            {
+                key: 'prompt',
+                value: (daily.prompt_tokens || 0).toLocaleString(),
+                label: 'Prompt tokens',
+                detail: tokenDetail(
+                    daily.prompt_tokens || 0,
+                    daily.cached_prompt_tokens || 0,
+                    daily.cached_prompt_tokens_available === true,
+                ),
+            },
+            {
+                key: 'completion',
+                value: (daily.completion_tokens || 0).toLocaleString(),
+                label: 'Completion tokens',
+                detail: tokenDetail(
+                    daily.completion_tokens || 0,
+                    daily.cached_completion_tokens || 0,
+                    daily.cached_completion_tokens_available === true,
+                ),
+            },
+            {
+                key: 'cost',
+                value: costAvailable ? ('$' + (daily.cost_usd || 0).toFixed(4)) : '—',
+                label: costAvailable ? 'Total cost' : 'Cost unavailable',
+                detail: '',
+            },
         ];
-        UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map(([key, value, label]) => {
-            const card = UI.renderStatCard({ value, label });
-            card.dataset.key = key;
+        UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map((item) => {
+            const card = UI.renderStatCard(item);
+            card.dataset.key = item.key;
             return card;
         }));
     }
@@ -116,8 +155,16 @@ function renderUsageView(container) {
             tr.appendChild(linkTd);
 
             const cells = [
-                ['Prompt', (item.prompt_tokens || 0).toLocaleString()],
-                ['Completion', (item.completion_tokens || 0).toLocaleString()],
+                ['Prompt', tokenCell(
+                    item.prompt_tokens || 0,
+                    item.cached_prompt_tokens || 0,
+                    item.cached_prompt_tokens_available === true,
+                )],
+                ['Completion', tokenCell(
+                    item.completion_tokens || 0,
+                    item.cached_completion_tokens || 0,
+                    item.cached_completion_tokens_available === true,
+                )],
             ];
             if (nextState.showCost) {
                 cells.push([
@@ -145,7 +192,11 @@ function renderUsageView(container) {
                         id: String(item.conversation_id || ''),
                         title: String(item.title || ''),
                         prompt: Number(item.prompt_tokens || 0),
+                        cachedPrompt: Number(item.cached_prompt_tokens || 0),
+                        cachedPromptAvailable: item.cached_prompt_tokens_available === true,
                         completion: Number(item.completion_tokens || 0),
+                        cachedCompletion: Number(item.cached_completion_tokens || 0),
+                        cachedCompletionAvailable: item.cached_completion_tokens_available === true,
                         cost: Number(item.cost_usd || 0),
                         costAvailable: item.cost_available !== false,
                     })),

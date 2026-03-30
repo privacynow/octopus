@@ -547,13 +547,17 @@ class CodexProvider:
         tool_counter = 0
         usage_input = 0
         usage_output = 0
+        cached_usage_input: int | None = None
+        cached_usage_output: int | None = None
 
         def append_unique(values: list[str], value: str) -> None:
             if value and value not in values:
                 values.append(value)
 
         async def consume_stdout() -> None:
-            nonlocal thread_id, final_text, draft_text, usage_input, usage_output
+            nonlocal thread_id, final_text, draft_text
+            nonlocal usage_input, usage_output
+            nonlocal cached_usage_input, cached_usage_output
             while True:
                 read_coro = proc.stdout.readline()
                 if cancel is not None:
@@ -628,11 +632,19 @@ class CodexProvider:
                     total = msg.get("info", {}).get("total_token_usage", {})
                     usage_input = int(total.get("input_tokens", 0) or 0)
                     usage_output = int(total.get("output_tokens", 0) or 0)
+                    if "cached_input_tokens" in total:
+                        cached_usage_input = int(total.get("cached_input_tokens", 0) or 0)
+                    if "cached_output_tokens" in total:
+                        cached_usage_output = int(total.get("cached_output_tokens", 0) or 0)
                 elif etype == "turn_completed":
                     usage = event.get("usage", {})
                     if isinstance(usage, dict):
                         usage_input = int(usage.get("input_tokens", 0) or 0)
                         usage_output = int(usage.get("output_tokens", 0) or 0)
+                        if "cached_input_tokens" in usage:
+                            cached_usage_input = int(usage.get("cached_input_tokens", 0) or 0)
+                        if "cached_output_tokens" in usage:
+                            cached_usage_output = int(usage.get("cached_output_tokens", 0) or 0)
 
                 thread_id = self._extract_thread_id(event) or thread_id
                 if self._normalize_type(event.get("type")) == "session_meta":
@@ -721,6 +733,8 @@ class CodexProvider:
             provider_state_updates=state_updates,
             prompt_tokens=usage_input,
             completion_tokens=usage_output,
+            cached_prompt_tokens=cached_usage_input,
+            cached_completion_tokens=cached_usage_output,
             tool_executions=tool_records,
         )
 

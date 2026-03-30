@@ -512,6 +512,17 @@ class ClaudeProvider:
         final_text = result_data.get("result", accumulated) or accumulated
         denials = result_data.get("permission_denials", [])
         usage = result_data.get("usage", {})
+        cached_prompt_tokens = None
+        cached_completion_tokens = None
+        if isinstance(usage, dict):
+            if "cache_read_input_tokens" in usage:
+                cached_prompt_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
+            elif "cached_input_tokens" in usage:
+                cached_prompt_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+            if "cache_read_output_tokens" in usage:
+                cached_completion_tokens = int(usage.get("cache_read_output_tokens", 0) or 0)
+            elif "cached_output_tokens" in usage:
+                cached_completion_tokens = int(usage.get("cached_output_tokens", 0) or 0)
 
         return RunResult(
             text=final_text,
@@ -519,6 +530,8 @@ class ClaudeProvider:
             provider_state_updates={"started": True},
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
+            cached_prompt_tokens=cached_prompt_tokens,
+            cached_completion_tokens=cached_completion_tokens,
             cost_usd=float(result_data.get("total_cost_usd") or 0.0),
             tool_executions=tool_executions,
         )
@@ -569,5 +582,23 @@ class ClaudeProvider:
             text=final_text,
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
+            cached_prompt_tokens=(
+                int(usage.get("cache_read_input_tokens", 0) or 0)
+                if isinstance(usage, dict) and "cache_read_input_tokens" in usage
+                else (
+                    int(usage.get("cached_input_tokens", 0) or 0)
+                    if isinstance(usage, dict) and "cached_input_tokens" in usage
+                    else None
+                )
+            ),
+            cached_completion_tokens=(
+                int(usage.get("cache_read_output_tokens", 0) or 0)
+                if isinstance(usage, dict) and "cache_read_output_tokens" in usage
+                else (
+                    int(usage.get("cached_output_tokens", 0) or 0)
+                    if isinstance(usage, dict) and "cached_output_tokens" in usage
+                    else None
+                )
+            ),
             cost_usd=float(result_data.get("total_cost_usd") or 0.0),
         )

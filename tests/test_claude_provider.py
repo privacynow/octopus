@@ -321,6 +321,50 @@ async def test_mcp_temp_file_is_removed_after_run_exception():
     assert not os.path.exists(seen["path"])
 
 
+async def test_run_maps_cached_prompt_usage_when_available():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return (
+            "ok",
+            {
+                "result": "ok",
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 8,
+                    "cache_read_input_tokens": 48,
+                },
+                "total_cost_usd": 0.12,
+            },
+            0,
+            "",
+            [],
+        )
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+    )
+
+    assert result.prompt_tokens == 120
+    assert result.completion_tokens == 8
+    assert result.cached_prompt_tokens == 48
+    assert result.cached_completion_tokens is None
+    assert result.cost_usd == 0.12
+
+
 # -- Claude command safety (test_high_risk.py) --
 
 

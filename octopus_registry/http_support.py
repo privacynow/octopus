@@ -78,6 +78,77 @@ def provider_reports_cost(metadata: dict[str, Any] | None) -> bool:
     return float_value((metadata or {}).get("cost_usd")) > 0.0
 
 
+def aggregate_usage_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    daily_total = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_prompt_tokens": 0,
+        "cached_completion_tokens": 0,
+        "cached_prompt_tokens_available": False,
+        "cached_completion_tokens_available": False,
+        "cost_usd": 0.0,
+        "cost_available": False,
+    }
+    by_conversation: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        metadata = row.get("metadata") or {}
+        prompt_tokens = int_value(metadata.get("prompt_tokens"))
+        completion_tokens = int_value(metadata.get("completion_tokens"))
+        cached_prompt_tokens = int_value(metadata.get("cached_prompt_tokens"))
+        cached_completion_tokens = int_value(metadata.get("cached_completion_tokens"))
+        cached_prompt_available = "cached_prompt_tokens" in metadata
+        cached_completion_available = "cached_completion_tokens" in metadata
+        cost_usd = float_value(metadata.get("cost_usd"))
+        cost_available = provider_reports_cost(metadata)
+        daily_total["prompt_tokens"] += prompt_tokens
+        daily_total["completion_tokens"] += completion_tokens
+        if cached_prompt_available:
+            daily_total["cached_prompt_tokens"] += cached_prompt_tokens
+            daily_total["cached_prompt_tokens_available"] = True
+        if cached_completion_available:
+            daily_total["cached_completion_tokens"] += cached_completion_tokens
+            daily_total["cached_completion_tokens_available"] = True
+        if cost_available:
+            daily_total["cost_usd"] += cost_usd
+            daily_total["cost_available"] = True
+        item = by_conversation.setdefault(
+            row["conversation_id"],
+            {
+                "conversation_id": row["conversation_id"],
+                "title": row.get("title", ""),
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cached_prompt_tokens": 0,
+                "cached_completion_tokens": 0,
+                "cached_prompt_tokens_available": False,
+                "cached_completion_tokens_available": False,
+                "cost_usd": 0.0,
+                "cost_available": False,
+            },
+        )
+        item["prompt_tokens"] += prompt_tokens
+        item["completion_tokens"] += completion_tokens
+        if cached_prompt_available:
+            item["cached_prompt_tokens"] += cached_prompt_tokens
+            item["cached_prompt_tokens_available"] = True
+        if cached_completion_available:
+            item["cached_completion_tokens"] += cached_completion_tokens
+            item["cached_completion_tokens_available"] = True
+        if cost_available:
+            item["cost_usd"] += cost_usd
+            item["cost_available"] = True
+    return {
+        "daily_total": daily_total,
+        "by_conversation": sorted(
+            by_conversation.values(),
+            key=lambda item: (
+                -(item["prompt_tokens"] + item["completion_tokens"]),
+                item["conversation_id"],
+            ),
+        ),
+    }
+
+
 def operator_actor_key(raw: str = "") -> str:
     token = parse_actor_key(raw)
     return token or "reg:registry-ui"

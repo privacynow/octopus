@@ -159,11 +159,12 @@ def test_dashboard_surfaces_recently_completed_tasks() -> None:
 
     assert "createGroupedSection(" in dashboard
     assert "'Tasks'" in dashboard
+    assert "loadActiveTasks()" in dashboard
+    assert "loadTasksByStatus(['queued', 'submitted', 'leased', 'running'])" in dashboard
+    assert "loadTasksByStatus(['failed', 'cancelled', 'timed_out'])" in dashboard
     assert "label: 'Recently completed'" in dashboard
     assert "completed_since_iso: recentCompletedSinceIso()" in dashboard
     assert "status: 'completed'" in dashboard
-    assert "status: 'cancelled'" in dashboard
-    assert "status: 'timed_out'" in dashboard
     assert "function renderRunningSection(" not in dashboard
     assert "function renderRecentCompletedSection(" not in dashboard
 
@@ -189,6 +190,25 @@ def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> No
     assert ".dashboard-board {" in css
     assert ".dashboard-column {" in css
     assert ".dashboard-work-grid {" not in css
+
+
+def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function renderApprovalSection(" in dashboard
+    assert "function renderNeedsAttentionSection(" not in dashboard
+    assert "buildNeedsAttention" not in dashboard
+    assert "label: 'Queued backlog'" in dashboard
+    assert "label: 'Unhealthy agents'" in dashboard
+    assert "label: 'Tokens · 24h'" in dashboard
+    assert "label: 'Usage cost · 24h'" in dashboard
+    assert "value: String(summary.conversations?.open || 0)" not in dashboard
+    assert "value: String(summary.tasks?.running || 0)" not in dashboard
+    assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard
+    assert "value: String(summary.agents?.connected || 0)" not in dashboard
 
 
 def test_conversation_views_distinguish_task_threads() -> None:

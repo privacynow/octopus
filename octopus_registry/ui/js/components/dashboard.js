@@ -45,9 +45,9 @@ function renderDashboard(container) {
     secondaryColumn.dataset.key = 'dashboard-column-secondary';
     dashboardBoard.appendChild(secondaryColumn);
 
-    const needsAttentionHost = document.createElement('div');
-    needsAttentionHost.dataset.key = 'needs-attention-host';
-    primaryColumn.appendChild(needsAttentionHost);
+    const approvalsHost = document.createElement('div');
+    approvalsHost.dataset.key = 'approvals-host';
+    primaryColumn.appendChild(approvalsHost);
 
     const tasksHost = document.createElement('div');
     tasksHost.dataset.key = 'tasks-host';
@@ -137,53 +137,6 @@ function renderDashboard(container) {
         return row;
     }
 
-    function buildNeedsAttention(approvalsData, tasksData, agentsData) {
-        const rows = [];
-        (approvalsData.approvals || []).slice(0, 3).forEach((item) => {
-            rows.push(createRow({
-                key: `approval:${item.request_id || item.conversation_id}`,
-                title: item.conversation_title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Approval waiting',
-                subtitle: [
-                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
-                    item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
-                ].filter(Boolean).join(' · '),
-                badge: 'Approval',
-                badgeClass: 'badge-queued',
-                href: '/ui/approvals',
-            }));
-        });
-        (tasksData.tasks || []).slice(0, 3).forEach((item) => {
-            rows.push(createRow({
-                key: `task:${item.routed_task_id}`,
-                title: item.title || 'Task needs follow-up',
-                subtitle: [
-                    UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
-                    UI.relativeTime(item.updated_at || item.created_at),
-                ].filter(Boolean).join(' · '),
-                badge: item.status || 'failed',
-                badgeClass: 'badge-' + (item.status || 'failed'),
-                href: item.parent_conversation_id ? '/ui/conversations/' + item.parent_conversation_id : '/ui/tasks',
-            }));
-        });
-        const riskyAgents = (agentsData.agents || agentsData || []).filter((agent) => ['degraded', 'disconnected'].includes(agent.connectivity_state || ''));
-        riskyAgents.slice(0, 2).forEach((item) => {
-            rows.push(createRow({
-                key: `agent:${item.agent_id}`,
-                title: item.display_name || item.slug || 'Agent',
-                subtitle: [
-                    item.role || 'agent',
-                    item.provider || '',
-                    item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
-                ].filter(Boolean).join(' · '),
-                badge: item.connectivity_state || 'connected',
-                badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
-                href: '/ui/agents/' + item.agent_id,
-            }));
-        });
-
-        return rows.slice(0, 6);
-    }
-
     function coerceTaskList(payload) {
         return payload && Array.isArray(payload.tasks)
             ? payload.tasks
@@ -196,17 +149,13 @@ function renderDashboard(container) {
         return [...(items || [])].sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
     }
 
-    async function loadFollowUpTasks() {
-        const [failed, cancelled, timedOut] = await Promise.all([
-            API.listTasks({ limit: 6, status: 'failed' }),
-            API.listTasks({ limit: 6, status: 'cancelled' }).catch(() => ({ tasks: [] })),
-            API.listTasks({ limit: 6, status: 'timed_out' }).catch(() => ({ tasks: [] })),
-        ]);
+    async function loadTasksByStatus(statuses) {
+        const payloads = await Promise.all(
+            (statuses || []).map((status) => API.listTasks({ limit: 6, status }).catch(() => ({ tasks: [] }))),
+        );
         const seen = new Set();
         const tasks = sortTasks([
-            ...coerceTaskList(failed),
-            ...coerceTaskList(cancelled),
-            ...coerceTaskList(timedOut),
+            ...payloads.flatMap((payload) => coerceTaskList(payload)),
         ]).filter((item) => {
             const taskId = String(item.routed_task_id || '');
             if (!taskId || seen.has(taskId)) {
@@ -216,6 +165,14 @@ function renderDashboard(container) {
             return true;
         });
         return { tasks };
+    }
+
+    async function loadActiveTasks() {
+        return loadTasksByStatus(['queued', 'submitted', 'leased', 'running']);
+    }
+
+    async function loadFollowUpTasks() {
+        return loadTasksByStatus(['failed', 'cancelled', 'timed_out']);
     }
 
     function taskRowsState(items) {
@@ -249,7 +206,7 @@ function renderDashboard(container) {
         approvals: { approvals: [] },
         conversations: { conversations: [] },
         followUpTasks: { tasks: [] },
-        runningTasks: { tasks: [] },
+        activeTasks: { tasks: [] },
         recentCompletedTasks: { tasks: [] },
         agents: { agents: [] },
     };
@@ -259,34 +216,38 @@ function renderDashboard(container) {
     }
 
     function renderSummaryRail(summary) {
+        const promptTokens = Number(summary.usage_24h?.prompt_tokens || 0);
+        const completionTokens = Number(summary.usage_24h?.completion_tokens || 0);
+        const totalTokens = promptTokens + completionTokens;
+        const unhealthyAgents = Number(summary.agents?.degraded || 0) + Number(summary.agents?.disconnected || 0);
         const items = [
             {
-                key: 'open-conversations',
-                value: String(summary.conversations?.open || 0),
-                label: 'Open conversations',
-                detail: `${summary.conversations?.pending_approvals || 0} waiting on review`,
-                href: '/ui/conversations?status=open',
-            },
-            {
-                key: 'running-tasks',
-                value: String(summary.tasks?.running || 0),
-                label: 'Running tasks',
-                detail: `${summary.tasks?.pending || 0} pending`,
+                key: 'queued-backlog',
+                value: String(summary.tasks?.pending || 0),
+                label: 'Queued backlog',
+                detail: `${summary.tasks?.running || 0} running now`,
                 href: '/ui/tasks?status=running',
             },
             {
-                key: 'needs-follow-up',
-                value: String(summary.tasks?.failed_24h || 0),
-                label: 'Needs follow-up',
-                detail: 'failed in the last day',
-                href: '/ui/tasks?status=failed',
+                key: 'unhealthy-agents',
+                value: String(unhealthyAgents),
+                label: 'Unhealthy agents',
+                detail: `${summary.agents?.connected || 0} connected`,
+                href: '/ui/agents',
             },
             {
-                key: 'connected-agents',
-                value: String(summary.agents?.connected || 0),
-                label: 'Connected agents',
-                detail: `${(summary.agents?.degraded || 0) + (summary.agents?.disconnected || 0)} unhealthy`,
-                href: '/ui/agents',
+                key: 'tokens-24h',
+                value: totalTokens.toLocaleString(),
+                label: 'Tokens · 24h',
+                detail: `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`,
+                href: '/ui/usage',
+            },
+            {
+                key: 'cost-24h',
+                value: '$' + Number(summary.usage_24h?.cost_usd || 0).toFixed(4),
+                label: 'Usage cost · 24h',
+                detail: `${summary.conversations?.active || 0} active conversations`,
+                href: '/ui/usage',
             },
         ];
         UI.memoizedRender(summaryRailHost, items, (nextItems) => nextItems.map((item) => {
@@ -296,41 +257,32 @@ function renderDashboard(container) {
         }));
     }
 
-    function renderNeedsAttentionSection() {
-        const approvals = (dashboardState.approvals.approvals || []).slice(0, 3).map((item) => ({
+    function renderApprovalSection() {
+        const approvals = (dashboardState.approvals.approvals || []).slice(0, 6).map((item) => ({
             id: String(item.request_id || item.conversation_id || ''),
             title: String(item.conversation_title || ''),
             target: String(item.target_display_name || item.target_agent_id || ''),
             createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
             expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
         }));
-        const failedTasks = (dashboardState.followUpTasks.tasks || []).slice(0, 3).map((item) => ({
-            id: String(item.routed_task_id || ''),
-            title: String(item.title || ''),
-            target: String(item.target_display_name || item.target_agent_id || ''),
-            status: String(item.status || ''),
-            updatedLabel: UI.relativeTime(item.updated_at || item.created_at),
+        const approvalRows = (dashboardState.approvals.approvals || []).slice(0, 6).map((item) => createRow({
+            key: `approval:${item.request_id || item.conversation_id}`,
+            title: item.conversation_title || UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'Approval waiting',
+            subtitle: [
+                UI.visibleLabel(item.target_display_name, item.target_agent_id) || 'agent',
+                item.expires_at ? `expires ${UI.formatApprovalTime(item.expires_at)}` : UI.relativeTime(item.created_at),
+            ].filter(Boolean).join(' · '),
+            badge: 'Approval',
+            badgeClass: 'badge-queued',
+            href: '/ui/approvals',
         }));
-        const riskyAgents = ((dashboardState.agents.agents || dashboardState.agents || []).filter(
-            (agent) => ['degraded', 'disconnected'].includes(agent.connectivity_state || ''),
-        )).slice(0, 2).map((item) => ({
-            id: String(item.agent_id || ''),
-            display: String(item.display_name || item.slug || ''),
-            status: String(item.connectivity_state || ''),
-            heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
-        }));
-        const needsAttentionRows = buildNeedsAttention(
-            dashboardState.approvals,
-            { tasks: dashboardState.followUpTasks.tasks || dashboardState.followUpTasks || [] },
-            dashboardState.agents,
-        );
-        UI.memoizedRender(needsAttentionHost, { approvals, failedTasks, riskyAgents }, () => [
+        UI.memoizedRender(approvalsHost, approvals, () => [
             createSection(
-                'needs-attention',
-                'Needs attention',
+                'approvals',
+                'Approvals',
                 '/ui/approvals',
-                needsAttentionRows,
-                'Nothing urgent right now.',
+                approvalRows,
+                'Nothing waiting on review.',
             ),
         ]);
     }
@@ -368,19 +320,19 @@ function renderDashboard(container) {
     }
 
     function renderTaskSection() {
-        const runningTasks = coerceTaskList(dashboardState.runningTasks);
+        const activeTasks = coerceTaskList(dashboardState.activeTasks);
         const followUpTasks = coerceTaskList(dashboardState.followUpTasks);
         const recentCompletedTasks = coerceTaskList(dashboardState.recentCompletedTasks);
         const rowsState = {
-            running: taskRowsState(runningTasks),
+            active: taskRowsState(activeTasks),
             followUp: taskRowsState(followUpTasks),
             completed: taskRowsState(recentCompletedTasks),
         };
         const groups = [
             {
-                key: 'running',
+                key: 'active',
                 label: 'Active',
-                rows: createTaskRows(runningTasks, 'Running task'),
+                rows: createTaskRows(activeTasks, 'Active task'),
             },
             {
                 key: 'follow-up',
@@ -440,13 +392,13 @@ function renderDashboard(container) {
     function renderDashboardView() {
         const summary = dashboardState.summary || {};
         renderSummaryRail(summary);
-        renderNeedsAttentionSection();
+        renderApprovalSection();
         renderTaskSection();
         renderConversationSection();
         renderAgentSection();
     }
 
-    function applySnapshot({ summary, approvals, conversations, followUpTasks, runningTasks, recentCompletedTasks, agents }) {
+    function applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents }) {
         if (!dashboardGrid.isConnected) {
             UI.reconcileChildren(content, [dashboardGrid]);
         }
@@ -454,7 +406,7 @@ function renderDashboard(container) {
         dashboardState.approvals = approvals;
         dashboardState.conversations = conversations;
         dashboardState.followUpTasks = { tasks: followUpTasks.tasks || followUpTasks || [] };
-        dashboardState.runningTasks = { tasks: runningTasks.tasks || runningTasks || [] };
+        dashboardState.activeTasks = { tasks: activeTasks.tasks || activeTasks || [] };
         dashboardState.recentCompletedTasks = { tasks: recentCompletedTasks.tasks || recentCompletedTasks || [] };
         dashboardState.agents = agents;
         renderDashboardView();
@@ -462,16 +414,16 @@ function renderDashboard(container) {
 
     async function loadSnapshot({ soft = false } = {}) {
         try {
-            const [summary, approvals, conversations, followUpTasks, runningTasks, recentCompletedTasks, agents] = await Promise.all([
+            const [summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents] = await Promise.all([
                 API.getSummary(),
                 API.listApprovals({ limit: 4 }),
                 API.listConversations({ limit: 6, status: 'open' }),
                 loadFollowUpTasks(),
-                API.listTasks({ limit: 6, status: 'running' }).catch(() => ({ tasks: [] })),
+                loadActiveTasks(),
                 API.listTasks({ limit: 6, status: 'completed', completed_since_iso: recentCompletedSinceIso() }).catch(() => ({ tasks: [] })),
                 API.listAgents({ limit: 8 }),
             ]);
-            applySnapshot({ summary, approvals, conversations, followUpTasks, runningTasks, recentCompletedTasks, agents });
+            applySnapshot({ summary, approvals, conversations, followUpTasks, activeTasks, recentCompletedTasks, agents });
             hasLoaded = true;
         } catch (err) {
             if (soft && hasLoaded) {
@@ -479,7 +431,7 @@ function renderDashboard(container) {
                 return;
             }
             UI.clearMemoizedRender(summaryRailHost);
-            UI.clearMemoizedRender(needsAttentionHost);
+            UI.clearMemoizedRender(approvalsHost);
             UI.clearMemoizedRender(tasksHost);
             UI.clearMemoizedRender(conversationsHost);
             UI.clearMemoizedRender(agentsHost);

@@ -99,23 +99,5 @@ BANNER
     ;;
 esac
 
-echo "Verifying provider login..."
-# Quick version check only — do not run the full API ping here.
-# The login succeeded if auth files were written. A slow or
-# unreachable API should not block setup after a successful login.
-case "$provider" in
-  codex)
-    if codex --version >/dev/null 2>&1; then
-      echo "Provider login verified."
-    else
-      echo "Warning: could not verify codex CLI. Continuing anyway — auth files were saved." >&2
-    fi
-    ;;
-  claude)
-    if claude --version >/dev/null 2>&1; then
-      echo "Provider login verified."
-    else
-      echo "Warning: could not verify claude CLI. Continuing anyway — auth files were saved." >&2
-    fi
-    ;;
-esac
+echo "Provider auth files saved."
+echo "Octopus will run a live provider health check next."

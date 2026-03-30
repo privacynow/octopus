@@ -111,28 +111,34 @@ class ClaudeProvider:
 
         if not self._has_auth_artifacts():
             errors.append("Claude auth not found. Run 'claude' and complete /login.")
+            return errors
+
+        try:
+            returncode, stdout, stderr = await self._run_health_command(
+                "claude",
+                "-p",
+                "--output-format",
+                "text",
+                "--max-turns",
+                "1",
+                "--",
+                "reply with ok",
+                timeout=15,
+            )
+            combined = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part).strip()
+            if returncode != 0:
+                detail = trim_text(combined or "Claude is not logged in.", 200)
+                errors.append(f"Claude auth probe failed (rc={returncode}): {detail}")
+            else:
+                log.info("claude auth probe ok")
+        except (asyncio.TimeoutError, TimeoutError):
+            errors.append("Claude auth probe timed out")
+        except OSError as e:
+            errors.append(f"Claude auth probe failed: {e}")
         return errors
 
     async def check_runtime_health(self) -> list[str]:
-        errors = await self.check_auth_health()
-        if errors:
-            return errors
-        try:
-            model = self.config.model or "claude-sonnet-4-20250514"
-            returncode, _, stderr = await self._run_health_command(
-                "claude", "-p", "--model", model, "--max-turns", "1",
-                "--output-format", "text", "reply with ok",
-                timeout=15,
-            )
-            if returncode != 0:
-                errors.append(f"API ping failed (rc={returncode}): {stderr[:200]}")
-            else:
-                log.info("claude API ping ok")
-        except (asyncio.TimeoutError, TimeoutError):
-            errors.append("API ping timed out (15s)")
-        except OSError as e:
-            errors.append(f"API ping error: {e}")
-        return errors
+        return await self.check_auth_health()
 
     # -- subprocess env ----------------------------------------------------
 
@@ -500,10 +506,22 @@ class ClaudeProvider:
         if rc != 0:
             # Check both stderr and structured JSON errors for resume failure
             error_text = stderr
+            result_text = str(result_data.get("result", "") or "").strip()
+            error_kind = str(result_data.get("error", "") or "").strip()
             if result_data.get("errors"):
                 error_text = error_text + " " + " ".join(str(e) for e in result_data["errors"])
+            if result_text:
+                error_text = f"{error_text} {result_text}".strip()
+            if error_kind and error_kind not in error_text:
+                error_text = f"{error_text} ({error_kind})".strip()
+            if accumulated and accumulated not in error_text:
+                error_text = f"{error_text} {accumulated}".strip()
+            detail = trim_text(error_text, 300) if error_text else ""
+            text = f"[Claude error (rc={rc})]"
+            if detail:
+                text = f"{text}\n{detail}"
             return RunResult(
-                text=f"[Claude error (rc={rc})]",
+                text=text,
                 returncode=rc,
                 resume_failed=is_resume and self._is_resume_failure(error_text),
                 tool_executions=tool_executions,

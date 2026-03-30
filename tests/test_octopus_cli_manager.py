@@ -44,6 +44,13 @@ class _ComposeDockerRunner:
 
         return CompletedProcess(["docker"], 0, "", "")
 
+    def provider_compose(self, provider, *args, **kwargs):  # noqa: ANN001
+        del kwargs
+        self.commands.append((f"provider:{provider}", *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(["docker"], 0, "", "")
+
     def image_labels(self, image: str) -> dict[str, str]:
         del image
         return {}
@@ -487,6 +494,43 @@ def test_add_bot_interactive_prepares_local_registry_before_start(tmp_path: Path
     assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "local-secret"
     assert started == ["example-bot"]
     assert verified == [("example-bot", "local")]
+
+
+def test_ensure_provider_auth_ready_uses_live_health_for_existing_auth(tmp_path: Path) -> None:
+    auth_dir = tmp_path / ".deploy" / "provider-auth" / "claude"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    (auth_dir / ".claude.json").write_text('{"token":"secret"}', encoding="utf-8")
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
+    manager.provider_health_output = lambda provider: (True, "ok")  # type: ignore[method-assign]
+
+    manager.ensure_provider_auth_ready("claude")
+
+    assert manager.docker.commands == []
+
+
+def test_ensure_provider_auth_ready_retries_login_when_existing_auth_is_invalid(tmp_path: Path) -> None:
+    auth_dir = tmp_path / ".deploy" / "provider-auth" / "claude"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    (auth_dir / ".claude.json").write_text('{"token":"secret"}', encoding="utf-8")
+    docker = _ComposeDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+    manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
+    health_results = iter([(False, "not logged in"), (True, "ok")])
+    manager.provider_health_output = lambda provider: next(health_results)  # type: ignore[method-assign]
+
+    manager.ensure_provider_auth_ready("claude")
+
+    assert docker.commands == [
+        (
+            "provider:claude",
+            "run",
+            "--rm",
+            "bot-provider",
+            "sh",
+            "/app/scripts/provider/container_provider_login.sh",
+        )
+    ]
 
 
 def test_disconnect_bot_registry_by_id_removes_only_target_record(tmp_path: Path) -> None:

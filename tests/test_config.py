@@ -517,8 +517,8 @@ def test_main_calls_run_polling_in_poll_mode():
     with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    runtime.provider.check_auth_health.assert_awaited_once()
-    runtime.provider.check_runtime_health.assert_not_awaited()
+    runtime.provider.check_auth_health.assert_not_awaited()
+    runtime.provider.check_runtime_health.assert_awaited_once()
     _assert_dispatcher_runner_called(runtime)
     call = runtime.build_bootstrap.call_args
     assert call is not None
@@ -603,8 +603,8 @@ def test_main_calls_run_webhook_in_webhook_mode():
     with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    runtime.provider.check_auth_health.assert_awaited_once()
-    runtime.provider.check_runtime_health.assert_not_awaited()
+    runtime.provider.check_auth_health.assert_not_awaited()
+    runtime.provider.check_runtime_health.assert_awaited_once()
     _assert_dispatcher_runner_called(runtime)
 
 
@@ -620,8 +620,8 @@ def test_main_allows_shared_runtime_in_webhook_mode():
         from app.main import main
 
         main()
-    runtime.provider.check_auth_health.assert_awaited_once()
-    runtime.provider.check_runtime_health.assert_not_awaited()
+    runtime.provider.check_auth_health.assert_not_awaited()
+    runtime.provider.check_runtime_health.assert_awaited_once()
     _assert_dispatcher_runner_called(runtime)
 
 
@@ -638,8 +638,8 @@ def test_main_worker_role_runs_worker_process_only():
         from app.main import main
 
         main()
-    runtime.provider.check_auth_health.assert_awaited_once()
-    runtime.provider.check_runtime_health.assert_not_awaited()
+    runtime.provider.check_auth_health.assert_not_awaited()
+    runtime.provider.check_runtime_health.assert_awaited_once()
     _assert_dispatcher_runner_called(runtime)
 
 

@@ -1030,10 +1030,32 @@ class OctopusManager:
         if force or freshness.stale:
             self.build_registry_image()
 
+    def provider_health_output(self, provider: str) -> tuple[bool, str]:
+        self.ensure_provider_image_ready(provider)
+        result = self.docker.provider_compose(
+            provider,
+            "run",
+            "--rm",
+            "bot-provider",
+            "python",
+            "-m",
+            "app.main",
+            "--provider-health",
+            check=False,
+        )
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        return result.returncode == 0, output
+
     def ensure_provider_auth_ready(self, provider: str) -> None:
         if provider_has_auth_files(self.repo_dir, provider):
-            return
-        self.io.error("Provider authentication is required. Starting the login flow now.")
+            healthy, output = self.provider_health_output(provider)
+            if healthy:
+                return
+            self.io.error("Stored provider auth is present but not valid. Starting the login flow now.")
+            if output:
+                self.io.error(output)
+        else:
+            self.io.error("Provider authentication is required. Starting the login flow now.")
         self.ensure_provider_image_ready(provider)
         result = self.docker.provider_compose(
             provider,
@@ -1048,6 +1070,12 @@ class OctopusManager:
         if result.returncode != 0 or not provider_has_auth_files(self.repo_dir, provider):
             raise OctopusError(
                 f"Provider login did not complete for {provider}. Finish login, then run ./octopus again."
+            )
+        healthy, output = self.provider_health_output(provider)
+        if not healthy:
+            detail = f"\n{output}" if output else ""
+            raise OctopusError(
+                f"Provider login did not complete for {provider}. Finish login, then run ./octopus again.{detail}"
             )
 
     def ensure_local_registry(

@@ -1276,7 +1276,7 @@ class OctopusManager:
         self.verify_registry_enrollment(slug, connection.registry_id)
         return connection
 
-    def connect_bot_to_local_registry(self, slug: str, *, desired_scope: str = "full") -> None:
+    def prepare_bot_for_local_registry(self, slug: str, *, desired_scope: str = "full") -> RegistryConnection:
         registry = self.ensure_local_registry()
         if not registry.enroll_token:
             raise OctopusError("Local registry setup is incomplete.")
@@ -1302,6 +1302,10 @@ class OctopusManager:
         state = self.read_bot_registry_state(slug, connection.registry_id)
         if state and not self.registry_identity_valid(connection, state):
             self.clear_bot_registry_state(slug, [connection.registry_id])
+        return connection
+
+    def connect_bot_to_local_registry(self, slug: str, *, desired_scope: str = "full") -> None:
+        connection = self.prepare_bot_for_local_registry(slug, desired_scope=desired_scope)
         self.restart_bot(slug, force_rebuild=False)
         self.verify_registry_enrollment(slug, connection.registry_id)
 
@@ -1643,9 +1647,11 @@ class OctopusManager:
         self.ensure_provider_image_ready(provider)
         self.ensure_provider_auth_ready(provider)
         self.docker.ensure_network()
+        local_registry_connection = self.prepare_bot_for_local_registry(slug)
         doctor_output = self.run_bot_doctor(slug)
         if "FAIL:" in doctor_output or "Overall status: unhealthy" in doctor_output:
             raise OctopusError(doctor_output.strip())
         self.start_bot(slug)
+        self.verify_registry_enrollment(slug, local_registry_connection.registry_id)
         self.io.print(f"Bot is running. Open Telegram and message @{username}.")
         self.io.print("Use ./octopus status to check health.")

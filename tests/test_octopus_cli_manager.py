@@ -7,7 +7,7 @@ import pytest
 
 import app.octopus_cli.core as octopus_core
 from app.octopus_cli.core import OctopusManager, PromptIO
-from app.octopus_cli.models import Action, RegistryConnection, RegistryDeployOptions
+from app.octopus_cli.models import Action, RegistryConnection, RegistryDeployOptions, RegistryState
 
 
 class _ComposeDockerRunner:
@@ -412,6 +412,81 @@ def test_connect_bot_to_remote_registry_writes_registry_record(tmp_path: Path) -
     assert connection.registry_id == "registry-example-internal-9000"
     assert restarted == ["m1"]
     assert verified == [("m1", "registry-example-internal-9000")]
+
+
+def test_prepare_bot_for_local_registry_writes_registry_record_without_restart(tmp_path: Path) -> None:
+    _write_bot_env(tmp_path, "m1", "M1")
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    cleared: list[list[str] | None] = []
+
+    manager.ensure_local_registry = lambda force_rebuild=False, deploy=None: RegistryState(  # type: ignore[method-assign]
+        configured=True,
+        running=True,
+        env_file=tmp_path / ".deploy" / "registry" / ".env",
+        enroll_token="local-secret",
+        ui_token="ui-secret",
+    )
+    manager.read_bot_registry_state = lambda slug, registry_id: {}  # type: ignore[method-assign]
+    manager.clear_bot_registry_state = lambda slug, registry_ids=None: cleared.append(registry_ids)  # type: ignore[method-assign]
+
+    connection = manager.prepare_bot_for_local_registry("m1")
+
+    values = manager.bot_values("m1")
+    assert values["BOT_AGENT_MODE"] == "registry"
+    assert values["BOT_AGENT_REGISTRY_1_ID"] == "local"
+    assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry:8787"
+    assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "local-secret"
+    assert values["BOT_AGENT_REGISTRY_1_SCOPE"] == "full"
+    assert connection.registry_id == "local"
+    assert cleared == []
+
+
+def test_add_bot_interactive_prepares_local_registry_before_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = _FakeOutput()
+    io = PromptIO(
+        stdin=_FakeInput(
+            [
+                "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789\n",
+                "\n",
+                "2\n",
+            ]
+        ),
+        stdout=stdout,
+        stderr=stdout,
+    )
+    manager = OctopusManager(tmp_path, io=io, docker=_ComposeDockerRunner())
+    started: list[str] = []
+    verified: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        octopus_core,
+        "validate_telegram_token",
+        lambda token: ("123456", "example_bot", "Example Bot"),
+    )
+    manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
+    manager.ensure_provider_auth_ready = lambda provider: None  # type: ignore[method-assign]
+    manager.ensure_local_registry = lambda force_rebuild=False, deploy=None: RegistryState(  # type: ignore[method-assign]
+        configured=True,
+        running=True,
+        env_file=tmp_path / ".deploy" / "registry" / ".env",
+        enroll_token="local-secret",
+        ui_token="ui-secret",
+    )
+    manager.read_bot_registry_state = lambda slug, registry_id: {}  # type: ignore[method-assign]
+    manager.clear_bot_registry_state = lambda slug, registry_ids=None: None  # type: ignore[method-assign]
+    manager.run_bot_doctor = lambda slug, live_provider=False: "All checks passed."  # type: ignore[method-assign]
+    manager.start_bot = lambda slug, force_rebuild=False, force_recreate=False: started.append(slug)  # type: ignore[method-assign]
+    manager.verify_registry_enrollment = lambda slug, registry_id: verified.append((slug, registry_id))  # type: ignore[method-assign]
+
+    manager.add_bot_interactive()
+
+    values = manager.bot_values("example-bot")
+    assert values["BOT_AGENT_MODE"] == "registry"
+    assert values["BOT_AGENT_REGISTRY_1_ID"] == "local"
+    assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry:8787"
+    assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "local-secret"
+    assert started == ["example-bot"]
+    assert verified == [("example-bot", "local")]
 
 
 def test_disconnect_bot_registry_by_id_removes_only_target_record(tmp_path: Path) -> None:

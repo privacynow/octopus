@@ -1295,8 +1295,9 @@ select {
 
 .conversation-management-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--space-3);
+    max-width: min(760px, 100%);
+    align-content: start;
 }
 
 .conversation-management-card {
@@ -1306,6 +1307,17 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
+}
+
+.conversation-management-close {
+    min-width: 40px;
+    padding-inline: 0.78rem;
+    font-size: 1.15rem;
+    line-height: 1;
+}
+
+.conversation-manage-trigger[aria-pressed="true"] {
     box-shadow: var(--shadow-card);
 }
 

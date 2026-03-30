@@ -190,6 +190,30 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "conversationPaginator = UI.createCursorPaginator" in agent_detail
 
 
+def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "let managementMode = 'closed';" in detail
+    assert "function openManagement(" in detail
+    assert "function closeManagement(" in detail
+    assert "function scheduleManagementIdleClose(" in detail
+    assert "function scheduleManagementSuccessClose(" in detail
+    assert "skillsManageBtn.textContent = 'Skills';" in detail
+    assert "settingsManageBtn.textContent = 'Settings';" in detail
+    assert "textContent = '×';" in detail
+    assert "managementPanel.hidden = !managementAgentId();" not in detail
+    assert "openManagement('skills')" in detail
+    assert "openManagement('settings'" in detail
+    assert "&& !pendingSkillSetup" in detail
+    assert ".conversation-management-close {" in css
+
+
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     helper = (

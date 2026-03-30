@@ -36,6 +36,14 @@ def runs_ingress(config: BotConfig) -> bool:
     }
 
 
+def initialize_runtime_health_startup(config: BotConfig) -> None:
+    """Initialize only the runtime dependencies needed by doctor/health checks."""
+    runtime_backend.init(config)
+    ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
+    init_content_store_for_config(config)
+    init_credential_store_for_config(config)
+
+
 def runs_registry_transport(config: BotConfig) -> bool:
     if config.agent_mode != "registry":
         return False
@@ -83,6 +91,7 @@ async def run_doctor(
 ) -> None:
     from app.runtime_health import collect_runtime_health_report, format_runtime_health_for_doctor
 
+    initialize_runtime_health_startup(config)
     report = await collect_runtime_health_report(
         config,
         provider,
@@ -191,10 +200,7 @@ def validate_required_runtime_profile(config: BotConfig) -> None:
 
 
 def initialize_runtime_startup(config: BotConfig, provider: Provider) -> None:
-    runtime_backend.init(config)
-    ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
-    init_content_store_for_config(config)
-    init_credential_store_for_config(config)
+    initialize_runtime_health_startup(config)
     run_database_startup_checks(config)
     validate_provider_auth(config, provider)
     validate_required_runtime_profile(config)

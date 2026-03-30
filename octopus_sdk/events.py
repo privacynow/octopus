@@ -127,7 +127,7 @@ class DelegationMetadata(BaseModel):
 class TaskStatusMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    routed_task_id: str = Field(..., min_length=1)
+    routed_task_id: str = ""
     status: str = Field(..., min_length=1)
     progress: int | None = None
     transition_id: str = ""

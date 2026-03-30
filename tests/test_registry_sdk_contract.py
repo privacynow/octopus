@@ -145,6 +145,17 @@ def test_validate_event_metadata_rejects_extra_fields():
         validate_event_metadata(event)
 
 
+def test_validate_event_metadata_accepts_task_status_without_routed_task_id():
+    event = ConversationEvent(
+        event_id="task-started",
+        kind="task.status",
+        created_at="2026-03-23T00:00:00+00:00",
+        metadata={"status": "started"},
+    )
+
+    assert validate_event_metadata(event) == {"status": "started"}
+
+
 def test_conversation_create_rejects_blank_fields():
     with pytest.raises(Exception):
         ConversationCreate(target_agent_id="", origin_channel="telegram", external_conversation_ref="123")

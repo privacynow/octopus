@@ -6,8 +6,16 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from app.octopus_cli.core import OctopusError, OctopusManager, PromptIO
-from app.octopus_cli.models import Action, BotState, ResolvedTarget, SystemState, TargetKind
+from app.octopus_cli.core import LOCAL_REGISTRY_INTERNAL_URL, OctopusError, OctopusManager, PromptIO
+from app.octopus_cli.models import (
+    Action,
+    BotState,
+    RegistryConnectOptions,
+    RegistryDeployOptions,
+    ResolvedTarget,
+    SystemState,
+    TargetKind,
+)
 
 
 class OctopusCLI:
@@ -22,8 +30,32 @@ class OctopusCLI:
         parser.add_argument("--yes", action="store_true")
         parser.add_argument("--follow", action="store_true")
         parser.add_argument("--live-provider", action="store_true")
+        parser.add_argument("--registry-bind-host")
+        parser.add_argument("--registry-port", type=int)
+        parser.add_argument("--registry-public-url")
+        parser.add_argument("--registry-url")
+        parser.add_argument("--registry-enroll-token")
+        parser.add_argument("--registry-id")
+        parser.add_argument("--registry-scope")
         parser.add_argument("--help", "-h", action="store_true")
         return parser
+
+    def _registry_deploy_options(self, args: argparse.Namespace) -> RegistryDeployOptions:
+        return RegistryDeployOptions(
+            bind_host=args.registry_bind_host or "",
+            port=args.registry_port,
+            public_url=args.registry_public_url or "",
+        )
+
+    def _registry_connect_options(self, args: argparse.Namespace) -> RegistryConnectOptions:
+        if args.registry_enroll_token and not args.registry_url:
+            raise OctopusError("--registry-enroll-token requires --registry-url.")
+        return RegistryConnectOptions(
+            registry_url=args.registry_url or "",
+            enrollment_token=args.registry_enroll_token or "",
+            registry_id=args.registry_id or "",
+            scope=args.registry_scope or "full",
+        )
 
     def run(self, argv: list[str] | None = None) -> int:
         args = self.build_parser().parse_args(argv)
@@ -43,7 +75,14 @@ class OctopusCLI:
             if command == "status":
                 return self.cmd_status(args.targets)
             if command in {"start", "stop", "restart", "redeploy", "connect", "disconnect"}:
-                return self.run_mutating(Action(command), args.targets, yes=args.yes)
+                return self.run_mutating(
+                    Action(command),
+                    args.targets,
+                    yes=args.yes,
+                    deploy=self._registry_deploy_options(args),
+                    connect=self._registry_connect_options(args),
+                    disconnect_registry_id=args.registry_id or "",
+                )
             if command == "logs":
                 return self.cmd_logs(args.targets, follow=args.follow or True)
             if command == "shell":
@@ -60,12 +99,12 @@ class OctopusCLI:
         self.io.print("")
         self.io.print("Actions:")
         self.io.print("  status")
-        self.io.print("  start [target...] [--yes]")
+        self.io.print("  start [target...] [--yes] [--registry-bind-host HOST] [--registry-port PORT] [--registry-public-url URL]")
         self.io.print("  stop [target...] [--yes]")
-        self.io.print("  restart [target...] [--yes]")
-        self.io.print("  redeploy [target...] [--yes]")
-        self.io.print("  connect [target...] [--yes]")
-        self.io.print("  disconnect [target...] [--yes]")
+        self.io.print("  restart [target...] [--yes] [--registry-bind-host HOST] [--registry-port PORT] [--registry-public-url URL]")
+        self.io.print("  redeploy [target...] [--yes] [--registry-bind-host HOST] [--registry-port PORT] [--registry-public-url URL]")
+        self.io.print("  connect [target...] [--yes] [--registry-url URL --registry-enroll-token TOKEN] [--registry-id ID] [--registry-scope SCOPE]")
+        self.io.print("  disconnect [target...] [--yes] [--registry-id ID]")
         self.io.print("  logs <target> [--follow]")
         self.io.print("  shell <target>")
         self.io.print("  doctor <target> [--live-provider]")
@@ -82,10 +121,9 @@ class OctopusCLI:
             running = "running" if bot.running else "stopped"
             detail = f"({bot.docker_status})" if bot.docker_status else ""
             self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
-            if bot.local_registry_connection_state != "none":
-                self.io.print(
-                    f"      local    {bot.bot_local_scope if hasattr(bot, 'bot_local_scope') else 'full'}    {bot.local_registry_live_state}    http://registry:8787"
-                )
+            for connection in bot.registry_connection_statuses:
+                label = "local" if connection.local else connection.registry_id
+                self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
 
     def cmd_status(self, targets: list[str]) -> int:
         state = self.manager.inspect_state()
@@ -122,9 +160,9 @@ class OctopusCLI:
             running = "running" if bot.running else "stopped"
             detail = f"({bot.docker_status})" if bot.docker_status else ""
             self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
-            connection = self.manager.bot_local_registry_connection(bot.slug)
-            if connection is not None:
-                self.io.print(f"      local    {connection.scope}    {bot.local_registry_live_state}    {connection.url}")
+            for connection in bot.registry_connection_statuses:
+                label = "local" if connection.local else connection.registry_id
+                self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
 
     def render_single_bot_status(self, bot: BotState, state: SystemState) -> None:
         del state
@@ -137,11 +175,12 @@ class OctopusCLI:
             self.io.print(f"  Docker:    {bot.docker_status}")
         self.io.print(f"  Role:      {bot.role or '(not set)'}")
         self.io.print(f"  Tags:      {bot.tags or '(not set)'}")
-        if bot.registry_connections:
+        if bot.registry_connection_statuses:
             self.io.print("  Registry connections:")
-            for connection in bot.registry_connections:
+            for connection in bot.registry_connection_statuses:
+                label = "local" if connection.local else connection.registry_id
                 self.io.print(
-                    f"    {connection.registry_id}    {connection.scope}    {connection.url}"
+                    f"    {label:<12} scope={connection.scope:<8} configured={connection.connection_state:<10} live={connection.live_state:<18} {connection.url}"
                 )
         else:
             self.io.print("  Registry connections: none")
@@ -154,31 +193,37 @@ class OctopusCLI:
             self.io.print("  local      not configured")
             return
         status = "running" if state.registry.running else "stopped"
-        self.io.print(f"  local      {status}    {state.registry.ui_url}")
+        self.io.print(f"  local      {status}")
+        self.io.print(f"  bind:      {state.registry.bind_host}:{state.registry.port}")
+        self.io.print(f"  host URL:  {state.registry.host_base_url}")
+        self.io.print(f"  public:    {state.registry.public_url}")
+        self.io.print(f"  ui:        {state.registry.ui_url}")
         self.io.print("")
         self.io.print("Connected bots:")
-        connected = [bot for bot in state.bots if bot.local_registry_live_state == "connected"]
+        connected = [
+            (bot, connection)
+            for bot in state.bots
+            for connection in bot.registry_connection_statuses
+            if connection.local and connection.live_state == "connected"
+        ]
         if not connected:
             self.io.print("  (none)")
         else:
-            for bot in connected:
-                connection = self.manager.bot_local_registry_connection(bot.slug)
-                scope = connection.scope if connection else "full"
-                self.io.print(f"  {bot.label}    scope: {scope}    state: connected")
+            for bot, connection in connected:
+                self.io.print(f"  {bot.label}    scope: {connection.scope}    state: connected")
         self.io.print("")
         self.io.print("Configured but not connected:")
         configured = [
-            bot
+            (bot, connection)
             for bot in state.bots
-            if bot.local_registry_connection_state != "none" and bot.local_registry_live_state != "connected"
+            for connection in bot.registry_connection_statuses
+            if connection.local and connection.connection_state != "none" and connection.live_state != "connected"
         ]
         if not configured:
             self.io.print("  (none)")
         else:
-            for bot in configured:
-                connection = self.manager.bot_local_registry_connection(bot.slug)
-                scope = connection.scope if connection else "full"
-                self.io.print(f"  {bot.label}    scope: {scope}    state: {bot.local_registry_live_state}")
+            for bot, connection in configured:
+                self.io.print(f"  {bot.label}    scope: {connection.scope}    state: {connection.live_state}")
 
     def render_provider_auth_status(self, state: SystemState) -> None:
         self.io.print("Provider auth:")
@@ -192,32 +237,73 @@ class OctopusCLI:
             status = "stale" if freshness.stale else "current"
             self.io.print(f"  {key:<12} {status}    {freshness.image}")
 
-    def run_mutating(self, action: Action, selectors: list[str], *, yes: bool) -> int:
+    def run_mutating(
+        self,
+        action: Action,
+        selectors: list[str],
+        *,
+        yes: bool,
+        deploy: RegistryDeployOptions | None = None,
+        connect: RegistryConnectOptions | None = None,
+        disconnect_registry_id: str = "",
+    ) -> int:
+        deploy = deploy or RegistryDeployOptions()
+        connect = connect or RegistryConnectOptions()
+        if action not in {Action.START, Action.RESTART, Action.REDEPLOY} and not deploy.is_empty:
+            raise OctopusError("Registry bind/public URL options are only valid with start, restart, or redeploy.")
+        if action not in {Action.CONNECT, Action.DISCONNECT}:
+            if connect.is_remote or disconnect_registry_id:
+                raise OctopusError("Registry connection options are only valid with connect or disconnect.")
+        if action != Action.CONNECT and connect.is_remote:
+            raise OctopusError("--registry-url and --registry-enroll-token are only valid with connect.")
         state = self.manager.inspect_state()
-        targets = self.manager.resolve_targets(selectors, action, state)
+        if action == Action.CONNECT and connect.is_remote and not selectors:
+            targets = [ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in state.bots]
+        elif action == Action.DISCONNECT and disconnect_registry_id and not selectors:
+            targets = [
+                ResolvedTarget(TargetKind.BOT, bot.slug, bot.label)
+                for bot in state.bots
+                if any(connection.registry_id == disconnect_registry_id for connection in bot.registry_connection_statuses)
+            ]
+        else:
+            targets = self.manager.resolve_targets(selectors, action, state)
+        if action in {Action.CONNECT, Action.DISCONNECT} and any(target.kind == TargetKind.REGISTRY for target in targets):
+            raise OctopusError(f"{action.value.title()} only applies to bots.")
         if not targets:
             self.io.print("Nothing to do.")
             return 0
         plan = self.manager.plan_action(action, targets, state)
+        if action == Action.CONNECT:
+            if connect.is_remote:
+                plan.notes = [f"Bots will be connected to remote registry {connect.registry_url}."]
+            else:
+                plan.notes = ["Bots will be connected to the local registry."]
+        elif action == Action.DISCONNECT:
+            if disconnect_registry_id:
+                plan.notes = [
+                    f"Only registry connection '{disconnect_registry_id}' will be removed; bot data will be preserved."
+                ]
+            else:
+                plan.notes = ["Only the local registry connection will be removed; bot data will be preserved."]
         self.manager.confirm_plan(plan, yes=yes)
         if action == Action.START:
-            return self.execute_start(targets)
+            return self.execute_start(targets, deploy=deploy)
         if action == Action.STOP:
             return self.execute_stop(targets)
         if action == Action.RESTART:
-            return self.execute_restart(targets)
+            return self.execute_restart(targets, deploy=deploy)
         if action == Action.REDEPLOY:
-            return self.execute_redeploy(targets)
+            return self.execute_redeploy(targets, deploy=deploy)
         if action == Action.CONNECT:
-            return self.execute_connect(targets)
+            return self.execute_connect(targets, connect=connect)
         if action == Action.DISCONNECT:
-            return self.execute_disconnect(targets)
+            return self.execute_disconnect(targets, registry_id=disconnect_registry_id)
         raise OctopusError(f"Unsupported action: {action.value}")
 
-    def execute_start(self, targets: list[ResolvedTarget]) -> int:
+    def execute_start(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
         for target in targets:
             if target.kind == TargetKind.REGISTRY:
-                self.manager.start_registry()
+                self.manager.start_registry(deploy=deploy)
             else:
                 self.manager.start_bot(target.identifier)
         return 0
@@ -230,36 +316,48 @@ class OctopusCLI:
                 self.manager.stop_bot(target.identifier)
         return 0
 
-    def execute_restart(self, targets: list[ResolvedTarget]) -> int:
+    def execute_restart(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
         for target in targets:
             if target.kind == TargetKind.REGISTRY:
                 if self.manager.has_local_registry():
                     self.manager.stop_registry()
-                self.manager.start_registry()
+                self.manager.start_registry(deploy=deploy)
             else:
                 self.manager.restart_bot(target.identifier)
         return 0
 
-    def execute_redeploy(self, targets: list[ResolvedTarget]) -> int:
+    def execute_redeploy(self, targets: list[ResolvedTarget], *, deploy: RegistryDeployOptions | None = None) -> int:
         for target in targets:
             if target.kind == TargetKind.REGISTRY:
                 if self.manager.has_local_registry():
                     self.manager.stop_registry()
-                self.manager.start_registry(force_rebuild=True, force_recreate=True)
+                self.manager.start_registry(force_rebuild=True, force_recreate=True, deploy=deploy)
             else:
                 self.manager.restart_bot(target.identifier, force_rebuild=True)
         return 0
 
-    def execute_connect(self, targets: list[ResolvedTarget]) -> int:
+    def execute_connect(self, targets: list[ResolvedTarget], *, connect: RegistryConnectOptions | None = None) -> int:
+        connect = connect or RegistryConnectOptions()
         for target in targets:
-            self.manager.connect_bot_to_local_registry(target.identifier)
-            self.io.print(f"Connected {target.label} to the local registry.")
+            if connect.is_remote:
+                connection = self.manager.connect_bot_to_registry(
+                    target.identifier,
+                    registry_url=connect.registry_url,
+                    enrollment_token=connect.enrollment_token,
+                    desired_scope=connect.scope or "full",
+                    registry_id=connect.registry_id,
+                )
+                self.io.print(f"Connected {target.label} to remote registry {connection.registry_id} ({connection.url}).")
+            else:
+                self.manager.connect_bot_to_local_registry(target.identifier, desired_scope=connect.scope or "full")
+                self.io.print(f"Connected {target.label} to the local registry.")
         return 0
 
-    def execute_disconnect(self, targets: list[ResolvedTarget]) -> int:
+    def execute_disconnect(self, targets: list[ResolvedTarget], *, registry_id: str = "") -> int:
         for target in targets:
-            self.manager.disconnect_bot__local_registry(target.identifier)
-            self.io.print(f"Disconnected {target.label} the local registry.")
+            connection = self.manager.disconnect_bot_registry(target.identifier, registry_id=registry_id)
+            label = "local registry" if connection.url == LOCAL_REGISTRY_INTERNAL_URL else f"registry {connection.registry_id}"
+            self.io.print(f"Disconnected {target.label} from {label}.")
         return 0
 
     def cmd_logs(self, targets: list[str], *, follow: bool) -> int:

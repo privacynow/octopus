@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -16,6 +17,7 @@ from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.octopus_cli.envfiles import (
@@ -32,6 +34,8 @@ from app.octopus_cli.models import (
     ImageFreshness,
     ProviderAuthState,
     RegistryConnection,
+    RegistryConnectionStatus,
+    RegistryDeployOptions,
     RegistryState,
     ResolvedTarget,
     SystemState,
@@ -82,8 +86,11 @@ class PromptIO:
             return False
 
 
-def normalize_slug(value: str) -> str:
-    return re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", value.lower())).strip("-")[:32]
+def normalize_slug(value: str, *, fallback: str = "") -> str:
+    normalized = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", value.lower())).strip("-")[:32]
+    if normalized:
+        return normalized
+    return fallback[:32]
 
 
 def telegram_token_format_valid(value: str) -> bool:
@@ -163,16 +170,51 @@ def prompt_with_default(io: PromptIO, label: str, default: str = "") -> str:
 
 
 def pick_available_port(start: int = DEFAULT_REGISTRY_PORT) -> int:
+    return pick_available_port_for_host("127.0.0.1", start=start)
+
+
+def pick_available_port_for_host(host: str, start: int = DEFAULT_REGISTRY_PORT) -> int:
     port = start
     while True:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.bind(("127.0.0.1", port))
+                sock.bind((host, port))
             except OSError:
                 port += 1
                 continue
         return port
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower() in {"127.0.0.1", "localhost", "::1"}
+
+
+def _normalize_bind_host(host: str) -> str:
+    value = (host or "").strip()
+    if not value:
+        return "127.0.0.1"
+    if value.lower() == "localhost":
+        return "127.0.0.1"
+    if value == "0.0.0.0":
+        return value
+    try:
+        ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise OctopusError("Registry bind host must be localhost, 0.0.0.0, or a concrete IP address.") from exc
+    return value
+
+
+def _parse_registry_url(raw: str) -> tuple[str, str]:
+    parsed = urlparse((raw or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise OctopusError("Registry URL must be a valid http:// or https:// URL.")
+    host = (parsed.hostname or "").strip()
+    if not host:
+        raise OctopusError("Registry URL must include a host.")
+    if host == "0.0.0.0":
+        raise OctopusError("0.0.0.0 is a listen address, not a usable registry URL.")
+    return parsed.geturl().rstrip("/"), host
 
 
 class DockerRunner:
@@ -384,15 +426,134 @@ class OctopusManager:
     def has_local_registry(self) -> bool:
         return self.registry_env_file().exists()
 
+    def _registry_bind_host(self, values: OrderedDict[str, str] | None = None) -> str:
+        current = values if values is not None else parse_env_file(self.registry_env_file())
+        return _normalize_bind_host(current.get("REGISTRY_BIND_HOST", "127.0.0.1"))
+
+    def _registry_port(self, values: OrderedDict[str, str] | None = None) -> int:
+        current = values if values is not None else parse_env_file(self.registry_env_file())
+        raw = current.get("REGISTRY_PORT", str(DEFAULT_REGISTRY_PORT)) or str(DEFAULT_REGISTRY_PORT)
+        try:
+            port = int(raw)
+        except ValueError as exc:
+            raise OctopusError(f"Invalid REGISTRY_PORT value: {raw!r}") from exc
+        if port <= 0 or port > 65535:
+            raise OctopusError(f"Registry port must be between 1 and 65535, got {port}.")
+        return port
+
+    def _registry_host_base_url(self, values: OrderedDict[str, str] | None = None) -> str:
+        current = values if values is not None else parse_env_file(self.registry_env_file())
+        bind_host = self._registry_bind_host(current)
+        port = self._registry_port(current)
+        if bind_host == "0.0.0.0" or _is_loopback_host(bind_host):
+            host = "127.0.0.1"
+        else:
+            host = bind_host
+        return f"http://{host}:{port}"
+
+    def _default_registry_public_url(self, bind_host: str, port: int) -> str:
+        if bind_host == "0.0.0.0":
+            raise OctopusError("A public registry URL is required when binding the registry to 0.0.0.0.")
+        host = "127.0.0.1" if _is_loopback_host(bind_host) else bind_host
+        return f"http://{host}:{port}"
+
+    def _registry_public_url(self, values: OrderedDict[str, str] | None = None) -> str:
+        current = values if values is not None else parse_env_file(self.registry_env_file())
+        configured = str(current.get("REGISTRY_PUBLIC_URL", "") or "").strip()
+        if configured:
+            return _parse_registry_url(configured)[0]
+        return self._default_registry_public_url(
+            self._registry_bind_host(current),
+            self._registry_port(current),
+        )
+
     def registry_ui_url(self) -> str:
-        values = parse_env_file(self.registry_env_file())
-        port = values.get("REGISTRY_PORT", str(DEFAULT_REGISTRY_PORT))
-        return f"http://localhost:{port}/ui"
+        return f"{self._registry_public_url().rstrip('/')}/ui"
 
     def local_registry_public_base_url(self) -> str:
-        values = parse_env_file(self.registry_env_file())
-        port = values.get("REGISTRY_PORT", str(DEFAULT_REGISTRY_PORT))
-        return f"http://127.0.0.1:{port}"
+        return self._registry_public_url()
+
+    def local_registry_host_base_url(self) -> str:
+        return self._registry_host_base_url()
+
+    def _registry_state_from_values(
+        self,
+        values: OrderedDict[str, str] | None,
+        *,
+        configured: bool,
+        running: bool,
+    ) -> RegistryState:
+        current = values if values is not None else OrderedDict()
+        bind_host = self._registry_bind_host(current)
+        port = self._registry_port(current)
+        host_base_url = self._registry_host_base_url(current)
+        public_url = self._registry_public_url(current)
+        return RegistryState(
+            configured=configured,
+            running=running,
+            env_file=self.registry_env_file(),
+            bind_host=bind_host,
+            port=port,
+            public_url=public_url,
+            host_base_url=host_base_url,
+            ui_url=f"{public_url.rstrip('/')}/ui",
+            enroll_token=current.get("REGISTRY_ENROLL_TOKEN", ""),
+            ui_token=current.get("REGISTRY_UI_TOKEN", ""),
+        )
+
+    def _validated_registry_deploy_values(
+        self,
+        deploy: RegistryDeployOptions | None = None,
+        *,
+        existing: OrderedDict[str, str] | None = None,
+        creating: bool = False,
+    ) -> OrderedDict[str, str]:
+        current = OrderedDict(existing or parse_env_file(self.registry_env_file()))
+        deploy = deploy or RegistryDeployOptions()
+        bind_host = _normalize_bind_host(deploy.bind_host or current.get("REGISTRY_BIND_HOST", "127.0.0.1"))
+        explicit_port = deploy.port is not None
+        if explicit_port:
+            port = int(deploy.port)
+        elif creating and not deploy.bind_host and "REGISTRY_PORT" not in current:
+            port = pick_available_port_for_host("127.0.0.1", start=DEFAULT_REGISTRY_PORT)
+        else:
+            port = self._registry_port(current)
+        if port <= 0 or port > 65535:
+            raise OctopusError(f"Registry port must be between 1 and 65535, got {port}.")
+        raw_public = str(deploy.public_url or current.get("REGISTRY_PUBLIC_URL", "") or "").strip()
+        if raw_public:
+            public_url, _ = _parse_registry_url(raw_public)
+        else:
+            public_url = self._default_registry_public_url(bind_host, port)
+        current["REGISTRY_BIND_HOST"] = bind_host
+        current["REGISTRY_PORT"] = str(port)
+        current["REGISTRY_PUBLIC_URL"] = public_url
+        return current
+
+    def _replace_registry_record(
+        self,
+        records: list[RegistryConnection],
+        connection: RegistryConnection,
+        *,
+        previous_id: str | None = None,
+    ) -> list[RegistryConnection]:
+        updated: list[RegistryConnection] = []
+        replaced = False
+        for record in records:
+            if previous_id and record.registry_id == previous_id:
+                if not replaced:
+                    updated.append(connection)
+                    replaced = True
+                continue
+            if record.registry_id == connection.registry_id:
+                if not replaced:
+                    updated.append(connection)
+                    replaced = True
+                continue
+            updated.append(record)
+        if not replaced:
+            updated.append(connection)
+        return updated
 
     def registry_is_running(self) -> bool:
         result = self.docker.run(
@@ -415,6 +576,43 @@ class OctopusManager:
             if record.url == LOCAL_REGISTRY_INTERNAL_URL:
                 return record
         return None
+
+    def bot_registry_connection_by_id(self, slug: str, registry_id: str) -> RegistryConnection | None:
+        for record in self.bot_registry_connections(slug):
+            if record.registry_id == registry_id:
+                return record
+        return None
+
+    def bot_registry_connection_state(self, slug: str, connection: RegistryConnection) -> str:
+        if not connection.url and not connection.enrollment_token:
+            return "none"
+        if self.bot_registry_has_identity(slug, connection.registry_id):
+            return "enrolled"
+        return "configured"
+
+    def bot_registry_live_state(self, slug: str, connection: RegistryConnection) -> str:
+        connection_state = self.bot_registry_connection_state(slug, connection)
+        if connection_state == "configured":
+            return "enrollment failed"
+        if not self.bot_is_running(slug):
+            return "stopped"
+        state = self.read_bot_registry_state(slug, connection.registry_id)
+        return state.get("connectivity_state", "starting")
+
+    def bot_registry_connection_statuses(self, slug: str) -> list[RegistryConnectionStatus]:
+        statuses: list[RegistryConnectionStatus] = []
+        for connection in self.bot_registry_connections(slug):
+            statuses.append(
+                RegistryConnectionStatus(
+                    registry_id=connection.registry_id,
+                    url=connection.url,
+                    scope=connection.scope,
+                    connection_state=self.bot_registry_connection_state(slug, connection),
+                    live_state=self.bot_registry_live_state(slug, connection),
+                    local=connection.url == LOCAL_REGISTRY_INTERNAL_URL,
+                )
+            )
+        return statuses
 
     def workspace_memberships(self, slug: str) -> list[str]:
         memberships: list[str] = []
@@ -533,7 +731,7 @@ class OctopusManager:
     def clear_bot_registry_state(self, slug: str, registry_ids: list[str] | None = None) -> None:
         ids = registry_ids or []
         script = (
-            "pathlib import Path\n"
+            "from pathlib import Path\n"
             "import os\n"
             "data_dir = Path(os.environ.get('BOT_DATA_DIR', '/home/bot/data')) / 'agent' / 'registries'\n"
             "registry_ids = [item for item in os.environ.get('OCTOPUS_CLEAR_REGISTRY_IDS','').split() if item]\n"
@@ -570,21 +768,13 @@ class OctopusManager:
         connection = self.bot_local_registry_connection(slug)
         if connection is None:
             return "none"
-        if self.bot_registry_has_identity(slug, connection.registry_id):
-            return "enrolled"
-        return "configured"
+        return self.bot_registry_connection_state(slug, connection)
 
     def bot_local_registry_live_state(self, slug: str) -> str:
         connection = self.bot_local_registry_connection(slug)
         if connection is None:
             return "none"
-        connection_state = self.bot_local_registry_connection_state(slug)
-        if connection_state == "configured":
-            return "enrollment failed"
-        if not self.bot_is_running(slug):
-            return "stopped"
-        state = self.read_bot_registry_state(slug, connection.registry_id)
-        return state.get("connectivity_state", "starting")
+        return self.bot_registry_live_state(slug, connection)
 
     def inspect_state(self) -> SystemState:
         self.ensure_deploy_dirs()
@@ -605,21 +795,17 @@ class OctopusManager:
                     role=values.get("BOT_ROLE", ""),
                     tags=values.get("BOT_AGENT_TAGS", ""),
                     registry_connections=self.bot_registry_connections(slug),
+                    registry_connection_statuses=self.bot_registry_connection_statuses(slug),
                     local_registry_connection_state=self.bot_local_registry_connection_state(slug),
                     local_registry_live_state=self.bot_local_registry_live_state(slug),
                     workspace_memberships=self.workspace_memberships(slug),
                 )
             )
         registry_values = parse_env_file(self.registry_env_file())
-        port = int(registry_values.get("REGISTRY_PORT", str(DEFAULT_REGISTRY_PORT)) or DEFAULT_REGISTRY_PORT)
-        registry = RegistryState(
+        registry = self._registry_state_from_values(
+            registry_values,
             configured=self.has_local_registry(),
             running=self.registry_is_running() if self.has_local_registry() else False,
-            env_file=self.registry_env_file(),
-            port=port,
-            ui_url=f"http://localhost:{port}/ui",
-            enroll_token=registry_values.get("REGISTRY_ENROLL_TOKEN", ""),
-            ui_token=registry_values.get("REGISTRY_UI_TOKEN", ""),
         )
         workspaces = [
             Workspace(
@@ -864,23 +1050,28 @@ class OctopusManager:
                 f"Provider login did not complete for {provider}. Finish login, then run ./octopus again."
             )
 
-    def ensure_local_registry(self, *, force_rebuild: bool = False) -> RegistryState:
+    def ensure_local_registry(
+        self,
+        *,
+        force_rebuild: bool = False,
+        deploy: RegistryDeployOptions | None = None,
+    ) -> RegistryState:
         self.ensure_deploy_dirs()
         self.ensure_registry_image_ready(force=force_rebuild)
         created = False
         if not self.has_local_registry():
             created = True
-            port = pick_available_port(DEFAULT_REGISTRY_PORT)
             values = OrderedDict(
                 {
                     "REGISTRY_ENROLL_TOKEN": secrets.token_urlsafe(24),
                     "REGISTRY_UI_TOKEN": secrets.token_urlsafe(24),
-                    "REGISTRY_BIND_HOST": "127.0.0.1",
-                    "REGISTRY_PORT": str(port),
                     "REGISTRY_ALLOW_HTTP": "1",
                 }
             )
-            write_env_file(self.registry_env_file(), values)
+        else:
+            values = parse_env_file(self.registry_env_file())
+        values = self._validated_registry_deploy_values(deploy, existing=values, creating=created)
+        write_env_file(self.registry_env_file(), values)
         self.docker.registry_compose("up", "-d", "--remove-orphans", "service", capture_output=False)
         state = self.inspect_state().registry
         if created:
@@ -890,12 +1081,20 @@ class OctopusManager:
             self.io.print("  Stored in: .deploy/registry/.env (REGISTRY_UI_TOKEN)")
         return state
 
-    def start_registry(self, *, force_rebuild: bool = False, force_recreate: bool = False) -> None:
+    def start_registry(
+        self,
+        *,
+        force_rebuild: bool = False,
+        force_recreate: bool = False,
+        deploy: RegistryDeployOptions | None = None,
+    ) -> None:
         self.ensure_deploy_dirs()
         self.ensure_registry_image_ready(force=force_rebuild)
         if not self.has_local_registry():
-            self.ensure_local_registry(force_rebuild=force_rebuild)
+            self.ensure_local_registry(force_rebuild=force_rebuild, deploy=deploy)
             return
+        values = self._validated_registry_deploy_values(deploy, existing=parse_env_file(self.registry_env_file()), creating=False)
+        write_env_file(self.registry_env_file(), values)
         args = ["up", "-d", "--remove-orphans"]
         if force_recreate:
             args.append("--force-recreate")
@@ -965,7 +1164,7 @@ class OctopusManager:
         agent_token = state.get("agent_token", "")
         if not agent_id or not agent_token:
             return False
-        base_url = self.local_registry_public_base_url() if connection.url == LOCAL_REGISTRY_INTERNAL_URL else connection.url
+        base_url = self.local_registry_host_base_url() if connection.url == LOCAL_REGISTRY_INTERNAL_URL else connection.url
         request = urllib.request.Request(
             f"{base_url.rstrip('/')}/v1/agents/{agent_id}/status",
             headers={"Authorization": f"Bearer {agent_token}"},
@@ -1004,12 +1203,85 @@ class OctopusManager:
         upsert_env_value(env_file, "BOT_AGENT_MODE", mode)
         write_registry_connection_records(env_file, records)
 
+    def _unique_registry_id(self, records: list[RegistryConnection], base: str) -> str:
+        candidate = normalize_slug(base, fallback="registry") or "registry"
+        existing = {record.registry_id for record in records}
+        if candidate not in existing:
+            return candidate
+        suffix = 2
+        while f"{candidate}-{suffix}" in existing:
+            suffix += 1
+        return f"{candidate}-{suffix}"
+
+    def _derived_registry_id(self, registry_url: str, records: list[RegistryConnection]) -> str:
+        parsed = urlparse(registry_url)
+        host = (parsed.hostname or "registry").strip() or "registry"
+        base = normalize_slug(host, fallback="registry") or "registry"
+        port = parsed.port
+        if port and port not in {80, 443}:
+            base = normalize_slug(f"{base}-{port}", fallback=base)
+        return self._unique_registry_id(records, base)
+
+    def connect_bot_to_registry(
+        self,
+        slug: str,
+        *,
+        registry_url: str,
+        enrollment_token: str,
+        desired_scope: str = "full",
+        registry_id: str = "",
+    ) -> RegistryConnection:
+        normalized_url, _ = _parse_registry_url(registry_url)
+        if normalized_url.rstrip("/") == LOCAL_REGISTRY_INTERNAL_URL.rstrip("/"):
+            raise OctopusError("Use ./octopus connect without --registry-url to connect a bot to the local registry.")
+        token = str(enrollment_token or "").strip()
+        if not token:
+            raise OctopusError("A remote registry enroll token is required.")
+        records = list(self.bot_registry_connections(slug))
+        scope = desired_scope or "full"
+        selected_id = normalize_slug(registry_id, fallback="registry") if registry_id else ""
+        connection: RegistryConnection | None = None
+        if selected_id:
+            connection = next((record for record in records if record.registry_id == selected_id), None)
+        if connection is None:
+            connection = next((record for record in records if record.url.rstrip("/") == normalized_url), None)
+        previous_id = connection.registry_id if connection is not None else None
+        if connection is None:
+            connection = RegistryConnection(
+                registry_id=selected_id or self._derived_registry_id(normalized_url, records),
+                url=normalized_url,
+                enrollment_token=token,
+                scope=scope,
+            )
+        else:
+            new_id = selected_id or connection.registry_id
+            duplicate = next(
+                (record for record in records if record.registry_id == new_id and record.registry_id != connection.registry_id),
+                None,
+            )
+            if duplicate is not None:
+                raise OctopusError(f"{slug} already has a registry connection named '{new_id}'.")
+            connection.registry_id = new_id
+            connection.url = normalized_url
+            connection.enrollment_token = token
+            connection.scope = scope
+        self.configure_bot_registry_connections(
+            slug,
+            self._replace_registry_record(records, connection, previous_id=previous_id),
+        )
+        state = self.read_bot_registry_state(slug, connection.registry_id)
+        if state and not self.registry_identity_valid(connection, state):
+            self.clear_bot_registry_state(slug, [connection.registry_id])
+        self.restart_bot(slug, force_rebuild=False)
+        self.verify_registry_enrollment(slug, connection.registry_id)
+        return connection
+
     def connect_bot_to_local_registry(self, slug: str, *, desired_scope: str = "full") -> None:
         registry = self.ensure_local_registry()
         if not registry.enroll_token:
             raise OctopusError("Local registry setup is incomplete.")
         connection = self.bot_local_registry_connection(slug)
-        records = self.bot_registry_connections(slug)
+        records = list(self.bot_registry_connections(slug))
         if connection is None:
             registry_id = "local"
             existing_ids = {record.registry_id for record in records}
@@ -1023,26 +1295,22 @@ class OctopusManager:
                 enrollment_token=registry.enroll_token,
                 scope=desired_scope,
             )
-            records.append(connection)
-            self.configure_bot_registry_connections(slug, records)
         else:
             connection.enrollment_token = registry.enroll_token
             connection.scope = desired_scope or connection.scope
-            for index, record in enumerate(records):
-                if record.registry_id == connection.registry_id:
-                    records[index] = connection
-            self.configure_bot_registry_connections(slug, records)
+        self.configure_bot_registry_connections(slug, self._replace_registry_record(records, connection))
         state = self.read_bot_registry_state(slug, connection.registry_id)
         if state and not self.registry_identity_valid(connection, state):
             self.clear_bot_registry_state(slug, [connection.registry_id])
         self.restart_bot(slug, force_rebuild=False)
         self.verify_registry_enrollment(slug, connection.registry_id)
 
-    def disconnect_bot__local_registry(self, slug: str) -> None:
-        connection = self.bot_local_registry_connection(slug)
+    def disconnect_bot_registry(self, slug: str, *, registry_id: str = "") -> RegistryConnection:
+        connection = self.bot_registry_connection_by_id(slug, registry_id) if registry_id else self.bot_local_registry_connection(slug)
         if connection is None:
-            self.io.print(f"{slug} has no local registry connection.")
-            return
+            if registry_id:
+                raise OctopusError(f"{slug} has no registry connection named '{registry_id}'.")
+            raise OctopusError(f"{slug} has no local registry connection.")
         records = [record for record in self.bot_registry_connections(slug) if record.registry_id != connection.registry_id]
         env_file = self.bot_env_file(slug)
         if records:
@@ -1052,6 +1320,10 @@ class OctopusManager:
             write_registry_connection_records(env_file, [])
         self.clear_bot_registry_state(slug, [connection.registry_id])
         self.restart_bot(slug, force_rebuild=False)
+        return connection
+
+    def disconnect_bot__local_registry(self, slug: str) -> None:
+        self.disconnect_bot_registry(slug)
 
     def clean_all(self) -> None:
         answer = self.io.prompt("Type 'yes' to confirm: ")

@@ -33,6 +33,39 @@ class RegistryConnection:
 
 
 @dataclass(slots=True)
+class RegistryConnectionStatus:
+    registry_id: str
+    url: str
+    scope: str = "full"
+    connection_state: str = "none"
+    live_state: str = "none"
+    local: bool = False
+
+
+@dataclass(slots=True)
+class RegistryDeployOptions:
+    bind_host: str = ""
+    port: int | None = None
+    public_url: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.bind_host and self.port is None and not self.public_url
+
+
+@dataclass(slots=True)
+class RegistryConnectOptions:
+    registry_url: str = ""
+    enrollment_token: str = ""
+    registry_id: str = ""
+    scope: str = ""
+
+    @property
+    def is_remote(self) -> bool:
+        return bool(self.registry_url)
+
+
+@dataclass(slots=True)
 class Workspace:
     slug: str
     root: Path
@@ -75,6 +108,7 @@ class BotState:
     role: str = ""
     tags: str = ""
     registry_connections: list[RegistryConnection] = field(default_factory=list)
+    registry_connection_statuses: list[RegistryConnectionStatus] = field(default_factory=list)
     local_registry_connection_state: str = "none"
     local_registry_live_state: str = "none"
     workspace_memberships: list[str] = field(default_factory=list)
@@ -92,8 +126,11 @@ class RegistryState:
     configured: bool
     running: bool
     env_file: Path
+    bind_host: str = "127.0.0.1"
     port: int = 8787
-    ui_url: str = "http://localhost:8787/ui"
+    public_url: str = "http://127.0.0.1:8787"
+    host_base_url: str = "http://127.0.0.1:8787"
+    ui_url: str = "http://127.0.0.1:8787/ui"
     enroll_token: str = ""
     ui_token: str = ""
 

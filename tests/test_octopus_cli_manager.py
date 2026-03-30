@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
+
+import app.octopus_cli.core as octopus_core
 from app.octopus_cli.core import OctopusManager, PromptIO
-from app.octopus_cli.models import Action
+from app.octopus_cli.models import Action, RegistryConnection, RegistryDeployOptions
 
 
 class _ComposeDockerRunner:
@@ -16,6 +20,22 @@ class _ComposeDockerRunner:
     def docker_status_for_slug(self, slug: str) -> str:
         del slug
         return "Up 1 second"
+
+    def run(self, args, **kwargs):  # noqa: ANN001
+        del kwargs
+        from subprocess import CompletedProcess
+
+        joined = " ".join(args)
+        if "compose -p octopus-registry ps" in joined:
+            return CompletedProcess(args, 0, "", "")
+        return CompletedProcess(args, 0, "", "")
+
+    def registry_compose(self, *args, **kwargs):  # noqa: ANN001
+        del kwargs
+        self.commands.append(("registry", *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(["docker"], 0, "", "")
 
     def bot_compose(self, slug, *args, **kwargs):  # noqa: ANN001
         del kwargs
@@ -116,6 +136,20 @@ def _write_registry_bot_env(tmp_path: Path, slug: str, display_name: str) -> Non
         ),
         encoding="utf-8",
     )
+
+
+def _write_bot_env(tmp_path: Path, slug: str, display_name: str, extra_lines: list[str] | None = None) -> None:
+    env_dir = tmp_path / ".deploy" / "bots" / slug
+    env_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"BOT_DISPLAY_NAME={display_name}",
+        f"BOT_TELEGRAM_USERNAME={slug}",
+        "BOT_PROVIDER=codex",
+        "BOT_AGENT_MODE=standalone",
+    ]
+    if extra_lines:
+        lines.extend(extra_lines)
+    (env_dir / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def test_connect_targets_default_to_all_eligible_registry_bots(tmp_path: Path) -> None:
@@ -231,3 +265,185 @@ def test_read_bot_registry_state_uses_exec_against_running_bot(tmp_path: Path) -
     script = docker.commands[0][-1]
     assert "from pathlib import Path" in script
     assert "agent' / 'registries'" in script
+
+
+def test_registry_deploy_defaults_public_url_for_ip_bind(tmp_path: Path) -> None:
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+
+    values = manager._validated_registry_deploy_values(
+        RegistryDeployOptions(bind_host="192.168.1.20", port=9000),
+        existing=None,
+        creating=True,
+    )
+
+    assert values["REGISTRY_BIND_HOST"] == "192.168.1.20"
+    assert values["REGISTRY_PORT"] == "9000"
+    assert values["REGISTRY_PUBLIC_URL"] == "http://192.168.1.20:9000"
+
+
+def test_registry_deploy_rejects_0_0_0_0_without_public_url(tmp_path: Path) -> None:
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+
+    with pytest.raises(octopus_core.OctopusError, match="public registry URL is required"):
+        manager._validated_registry_deploy_values(
+            RegistryDeployOptions(bind_host="0.0.0.0"),
+            existing=None,
+            creating=True,
+        )
+
+
+def test_registry_deploy_rejects_hostname_bind_host(tmp_path: Path) -> None:
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+
+    with pytest.raises(octopus_core.OctopusError, match="bind host must be localhost, 0.0.0.0, or a concrete IP address"):
+        manager._validated_registry_deploy_values(
+            RegistryDeployOptions(bind_host="registry.example.internal"),
+            existing=None,
+            creating=True,
+        )
+
+
+def test_inspect_state_reports_registry_bind_and_public_urls(tmp_path: Path) -> None:
+    registry_dir = tmp_path / ".deploy" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    (registry_dir / ".env").write_text(
+        "\n".join(
+            [
+                "REGISTRY_BIND_HOST=0.0.0.0",
+                "REGISTRY_PORT=9000",
+                "REGISTRY_PUBLIC_URL=http://mybox.local:9000",
+                "REGISTRY_ENROLL_TOKEN=enroll",
+                "REGISTRY_UI_TOKEN=ui",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class _RunningRegistryDocker(_ComposeDockerRunner):
+        def run(self, args, **kwargs):  # noqa: ANN001
+            del kwargs
+            from subprocess import CompletedProcess
+
+            joined = " ".join(args)
+            if "compose -p octopus-registry ps" in joined:
+                return CompletedProcess(args, 0, "service\n", "")
+            return CompletedProcess(args, 0, "", "")
+
+    manager = OctopusManager(tmp_path, docker=_RunningRegistryDocker())
+
+    state = manager.inspect_state().registry
+
+    assert state.running is True
+    assert state.bind_host == "0.0.0.0"
+    assert state.port == 9000
+    assert state.host_base_url == "http://127.0.0.1:9000"
+    assert state.public_url == "http://mybox.local:9000"
+    assert state.ui_url == "http://mybox.local:9000/ui"
+
+
+def test_registry_identity_valid_uses_host_base_url_for_local_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_dir = tmp_path / ".deploy" / "registry"
+    registry_dir.mkdir(parents=True, exist_ok=True)
+    (registry_dir / ".env").write_text(
+        "\n".join(
+            [
+                "REGISTRY_BIND_HOST=0.0.0.0",
+                "REGISTRY_PORT=8787",
+                "REGISTRY_PUBLIC_URL=http://mybox.local:8787",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    seen: dict[str, str] = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN204
+            del exc_type, exc, tb
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"agent_id": "agent-1"}).encode("utf-8")
+
+    def _fake_urlopen(request, timeout=10):  # noqa: ANN001
+        del timeout
+        seen["url"] = request.full_url
+        return _Response()
+
+    monkeypatch.setattr(octopus_core.urllib.request, "urlopen", _fake_urlopen)
+
+    valid = manager.registry_identity_valid(
+        RegistryConnection(registry_id="local", url="http://registry:8787", enrollment_token="secret"),
+        {"agent_id": "agent-1", "agent_token": "token-1"},
+    )
+
+    assert valid is True
+    assert seen["url"] == "http://127.0.0.1:8787/v1/agents/agent-1/status"
+
+
+def test_connect_bot_to_remote_registry_writes_registry_record(tmp_path: Path) -> None:
+    _write_bot_env(tmp_path, "m1", "M1")
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    restarted: list[str] = []
+    verified: list[tuple[str, str]] = []
+
+    manager.restart_bot = lambda slug, force_rebuild=False: restarted.append(slug)  # type: ignore[method-assign]
+    manager.verify_registry_enrollment = lambda slug, registry_id: verified.append((slug, registry_id))  # type: ignore[method-assign]
+
+    connection = manager.connect_bot_to_registry(
+        "m1",
+        registry_url="http://registry.example.internal:9000",
+        enrollment_token="remote-secret",
+        desired_scope="observe",
+    )
+
+    values = manager.bot_values("m1")
+    assert values["BOT_AGENT_MODE"] == "registry"
+    assert values["BOT_AGENT_REGISTRY_1_URL"] == "http://registry.example.internal:9000"
+    assert values["BOT_AGENT_REGISTRY_1_ENROLL_TOKEN"] == "remote-secret"
+    assert values["BOT_AGENT_REGISTRY_1_SCOPE"] == "observe"
+    assert connection.registry_id == "registry-example-internal-9000"
+    assert restarted == ["m1"]
+    assert verified == [("m1", "registry-example-internal-9000")]
+
+
+def test_disconnect_bot_registry_by_id_removes_only_target_record(tmp_path: Path) -> None:
+    _write_bot_env(
+        tmp_path,
+        "m1",
+        "M1",
+        [
+            "BOT_AGENT_MODE=registry",
+            "BOT_AGENT_REGISTRY_1_ID=local",
+            "BOT_AGENT_REGISTRY_1_URL=http://registry:8787",
+            "BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=local-token",
+            "BOT_AGENT_REGISTRY_1_SCOPE=full",
+            "BOT_AGENT_REGISTRY_2_ID=qa",
+            "BOT_AGENT_REGISTRY_2_URL=http://qa.example.internal:8787",
+            "BOT_AGENT_REGISTRY_2_ENROLL_TOKEN=qa-token",
+            "BOT_AGENT_REGISTRY_2_SCOPE=observe",
+        ],
+    )
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    cleared: list[list[str] | None] = []
+    restarted: list[str] = []
+
+    manager.clear_bot_registry_state = lambda slug, registry_ids=None: cleared.append(registry_ids)  # type: ignore[method-assign]
+    manager.restart_bot = lambda slug, force_rebuild=False: restarted.append(slug)  # type: ignore[method-assign]
+
+    connection = manager.disconnect_bot_registry("m1", registry_id="qa")
+
+    values = manager.bot_values("m1")
+    assert connection.registry_id == "qa"
+    assert values["BOT_AGENT_MODE"] == "registry"
+    assert values["BOT_AGENT_REGISTRY_1_ID"] == "local"
+    assert "BOT_AGENT_REGISTRY_2_ID" not in values
+    assert cleared == [["qa"]]
+    assert restarted == ["m1"]

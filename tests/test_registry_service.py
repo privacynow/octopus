@@ -1334,6 +1334,19 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
                     },
                 },
                 {
+                    "event_id": "evt-summary-provider-claude",
+                    "kind": "provider.response",
+                    "actor": "claude",
+                    "content": "",
+                    "created_at": now_iso,
+                    "metadata": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2,
+                        "cost_usd": 0.5,
+                        "provider": "claude",
+                    },
+                },
+                {
                     "event_id": "evt-summary-approval",
                     "kind": "approval.requested",
                     "actor": "operator",
@@ -1421,9 +1434,10 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "failed_24h": 0,
     }
     assert payload["usage_24h"] == {
-        "prompt_tokens": 11,
-        "completion_tokens": 7,
-        "cost_usd": 0.25,
+        "prompt_tokens": 14,
+        "completion_tokens": 9,
+        "cost_usd": 0.5,
+        "cost_available": True,
     }
 
 
@@ -1495,7 +1509,8 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
     assert payload["daily_total"] == {
         "prompt_tokens": 13,
         "completion_tokens": 5,
-        "cost_usd": 0.17,
+        "cost_usd": 0.0,
+        "cost_available": False,
     }
     row = next(item for item in payload["by_conversation"] if item["conversation_id"] == conversation_id)
     assert row == {
@@ -1503,7 +1518,8 @@ def test_usage_endpoint_rolls_up_delegated_child_usage(monkeypatch, tmp_path: Pa
         "title": "Usage rollup conversation",
         "prompt_tokens": 13,
         "completion_tokens": 5,
-        "cost_usd": 0.17,
+        "cost_usd": 0.0,
+        "cost_available": False,
     }
 
 

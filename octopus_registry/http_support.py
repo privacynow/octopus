@@ -69,6 +69,15 @@ def float_value(value: Any) -> float:
         return 0.0
 
 
+def provider_reports_cost(metadata: dict[str, Any] | None) -> bool:
+    provider = str((metadata or {}).get("provider") or "").strip().lower()
+    if provider == "codex":
+        return False
+    if provider:
+        return True
+    return float_value((metadata or {}).get("cost_usd")) > 0.0
+
+
 def operator_actor_key(raw: str = "") -> str:
     token = parse_actor_key(raw)
     return token or "reg:registry-ui"

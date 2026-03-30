@@ -159,7 +159,9 @@ function _renderProviderResponseCard(body, metadata) {
     metrics.className = 'inline-metrics';
     metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), 'Input'));
     metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), 'Reply'));
-    metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
+    if (_providerReportsCost(metadata)) {
+        metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
+    }
     metrics.appendChild(_createInlineMetric(metadata.provider || 'unknown', 'Provider'));
     body.appendChild(metrics);
 }
@@ -430,6 +432,17 @@ function _createInlineMetric(value, label) {
     return metric;
 }
 
+function _providerReportsCost(metadata) {
+    const provider = String(metadata?.provider || '').trim().toLowerCase();
+    if (provider === 'codex') {
+        return false;
+    }
+    if (provider) {
+        return true;
+    }
+    return Number(metadata?.cost_usd || 0) > 0;
+}
+
 function _eventSummary(kind, event, taskContext = []) {
     const metadata = event.metadata || {};
     switch (kind) {
@@ -442,8 +455,8 @@ function _eventSummary(kind, event, taskContext = []) {
         case 'provider.response':
             return [
                 `${Number((metadata.prompt_tokens || 0) + (metadata.completion_tokens || 0)).toLocaleString()} tokens`,
-                `$${Number(metadata.cost_usd || 0).toFixed(4)}`,
-            ].join(' · ');
+                _providerReportsCost(metadata) ? `$${Number(metadata.cost_usd || 0).toFixed(4)}` : '',
+            ].filter(Boolean).join(' · ');
         case 'tool.execution':
             return [
                 metadata.tool_name || 'Tool',

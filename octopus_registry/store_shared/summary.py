@@ -17,6 +17,18 @@ def _stringify_timestamp(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+def _provider_reports_cost(metadata: dict[str, object]) -> bool:
+    provider = str(metadata.get("provider") or "").strip().lower()
+    if provider == "codex":
+        return False
+    if provider:
+        return True
+    try:
+        return bool(float(metadata.get("cost_usd") or 0.0))
+    except (TypeError, ValueError):
+        return False
+
+
 def get_usage_summary(
     conn,
     *,
@@ -121,12 +133,15 @@ def get_summary(
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "cost_usd": 0.0,
+        "cost_available": False,
     }
     for row in usage_rows:
         metadata = row.metadata or {}
         usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
         usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
-        usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
+        if _provider_reports_cost(metadata):
+            usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
+            usage_total["cost_available"] = True
 
     return RegistrySummaryRecord.model_validate({
         "generated_at": now_iso,

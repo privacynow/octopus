@@ -220,6 +220,7 @@ function renderDashboard(container) {
         const completionTokens = Number(summary.usage_24h?.completion_tokens || 0);
         const totalTokens = promptTokens + completionTokens;
         const unhealthyAgents = Number(summary.agents?.degraded || 0) + Number(summary.agents?.disconnected || 0);
+        const costAvailable = summary.usage_24h?.cost_available !== false;
         const items = [
             {
                 key: 'queued-backlog',
@@ -244,9 +245,11 @@ function renderDashboard(container) {
             },
             {
                 key: 'cost-24h',
-                value: '$' + Number(summary.usage_24h?.cost_usd || 0).toFixed(4),
-                label: 'Usage cost · 24h',
-                detail: `${summary.conversations?.active || 0} active conversations`,
+                value: costAvailable ? ('$' + Number(summary.usage_24h?.cost_usd || 0).toFixed(4)) : '—',
+                label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable',
+                detail: costAvailable
+                    ? `${summary.conversations?.active || 0} active conversations`
+                    : 'Codex does not report execution cost',
                 href: '/ui/usage',
             },
         ];

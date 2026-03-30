@@ -628,6 +628,11 @@ class CodexProvider:
                     total = msg.get("info", {}).get("total_token_usage", {})
                     usage_input = int(total.get("input_tokens", 0) or 0)
                     usage_output = int(total.get("output_tokens", 0) or 0)
+                elif etype == "turn_completed":
+                    usage = event.get("usage", {})
+                    if isinstance(usage, dict):
+                        usage_input = int(usage.get("input_tokens", 0) or 0)
+                        usage_output = int(usage.get("output_tokens", 0) or 0)
 
                 thread_id = self._extract_thread_id(event) or thread_id
                 if self._normalize_type(event.get("type")) == "session_meta":

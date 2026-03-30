@@ -705,6 +705,14 @@ def _modern_codex_script() -> str:
                     "last_agent_message": "final modern reply",
                 },
             },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 11779,
+                    "cached_input_tokens": 4480,
+                    "output_tokens": 17,
+                },
+            },
         ]
         for event in events:
             sys.stdout.write(json.dumps(event) + "\\n")
@@ -843,6 +851,9 @@ async def test_modern_schema_new():
     assert any(("Running command" in u or "Running a command" in u) and "git status" in u for u in progress1.updates)
     assert any("Command finished" in u and "M app/providers/codex.py" in u for u in progress1.updates)
     assert any("draft response item" in u for u in progress1.updates)
+    assert result1.prompt_tokens == 11779
+    assert result1.completion_tokens == 17
+    assert result1.cost_usd == 0.0
 
 
 async def test_modern_schema_resume():

@@ -66,10 +66,11 @@ function renderUsageView(container) {
     }
 
     function renderSummary(daily) {
+        const costAvailable = daily.cost_available !== false;
         const items = [
             ['prompt', (daily.prompt_tokens || 0).toLocaleString(), 'Prompt tokens'],
             ['completion', (daily.completion_tokens || 0).toLocaleString(), 'Completion tokens'],
-            ['cost', '$' + (daily.cost_usd || 0).toFixed(4), 'Total cost'],
+            ['cost', costAvailable ? ('$' + (daily.cost_usd || 0).toFixed(4)) : '—', costAvailable ? 'Total cost' : 'Cost unavailable'],
         ];
         UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map(([key, value, label]) => {
             const card = UI.renderStatCard({ value, label });
@@ -85,7 +86,9 @@ function renderUsageView(container) {
             return;
         }
 
-        UI.memoizedRender(tableEl, rows, (nextRows) => {
+        const showCost = rows.some((item) => item.cost_available !== false);
+        UI.memoizedRender(tableEl, { rows, showCost }, (nextState) => {
+        const nextRows = nextState.rows || [];
         const wrap = document.createElement('div');
         wrap.className = 'table-wrap';
         wrap.dataset.key = 'usage-table-wrap';
@@ -94,7 +97,9 @@ function renderUsageView(container) {
         table.className = 'data-table responsive';
 
         const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>';
+        thead.innerHTML = nextState.showCost
+            ? '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>'
+            : '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th></tr>';
         table.appendChild(thead);
 
         const tbody = document.createElement('tbody');
@@ -110,11 +115,17 @@ function renderUsageView(container) {
             linkTd.appendChild(link);
             tr.appendChild(linkTd);
 
-            [
+            const cells = [
                 ['Prompt', (item.prompt_tokens || 0).toLocaleString()],
                 ['Completion', (item.completion_tokens || 0).toLocaleString()],
-                ['Cost', '$' + (item.cost_usd || 0).toFixed(4)],
-            ].forEach(([label, value]) => {
+            ];
+            if (nextState.showCost) {
+                cells.push([
+                    'Cost',
+                    item.cost_available === false ? '—' : ('$' + (item.cost_usd || 0).toFixed(4)),
+                ]);
+            }
+            cells.forEach(([label, value]) => {
                 const td = document.createElement('td');
                 td.setAttribute('data-label', label);
                 td.textContent = value;
@@ -127,13 +138,18 @@ function renderUsageView(container) {
         return [wrap];
         }, {
             signatureFn(nextRows) {
-                return (nextRows || []).map((item) => ({
-                    id: String(item.conversation_id || ''),
-                    title: String(item.title || ''),
-                    prompt: Number(item.prompt_tokens || 0),
-                    completion: Number(item.completion_tokens || 0),
-                    cost: Number(item.cost_usd || 0),
-                }));
+                const rows = nextRows?.rows || [];
+                return {
+                    showCost: !!nextRows?.showCost,
+                    rows: rows.map((item) => ({
+                        id: String(item.conversation_id || ''),
+                        title: String(item.title || ''),
+                        prompt: Number(item.prompt_tokens || 0),
+                        completion: Number(item.completion_tokens || 0),
+                        cost: Number(item.cost_usd || 0),
+                        costAvailable: item.cost_available !== false,
+                    })),
+                };
             },
         });
     }

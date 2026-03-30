@@ -1248,7 +1248,8 @@ def test_delegated_task_usage_rolls_up_to_parent_conversation(store):
     assert summary.usage_24h == {
         "prompt_tokens": 13,
         "completion_tokens": 5,
-        "cost_usd": 0.17,
+        "cost_usd": 0.0,
+        "cost_available": False,
     }
 
 

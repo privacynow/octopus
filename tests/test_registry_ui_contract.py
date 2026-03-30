@@ -204,7 +204,7 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "label: 'Queued backlog'" in dashboard
     assert "label: 'Unhealthy agents'" in dashboard
     assert "label: 'Tokens · 24h'" in dashboard
-    assert "label: 'Usage cost · 24h'" in dashboard
+    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" in dashboard
     assert "value: String(summary.conversations?.open || 0)" not in dashboard
     assert "value: String(summary.tasks?.running || 0)" not in dashboard
     assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard

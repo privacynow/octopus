@@ -320,20 +320,10 @@ class RegistryChannelEgress(TransportEgress):
         prompt: str,
         run_again_label: str,
         skip_label: str,
-        update_id: int,
+        recovery_id: str,
     ) -> None:
-        if self._is_task_ref():
-            return
-        del run_again_label, skip_label, update_id
-        await self._publish_event(
-            kind="error",
-            title="Recovery available",
-            body=f"{preview}\n\n{prompt}".strip(),
-            metadata={
-                "error_type": "recovery",
-                "message": "Execution paused. Choose how to continue.",
-            },
-        )
+        del preview, prompt, run_again_label, skip_label, recovery_id
+        return
 
     async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:
         return await self.send_text(text, **kwargs)

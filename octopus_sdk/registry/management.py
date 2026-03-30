@@ -9,6 +9,10 @@ from pydantic import Field
 
 from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
+from octopus_sdk.workflows.conversation import (
+    ConversationResetOutcome,
+    SettingMutationOutcome,
+)
 from octopus_sdk.workflows.provider_guidance import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleMutation,
@@ -25,6 +29,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleMutation,
     RuntimeSkillMutationOutcome,
     RuntimeSkillSearchResults,
+    RuntimeSkillSetupAdvanceOutcome,
 )
 
 ManagementCapability = Literal[
@@ -32,6 +37,7 @@ ManagementCapability = Literal[
     "skill_lifecycle",
     "provider_guidance",
     "conversation_skills",
+    "conversation_settings",
 ]
 
 ManagementOperation = Literal[
@@ -53,6 +59,10 @@ ManagementOperation = Literal[
     "activate_conversation_skill",
     "deactivate_conversation_skill",
     "clear_conversation_skills",
+    "submit_conversation_skill_credential",
+    "conversation_settings_state",
+    "set_conversation_setting",
+    "reset_conversation",
     "preview_provider_guidance",
     "provider_guidance_detail",
     "edit_provider_guidance_draft",
@@ -198,12 +208,61 @@ class ConversationSkillListingRecord(RegistryRecordModel):
     active_skill_details: list[ConversationSkillItemRecord] = Field(default_factory=list)
 
 
+class ConversationSkillSetupPromptRecord(RegistryRecordModel):
+    skill_name: str = ""
+    actor_key: str = ""
+    requirement: SkillRequirementRecord | None = None
+
+
 class ConversationSkillMutationOutcomeRecord(RegistryRecordModel):
     status: str = ""
     first_requirement: SkillRequirementRecord | None = None
     projected_size: int = 0
     prompt_size_threshold: int = 0
     foreign_setup_user: str = ""
+
+
+class ConversationSkillSetupAdvanceOutcomeRecord(RegistryRecordModel):
+    status: str = ""
+    validation_key: str = ""
+    validation_error: str = ""
+    next_requirement: SkillRequirementRecord | None = None
+    skill_name: str = ""
+
+
+class ConversationSettingsStateRecord(RegistryRecordModel):
+    conversation_id: str = ""
+    conversation_key: str = ""
+    role: str = ""
+    default_role: str = ""
+    approval_mode: str = ""
+    approval_mode_explicit: bool = False
+    compact_mode: bool | None = None
+    effective_compact_mode: bool = False
+    model_profile: str = ""
+    current_profile: str = ""
+    effective_model: str = ""
+    available_model_profiles: list[str] = Field(default_factory=list)
+    file_policy: str = ""
+    effective_file_policy: str = ""
+    project_id: str = ""
+    available_projects: list[str] = Field(default_factory=list)
+
+
+class ConversationSettingMutationRecord(RegistryRecordModel):
+    setting: str = ""
+    status: str = ""
+    mutated: bool = False
+    message: str = ""
+    effective_policy: str = ""
+    effective_model: str = ""
+    current_profile: str = ""
+    compact_enabled: bool | None = None
+
+
+class ConversationResetOutcomeRecord(RegistryRecordModel):
+    status: str = ""
+    message: str = ""
 
 
 class ProviderGuidancePreviewRecord(RegistryRecordModel):
@@ -436,6 +495,47 @@ def conversation_skill_mutation_outcome_record(
     )
 
 
+def conversation_skill_setup_advance_outcome_record(
+    outcome: RuntimeSkillSetupAdvanceOutcome,
+) -> ConversationSkillSetupAdvanceOutcomeRecord:
+    return ConversationSkillSetupAdvanceOutcomeRecord(
+        status=outcome.status,
+        validation_key=outcome.validation_key,
+        validation_error=outcome.validation_error,
+        next_requirement=(
+            skill_requirement_record(outcome.next_requirement)
+            if outcome.next_requirement is not None
+            else None
+        ),
+        skill_name=outcome.skill_name,
+    )
+
+
+def conversation_setting_mutation_record(
+    setting: str,
+    outcome: SettingMutationOutcome,
+) -> ConversationSettingMutationRecord:
+    return ConversationSettingMutationRecord(
+        setting=setting,
+        status=outcome.status,
+        mutated=outcome.mutated,
+        message=outcome.message,
+        effective_policy=outcome.effective_policy,
+        effective_model=outcome.effective_model,
+        current_profile=outcome.current_profile,
+        compact_enabled=outcome.compact_enabled,
+    )
+
+
+def conversation_reset_outcome_record(
+    outcome: ConversationResetOutcome,
+) -> ConversationResetOutcomeRecord:
+    return ConversationResetOutcomeRecord(
+        status=outcome.status,
+        message=outcome.message,
+    )
+
+
 def provider_guidance_preview_record(
     preview: ProviderGuidancePreview,
 ) -> ProviderGuidancePreviewRecord:
@@ -613,6 +713,37 @@ class ClearConversationSkillsRequest(RegistryRecordModel):
     actor_key: str
 
 
+class SubmitConversationSkillCredentialRequest(RegistryRecordModel):
+    operation: Literal["submit_conversation_skill_credential"] = "submit_conversation_skill_credential"
+    conversation_id: str
+    conversation_key: str
+    actor_key: str
+    skill_name: str
+    value: str
+
+
+class ConversationSettingsStateRequest(RegistryRecordModel):
+    operation: Literal["conversation_settings_state"] = "conversation_settings_state"
+    conversation_id: str
+    conversation_key: str
+
+
+class SetConversationSettingRequest(RegistryRecordModel):
+    operation: Literal["set_conversation_setting"] = "set_conversation_setting"
+    conversation_id: str
+    conversation_key: str
+    actor_key: str
+    setting: Literal["approval_mode", "compact_mode", "role", "model_profile", "project", "file_policy"]
+    value: str = ""
+
+
+class ResetConversationRequest(RegistryRecordModel):
+    operation: Literal["reset_conversation"] = "reset_conversation"
+    conversation_id: str
+    conversation_key: str
+    actor_key: str
+
+
 class PreviewProviderGuidanceRequest(RegistryRecordModel):
     operation: Literal["preview_provider_guidance"] = "preview_provider_guidance"
     provider_name: str
@@ -701,6 +832,10 @@ ManagementRequestPayload = Annotated[
     | ActivateConversationSkillRequest
     | DeactivateConversationSkillRequest
     | ClearConversationSkillsRequest
+    | SubmitConversationSkillCredentialRequest
+    | ConversationSettingsStateRequest
+    | SetConversationSettingRequest
+    | ResetConversationRequest
     | PreviewProviderGuidanceRequest
     | ProviderGuidanceDetailRequest
     | EditProviderGuidanceDraftRequest
@@ -788,6 +923,7 @@ class ConversationSkillStateResult(RegistryRecordModel):
     conversation_id: str
     conversation_key: str
     listing: ConversationSkillListingRecord
+    pending_setup: ConversationSkillSetupPromptRecord | None = None
 
 
 class ActivateConversationSkillResult(RegistryRecordModel):
@@ -803,6 +939,28 @@ class DeactivateConversationSkillResult(RegistryRecordModel):
 class ClearConversationSkillsResult(RegistryRecordModel):
     operation: Literal["clear_conversation_skills"] = "clear_conversation_skills"
     result: ConversationSkillMutationOutcomeRecord
+
+
+class SubmitConversationSkillCredentialResult(RegistryRecordModel):
+    operation: Literal["submit_conversation_skill_credential"] = "submit_conversation_skill_credential"
+    result: ConversationSkillSetupAdvanceOutcomeRecord
+
+
+class ConversationSettingsStateResult(RegistryRecordModel):
+    operation: Literal["conversation_settings_state"] = "conversation_settings_state"
+    state: ConversationSettingsStateRecord
+
+
+class SetConversationSettingResult(RegistryRecordModel):
+    operation: Literal["set_conversation_setting"] = "set_conversation_setting"
+    result: ConversationSettingMutationRecord
+    state: ConversationSettingsStateRecord
+
+
+class ResetConversationResult(RegistryRecordModel):
+    operation: Literal["reset_conversation"] = "reset_conversation"
+    result: ConversationResetOutcomeRecord
+    state: ConversationSettingsStateRecord
 
 
 class PreviewProviderGuidanceResult(RegistryRecordModel):
@@ -864,6 +1022,10 @@ ManagementResultPayload = Annotated[
     | ActivateConversationSkillResult
     | DeactivateConversationSkillResult
     | ClearConversationSkillsResult
+    | SubmitConversationSkillCredentialResult
+    | ConversationSettingsStateResult
+    | SetConversationSettingResult
+    | ResetConversationResult
     | PreviewProviderGuidanceResult
     | ProviderGuidanceDetailResult
     | EditProviderGuidanceDraftResult
@@ -931,6 +1093,10 @@ MANAGEMENT_OPERATION_CAPABILITIES: dict[ManagementOperation, ManagementCapabilit
     "activate_conversation_skill": "conversation_skills",
     "deactivate_conversation_skill": "conversation_skills",
     "clear_conversation_skills": "conversation_skills",
+    "submit_conversation_skill_credential": "conversation_skills",
+    "conversation_settings_state": "conversation_settings",
+    "set_conversation_setting": "conversation_settings",
+    "reset_conversation": "conversation_settings",
 }
 
 

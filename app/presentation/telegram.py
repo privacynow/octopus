@@ -137,13 +137,13 @@ def approval_prompt(callback_token: str = "") -> TelegramRenderedMessage:
 
 
 def recovery_notice_markup(
-    update_id: int,
+    recovery_id: str,
     run_again_label: str,
     skip_label: str,
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u25b6\ufe0f " + run_again_label, callback_data=f"recovery_replay:{update_id}"),
-        InlineKeyboardButton("\u2716 " + skip_label, callback_data=f"recovery_discard:{update_id}"),
+        InlineKeyboardButton("\u25b6\ufe0f " + run_again_label, callback_data=f"recovery_replay:{recovery_id}"),
+        InlineKeyboardButton("\u2716 " + skip_label, callback_data=f"recovery_discard:{recovery_id}"),
     ]])
 
 

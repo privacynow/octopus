@@ -304,7 +304,7 @@ async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path
         prompt="prompt",
         run_again_label="Run again",
         skip_label="Skip",
-        update_id=1,
+        recovery_id="reg:1",
     )
 
     assert task_egress.capabilities.can_render_timeline is False

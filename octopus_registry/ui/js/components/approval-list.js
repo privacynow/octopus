@@ -46,21 +46,22 @@ function renderApprovalList(container) {
             cursor: paginator.cursor,
             approvals,
         }, (state) => {
-        const cards = state.approvals.map((item) => {
-            const card = document.createElement('article');
-            card.className = 'approval-card';
-            card.dataset.key = item.request_id || item.approval_id || item.conversation_id;
-            card.dataset.signature = UI.dataSignature({
-                id: String(item.request_id || item.approval_id || item.conversation_id || ''),
-                title: String(item.conversation_title || ''),
-                target: String(item.target_display_name || item.target_agent_id || ''),
-                requestKind: String(item.request_kind || ''),
-                actor: String(item.actor || ''),
-                trust: String(item.trust_tier || ''),
-                createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
-                expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
-                content: String(item.content || ''),
-            });
+            const cards = state.approvals.map((item) => {
+                const card = document.createElement('article');
+                card.className = 'approval-card';
+                card.dataset.key = item.request_id || item.approval_id || item.conversation_id;
+                card.dataset.signature = UI.dataSignature({
+                    id: String(item.request_id || item.approval_id || item.conversation_id || ''),
+                    title: String(item.conversation_title || ''),
+                    target: String(item.target_display_name || item.target_agent_id || ''),
+                    requestKind: String(item.request_kind || ''),
+                    recoveryId: String(item.recovery_id || ''),
+                    actor: String(item.actor || ''),
+                    trust: String(item.trust_tier || ''),
+                    createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',
+                    expiresLabel: item.expires_at ? UI.formatApprovalTime(item.expires_at) : '',
+                    content: String(item.content || ''),
+                });
 
             const headerRow = document.createElement('div');
             headerRow.className = 'approval-card-header';
@@ -124,44 +125,62 @@ function renderApprovalList(container) {
             const approveBtn = document.createElement('button');
             approveBtn.className = 'btn btn-sm btn-primary';
             approveBtn.type = 'button';
-            approveBtn.textContent = 'Approve';
-            approveBtn.setAttribute('aria-label', `Approve request for ${item.conversation_title || item.conversation_id}`);
 
             const rejectBtn = document.createElement('button');
             rejectBtn.className = 'btn btn-sm btn-danger';
             rejectBtn.type = 'button';
-            rejectBtn.textContent = 'Reject';
-            rejectBtn.setAttribute('aria-label', `Reject request for ${item.conversation_title || item.conversation_id}`);
+
+            let primaryAction = 'approve';
+            let secondaryAction = 'reject';
+            let actionPayload = () => ({ request_id: item.request_id });
+            const requestKind = String(item.request_kind || '').trim();
+            if (requestKind === 'retry') {
+                approveBtn.textContent = 'Retry';
+                rejectBtn.textContent = 'Skip';
+                primaryAction = 'retry_allow';
+                secondaryAction = 'retry_skip';
+            } else if (requestKind === 'recovery') {
+                approveBtn.textContent = 'Replay';
+                rejectBtn.textContent = 'Discard';
+                primaryAction = 'recovery_replay';
+                secondaryAction = 'recovery_discard';
+                actionPayload = () => ({ recovery_id: String(item.recovery_id || '').trim() });
+            } else {
+                approveBtn.textContent = 'Approve';
+                rejectBtn.textContent = 'Reject';
+            }
+            approveBtn.setAttribute('aria-label', `${approveBtn.textContent} request for ${item.conversation_title || item.conversation_id}`);
+            rejectBtn.setAttribute('aria-label', `${rejectBtn.textContent} request for ${item.conversation_title || item.conversation_id}`);
 
             const expired = item.expires_at ? new Date(item.expires_at) < new Date() : false;
-            approveBtn.disabled = expired;
-            rejectBtn.disabled = expired;
+            approveBtn.disabled = requestKind === 'recovery' ? !String(item.recovery_id || '').trim() : expired;
+            rejectBtn.disabled = requestKind === 'recovery' ? !String(item.recovery_id || '').trim() : expired;
 
             async function act(action) {
                 approveBtn.disabled = true;
                 rejectBtn.disabled = true;
                 try {
-                    await API.conversationAction(item.conversation_id, action, { request_id: item.request_id });
+                    await API.conversationAction(item.conversation_id, action, actionPayload());
                     loadPage();
                 } catch (err) {
                     UI.reportError('Failed to update the approval', err, { context: 'Approval list action failed' });
-                    approveBtn.disabled = expired;
-                    rejectBtn.disabled = expired;
+                    approveBtn.disabled = requestKind === 'recovery' ? !String(item.recovery_id || '').trim() : expired;
+                    rejectBtn.disabled = requestKind === 'recovery' ? !String(item.recovery_id || '').trim() : expired;
                 }
             }
 
-            approveBtn.addEventListener('click', () => act('approve'));
-            rejectBtn.addEventListener('click', () => act('reject'));
+            approveBtn.addEventListener('click', () => act(primaryAction));
+            rejectBtn.addEventListener('click', () => act(secondaryAction));
             actions.appendChild(approveBtn);
             actions.appendChild(rejectBtn);
             card.appendChild(actions);
-            return card;
-        });
-        const grid = document.createElement('div');
-        grid.className = 'approval-list';
-        grid.dataset.key = 'approval-list';
-        UI.reconcileChildren(grid, cards);
-        return [grid];
+                return card;
+            });
+            const grid = document.createElement('div');
+            grid.className = 'approval-list';
+            grid.dataset.key = 'approval-list';
+            UI.reconcileChildren(grid, cards);
+            return [grid];
         }, {
             signatureFn(state) {
                 return {
@@ -171,6 +190,7 @@ function renderApprovalList(container) {
                         title: String(item.conversation_title || ''),
                         target: String(item.target_display_name || item.target_agent_id || ''),
                         requestKind: String(item.request_kind || ''),
+                        recoveryId: String(item.recovery_id || '').trim(),
                         actor: String(item.actor || ''),
                         trust: String(item.trust_tier || ''),
                         createdLabel: item.created_at ? UI.relativeTime(item.created_at) : '',

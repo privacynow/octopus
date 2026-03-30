@@ -200,8 +200,9 @@ function _renderToolExecutionCard(body, metadata) {
 }
 
 function _renderApprovalRequestedCard(body, event, metadata, convoId) {
+    const requestKind = String(metadata.request_kind || 'approval').trim();
     body.appendChild(_metadataGrid([
-        ['Request', metadata.request_kind || 'approval'],
+        ['Request', requestKind || 'approval'],
         ['Requested by', metadata.actor_key || event.actor || 'agent'],
         ['Trust tier', metadata.trust_tier || ''],
         ['Expires', metadata.expires_at ? UI.formatApprovalTime(metadata.expires_at) : 'No deadline'],
@@ -210,7 +211,12 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
     if (event.content) {
         const content = document.createElement('div');
         content.className = 'event-text-block';
-        content.innerHTML = `<strong>Needs a decision</strong><p>${UI.esc(event.content)}</p>`;
+        const heading = requestKind === 'recovery'
+            ? 'Recovery available'
+            : requestKind === 'retry'
+                ? 'Retry decision'
+                : 'Needs a decision';
+        content.innerHTML = `<strong>${UI.esc(heading)}</strong><p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
 
@@ -218,39 +224,70 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
     const actions = document.createElement('div');
     actions.className = 'event-card-actions';
 
-    const approve = document.createElement('button');
-    approve.className = 'btn btn-sm btn-primary';
-    approve.textContent = 'Approve';
-    approve.disabled = expired;
+    const primary = document.createElement('button');
+    primary.className = 'btn btn-sm btn-primary';
 
-    const reject = document.createElement('button');
-    reject.className = 'btn btn-sm btn-danger';
-    reject.textContent = 'Reject';
-    reject.disabled = expired;
+    const secondary = document.createElement('button');
+    secondary.className = 'btn btn-sm btn-danger';
 
     const status = document.createElement('span');
     status.className = 'action-status';
-    if (expired) status.textContent = 'Expired';
+    if (expired && requestKind !== 'recovery') status.textContent = 'Expired';
+
+    let primaryAction = 'approve';
+    let secondaryAction = 'reject';
+    let payloadForAction = () => ({ request_id: event.event_id });
+
+    if (requestKind === 'retry') {
+        primary.textContent = 'Retry';
+        secondary.textContent = 'Skip';
+        primaryAction = 'retry_allow';
+        secondaryAction = 'retry_skip';
+    } else if (requestKind === 'recovery') {
+        primary.textContent = 'Replay';
+        secondary.textContent = 'Discard';
+        const recoveryId = String(metadata.recovery_id || '').trim();
+        payloadForAction = () => ({ recovery_id: recoveryId });
+        if (!recoveryId) {
+            primary.disabled = true;
+            secondary.disabled = true;
+            status.textContent = 'Recovery action unavailable';
+        }
+    } else {
+        primary.textContent = 'Approve';
+        secondary.textContent = 'Reject';
+    }
+
+    if (requestKind !== 'recovery') {
+        primary.disabled = expired;
+        secondary.disabled = expired;
+    }
 
     async function act(action) {
-        approve.disabled = true;
-        reject.disabled = true;
+        primary.disabled = true;
+        secondary.disabled = true;
         try {
-            await API.conversationAction(convoId, action, { request_id: event.event_id });
-            status.textContent = action === 'approve' ? 'Approved' : 'Rejected';
+            await API.conversationAction(convoId, action, payloadForAction());
+            if (action === 'approve') status.textContent = 'Approved';
+            else if (action === 'reject') status.textContent = 'Rejected';
+            else if (action === 'retry_allow') status.textContent = 'Retrying';
+            else if (action === 'retry_skip') status.textContent = 'Skipped';
+            else if (action === 'recovery_replay') status.textContent = 'Replaying';
+            else if (action === 'recovery_discard') status.textContent = 'Discarded';
+            else status.textContent = 'Updated';
         } catch (err) {
-            UI.reportError('Failed to update the approval', err, { context: 'Conversation approval action failed' });
-            approve.disabled = expired;
-            reject.disabled = expired;
+            UI.reportError('Failed to update the request', err, { context: 'Conversation request action failed' });
+            primary.disabled = requestKind !== 'recovery' && expired;
+            secondary.disabled = requestKind !== 'recovery' && expired;
             status.textContent = 'Action failed';
         }
     }
 
-    approve.addEventListener('click', () => act('approve'));
-    reject.addEventListener('click', () => act('reject'));
+    primary.addEventListener('click', () => act(primaryAction));
+    secondary.addEventListener('click', () => act(secondaryAction));
 
-    actions.appendChild(approve);
-    actions.appendChild(reject);
+    actions.appendChild(primary);
+    actions.appendChild(secondary);
     actions.appendChild(status);
     body.appendChild(actions);
 }
@@ -441,6 +478,9 @@ function _eventSummary(kind, event, taskContext = []) {
         case 'approval.decided':
             return `${metadata.decision || 'handled'}${metadata.decided_by ? ` by ${metadata.decided_by}` : ''}`;
         case 'approval.requested':
+            if (metadata.request_kind === 'retry') return 'Retry decision';
+            if (metadata.request_kind === 'recovery') return 'Recovery decision';
+            if (metadata.request_kind === 'delegation') return 'Delegation decision';
             return metadata.request_kind || 'Approval needed';
         default:
             return event.actor || '';

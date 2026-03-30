@@ -1058,15 +1058,15 @@ class BotRuntime:
         if action == "recovery_replay":
             self.work_queue.complete_work_item(self.config.data_dir, item.id)
 
-        recovery_update_id = event_id_for_conversation_key(
+        recovery_event_id = event_id_for_conversation_key(
             item.conversation_key,
-            str(event.params.get("update_id") or item.event_id),
+            str(event.params.get("recovery_id") or item.event_id),
         )
 
         outcome = self.workflows.recovery.replay.prepare_action(
             data_dir=self.config.data_dir,
             conversation_key=item.conversation_key,
-            event_id=recovery_update_id,
+            event_id=recovery_event_id,
             action=action,
             worker_id=self._worker_id(),
             ignore_claimed_item_id=item.id,
@@ -1410,12 +1410,23 @@ class BotRuntime:
         authority_ref = str(getattr(event, "authority_ref", "") or "")
 
         if item.dispatch_mode == "recovery":
-            numeric_event_id = int(str(item.event_id)) if str(item.event_id).isdigit() else 0
+            transport_identity = self._build_transport_identity(
+                event=event,
+                conversation_ref=conversation_ref,
+                actor_key=str(getattr(event.user, "id", "") or ""),
+            )
+            from octopus_sdk.event_sink import build_event_sink_for_context
+
+            event_sink = build_event_sink_for_context(
+                transport_identity,
+                self.control_plane.conversation_projection if self.control_plane is not None else None,
+                self.config,
+            )
             recovery_outcome = await self.workflows.recovery.replay.dispatch_worker_recovery(
                 data_dir=self.config.data_dir,
                 item_id=item.id,
                 original_text=event.text or "",
-                update_id=numeric_event_id,
+                recovery_id=item.event_id,
                 bind_egress=(
                     (lambda: egress.bind(title=title, config=self.config))
                     if not routed_task_id
@@ -1428,7 +1439,21 @@ class BotRuntime:
                             prompt=notice.prompt,
                             run_again_label=notice.run_again_label,
                             skip_label=notice.skip_label,
-                            update_id=notice.update_id,
+                            recovery_id=notice.recovery_id,
+                        )
+                    )
+                    if not routed_task_id
+                    else (lambda notice: asyncio.sleep(0))
+                ),
+                publish_notice=(
+                    (
+                        lambda notice: event_sink.on_approval_requested(
+                            f"{notice.preview}\n\n{notice.prompt}".strip(),
+                            request_kind="recovery",
+                            actor_key=str(getattr(event.user, "id", "") or ""),
+                            trust_tier=trust_tier,
+                            request_id=f"recovery:{item.conversation_key}:{item.event_id}",
+                            recovery_id=notice.recovery_id,
                         )
                     )
                     if not routed_task_id

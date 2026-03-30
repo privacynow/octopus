@@ -229,6 +229,14 @@ const API = (() => {
             request('POST', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/skills/${encodeURIComponent(skillName)}/deactivate`, { body }),
         clearConversationSkills: (agentId, conversationId, body = {}) =>
             request('POST', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/skills/clear`, { body }),
+        submitConversationSkillCredential: (agentId, conversationId, skillName, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/skills/${encodeURIComponent(skillName)}/credential`, { body }),
+        getConversationSettings: (agentId, conversationId) =>
+            request('GET', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/settings`),
+        updateConversationSetting: (agentId, conversationId, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/settings`, { body }),
+        resetConversation: (agentId, conversationId, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/conversations/${encodeURIComponent(conversationId)}/reset`, { body }),
 
         // Provider Guidance
         getGuidance: (agentId, provider, opts = {}) =>

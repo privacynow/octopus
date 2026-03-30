@@ -426,6 +426,7 @@ def test_workflow_composer_tracks_management_capabilities_from_optional_ports() 
     assert workflows.management_capabilities == (
         "skill_catalog",
         "conversation_skills",
+        "conversation_settings",
     )
 
 

@@ -116,10 +116,10 @@ def test_skill_add_confirmation_renders_expected_buttons():
 
 
 def test_recovery_notice_markup_renders_expected_buttons():
-    markup = recovery_notice_markup(601, "Run again", "Skip")
+    markup = recovery_notice_markup("tg:601", "Run again", "Skip")
 
-    assert markup.inline_keyboard[0][0].callback_data == "recovery_replay:601"
-    assert markup.inline_keyboard[0][1].callback_data == "recovery_discard:601"
+    assert markup.inline_keyboard[0][0].callback_data == "recovery_replay:tg:601"
+    assert markup.inline_keyboard[0][1].callback_data == "recovery_discard:tg:601"
 
 
 def test_provider_guidance_preview_message_renders_expected_html():

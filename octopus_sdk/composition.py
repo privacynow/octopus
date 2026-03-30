@@ -279,6 +279,8 @@ class WorkflowComposer:
             and self._guidance_service is not None
         ):
             management_capabilities.append("conversation_skills")
+        if self._catalog_service is not None:
+            management_capabilities.append("conversation_settings")
 
         catalog = RuntimeSkillCatalogUseCases(
             catalog_service=catalog_service,

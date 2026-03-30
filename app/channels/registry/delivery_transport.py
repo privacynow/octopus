@@ -405,10 +405,10 @@ def _registry_semantic_action(
 
     params = dict(payload)
     if semantic in {"recovery_discard", "recovery_replay"}:
-        update_id = int(payload.get("update_id") or 0)
-        if update_id <= 0:
+        recovery_id = str(payload.get("recovery_id") or "").strip()
+        if not recovery_id:
             return None
-        params["update_id"] = update_id
+        params["recovery_id"] = recovery_id
 
     return build_registry_action_envelope(
         conversation_ref=conversation_ref,
@@ -455,9 +455,9 @@ async def handle_registry_delivery(
         if not isinstance(action_payload, dict):
             action_payload = {}
         action = str(payload.get("action", "")).lower()
-        if action in {"recovery_discard", "recovery_replay"} and "update_id" not in action_payload:
+        if action in {"recovery_discard", "recovery_replay"} and "recovery_id" not in action_payload:
             action_payload = dict(action_payload)
-            action_payload["update_id"] = payload.get("update_id")
+            action_payload["recovery_id"] = payload.get("recovery_id")
         stable_event_id = str(payload.get("stable_event_id", "") or "")
         effective_delivery_id = stable_event_id if stable_event_id else delivery_id
         envelope = _registry_semantic_action(

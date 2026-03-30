@@ -400,6 +400,7 @@ class ApprovalRecord(RegistryRecordModel):
     actor_key: str = ""
     trust_tier: str = ""
     expires_at: str = ""
+    recovery_id: str = ""
     actor: str = ""
     content: str = ""
     created_at: str = ""
@@ -568,7 +569,7 @@ class RetryDecisionActionPayload(RegistryRecordModel):
 class RecoveryActionPayload(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
-    update_id: int = Field(..., gt=0)
+    recovery_id: str = Field(..., min_length=1)
 
 
 class DirectAssignActionPayload(DirectAssignmentRequest):

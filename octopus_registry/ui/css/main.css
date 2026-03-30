@@ -1293,6 +1293,76 @@ select {
     gap: var(--space-2);
 }
 
+.conversation-management-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--space-3);
+}
+
+.conversation-management-card {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--panel-padding);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
+}
+
+.conversation-management-status {
+    padding: 0.78rem 0.92rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(149, 76, 47, 0.18);
+    background: rgba(149, 76, 47, 0.08);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+}
+
+.conversation-management-section {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.conversation-management-form,
+.conversation-setup-form {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.conversation-skill-list {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.conversation-setup-box {
+    display: grid;
+    gap: var(--space-2);
+    padding: 0.95rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(149, 76, 47, 0.18);
+    background: rgba(149, 76, 47, 0.08);
+}
+
+.conversation-setup-copy {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+}
+
+.input {
+    width: 100%;
+    min-height: 40px;
+    padding: 0.72rem 0.82rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+}
+
+.input-compact {
+    min-width: 180px;
+    max-width: 100%;
+}
+
 .conversation-meta {
     margin-bottom: 0;
     display: grid;

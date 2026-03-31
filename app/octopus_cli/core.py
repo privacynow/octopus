@@ -145,6 +145,13 @@ def provider_has_auth_files(repo_dir: Path, provider: str) -> bool:
     return False
 
 
+def _provider_health_detail(output: str) -> str:
+    text = " ".join((output or "").split()).strip()
+    if not text:
+        return ""
+    return text[:200]
+
+
 def ensure_provider_auth_dir(repo_dir: Path, provider: str) -> Path:
     auth_dir = repo_dir / ".deploy" / "provider-auth" / provider
     auth_dir.mkdir(parents=True, exist_ok=True)
@@ -818,10 +825,7 @@ class OctopusManager:
             for ws_slug in self.list_workspace_slugs()
         ]
         providers = {bot.provider for bot in bots} or {"claude", "codex"}
-        provider_auth = [
-            ProviderAuthState(provider=provider, configured=provider_has_auth_files(self.repo_dir, provider))
-            for provider in sorted(providers)
-        ]
+        provider_auth = self.provider_auth_states(sorted(providers))
         return SystemState(
             repo_dir=self.repo_dir,
             bots=bots,
@@ -830,6 +834,22 @@ class OctopusManager:
             provider_auth=provider_auth,
             freshness=self.image_freshness(),
         )
+
+    def provider_auth_states(self, providers: list[str], *, live: bool = False) -> list[ProviderAuthState]:
+        return [self.provider_auth_state(provider, live=live) for provider in sorted(set(providers))]
+
+    def provider_auth_state(self, provider: str, *, live: bool = False) -> ProviderAuthState:
+        configured = provider_has_auth_files(self.repo_dir, provider)
+        state = ProviderAuthState(provider=provider, configured=configured)
+        if not configured or not live:
+            return state
+        healthy, output = self.provider_health_output(provider, build_if_stale=False)
+        state.detail = _provider_health_detail(output)
+        if healthy is None:
+            return state
+        state.live_checked = True
+        state.healthy = healthy
+        return state
 
     def bot_aliases(self, bot: BotState) -> set[str]:
         return collect_exact_aliases(
@@ -1030,26 +1050,34 @@ class OctopusManager:
         if force or freshness.stale:
             self.build_registry_image()
 
-    def provider_health_output(self, provider: str) -> tuple[bool, str]:
-        self.ensure_provider_image_ready(provider)
-        result = self.docker.provider_compose(
-            provider,
-            "run",
-            "--rm",
-            "bot-provider",
-            "python",
-            "-m",
-            "app.main",
-            "--provider-health",
-            check=False,
-        )
+    def provider_health_output(self, provider: str, *, build_if_stale: bool = True) -> tuple[bool | None, str]:
+        try:
+            if build_if_stale:
+                self.ensure_provider_image_ready(provider)
+            else:
+                freshness = self.image_freshness().get(f"bot:{provider}")
+                if freshness is not None and not freshness.image_exists:
+                    return None, "Provider image is missing."
+            result = self.docker.provider_compose(
+                provider,
+                "run",
+                "--rm",
+                "bot-provider",
+                "python",
+                "-m",
+                "app.main",
+                "--provider-health",
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, str(exc)
         output = ((result.stdout or "") + (result.stderr or "")).strip()
         return result.returncode == 0, output
 
     def ensure_provider_auth_ready(self, provider: str) -> None:
         if provider_has_auth_files(self.repo_dir, provider):
             healthy, output = self.provider_health_output(provider)
-            if healthy:
+            if healthy is True:
                 return
             self.io.error("Stored provider auth is present but not valid. Starting the login flow now.")
             if output:
@@ -1072,7 +1100,7 @@ class OctopusManager:
                 f"Provider login did not complete for {provider}. Finish login, then run ./octopus again."
             )
         healthy, output = self.provider_health_output(provider)
-        if not healthy:
+        if healthy is not True:
             detail = f"\n{output}" if output else ""
             raise OctopusError(
                 f"Provider login did not complete for {provider}. Finish login, then run ./octopus again.{detail}"

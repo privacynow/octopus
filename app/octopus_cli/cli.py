@@ -23,6 +23,13 @@ class OctopusCLI:
         self.io = io or PromptIO()
         self.manager = OctopusManager(repo_dir, io=self.io)
 
+    def _state(self, *, live_provider_auth: bool = False) -> SystemState:
+        state = self.manager.inspect_state()
+        if live_provider_auth:
+            providers = [provider.provider for provider in state.provider_auth]
+            state.provider_auth = self.manager.provider_auth_states(providers, live=True)
+        return state
+
     def build_parser(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(prog="./octopus", add_help=False)
         parser.add_argument("command", nargs="?", default="")
@@ -126,7 +133,7 @@ class OctopusCLI:
                 self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
 
     def cmd_status(self, targets: list[str]) -> int:
-        state = self.manager.inspect_state()
+        state = self._state(live_provider_auth=True)
         if not targets:
             self.render_system_status(state)
             return 0
@@ -228,8 +235,9 @@ class OctopusCLI:
     def render_provider_auth_status(self, state: SystemState) -> None:
         self.io.print("Provider auth:")
         for provider in state.provider_auth:
-            label = "authenticated" if provider.configured else "not configured"
-            self.io.print(f"  {provider.provider:<10} {label}")
+            self.io.print(f"  {provider.provider:<10} {provider.status_label}")
+            if provider.detail:
+                self.io.print(f"      detail: {provider.detail}")
 
     def render_freshness_status(self, state: SystemState) -> None:
         self.io.print("Freshness:")
@@ -399,14 +407,14 @@ class OctopusCLI:
         ]
         if degraded:
             actions.append((f"Reconnect {len(degraded)} bot(s) to registry", lambda: self.execute_connect([ResolvedTarget(TargetKind.BOT, bot.slug, bot.label) for bot in degraded])))
-        missing_auth = [auth for auth in state.provider_auth if not auth.configured]
+        missing_auth = [auth for auth in state.provider_auth if auth.needs_authentication]
         for auth in missing_auth:
             actions.append((f"Authenticate {auth.provider}", lambda provider=auth.provider: self.manager.ensure_provider_auth_ready(provider) or 0))
         return actions
 
     def interactive_menu(self) -> int:
         while True:
-            state = self.manager.inspect_state()
+            state = self._state()
             self.io.print("What would you like to do?")
             options: list[tuple[str, callable[[], int | None]]] = []
             options.append(("Recommended Actions", self.menu_recommended))
@@ -454,7 +462,7 @@ class OctopusCLI:
             return items[numeric - 1][1]()
 
     def menu_recommended(self) -> int | None:
-        state = self.manager.inspect_state()
+        state = self._state(live_provider_auth=True)
         recommended = self.recommended_actions(state)
         if not recommended:
             self.io.print("No recommended actions right now.")
@@ -629,10 +637,10 @@ class OctopusCLI:
         return self.choose__items("Choose a target", items)
 
     def menu_provider_auth(self) -> int:
-        state = self.manager.inspect_state()
+        state = self._state(live_provider_auth=True)
         items = [
             (
-                f"{provider.provider} ({'authenticated' if provider.configured else 'not configured'})",
+                f"{provider.provider} ({provider.status_label})",
                 lambda provider_name=provider.provider: self._provider_auth(provider_name),
             )
             for provider in state.provider_auth

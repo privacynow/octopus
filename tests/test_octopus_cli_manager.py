@@ -533,6 +533,22 @@ def test_ensure_provider_auth_ready_retries_login_when_existing_auth_is_invalid(
     ]
 
 
+def test_provider_auth_state_reports_live_failure_for_configured_auth(tmp_path: Path) -> None:
+    auth_dir = tmp_path / ".deploy" / "provider-auth" / "claude"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    (auth_dir / ".claude.json").write_text('{"token":"secret"}', encoding="utf-8")
+    manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
+    manager.provider_health_output = lambda provider, build_if_stale=False: (False, "Not logged in · Please run /login")  # type: ignore[method-assign]
+
+    state = manager.provider_auth_state("claude", live=True)
+
+    assert state.configured is True
+    assert state.live_checked is True
+    assert state.healthy is False
+    assert state.status_label == "configured, unable to authenticate"
+    assert "Not logged in" in state.detail
+
+
 def test_disconnect_bot_registry_by_id_removes_only_target_record(tmp_path: Path) -> None:
     _write_bot_env(
         tmp_path,

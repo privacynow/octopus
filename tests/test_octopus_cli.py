@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.octopus_cli.cli import OctopusCLI
+from app.octopus_cli.core import PromptIO
 from app.octopus_cli.models import (
     Action,
     BotState,
     ExecutionPlan,
+    ImageFreshness,
+    ProviderAuthState,
     RegistryConnectionStatus,
     RegistryState,
     ResolvedTarget,
@@ -40,7 +43,7 @@ def _state(*bots: BotState) -> SystemState:
         registry=RegistryState(configured=True, running=True, env_file=Path("/tmp/repo/.deploy/registry/.env")),
         workspaces=[],
         provider_auth=[],
-        freshness={},
+        freshness={"registry": ImageFreshness(image="octopus-registry-service:latest", fingerprint="a", image_exists=True, image_fingerprint="a")},
     )
 
 
@@ -133,3 +136,51 @@ def test_cli_disconnect_registry_id_without_targets_uses_matching_bots(tmp_path:
 
     assert result == 0
     assert disconnected == [("m1", "qa")]
+
+
+def test_render_provider_auth_status_shows_live_failure_detail(tmp_path: Path) -> None:
+    class _Output:
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+
+        def write(self, value: str) -> None:
+            self.parts.append(value)
+
+        def flush(self) -> None:
+            return None
+
+        def isatty(self) -> bool:
+            return False
+
+    output = _Output()
+    cli = OctopusCLI(tmp_path, io=PromptIO(stdout=output))
+    state = _state()
+    state.provider_auth = [
+        ProviderAuthState(
+            provider="claude",
+            configured=True,
+            live_checked=True,
+            healthy=False,
+            detail="Claude auth probe failed (rc=1): Not logged in · Please run /login",
+        )
+    ]
+
+    cli.render_provider_auth_status(state)
+
+    assert output.parts == [
+        "Provider auth:\n",
+        "  claude     configured, unable to authenticate\n",
+        "      detail: Claude auth probe failed (rc=1): Not logged in · Please run /login\n",
+    ]
+
+
+def test_recommended_actions_include_authenticate_for_invalid_live_auth(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path)
+    state = _state(_bot("m1"))
+    state.provider_auth = [
+        ProviderAuthState(provider="claude", configured=True, live_checked=True, healthy=False, detail="not logged in")
+    ]
+
+    actions = cli.recommended_actions(state)
+
+    assert [label for label, _ in actions] == ["Authenticate claude"]

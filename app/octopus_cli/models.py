@@ -78,6 +78,23 @@ class Workspace:
 class ProviderAuthState:
     provider: str
     configured: bool
+    live_checked: bool = False
+    healthy: bool | None = None
+    detail: str = ""
+
+    @property
+    def status_label(self) -> str:
+        if not self.configured:
+            return "not configured"
+        if not self.live_checked or self.healthy is None:
+            return "configured"
+        if self.healthy:
+            return "authenticated"
+        return "configured, unable to authenticate"
+
+    @property
+    def needs_authentication(self) -> bool:
+        return not self.configured or self.healthy is False
 
 
 @dataclass(slots=True)

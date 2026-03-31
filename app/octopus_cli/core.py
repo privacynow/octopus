@@ -146,7 +146,15 @@ def provider_has_auth_files(repo_dir: Path, provider: str) -> bool:
 
 
 def _provider_health_detail(output: str) -> str:
-    text = " ".join((output or "").split()).strip()
+    parts: list[str] = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("Volume ", "Container ")):
+            continue
+        parts.append(stripped)
+    text = " ".join(parts).strip()
     if not text:
         return ""
     return text[:200]

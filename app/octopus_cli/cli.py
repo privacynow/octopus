@@ -236,7 +236,7 @@ class OctopusCLI:
         self.io.print("Provider auth:")
         for provider in state.provider_auth:
             self.io.print(f"  {provider.provider:<10} {provider.status_label}")
-            if provider.detail:
+            if provider.detail and provider.healthy is not True:
                 self.io.print(f"      detail: {provider.detail}")
 
     def render_freshness_status(self, state: SystemState) -> None:

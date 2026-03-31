@@ -487,6 +487,18 @@ expose them back through the operator UI.
 Both implement the SDK `Provider` protocol with deterministic `session_id`
 via `uuid5(conversation_key)`.
 
+For the shipped runtime, provider auth is treated as live runtime health, not
+just file presence on disk:
+
+- `./octopus status` performs a best-effort provider health probe and reports
+  `not configured`, `configured`, `authenticated`, or
+  `configured, unable to authenticate`
+- bot startup validates live provider health and fails fast if the provider
+  login has expired or is otherwise unusable
+- `./octopus` provider-auth flows reuse the same live health check after login,
+  so a written auth file is not treated as success unless the provider can
+  actually authenticate
+
 ---
 
 ## 4. Extending Octopus

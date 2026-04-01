@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,7 @@ from app.control_plane.machine import (
     run_control_command_event,
 )
 from app.control_plane.models import ControlCommand, ControlReply
+from octopus_sdk.time_utils import utc_now, utc_now_iso
 
 _SCHEMA_VERSION = 1
 _DB_NAME = "control_plane.db"
@@ -85,11 +86,7 @@ CREATE TABLE IF NOT EXISTS meta (
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _utcnow_iso() -> str:
-    return _utcnow().isoformat()
+    return utc_now()
 
 
 def _expiry_iso(seconds: float) -> str:
@@ -177,7 +174,7 @@ def _write_tx(conn: sqlite3.Connection):
 
 
 def submit(conn: sqlite3.Connection, command: ControlCommand) -> str:
-    now = _utcnow_iso()
+    now = utc_now_iso()
     try:
         with _write_tx(conn):
             if command.idempotency_key:
@@ -268,7 +265,7 @@ def poll_commands(
 ) -> list[ControlCommand]:
     if not allowed_pairs:
         return []
-    now_iso = _utcnow_iso()
+    now_iso = utc_now_iso()
     lease_expires_at = _expiry_iso(lease_seconds)
     pair_terms = " OR ".join("(authority_ref = ? AND capability = ?)" for _ in allowed_pairs)
     pair_args: list[str] = []
@@ -325,7 +322,7 @@ def complete(
     claimed_at: str,
     result_json: str | None = None,
 ) -> None:
-    now_iso = _utcnow_iso()
+    now_iso = utc_now_iso()
     with _write_tx(conn):
         conn.execute(
             """
@@ -418,7 +415,7 @@ def fail(conn: sqlite3.Connection, command_id: str, *, claimed_at: str, error: s
 
 
 def dead_letter(conn: sqlite3.Connection, command_id: str, *, claimed_at: str, reason: str) -> None:
-    now_iso = _utcnow_iso()
+    now_iso = utc_now_iso()
     with _write_tx(conn):
         conn.execute(
             """
@@ -512,7 +509,7 @@ def reclaim_expired(conn: sqlite3.Connection) -> int:
 
 
 def purge_old_commands(conn: sqlite3.Connection, older_than_hours: int = 72) -> int:
-    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    cutoff_iso = (_utcnow() - timedelta(hours=older_than_hours)).isoformat()
     with _write_tx(conn):
         cursor = conn.execute(
             """
@@ -527,7 +524,7 @@ def purge_old_commands(conn: sqlite3.Connection, older_than_hours: int = 72) -> 
 
 
 def reconcile_orphans(conn: sqlite3.Connection, *, allowed_pairs: set[tuple[str, str]]) -> int:
-    now_iso = _utcnow_iso()
+    now_iso = utc_now_iso()
     dead_lettered = 0
     with _write_tx(conn):
         rows = conn.execute(

@@ -100,15 +100,55 @@ async def test_check_auth_health_requires_nonempty_auth_file(monkeypatch, tmp_pa
     provider = ClaudeProvider(make_config(provider_name="claude"))
     auth_file = tmp_path / ".claude.json"
     auth_file.write_text('{"token":"secret"}', encoding="utf-8")
-    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: auth_file))
-    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: tmp_path / ".claude"))
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
     seen: list[tuple[str, ...]] = []
 
-    async def fake_run(*cmd: str, timeout: int):
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
         seen.append(cmd)
         if cmd == ("claude", "--version"):
             assert timeout == 10
             return 0, "claude 2.1.79\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
+
+    assert await provider.check_auth_health() == []
+    assert seen == [("claude", "--version")]
+
+
+async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_dir = tmp_path / ".claude"
+    auth_dir.mkdir()
+    (auth_dir / "session.json").write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
+    seen: list[tuple[str, ...]] = []
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
+        seen.append(cmd)
+        if cmd == ("claude", "--version"):
+            assert timeout == 10
+            return 0, "claude 2.1.81\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
+
+    assert await provider.check_auth_health() == []
+    assert seen[0] == ("claude", "--version")
+
+
+async def test_check_runtime_health_reports_live_login_failure(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_file = tmp_path / ".claude.json"
+    auth_file.write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
+        if cmd == ("claude", "--version"):
+            return 0, "claude 2.1.87\n", ""
         assert cmd == (
             "claude",
             "-p",
@@ -119,72 +159,27 @@ async def test_check_auth_health_requires_nonempty_auth_file(monkeypatch, tmp_pa
             "--",
             "reply with ok",
         )
-        assert timeout == 15
-        return 0, "ok\n", ""
-
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
-
-    assert await provider.check_auth_health() == []
-    assert seen == [
-        ("claude", "--version"),
-        ("claude", "-p", "--output-format", "text", "--max-turns", "1", "--", "reply with ok"),
-    ]
-
-
-async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tmp_path: Path):
-    provider = ClaudeProvider(make_config(provider_name="claude"))
-    auth_dir = tmp_path / ".claude"
-    auth_dir.mkdir()
-    (auth_dir / "session.json").write_text('{"token":"secret"}', encoding="utf-8")
-    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: tmp_path / ".claude.json"))
-    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: auth_dir))
-    seen: list[tuple[str, ...]] = []
-
-    async def fake_run(*cmd: str, timeout: int):
-        seen.append(cmd)
-        if cmd == ("claude", "--version"):
-            assert timeout == 10
-            return 0, "claude 2.1.81\n", ""
-        assert timeout == 15
-        return 0, "ok\n", ""
-
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
-
-    assert await provider.check_auth_health() == []
-    assert seen[0] == ("claude", "--version")
-
-
-async def test_check_auth_health_reports_live_login_failure(monkeypatch, tmp_path: Path):
-    provider = ClaudeProvider(make_config(provider_name="claude"))
-    auth_file = tmp_path / ".claude.json"
-    auth_file.write_text('{"token":"secret"}', encoding="utf-8")
-    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: auth_file))
-    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: tmp_path / ".claude"))
-
-    async def fake_run(*cmd: str, timeout: int):
-        if cmd == ("claude", "--version"):
-            return 0, "claude 2.1.87\n", ""
-        assert timeout == 15
         return 1, "Not logged in · Please run /login\n", ""
 
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
 
-    errors = await provider.check_auth_health()
+    errors = await provider.check_runtime_health()
 
-    assert errors == ["Claude auth probe failed (rc=1): Not logged in · Please run /login"]
+    assert errors == ["Claude runtime probe failed (rc=1): Not logged in · Please run /login"]
 
 
-async def test_check_runtime_health_short_circuits_when_auth_fails():
+async def test_check_runtime_health_short_circuits_when_auth_fails(monkeypatch):
     provider = ClaudeProvider(make_config(provider_name="claude"))
 
     async def fake_auth():
         return ["auth missing"]
 
-    async def fake_run(*cmd: str, timeout: int):
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
         raise AssertionError(f"runtime probe should not run: {cmd} timeout={timeout}")
 
     provider.check_auth_health = fake_auth  # type: ignore[method-assign]
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
 
     assert await provider.check_runtime_health() == ["auth missing"]
 

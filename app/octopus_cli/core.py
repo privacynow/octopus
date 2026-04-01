@@ -20,6 +20,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.exact_aliases import collect_exact_aliases, matches_exact_alias
+from app.provider_auth import ensure_auth_layout, has_auth_artifacts, shared_auth_root
+from app.provider_health import health_detail
 from app.octopus_cli.envfiles import (
     list_registry_connection_records,
     parse_env_file,
@@ -132,48 +134,22 @@ def validate_telegram_token(token: str) -> tuple[str, str, str]:
     return telegram_id, username, display_name
 
 
+def provider_auth_base_dir(repo_dir: Path, provider: str) -> Path:
+    return repo_dir / ".deploy" / "provider-auth" / provider
+
+
 def provider_has_auth_files(repo_dir: Path, provider: str) -> bool:
-    auth_dir = repo_dir / ".deploy" / "provider-auth" / provider
-    if provider == "claude":
-        claude_json = auth_dir / ".claude.json"
-        if claude_json.exists() and claude_json.stat().st_size > 0:
-            return True
-        claude_dir = auth_dir / ".claude"
-        return claude_dir.exists() and any(path.is_file() and path.stat().st_size > 0 for path in claude_dir.rglob("*"))
-    if provider == "codex":
-        return (auth_dir / ".codex" / "auth.json").exists()
-    return False
-
-
-def _provider_health_detail(output: str) -> str:
-    parts: list[str] = []
-    for line in (output or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith(("Volume ", "Container ")):
-            continue
-        parts.append(stripped)
-    text = " ".join(parts).strip()
-    if not text:
-        return ""
-    return text[:200]
+    return has_auth_artifacts(
+        provider,
+        shared_auth_root(provider, provider_auth_base_dir(repo_dir, provider)),
+    )
 
 
 def ensure_provider_auth_dir(repo_dir: Path, provider: str) -> Path:
-    auth_dir = repo_dir / ".deploy" / "provider-auth" / provider
+    auth_dir = provider_auth_base_dir(repo_dir, provider)
     auth_dir.mkdir(parents=True, exist_ok=True)
     auth_dir.chmod(0o700)
-    if provider == "claude":
-        (auth_dir / ".claude").mkdir(parents=True, exist_ok=True)
-        claude_json = auth_dir / ".claude.json"
-        if not claude_json.exists():
-            claude_json.write_text("", encoding="utf-8")
-            claude_json.chmod(0o600)
-    elif provider == "codex":
-        (auth_dir / ".codex").mkdir(parents=True, exist_ok=True)
-    else:
-        raise OctopusError(f"Unsupported provider '{provider}'.")
+    ensure_auth_layout(provider, shared_auth_root(provider, auth_dir))
     return auth_dir
 
 
@@ -851,8 +827,8 @@ class OctopusManager:
         state = ProviderAuthState(provider=provider, configured=configured)
         if not configured or not live:
             return state
-        healthy, output = self.provider_health_output(provider, build_if_stale=False)
-        state.detail = _provider_health_detail(output)
+        healthy, output = self.provider_live_health_output(provider, build_if_stale=False)
+        state.detail = health_detail(output)
         if healthy is None:
             return state
         state.live_checked = True
@@ -1058,7 +1034,7 @@ class OctopusManager:
         if force or freshness.stale:
             self.build_registry_image()
 
-    def provider_health_output(self, provider: str, *, build_if_stale: bool = True) -> tuple[bool | None, str]:
+    def provider_live_health_output(self, provider: str, *, build_if_stale: bool = True) -> tuple[bool | None, str]:
         try:
             if build_if_stale:
                 self.ensure_provider_image_ready(provider)
@@ -1084,7 +1060,7 @@ class OctopusManager:
 
     def ensure_provider_auth_ready(self, provider: str) -> None:
         if provider_has_auth_files(self.repo_dir, provider):
-            healthy, output = self.provider_health_output(provider)
+            healthy, output = self.provider_live_health_output(provider)
             if healthy is True:
                 return
             self.io.error("Stored provider auth is present but not valid. Starting the login flow now.")
@@ -1107,7 +1083,7 @@ class OctopusManager:
             raise OctopusError(
                 f"Provider login did not complete for {provider}. Finish login, then run ./octopus again."
             )
-        healthy, output = self.provider_health_output(provider)
+        healthy, output = self.provider_live_health_output(provider)
         if healthy is not True:
             detail = f"\n{output}" if output else ""
             raise OctopusError(

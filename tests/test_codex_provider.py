@@ -144,11 +144,12 @@ async def test_check_auth_health_uses_login_status_and_auth_file(monkeypatch, tm
     provider = CodexProvider(make_config(provider_name="codex"))
     auth_file = tmp_path / "auth.json"
     auth_file.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(CodexProvider, "_codex_auth_file", staticmethod(lambda: auth_file))
+    monkeypatch.setattr("app.providers.codex.runtime_auth_root", lambda provider_name: tmp_path)
 
     calls: list[tuple[tuple[str, ...], int]] = []
 
-    async def fake_run(*cmd: str, timeout: int):
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
         calls.append((cmd, timeout))
         if cmd == ("codex", "--version"):
             return 0, "codex-cli 0.116.0\n", ""
@@ -156,7 +157,7 @@ async def test_check_auth_health_uses_login_status_and_auth_file(monkeypatch, tm
             return 0, "Logged in using ChatGPT\n", ""
         raise AssertionError(f"unexpected command: {cmd}")
 
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.codex.run_health_command", fake_run)
 
     assert await provider.check_auth_health() == []
     assert calls == [
@@ -165,17 +166,18 @@ async def test_check_auth_health_uses_login_status_and_auth_file(monkeypatch, tm
     ]
 
 
-async def test_check_runtime_health_short_circuits_when_auth_fails():
+async def test_check_runtime_health_short_circuits_when_auth_fails(monkeypatch):
     provider = CodexProvider(make_config(provider_name="codex"))
 
     async def fake_auth():
         return ["auth missing"]
 
-    async def fake_run(*cmd: str, timeout: int):
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
         raise AssertionError(f"runtime probe should not run: {cmd} timeout={timeout}")
 
     provider.check_auth_health = fake_auth  # type: ignore[method-assign]
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.codex.run_health_command", fake_run)
 
     assert await provider.check_runtime_health() == ["auth missing"]
 

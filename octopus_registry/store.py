@@ -113,6 +113,7 @@ from .store_base import (
     effective_connectivity_state,
     ensure_json,
     hash_agent_token,
+    offline_before_iso,
     require_registry_scope,
     runtime_health_generated_at,
     runtime_health_summary,
@@ -633,7 +634,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             return self._row_to_agent(row)
 
     def _offline_before(self) -> str:
-        return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        return offline_before_iso()
 
     def enroll(self, requested_card: AgentCard) -> EnrollmentResult:
         now = utcnow_iso()

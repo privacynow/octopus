@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import hmac
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
@@ -46,6 +45,7 @@ from octopus_sdk.registry.models import (
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.realtime import ConversationProgressUpdate
+from octopus_sdk.time_utils import utc_now
 from .ingress import (
     approve_catalog_skill,
     approve_provider_guidance,
@@ -96,7 +96,6 @@ from .http_support import (
     ProviderGuidanceDraftUpdateRequest,
     ProviderGuidancePreviewRequest,
     RuntimeSkillDraftUpdateRequest,
-    aggregate_usage_rows as _aggregate_usage_rows,
     json_payload as _json_payload,
     operator_actor_key as _operator_actor_key,
     paginated_response as _paginated_response,
@@ -104,6 +103,7 @@ from .http_support import (
     scoped_agent_id as _scoped_agent_id,
     secure_html_response as _secure_html_response,
 )
+from .store_shared.usage import aggregate_usage_rows
 
 _REGISTRY_UI_SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -991,14 +991,14 @@ def resource_usage(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     if not since:
-        since_iso = datetime.now(timezone.utc).replace(
+        since_iso = utc_now().replace(
             hour=0, minute=0, second=0, microsecond=0,
         ).isoformat()
     else:
         since_iso = since
     until_iso = until or ""
     rows = store.get_usage_summary(since_iso, until_iso=until_iso)
-    return _aggregate_usage_rows(rows)
+    return aggregate_usage_rows(rows)
 
 
 @app.get("/v1/summary")
@@ -1006,7 +1006,7 @@ def resource_summary(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = utcnow_iso()
     return _json_payload(store.get_summary(now_iso=now_iso))
 
 

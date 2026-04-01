@@ -52,11 +52,16 @@ At this point the essential path is working:
 - bot reply back in the same chat
 - operator visibility in the registry UI
 
-`./octopus status` now does a best-effort live provider auth probe. That means
-the provider section can distinguish:
+Provider auth is reported at two levels:
 
 - `not configured`: no provider auth artifacts are present
-- `configured`: auth artifacts exist, but no live result is available
+- `configured`: auth artifacts exist, but no live probe was requested
+
+By default, `./octopus status` is static and cheap. Use
+`./octopus status --live-provider`, `Diagnose -> Provider auth`, or
+`Recommended Actions` when you want a live provider check. Live checks can
+add:
+
 - `authenticated`: the live provider probe succeeded
 - `configured, unable to authenticate`: auth artifacts exist, but the live
   provider probe failed
@@ -237,10 +242,10 @@ If something fails:
 2. `./octopus doctor <bot>`
 3. inspect the relevant `.deploy/.../.env` file and registry settings
 
-If `./octopus status` shows `configured, unable to authenticate` for a
-provider, the auth files are present but the provider login is no longer valid.
-Run `./octopus`, choose `Diagnose`, then `Provider auth`, and complete the
-provider login flow again.
+If `./octopus status --live-provider` or `Diagnose -> Provider auth` shows
+`configured, unable to authenticate` for a provider, the auth files are
+present but the provider login is no longer valid. Run `./octopus`, choose
+`Diagnose`, then `Provider auth`, and complete the provider login flow again.
 
 If a remote registry connection fails:
 

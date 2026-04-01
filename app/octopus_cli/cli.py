@@ -80,7 +80,7 @@ class OctopusCLI:
                 self.manager.clean_all()
                 return 0
             if command == "status":
-                return self.cmd_status(args.targets)
+                return self.cmd_status(args.targets, live_provider=args.live_provider)
             if command in {"start", "stop", "restart", "redeploy", "connect", "disconnect"}:
                 return self.run_mutating(
                     Action(command),
@@ -105,7 +105,7 @@ class OctopusCLI:
         self.io.print("Usage: ./octopus <action> [target...] [--yes]")
         self.io.print("")
         self.io.print("Actions:")
-        self.io.print("  status")
+        self.io.print("  status [--live-provider]")
         self.io.print("  start [target...] [--yes] [--registry-bind-host HOST] [--registry-port PORT] [--registry-public-url URL]")
         self.io.print("  stop [target...] [--yes]")
         self.io.print("  restart [target...] [--yes] [--registry-bind-host HOST] [--registry-port PORT] [--registry-public-url URL]")
@@ -132,8 +132,8 @@ class OctopusCLI:
                 label = "local" if connection.local else connection.registry_id
                 self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
 
-    def cmd_status(self, targets: list[str]) -> int:
-        state = self._state(live_provider_auth=True)
+    def cmd_status(self, targets: list[str], *, live_provider: bool = False) -> int:
+        state = self._state(live_provider_auth=live_provider)
         if not targets:
             self.render_system_status(state)
             return 0

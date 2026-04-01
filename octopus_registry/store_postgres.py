@@ -112,6 +112,7 @@ from .store_base import (
     canonical_registry_connectivity_state,
     effective_connectivity_state,
     hash_agent_token,
+    offline_before_iso,
     require_registry_scope,
     runtime_health_generated_at,
     runtime_health_summary,
@@ -304,7 +305,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return epoch
 
     def _offline_before(self) -> str:
-        return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        return offline_before_iso()
 
     def _token_row(self, conn, token: str) -> dict[str, object] | None:
         with _cur(conn) as cur:

@@ -487,17 +487,28 @@ expose them back through the operator UI.
 Both implement the SDK `Provider` protocol with deterministic `session_id`
 via `uuid5(conversation_key)`.
 
-For the shipped runtime, provider auth is treated as live runtime health, not
-just file presence on disk:
+For the shipped runtime, provider health is split into two levels:
 
-- `./octopus status` performs a best-effort provider health probe and reports
-  `not configured`, `configured`, `authenticated`, or
-  `configured, unable to authenticate`
-- bot startup validates live provider health and fails fast if the provider
-  login has expired or is otherwise unusable
-- `./octopus` provider-auth flows reuse the same live health check after login,
-  so a written auth file is not treated as success unless the provider can
-  actually authenticate
+- startup-safe auth health:
+  `Provider.check_auth_health()`
+  This is what bot startup uses. It may inspect local auth artifacts and run
+  cheap CLI status commands, but it must not require a real model inference.
+- deep runtime health:
+  `Provider.check_runtime_health()`
+  This may run a real provider request. It is used by explicit diagnostics and
+  live provider checks, not by normal startup admission.
+
+Operationally that means:
+
+- `./octopus status` is static by default and reports only configured vs not
+  configured auth state
+- `./octopus status --live-provider`, `Diagnose -> Provider auth`, and other
+  action-oriented flows may run the deep provider probe and report
+  `authenticated` or `configured, unable to authenticate`
+- bot startup validates startup-safe auth health, not deep runtime health
+- `./octopus` provider-auth flows still reuse the live runtime probe after
+  login so a written auth file is not treated as success unless the provider
+  can actually authenticate
 
 ---
 

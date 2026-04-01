@@ -14,14 +14,7 @@ case "$provider" in
 esac
 
 auth_dir=".deploy/provider-auth/$provider"
-mkdir -p "$auth_dir"
-chmod 700 "$auth_dir"
-if [ "$provider" = "claude" ]; then
-  mkdir -p "$auth_dir/.claude"
-  [ -f "$auth_dir/.claude.json" ] || : > "$auth_dir/.claude.json"
-else
-  mkdir -p "$auth_dir/.codex"
-fi
+python3 -m app.provider_auth ensure-shared-layout "$provider" "$auth_dir"
 
 if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
   echo "Image octopus-agent:$provider not found. Run ./octopus redeploy bots or ./scripts/provider/build_bot_image.sh $provider first." >&2
@@ -45,4 +38,3 @@ docker compose \
   -f infra/compose/docker-compose.yml \
   --profile bot \
   run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
-

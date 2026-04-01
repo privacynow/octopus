@@ -502,7 +502,7 @@ def test_ensure_provider_auth_ready_uses_live_health_for_existing_auth(tmp_path:
     (auth_dir / ".claude.json").write_text('{"token":"secret"}', encoding="utf-8")
     manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
     manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
-    manager.provider_health_output = lambda provider: (True, "ok")  # type: ignore[method-assign]
+    manager.provider_live_health_output = lambda provider: (True, "ok")  # type: ignore[method-assign]
 
     manager.ensure_provider_auth_ready("claude")
 
@@ -517,7 +517,7 @@ def test_ensure_provider_auth_ready_retries_login_when_existing_auth_is_invalid(
     manager = OctopusManager(tmp_path, docker=docker)
     manager.ensure_provider_image_ready = lambda provider, force=False: None  # type: ignore[method-assign]
     health_results = iter([(False, "not logged in"), (True, "ok")])
-    manager.provider_health_output = lambda provider: next(health_results)  # type: ignore[method-assign]
+    manager.provider_live_health_output = lambda provider: next(health_results)  # type: ignore[method-assign]
 
     manager.ensure_provider_auth_ready("claude")
 
@@ -538,7 +538,7 @@ def test_provider_auth_state_reports_live_failure_for_configured_auth(tmp_path: 
     auth_dir.mkdir(parents=True, exist_ok=True)
     (auth_dir / ".claude.json").write_text('{"token":"secret"}', encoding="utf-8")
     manager = OctopusManager(tmp_path, docker=_ComposeDockerRunner())
-    manager.provider_health_output = lambda provider, build_if_stale=False: (False, "Not logged in · Please run /login")  # type: ignore[method-assign]
+    manager.provider_live_health_output = lambda provider, build_if_stale=False: (False, "Not logged in · Please run /login")  # type: ignore[method-assign]
 
     state = manager.provider_auth_state("claude", live=True)
 

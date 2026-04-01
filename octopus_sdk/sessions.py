@@ -25,6 +25,7 @@ from octopus_sdk.providers import (
     coerce_provider_state,
 )
 from octopus_sdk.skill_types import SkillRequirement
+from octopus_sdk.time_utils import utc_now_iso
 
 
 @dataclass(frozen=True)
@@ -340,7 +341,7 @@ def default_session(
     if callable(provider_state):
         provider_state = provider_state("")
     state = coerce_provider_state(provider_state)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     return {
         "provider": provider_name,
         "provider_state": state.to_dict(),

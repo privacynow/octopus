@@ -17,6 +17,7 @@ from octopus_sdk.formatting import summarize_text
 from octopus_sdk.registry.models import RoutedTaskResult, RoutedTaskUpdate
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.task_routing import TaskRoutingPort
+from octopus_sdk.time_utils import utc_now_iso
 from octopus_sdk.webhooks import CompletionWebhookPort
 from octopus_sdk.workflows.delegation import finalize_resumed_delegation
 
@@ -206,7 +207,7 @@ async def finalize_execution(
         and context.completion_webhook_sender is not None
     ):
         summary = (outcome.reply_text or outcome.error_text or "")[:200]
-        completed_at = datetime.now(timezone.utc).isoformat()
+        completed_at = utc_now_iso()
         asyncio.create_task(
             context.completion_webhook_sender(
                 completion_webhook_url,

@@ -32,6 +32,7 @@ from octopus_sdk.task_protocol import (
     normalize_pending_delegation_status,
     validate_delegated_task_transition,
 )
+from octopus_sdk.time_utils import utc_now_iso
 
 CHILD_ACTIVE_STATUSES = DELEGATED_TASK_ACTIVE_STATES
 CHILD_TERMINAL_STATUSES = DELEGATED_TASK_TERMINAL_STATES
@@ -235,7 +236,7 @@ def _trim_text(text: str, limit: int) -> str:
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now_iso()
 
 
 def _age_seconds(value: float | str | None, *, now: str | None = None) -> float | None:

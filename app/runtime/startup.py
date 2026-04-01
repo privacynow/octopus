@@ -160,10 +160,10 @@ def run_database_startup_checks(config: BotConfig) -> None:
 def validate_provider_auth(config: BotConfig, provider: Provider) -> None:
     if not should_validate_provider_auth(config):
         return
-    auth_errors = asyncio.run(provider.check_runtime_health())
+    auth_errors = asyncio.run(provider.check_auth_health())
     if not auth_errors:
         return
-    print("Provider not authenticated or unavailable.", file=sys.stderr)
+    print("Provider startup validation failed.", file=sys.stderr)
     for error in auth_errors:
         print(f"  {error}", file=sys.stderr)
     print(

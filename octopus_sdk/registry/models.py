@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from datetime import datetime, timezone
 from typing import Literal, NewType
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, field_validator, model_validator
 
 from octopus_sdk.realtime import ConversationProgressUpdate
+from octopus_sdk.time_utils import utc_now_iso as utcnow_iso
 
 AuthorityId = NewType("AuthorityId", str)
 AgentId = NewType("AgentId", str)
@@ -20,10 +20,6 @@ ExternalConversationRef = NewType("ExternalConversationRef", str)
 DeliveryId = NewType("DeliveryId", str)
 ConnectivityState = NewType("ConnectivityState", str)
 RegistryJsonValue = JsonValue
-
-
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class RegistryRecordModel(BaseModel):

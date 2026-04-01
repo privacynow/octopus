@@ -11,6 +11,7 @@ from typing import Any, Callable
 from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
+from octopus_sdk.time_utils import utc_now_iso
 from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 from octopus_sdk.workflows.delegation import apply_routed_result
 
@@ -79,9 +80,9 @@ def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
     has_setup = session.get("awaiting_skill_setup") is not None
     # Normalize timestamps before serializing so JSON data and column agree
     if not stored_session.get("created_at"):
-        stored_session["created_at"] = datetime.now(timezone.utc).isoformat()
+        stored_session["created_at"] = utc_now_iso()
     if not stored_session.get("updated_at"):
-        stored_session["updated_at"] = datetime.now(timezone.utc).isoformat()
+        stored_session["updated_at"] = utc_now_iso()
     stored_session = session_to_dict(session_from_dict(stored_session))
     has_pending = (
         stored_session.get("pending_approval") is not None
@@ -121,7 +122,7 @@ def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
 
 
 def save_session(conn, conversation_key: str, session: dict[str, Any]) -> None:
-    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    session["updated_at"] = utc_now_iso()
     _upsert(conn, conversation_key, session)
     conn.commit()
 
@@ -253,7 +254,7 @@ def flush_deferred_notifications(
     actor_key: str,
     now: str | None = None,
 ) -> list[DeferredNotification]:
-    current = now or datetime.now(timezone.utc).isoformat()
+    current = now or utc_now_iso()
     with conn.cursor() as cur:
         cur.execute(
             f"DELETE FROM {_DEFERRED_NOTIFICATIONS_TABLE} WHERE expires_at <= %s::timestamptz",
@@ -290,7 +291,7 @@ def flush_deferred_notifications(
 
 
 def expire_stale_deferred_notifications(conn, *, now: str | None = None) -> int:
-    current = now or datetime.now(timezone.utc).isoformat()
+    current = now or utc_now_iso()
     with conn.cursor() as cur:
         cur.execute(
             f"DELETE FROM {_DEFERRED_NOTIFICATIONS_TABLE} WHERE expires_at <= %s::timestamptz",

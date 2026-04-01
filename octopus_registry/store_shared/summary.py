@@ -11,22 +11,11 @@ from octopus_sdk.registry.models import (
 from octopus_registry.store_base import decode_json_field, effective_connectivity_state
 from octopus_registry.store_dialect import StoreDialect
 from octopus_registry.store_shared.common import records
+from octopus_registry.store_shared.usage import aggregate_usage_totals
 
 
 def _stringify_timestamp(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
-
-
-def _provider_reports_cost(metadata: dict[str, object]) -> bool:
-    provider = str(metadata.get("provider") or "").strip().lower()
-    if provider == "codex":
-        return False
-    if provider:
-        return True
-    try:
-        return bool(float(metadata.get("cost_usd") or 0.0))
-    except (TypeError, ValueError):
-        return False
 
 
 def get_usage_summary(
@@ -129,29 +118,7 @@ def get_summary(
             disconnected += 1
 
     usage_rows = get_usage_summary(conn, dialect=dialect, since_iso=window_start, until_iso=now_iso)
-    usage_total = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "cached_prompt_tokens": 0,
-        "cached_completion_tokens": 0,
-        "cached_prompt_tokens_available": False,
-        "cached_completion_tokens_available": False,
-        "cost_usd": 0.0,
-        "cost_available": False,
-    }
-    for row in usage_rows:
-        metadata = row.metadata or {}
-        usage_total["prompt_tokens"] += int(metadata.get("prompt_tokens") or 0)
-        usage_total["completion_tokens"] += int(metadata.get("completion_tokens") or 0)
-        if "cached_prompt_tokens" in metadata:
-            usage_total["cached_prompt_tokens"] += int(metadata.get("cached_prompt_tokens") or 0)
-            usage_total["cached_prompt_tokens_available"] = True
-        if "cached_completion_tokens" in metadata:
-            usage_total["cached_completion_tokens"] += int(metadata.get("cached_completion_tokens") or 0)
-            usage_total["cached_completion_tokens_available"] = True
-        if _provider_reports_cost(metadata):
-            usage_total["cost_usd"] += float(metadata.get("cost_usd") or 0.0)
-            usage_total["cost_available"] = True
+    usage_total = aggregate_usage_totals(usage_rows)
 
     return RegistrySummaryRecord.model_validate({
         "generated_at": now_iso,

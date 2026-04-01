@@ -66,6 +66,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     UsageSummaryRecord,
 )
+from octopus_sdk.time_utils import seconds_from_now_iso, utc_now_iso as utcnow_iso
 
 _OFFLINE_AFTER_SECONDS = 60
 _MISSING = object()
@@ -122,9 +123,9 @@ class RegistryScopeError(PermissionError):
         )
 
 
-def utcnow_iso() -> str:
-    """Return the current UTC timestamp in ISO 8601 format."""
-    return datetime.now(timezone.utc).isoformat()
+def offline_before_iso() -> str:
+    """Return the cutoff timestamp for agents considered offline."""
+    return seconds_from_now_iso(-_OFFLINE_AFTER_SECONDS)
 
 
 _DefaultT = TypeVar("_DefaultT")

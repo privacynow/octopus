@@ -12,19 +12,15 @@ All failures are logged as warnings and swallowed — never blocks execution.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from octopus_sdk.config import BotConfigBase, should_publish_event
 from octopus_sdk.conversation_projection import ConversationProjectionPort
-from octopus_sdk.providers import ToolExecutionRecord
 from octopus_sdk.execution import TransportIdentity
+from octopus_sdk.providers import ToolExecutionRecord
+from octopus_sdk.time_utils import utc_now_iso
 
 log = logging.getLogger(__name__)
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class NoOpEventSink:
@@ -163,7 +159,7 @@ class RegistryEventSink:
                 kind=kind,
                 actor=actor,
                 content=content,
-                created_at=_utcnow_iso(),
+                created_at=utc_now_iso(),
                 metadata=metadata or {},
             )
             await self._projection.publish_events(

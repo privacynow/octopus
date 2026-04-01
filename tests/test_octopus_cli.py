@@ -174,6 +174,52 @@ def test_render_provider_auth_status_shows_live_failure_detail(tmp_path: Path) -
     ]
 
 
+def test_status_is_static_by_default(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path)
+    state = _state(_bot("m1"))
+    state.provider_auth = [ProviderAuthState(provider="claude", configured=True)]
+    cli.manager.inspect_state = lambda: state  # type: ignore[method-assign]
+    called: list[tuple[tuple[str, ...], bool]] = []
+
+    def _provider_auth_states(providers, *, live=False):  # noqa: ANN001
+        called.append((tuple(providers), live))
+        return state.provider_auth
+
+    cli.manager.provider_auth_states = _provider_auth_states  # type: ignore[method-assign]
+
+    result = cli.run(["status"])
+
+    assert result == 0
+    assert called == []
+
+
+def test_status_live_provider_opt_in(tmp_path: Path) -> None:
+    cli = OctopusCLI(tmp_path)
+    state = _state(_bot("m1"))
+    state.provider_auth = [ProviderAuthState(provider="claude", configured=True)]
+    cli.manager.inspect_state = lambda: state  # type: ignore[method-assign]
+    called: list[tuple[tuple[str, ...], bool]] = []
+
+    def _provider_auth_states(providers, *, live=False):  # noqa: ANN001
+        called.append((tuple(providers), live))
+        return [
+            ProviderAuthState(
+                provider="claude",
+                configured=True,
+                live_checked=True,
+                healthy=False,
+                detail="Not logged in",
+            )
+        ]
+
+    cli.manager.provider_auth_states = _provider_auth_states  # type: ignore[method-assign]
+
+    result = cli.run(["status", "--live-provider"])
+
+    assert result == 0
+    assert called == [(("claude",), True)]
+
+
 def test_recommended_actions_include_authenticate_for_invalid_live_auth(tmp_path: Path) -> None:
     cli = OctopusCLI(tmp_path)
     state = _state(_bot("m1"))

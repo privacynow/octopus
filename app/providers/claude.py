@@ -13,6 +13,8 @@ from typing import Any
 
 from app.config import BotConfig
 from app.formatting import trim_text
+from app.provider_auth import auth_artifact_errors, runtime_auth_root
+from app.provider_health import command_failure, run_health_command
 from app.progress import (
     CommandFinish, ContentDelta, Denial, ToolFinish, ToolStart,
     Thinking, render as render_progress,
@@ -47,59 +49,19 @@ class ClaudeProvider:
             errors.append("'claude' binary not found in PATH")
         return errors
 
-    @staticmethod
-    def _auth_file() -> Path:
-        return Path.home() / ".claude.json"
-
-    @staticmethod
-    def _auth_dir() -> Path:
-        return Path.home() / ".claude"
-
-    @classmethod
-    def _has_auth_artifacts(cls) -> bool:
-        auth_file = cls._auth_file()
-        if auth_file.is_file() and auth_file.stat().st_size > 0:
-            return True
-
-        auth_dir = cls._auth_dir()
-        if not auth_dir.is_dir():
-            return False
-
-        try:
-            for path in auth_dir.rglob("*"):
-                if path.is_file() and path.stat().st_size > 0:
-                    return True
-        except OSError:
-            return False
-        return False
-
-    async def _run_health_command(
-        self,
-        *cmd: str,
-        timeout: int,
-    ) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._clean_env(),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except (asyncio.TimeoutError, TimeoutError):
-            proc.kill()
-            await proc.wait()
-            raise
-        return proc.returncode, stdout.decode(), stderr.decode()
-
     async def check_auth_health(self) -> list[str]:
         errors: list[str] = []
         try:
-            returncode, stdout, stderr = await self._run_health_command(
-                "claude", "--version", timeout=10
+            returncode, stdout, stderr = await run_health_command(
+                "claude",
+                "--version",
+                timeout=10,
+                env=self._clean_env(),
             )
             if returncode != 0:
-                errors.append(f"'claude --version' failed (rc={returncode}): {stderr[:200]}")
+                errors.append(
+                    command_failure("'claude --version'", returncode, stdout=stdout, stderr=stderr)
+                )
             else:
                 log.info("claude version: %s", stdout.strip())
         except (asyncio.TimeoutError, TimeoutError):
@@ -109,12 +71,14 @@ class ClaudeProvider:
         if errors:
             return errors
 
-        if not self._has_auth_artifacts():
-            errors.append("Claude auth not found. Run 'claude' and complete /login.")
-            return errors
+        return auth_artifact_errors("claude", runtime_auth_root("claude"))
 
+    async def check_runtime_health(self) -> list[str]:
+        errors = await self.check_auth_health()
+        if errors:
+            return errors
         try:
-            returncode, stdout, stderr = await self._run_health_command(
+            returncode, stdout, stderr = await run_health_command(
                 "claude",
                 "-p",
                 "--output-format",
@@ -124,21 +88,25 @@ class ClaudeProvider:
                 "--",
                 "reply with ok",
                 timeout=15,
+                env=self._clean_env(),
             )
-            combined = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part).strip()
             if returncode != 0:
-                detail = trim_text(combined or "Claude is not logged in.", 200)
-                errors.append(f"Claude auth probe failed (rc={returncode}): {detail}")
+                errors.append(
+                    command_failure(
+                        "Claude runtime probe",
+                        returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                        fallback="Claude runtime probe failed.",
+                    )
+                )
             else:
-                log.info("claude auth probe ok")
+                log.info("claude runtime probe ok")
         except (asyncio.TimeoutError, TimeoutError):
-            errors.append("Claude auth probe timed out")
+            errors.append("Claude runtime probe timed out")
         except OSError as e:
-            errors.append(f"Claude auth probe failed: {e}")
+            errors.append(f"Claude runtime probe failed: {e}")
         return errors
-
-    async def check_runtime_health(self) -> list[str]:
-        return await self.check_auth_health()
 
     # -- subprocess env ----------------------------------------------------
 

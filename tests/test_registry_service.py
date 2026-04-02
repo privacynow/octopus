@@ -363,9 +363,12 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     assert "github-integration" in names
     github_summary = next(item for item in listed_payload if item["name"] == "github-integration")
     assert github_summary["source_kind"] == "builtin"
+    assert github_summary["source_label"] == "Core"
     assert github_summary["can_activate"] is True
     assert github_summary["can_update"] is False
     assert github_summary["can_uninstall"] is False
+    assert github_summary["requires_credentials"] is True
+    assert github_summary["runtime_available"] is True
 
     detail = client.get(
         f"/v1/agents/{agent_id}/catalog/skills/github-integration",
@@ -375,6 +378,7 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     payload = detail.json()
     assert payload["name"] == "github-integration"
     assert payload["source_kind"] == "builtin"
+    assert payload["source_label"] == "Core"
     assert "GITHUB_TOKEN" in payload["requirement_keys"]
 
     preview = client.post(
@@ -421,6 +425,7 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
     detail = client.get(f"/v1/agents/{agent_id}/catalog/skills/release-notes/lifecycle", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["lifecycle_status"] == "draft"
+    assert detail.json()["source_label"] == "Custom"
 
     for path in ("submit", "approve", "publish"):
         response = client.post(

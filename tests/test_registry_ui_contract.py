@@ -109,7 +109,7 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
     assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(currentMode === 'catalog' && queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -135,10 +135,39 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
 
     assert "UI.peekCachedData(_skillCacheKey(currentAgentId))" in skill_catalog
     assert "UI.loadCachedData(" in skill_catalog
-    assert "_invalidateSkillCaches();" in skill_catalog
+    assert "function _invalidateSkillCaches(agentId = currentAgentId, skillName = '') {" in skill_catalog
+    assert "_invalidateSkillCaches(currentAgentId, skill.name);" in skill_catalog
     assert "UI.peekCachedData(_guidanceCacheKey())" in guidance_editor
     assert "UI.loadCachedData(" in guidance_editor
     assert "_invalidateGuidanceCache();" in guidance_editor
+
+
+def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    conversation_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Catalog shows what is installed on this bot." in skill_catalog
+    assert "Studio manages custom skill drafts and lifecycle without changing the backend model." in skill_catalog
+    assert "label: 'Bot catalog'" in skill_catalog
+    assert "label: 'Studio'" in skill_catalog
+    assert "'Installed on bot'" in skill_catalog
+    assert "'Skill store'" in skill_catalog
+    assert "'Create custom draft'" in skill_catalog
+    assert "_renderRegistrySkillRow" in skill_catalog
+    assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
+    assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
+    assert "Active in this conversation" in conversation_detail
+    assert "Installed on this bot" in conversation_detail
+    assert "getSkillLifecycle: (agentId, name) =>" in api_js
+    assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
 
 
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:

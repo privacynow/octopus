@@ -43,5 +43,6 @@ artifacts in the screenshot pipeline, not the default docs presentation.
 
 - [README.md](/Users/tinker/output/bots/telegram-agent-bot/README.md)
 - [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md)
+- [skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md)
 - [registry-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-guide.md)
 - [flows-catalog.md](/Users/tinker/output/bots/telegram-agent-bot/docs/flows-catalog.md)

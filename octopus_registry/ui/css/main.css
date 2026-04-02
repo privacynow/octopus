@@ -2025,6 +2025,82 @@ select {
     color: var(--text);
 }
 
+.skills-workspace {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+    align-items: start;
+}
+
+.skills-explainer-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3);
+}
+
+.skills-explainer-grid p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+}
+
+.list-row-selected {
+    background: var(--surface-hover);
+}
+
+.badge-primary {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent-strong);
+}
+
+.skills-meta-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-3);
+}
+
+.skills-meta-block {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+}
+
+.skills-markdown-preview {
+    display: grid;
+    gap: var(--space-3);
+    padding: 0.95rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.skills-markdown-preview > :first-child {
+    margin-top: 0;
+}
+
+.skills-markdown-preview > :last-child {
+    margin-bottom: 0;
+}
+
+.skills-studio-create,
+.skills-studio-editor,
+.skills-history-panel {
+    display: grid;
+    gap: var(--space-3);
+}
+
+.skills-inline-form {
+    display: grid;
+    gap: var(--space-2);
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) auto;
+}
+
 .quiet-note {
     color: var(--text-muted);
     font-size: var(--text-sm);
@@ -2272,6 +2348,11 @@ select {
         padding: var(--space-5);
     }
 
+    .skills-workspace,
+    .skills-explainer-grid {
+        grid-template-columns: 1fr;
+    }
+
     .dashboard-board,
     .task-board,
     .task-board-conversation {
@@ -2365,6 +2446,10 @@ select {
 }
 
 @media (max-width: 720px) {
+    .skills-inline-form {
+        grid-template-columns: 1fr;
+    }
+
     .search-input {
         flex: 0 0 auto;
     }

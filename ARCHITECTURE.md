@@ -98,10 +98,25 @@ All management endpoints are agent-scoped: `/v1/agents/{agent_id}/catalog/skills
 `/v1/agents/{agent_id}/guidance/{provider}`, etc. No global management endpoints
 that assume a single connected bot.
 
+For skills, the shared user-facing layers are:
+
+- `Catalog`
+- `Installed on bot`
+- `Active in conversation`
+
+With orthogonal dimensions:
+
+- `Source`: `Core | Store | Custom`
+- `Setup`: `Needs setup | Ready`
+- `Lifecycle`: draft/review/publish/archive for mutable custom skills
+
 ### Management protocol
 
-When the operator manages a bot's skills or guidance from the UI, the request
-crosses the registry connection through a typed protocol:
+When an operator manages a bot's skills or guidance from the registry UI, or a
+chat client invokes the same skill lifecycle through commands, the request must
+land on the same backend capability graph. The browser is a richer wrapper, not
+a separate source of truth. A typical registry UI request crosses the registry
+connection through a typed protocol:
 
 ```mermaid
 sequenceDiagram

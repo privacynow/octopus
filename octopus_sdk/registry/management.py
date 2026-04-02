@@ -100,6 +100,7 @@ class RuntimeSkillCatalogItemRecord(RegistryRecordModel):
     display_name: str = ""
     description: str = ""
     source_kind: str = ""
+    source_label: str = ""
     has_custom_override: bool = False
     requires_credentials: bool = False
     requirement_keys: list[str] = Field(default_factory=list)
@@ -108,6 +109,10 @@ class RuntimeSkillCatalogItemRecord(RegistryRecordModel):
     can_update: bool = False
     can_uninstall: bool = False
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
 
 
 class RuntimeSkillSearchCatalogItemRecord(RegistryRecordModel):
@@ -115,6 +120,7 @@ class RuntimeSkillSearchCatalogItemRecord(RegistryRecordModel):
     display_name: str = ""
     description: str = ""
     source_kind: str = ""
+    source_label: str = ""
     can_activate: bool = False
     can_update: bool = False
     can_uninstall: bool = False
@@ -125,6 +131,7 @@ class RegistryRuntimeSkillSearchHitRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    source_label: str = "Store"
     publisher: str = ""
     version: str = ""
     can_import: bool = False
@@ -142,13 +149,19 @@ class RuntimeSkillDetailRecord(RegistryRecordModel):
     description: str = ""
     body: str = ""
     source_kind: str = ""
+    source_label: str = ""
     has_custom_override: bool = False
     providers: list[str] = Field(default_factory=list)
     requirement_keys: list[str] = Field(default_factory=list)
+    requires_credentials: bool = False
     can_activate: bool = False
     can_update: bool = False
     can_uninstall: bool = False
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
 
 
 class RuntimeSkillLifecycleRevisionRecord(RegistryRecordModel):
@@ -173,6 +186,7 @@ class RuntimeSkillLifecycleDetailRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    source_label: str = ""
     visibility: str = ""
     body: str = ""
     lifecycle_status: str = ""
@@ -202,6 +216,10 @@ class ConversationSkillItemRecord(RegistryRecordModel):
     display_name: str = ""
     description: str = ""
     source_kind: str = ""
+    source_label: str = ""
+    providers: list[str] = Field(default_factory=list)
+    requirement_keys: list[str] = Field(default_factory=list)
+    requires_credentials: bool = False
     has_custom_override: bool = False
 
 
@@ -328,6 +346,7 @@ def runtime_skill_catalog_item_record(item: RuntimeSkillCatalogItem) -> RuntimeS
         display_name=item.display_name,
         description=item.description,
         source_kind=item.source_kind,
+        source_label=item.source_label,
         has_custom_override=item.has_custom_override,
         requires_credentials=bool(item.requirement_keys),
         requirement_keys=list(item.requirement_keys),
@@ -336,6 +355,10 @@ def runtime_skill_catalog_item_record(item: RuntimeSkillCatalogItem) -> RuntimeS
         can_update=item.can_update,
         can_uninstall=item.can_uninstall,
         lifecycle_status=item.lifecycle_status,
+        runtime_available=item.runtime_available,
+        visibility=item.visibility,
+        is_mutable=item.is_mutable,
+        has_unpublished_changes=item.has_unpublished_changes,
     )
 
 
@@ -347,6 +370,7 @@ def runtime_skill_search_catalog_item_record(
         display_name=item.display_name,
         description=item.description,
         source_kind=item.source_kind,
+        source_label=item.source_label,
         can_activate=item.can_activate,
         can_update=item.can_update,
         can_uninstall=item.can_uninstall,
@@ -361,6 +385,7 @@ def registry_runtime_skill_search_hit_record(
         name=item.name,
         display_name=item.display_name,
         description=item.description,
+        source_label=item.source_label,
         publisher=item.publisher,
         version=item.version,
         can_import=item.can_import,
@@ -384,13 +409,19 @@ def runtime_skill_detail_record(detail: RuntimeSkillDetail) -> RuntimeSkillDetai
         description=detail.description,
         body=detail.body,
         source_kind=detail.source_kind,
+        source_label=detail.source_label,
         has_custom_override=detail.has_custom_override,
         providers=list(detail.providers),
         requirement_keys=list(detail.requirement_keys),
+        requires_credentials=detail.requires_credentials,
         can_activate=detail.can_activate,
         can_update=detail.can_update,
         can_uninstall=detail.can_uninstall,
         lifecycle_status=detail.lifecycle_status,
+        runtime_available=detail.runtime_available,
+        visibility=detail.visibility,
+        is_mutable=detail.is_mutable,
+        has_unpublished_changes=detail.has_unpublished_changes,
     )
 
 
@@ -401,6 +432,7 @@ def runtime_skill_lifecycle_detail_record(
         name=detail.name,
         display_name=detail.display_name,
         description=detail.description,
+        source_label=detail.source_label,
         visibility=detail.visibility,
         body=detail.body,
         lifecycle_status=detail.lifecycle_status,
@@ -464,6 +496,10 @@ def conversation_skill_item_record(item: ConversationSkillItem) -> ConversationS
         display_name=item.display_name,
         description=item.description,
         source_kind=item.source_kind,
+        source_label=item.source_label,
+        providers=list(item.providers),
+        requirement_keys=list(item.requirement_keys),
+        requires_credentials=item.requires_credentials,
         has_custom_override=item.has_custom_override,
     )
 

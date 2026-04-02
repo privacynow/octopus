@@ -562,6 +562,11 @@ function renderConversationDetail(container, params) {
                 nodes.push(status);
             }
 
+            const explainer = document.createElement('p');
+            explainer.className = 'quiet-note';
+            explainer.textContent = 'Use this panel to choose what is active in this conversation. To install, update, or edit skills for this bot, open the Skills page.';
+            nodes.push(explainer);
+
             if (state.pendingSetup) {
                 const foreignSetup = String(state.pendingSetup.ownerActor || '') && state.pendingSetup.ownerActor !== 'reg:registry-ui';
                 const setupBox = document.createElement('div');
@@ -674,7 +679,7 @@ function renderConversationDetail(container, params) {
             activeSection.className = 'conversation-management-section';
             const activeTitle = document.createElement('div');
             activeTitle.className = 'detail-label';
-            activeTitle.textContent = 'Active skills';
+            activeTitle.textContent = 'Active in this conversation';
             activeSection.appendChild(activeTitle);
             const activeSkills = state.skillState.active_skill_details || [];
             if (!activeSkills.length) {
@@ -685,7 +690,12 @@ function renderConversationDetail(container, params) {
                 activeSkills.forEach((skill) => {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
-                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(skill.description || skill.source_kind || '')}</span></div>`;
+                    const summaryBits = [
+                        skill.description || '',
+                        skill.source_label || skill.source_kind || '',
+                        skill.requires_credentials ? 'setup required' : '',
+                    ].filter(Boolean).join(' • ');
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Skill active in this conversation')}</span></div>`;
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const deactivate = document.createElement('button');
@@ -719,10 +729,10 @@ function renderConversationDetail(container, params) {
             activateSection.className = 'conversation-management-section';
             const activateTitle = document.createElement('div');
             activateTitle.className = 'detail-label';
-            activateTitle.textContent = 'Activate skill';
+            activateTitle.textContent = 'Installed on this bot';
             activateSection.appendChild(activateTitle);
             if (!state.activatable.length) {
-                activateSection.appendChild(UI.renderEmptyState('No additional activatable skills are available.', true));
+                activateSection.appendChild(UI.renderEmptyState('No additional installed skills are ready to activate here.', true));
             } else {
                 const controls = document.createElement('div');
                 controls.className = 'conversation-management-form';
@@ -730,12 +740,13 @@ function renderConversationDetail(container, params) {
                 select.className = 'input';
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = 'Choose a skill';
+                placeholder.textContent = 'Choose an installed skill';
                 select.appendChild(placeholder);
                 state.activatable.forEach((skill) => {
                     const option = document.createElement('option');
                     option.value = skill.name;
-                    option.textContent = skill.display_name || skill.name;
+                    const setupLabel = skill.requires_credentials ? ' · needs setup' : '';
+                    option.textContent = `${skill.display_name || skill.name}${setupLabel}`;
                     select.appendChild(option);
                 });
                 controls.appendChild(select);

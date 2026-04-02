@@ -230,21 +230,38 @@ workspace with `/project <name>`.
 
 ## Skills And Guidance
 
-Skills and guidance are secondary management surfaces, not the starting point
-for a new deployment.
+Skills and guidance share one backend lifecycle across the registry UI and chat
+clients.
 
-- builtin skills come with the bot runtime and can be enabled per chat through
-  Telegram `/skills ...` commands or turned on by default with `BOT_SKILLS`
-- imported skills come from a remote registry and require `BOT_REGISTRY_URL`
-  before the browser **Skills** page can install them
-- the browser **Skills** page manages the catalog and lifecycle; it does not
-  activate a skill into one specific conversation
+The user-facing skill model has three layers:
+
+- `Catalog`
+- `Installed on bot`
+- `Active in conversation`
+
+And these orthogonal labels:
+
+- `Source`: `Core`, `Store`, `Custom`
+- `Setup`: `Needs setup`, `Ready`
+- `Lifecycle`: draft through published/archive for custom skills
+
+Current product behavior:
+
+- `Core` skills ship with the bot runtime and can be turned on by default with
+  `BOT_SKILLS`
+- `Store` skills come from the remote skill store and can be installed on a bot
+  from the browser **Skills** page or chat `/skills install ...`
+- the browser **Skills** page manages what is installed on a bot and the custom
+  skill lifecycle
+- conversation activation is separate and happens in a conversation’s
+  **Skills** panel or via chat `/skills add ...`
 - guidance is provider-level instruction state for Claude/Codex behavior and is
   managed through Telegram `/guidance ...` commands or the browser
   **Guidance** page
 
-If you need the full model for builtin skills, imported registry skills,
-conversation activation, and provider guidance, see
+If you need the full shared skill model, package format, lifecycle, and
+provider guidance structure, see
+[docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md),
 [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md)
 and [docs/manual/README.md](/Users/tinker/output/bots/telegram-agent-bot/docs/manual/README.md).
 

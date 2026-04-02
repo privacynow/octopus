@@ -378,7 +378,7 @@ async def test_skills_add_no_creds():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert no_cred_skill in session.get("active_skills", [])
         assert session.get("awaiting_skill_setup") is None
-        assert "activated" in " ".join(r.get("text", "") for r in msg.replies).lower()
+        assert "active in this conversation" in " ".join(r.get("text", "") for r in msg.replies).lower()
 
 
 async def test_skills_remove_cancels_setup():

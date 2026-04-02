@@ -444,9 +444,9 @@ def test_runtime_skill_active_summary_message_renders_expected_html():
     rendered = runtime_skill_active_summary_message(["Planner", "Reviewer"], 7)
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert "<b>Active skills (2):</b>" in rendered.text
+    assert "<b>Active in this conversation (2):</b>" in rendered.text
     assert "Planner" in rendered.text
-    assert "7 skill(s) available" in rendered.text
+    assert "Installed on this bot: 7 skill(s)" in rendered.text
 
 
 def test_runtime_skill_history_message_renders_revisions_and_approvals():
@@ -454,6 +454,7 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
         name="release-notes",
         display_name="Release Notes",
         description="Summarize releases",
+        source_label="Custom",
         visibility="private",
         body="body",
         lifecycle_status="published",

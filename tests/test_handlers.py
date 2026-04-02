@@ -2434,7 +2434,7 @@ async def test_prompt_size_no_warning_small_skill():
                 args=["add", "tiny-skill"])
 
             reply = last_reply(msg)
-            assert "activated" in reply
+            assert "active in this conversation" in reply
             assert "prompt context" not in reply
 
             session = load_session_disk(data_dir, telegram_conversation_key(1), prov)

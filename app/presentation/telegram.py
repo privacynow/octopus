@@ -469,12 +469,15 @@ def provider_guidance_mutation_message(message: str) -> TelegramRenderedMessage:
 
 def runtime_skill_active_summary_message(active_display_names: list[str], catalog_count: int) -> TelegramRenderedMessage:
     if active_display_names:
-        lines = [f"<b>Active skills ({len(active_display_names)}):</b>"]
+        lines = [f"<b>Active in this conversation ({len(active_display_names)}):</b>"]
         for display in active_display_names:
             lines.append(f"  {html.escape(display)}")
     else:
-        lines = ["<b>No active skills.</b>"]
-    lines.append(f"\n{catalog_count} skill(s) available. Use /skills list to see all.")
+        lines = ["<b>No skills active in this conversation.</b>"]
+    lines.append(
+        f"\nInstalled on this bot: {catalog_count} skill(s). "
+        "Use /skills list for the bot catalog and /skills add <name> to activate one here."
+    )
     return _html_message("\n".join(lines))
 
 
@@ -483,27 +486,26 @@ def runtime_skill_catalog_message(
     status_by_name: dict[str, str],
 ) -> TelegramRenderedMessage:
     if not catalog:
-        return TelegramRenderedMessage(text="No skills available.")
-    lines = ["<b>Available skills:</b>"]
+        return TelegramRenderedMessage(text="No skills are installed on this bot.")
+    lines = ["<b>Installed on this bot:</b>"]
     for item in sorted(catalog, key=lambda value: value.name):
+        extra: list[str] = [item.source_label]
         if item.has_custom_override:
-            custom_tag = " [custom override]"
-        elif item.source_kind == "custom":
-            custom_tag = " (custom)"
-        elif item.source_kind == "imported":
-            custom_tag = " (imported)"
-        else:
-            custom_tag = ""
+            extra.append("custom override")
+        if item.requires_credentials:
+            extra.append("setup required")
         desc = f" — {html.escape(item.description)}" if item.description else ""
         lines.append(
             f"  <code>{html.escape(item.name)}</code>{desc}"
-            f"{status_by_name.get(item.name, '')}{custom_tag}"
+            f"{status_by_name.get(item.name, '')} ({html.escape(', '.join(extra))})"
         )
     return _html_message("\n".join(lines))
 
 
 def runtime_skill_unknown_message(name: str) -> TelegramRenderedMessage:
-    return _html_message(f"Unknown skill: {html.escape(name)}. Use /skills list to see available.")
+    return _html_message(
+        f"Unknown skill: {html.escape(name)}. Use /skills list to see what is installed on this bot."
+    )
 
 
 def runtime_skill_foreign_setup_message(setup) -> TelegramRenderedMessage:
@@ -512,7 +514,7 @@ def runtime_skill_foreign_setup_message(setup) -> TelegramRenderedMessage:
 
 def runtime_skill_needs_setup_message(name: str, first_requirement: dict[str, Any]) -> TelegramRenderedMessage:
     return _html_message(
-        f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
+        f"Skill <code>{html.escape(name)}</code> is installed on this bot but needs setup before it can be active in this conversation.\n\n"
         f"{format_credential_prompt(first_requirement)}"
     )
 
@@ -522,19 +524,19 @@ def runtime_skill_not_published_message(name: str) -> TelegramRenderedMessage:
 
 
 def runtime_skill_activated_message(name: str) -> TelegramRenderedMessage:
-    return _html_message(f"Skill <code>{html.escape(name)}</code> activated.")
+    return _html_message(f"Skill <code>{html.escape(name)}</code> is now active in this conversation.")
 
 
 def runtime_skill_deactivated_message(name: str) -> TelegramRenderedMessage:
-    return _html_message(f"Skill <code>{html.escape(name)}</code> deactivated.")
+    return _html_message(f"Skill <code>{html.escape(name)}</code> is no longer active in this conversation.")
 
 
 def runtime_skill_not_active_message(name: str) -> TelegramRenderedMessage:
-    return _html_message(f"Skill <code>{html.escape(name)}</code> is not active.")
+    return _html_message(f"Skill <code>{html.escape(name)}</code> is not active in this conversation.")
 
 
 def runtime_skill_no_requirements_message(name: str) -> TelegramRenderedMessage:
-    return _html_message(f"Skill <code>{html.escape(name)}</code> has no credential requirements.")
+    return _html_message(f"Skill <code>{html.escape(name)}</code> does not require setup credentials.")
 
 
 def runtime_skill_setup_could_not_start_message() -> TelegramRenderedMessage:
@@ -543,18 +545,18 @@ def runtime_skill_setup_could_not_start_message() -> TelegramRenderedMessage:
 
 def runtime_skill_setup_started_message(name: str, first_requirement: dict[str, Any]) -> TelegramRenderedMessage:
     return _html_message(
-        f"Setting up <code>{html.escape(name)}</code>.\n\n"
+        f"Setting up <code>{html.escape(name)}</code> for this conversation.\n\n"
         f"{format_credential_prompt(first_requirement)}"
     )
 
 
 def runtime_skill_all_removed_message() -> TelegramRenderedMessage:
-    return TelegramRenderedMessage(text="All skills removed.")
+    return TelegramRenderedMessage(text="All conversation skills removed.")
 
 
 def runtime_skill_create_success_message(name: str, visibility: str) -> TelegramRenderedMessage:
     return _html_message(
-        f"Created custom skill <code>{html.escape(name)}</code>\n"
+        f"Created custom draft <code>{html.escape(name)}</code>\n"
         f"Draft visibility: <code>{html.escape(visibility)}</code>\n"
         "Use /skills edit, /skills submit, and /skills history to continue the lifecycle."
     )
@@ -567,6 +569,7 @@ def runtime_skill_history_not_found_message(name: str) -> TelegramRenderedMessag
 def runtime_skill_history_message(detail: RuntimeSkillLifecycleDetail) -> TelegramRenderedMessage:
     lines = [
         f"<b>{html.escape(detail.display_name)}</b>",
+        f"Source: <code>{html.escape(detail.source_label)}</code>",
         f"Status: <code>{html.escape(detail.lifecycle_status)}</code>",
         f"Runtime available: {'yes' if detail.runtime_available else 'no'}",
         f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>",
@@ -665,24 +668,27 @@ def runtime_skill_search_results_message(
 ) -> TelegramRenderedMessage:
     lines: list[str] = []
     if results.catalog:
-        lines.append(f"<b>Catalog skills matching '{html.escape(query)}':</b>")
+        lines.append(f"<b>Installed on this bot matching '{html.escape(query)}':</b>")
         for info in results.catalog:
             desc = f" — {html.escape(info.description)}" if info.description else ""
-            lines.append(f"  <code>{html.escape(info.name)}</code>{desc}")
+            lines.append(
+                f"  <code>{html.escape(info.name)}</code>{desc} "
+                f"({html.escape(info.source_label)})"
+            )
     if results.registry:
         local_names = {item.name for item in results.catalog}
         reg_only = [item for item in results.registry if item.name not in local_names]
         if reg_only:
-            lines.append(f"\n<b>Registry skills matching '{html.escape(query)}':</b>")
+            lines.append(f"\n<b>Skill store matches for '{html.escape(query)}':</b>")
             for skill in reg_only:
                 desc = f" — {html.escape(skill.description)}" if skill.description else ""
                 pub = f" (by {html.escape(skill.publisher)})" if skill.publisher else ""
                 lines.append(f"  <code>{html.escape(skill.name)}</code>{desc}{pub}")
     if results.registry_error:
-        lines.append(f"\n<i>Registry search failed: {html.escape(results.registry_error)}</i>")
+        lines.append(f"\n<i>Skill store search failed: {html.escape(results.registry_error)}</i>")
     if not lines:
         return _html_message(f"No skills matching '{html.escape(query)}'.")
-    lines.append("\nUse /skills info <name> for details, /skills install <name> to import the registry.")
+    lines.append("\nUse /skills info <name> for details, /skills install <name> to install a store skill on this bot.")
     return _html_message("\n".join(lines))
 
 
@@ -694,11 +700,18 @@ def runtime_skill_info_message(detail: RuntimeSkillDetail) -> TelegramRenderedMe
     parts = [f"<b>{html.escape(detail.display_name)}</b>"]
     if detail.description:
         parts.append(html.escape(detail.description))
+    parts.append(f"Source: <code>{html.escape(detail.source_label)}</code>")
+    parts.append(
+        "State: "
+        + ("ready to activate in a conversation" if detail.runtime_available else "not ready for activation until published")
+    )
     if detail.requirement_keys:
-        parts.append(f"Requires: {html.escape(', '.join(detail.requirement_keys))}")
+        parts.append(f"Setup: {html.escape(', '.join(detail.requirement_keys))}")
+    else:
+        parts.append("Setup: none")
     if detail.providers:
         parts.append(f"Providers: {', '.join(sorted(detail.providers))}")
-    parts.append(f"Resolves to: {detail.source_kind}")
+    parts.append("Use /skills add <name> to activate it in this conversation.")
     preview = detail.body
     if len(preview) > 1000:
         cut = preview.rfind("\n\n", 0, 1000)
@@ -710,15 +723,15 @@ def runtime_skill_info_message(detail: RuntimeSkillDetail) -> TelegramRenderedMe
 
 
 def runtime_skill_install_error_message(error_text: str) -> TelegramRenderedMessage:
-    return _html_message(f"Registry install failed: {html.escape(error_text[:300])}")
+    return _html_message(f"Skill store install failed: {html.escape(error_text[:300])}")
 
 
 def runtime_skill_updates_message(
     updates: tuple[RuntimeSkillUpdateStatusItem, ...],
 ) -> TelegramRenderedMessage:
     if not updates:
-        return TelegramRenderedMessage(text="No imported skills found.")
-    lines = ["<b>Imported skill status:</b>"]
+        return TelegramRenderedMessage(text="No store-installed skills found on this bot.")
+    lines = ["<b>Store-installed skills on this bot:</b>"]
     for item in updates:
         label = "update available" if item.status == "update_available" else "up to date"
         override = " [custom override]" if item.has_custom_override else ""
@@ -971,15 +984,16 @@ def raw_missing_message() -> TelegramRenderedMessage:
 
 HELP_SKILLS = (
     "<b>Skills</b>\n\n"
-    "Skills add domain knowledge and tools to the AI.\n\n"
-    "/skills list — see all available skills with status\n"
-    "/skills add &lt;name&gt; — activate a skill (prompts for credentials if needed)\n"
-    "/skills remove &lt;name&gt; — deactivate a skill\n"
-    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
+    "Skills have three layers: what is installed on this bot, what needs setup, and what is active in this conversation.\n\n"
+    "/skills list — show the bot catalog with conversation status\n"
+    "/skills add &lt;name&gt; — activate an installed skill in this conversation\n"
+    "/skills remove &lt;name&gt; — deactivate a skill in this conversation\n"
+    "/skills setup &lt;name&gt; — re-enter setup credentials for a skill\n"
     "/skills info &lt;name&gt; — view skill details\n"
     "/skills search &lt;query&gt; — search the skill store\n"
-    "/skills clear — deactivate all skills\n"
-    "/skills create &lt;name&gt; — create a custom draft skill\n"
+    "/skills install &lt;name&gt; — install a store skill on this bot\n"
+    "/skills clear — deactivate all skills in this conversation\n"
+    "/skills create &lt;name&gt; — create a custom draft skill on this bot\n"
     "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
     "/skills history &lt;name&gt; — show revision and approval history\n"
     "/skills submit &lt;name&gt; — submit the draft for review\n"
@@ -1029,7 +1043,7 @@ def _help_command_lines(
 ) -> list[str]:
     lines = [
         "/new — start a fresh conversation",
-        "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
+        "/skills — inspect the bot catalog and manage what is active in this conversation",
         "/guidance — inspect and manage provider guidance",
         "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
         "/approval on|off — show a plan before executing, or run immediately",

@@ -91,9 +91,9 @@ def _diff_tracks(
 
 def _safe_registry_failure_message(action: str) -> str:
     messages = {
-        "install": "Could not fetch skill registry. Try again later.",
-        "update": "Could not update skill. Try again later.",
-        "diff": "Could not fetch skill for update check. Try again later.",
+        "install": "Could not reach the skill store. Try again later.",
+        "update": "Could not update this skill from the store. Try again later.",
+        "diff": "Could not fetch the store version for this skill. Try again later.",
     }
     return messages[action]
 
@@ -201,7 +201,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=f"Skill '{name}' installed registry. Use /skills add {name} to activate.",
+            message=f"Skill '{name}' installed on this bot from the skill store. Use /skills add {name} to activate it in a conversation.",
         )
 
     def uninstall(self, name: str, default_skills: tuple[str, ...] = ()) -> SkillMutationResult:
@@ -210,7 +210,7 @@ class SkillImportService:
             return SkillMutationResult(
                 name=name,
                 ok=False,
-                message=f"Skill '{name}' is not installed as an imported skill.",
+                message=f"Skill '{name}' is not installed from the skill store on this bot.",
             )
         remaining_tracks = [item for item in self._catalog.list_tracks(name) if item.source_kind != "imported"]
         if name in default_skills and not remaining_tracks:
@@ -273,7 +273,7 @@ class SkillImportService:
     def update(self, name: str) -> SkillMutationResult:
         imported = self._imported_track(name)
         if imported is None:
-            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed as an imported skill.")
+            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed from the skill store on this bot.")
         parsed = _parse_registry_source_uri(imported.source_uri)
         if parsed is None:
             return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' does not have a valid registry source.")
@@ -295,7 +295,7 @@ class SkillImportService:
         if incoming.revision.digest == imported.revision.digest:
             return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' is already up to date.")
         self._store().replace_skill_track(incoming)
-        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated registry.")
+        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated from the skill store.")
 
     def update_all(self) -> list[SkillMutationResult]:
         results: list[SkillMutationResult] = []
@@ -307,7 +307,7 @@ class SkillImportService:
     def diff(self, name: str, *, max_chars: int = 4000) -> SkillMutationResult:
         imported = self._imported_track(name)
         if imported is None:
-            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed as an imported skill.")
+            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed from the skill store on this bot.")
         parsed = _parse_registry_source_uri(imported.source_uri)
         if parsed is None:
             return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' does not have a valid registry source.")
@@ -329,7 +329,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=_diff_tracks(imported, incoming, _label="installed", to_label="registry", max_chars=max_chars),
+            message=_diff_tracks(imported, incoming, _label="installed on bot", to_label="skill store", max_chars=max_chars),
         )
 
     def is_installed(self, name: str) -> bool:

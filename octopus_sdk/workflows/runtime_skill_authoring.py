@@ -19,6 +19,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleMutation,
     RuntimeSkillLifecycleRevision,
 )
+from octopus_sdk.skill_types import skill_source_label
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             name=track.slug,
             display_name=track.display_name,
             description=track.description,
+            source_label=skill_source_label(track.source_kind),
             visibility=track.visibility,
             body=track.revision.instruction_body,
             lifecycle_status=track.revision.status,

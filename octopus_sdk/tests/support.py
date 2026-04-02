@@ -360,8 +360,14 @@ class StubCatalogService(SkillCatalogServicePort):
             description="Docs skill",
             body="Use docs",
             source_kind="builtin",
+            source_label="Core",
             providers=("stub",),
             requirement_keys=(),
+            requires_credentials=False,
+            runtime_available=True,
+            visibility="shared",
+            is_mutable=False,
+            has_unpublished_changes=False,
         )
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> WorkflowRuntimeSkillTrackRecord:

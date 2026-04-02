@@ -198,7 +198,7 @@ async def test_skills_info_shows_imported_requirements(monkeypatch, tmp_path: Pa
         await send_command(th.cmd_skills, chat, admin, "/skills install store-cred-skill", ["install", "store-cred-skill"])
         msg = await send_command(th.cmd_skills, chat, admin, "/skills info store-cred-skill", ["info", "store-cred-skill"])
 
-        assert "Requires: API_TOKEN" in " ".join(r.get("text", "") for r in msg.replies)
+        assert "Setup: API_TOKEN" in " ".join(r.get("text", "") for r in msg.replies)
     finally:
         _cleanup_runtime(data_dir)
 
@@ -293,7 +293,7 @@ async def test_skill_add_callback_confirm(monkeypatch, tmp_path: Path):
         assert len(query.answers) == 1
         assert not query.answer_show_alert
         assert has_markup_removal(cb_msg)
-        assert "activated" in (cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else "").lower()
+        assert "active in this conversation" in (cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else "").lower()
         session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert "helper" in session.get("active_skills", [])
     finally:
@@ -370,7 +370,7 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         chat = FakeChat(1001)
 
         created = await send_command(th.cmd_skills, chat, regular, "/skills create release-notes", ["create", "release-notes"])
-        assert "Created custom skill" in last_reply(created)
+        assert "Created custom draft" in last_reply(created)
         assert get_skill_catalog_service().resolve_runtime_track("release-notes") is None
 
         edited = await send_command(

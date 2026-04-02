@@ -2,7 +2,18 @@
 
 Manual: [Home](README.md) · Previous: [Registry UI deep links](registry-ui/deep-links.md) · Next: [Registry HTTP API](05-integration-api.md)
 
-Chat handling lives under [`app/channels/telegram/`](../../app/channels/telegram/). **`/help`** and **`/start`** list commands; **plain text** (not starting with `/`) is the main conversation with the agent. **`/settings`** uses inline buttons (`setting_*` callbacks). **`/skills`** lists and activates skills; **`/approval`**, **`/approve`**, **`/reject`**, **`/cancel`** apply when approval gates are on.
+Chat handling lives under [`app/channels/telegram/`](../../app/channels/telegram/). **`/help`** and **`/start`** list commands; **plain text** (not starting with `/`) is the main conversation with the agent. **`/settings`** uses inline buttons (`setting_*` callbacks). **`/skills`** exposes the same shared skill backend as the registry UI; **`/approval`**, **`/approve`**, **`/reject`**, **`/cancel`** apply when approval gates are on.
+
+The chat skill vocabulary matches the registry UI:
+
+- `Catalog`
+- `Installed on bot`
+- `Active in conversation`
+- `Core / Store / Custom`
+- `Needs setup / Ready`
+
+Chat and browser are peer clients over the same backend operations. They may
+bundle steps differently, but they must not diverge in rules or outcomes.
 
 ![Help and a normal user message](../assets/product/telegram-help.svg)
 

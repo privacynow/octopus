@@ -23,13 +23,19 @@ class RuntimeSkillCatalogItem:
     display_name: str
     description: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
     has_custom_override: bool
     can_activate: bool
     can_update: bool
     can_uninstall: bool
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,13 +45,19 @@ class RuntimeSkillDetail:
     description: str
     body: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
     has_custom_override: bool
     can_activate: bool
     can_update: bool
     can_uninstall: bool
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,8 +72,14 @@ class RuntimeSkillInfoRecord:
     description: str
     body: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
+    runtime_available: bool
+    visibility: str
+    is_mutable: bool
+    has_unpublished_changes: bool
 
 
 @dataclass(frozen=True)
@@ -148,7 +166,11 @@ class ConversationSkillItem:
     display_name: str
     description: str
     source_kind: str
+    source_label: str
     has_custom_override: bool
+    providers: tuple[str, ...] = ()
+    requirement_keys: tuple[str, ...] = ()
+    requires_credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,6 +243,7 @@ class RegistryRuntimeSkillSearchHit:
     publisher: str
     version: str
     can_import: bool
+    source_label: str = "Store"
 
 
 @dataclass(frozen=True)
@@ -389,6 +412,7 @@ class RuntimeSkillLifecycleDetail:
     name: str
     display_name: str
     description: str
+    source_label: str
     visibility: str
     body: str
     lifecycle_status: str

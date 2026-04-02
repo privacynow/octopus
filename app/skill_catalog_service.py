@@ -5,7 +5,7 @@ from __future__ import annotations
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_seed import builtin_skill_tracks
 from app.content_store import get_content_store
-from octopus_sdk.skill_types import SkillMeta, SkillRequirement
+from octopus_sdk.skill_types import SkillMeta, SkillRequirement, skill_source_label
 from octopus_sdk.workflows.skills import RuntimeSkillInfoRecord
 
 
@@ -15,12 +15,6 @@ def _requirements__track(record: RuntimeSkillTrackRecord) -> list[SkillRequireme
 
 class SkillCatalogService:
     """Channel-neutral runtime skill catalog service."""
-
-    _SOURCE_LABELS = {
-        "builtin": "builtin",
-        "imported": "imported",
-        "custom": "custom",
-    }
 
     def _store(self):
         return get_content_store()
@@ -76,9 +70,16 @@ class SkillCatalogService:
             display_name=record.display_name,
             description=record.description,
             body=record.revision.instruction_body,
-            source_kind=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
+            source_kind=record.source_kind,
+            source_label=skill_source_label(record.source_kind),
             providers=provider_names,
             requirement_keys=tuple(item.key for item in _requirements__track(record)),
+            requires_credentials=bool(record.revision.requirements),
+            runtime_available=bool(record.published_revision_id) or not record.is_mutable,
+            visibility=record.visibility,
+            is_mutable=record.is_mutable,
+            has_unpublished_changes=bool(record.published_revision_id)
+            and record.published_revision_id != record.active_revision_id,
         )
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillTrackRecord:

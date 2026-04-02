@@ -79,6 +79,17 @@ class SkillMeta:
     is_custom: bool = False
 
 
+_SOURCE_LABELS = {
+    "builtin": "Core",
+    "imported": "Store",
+    "custom": "Custom",
+}
+
+
+def skill_source_label(source_kind: str) -> str:
+    return _SOURCE_LABELS.get(str(source_kind or "").strip(), str(source_kind or "").strip() or "Skill")
+
+
 @dataclass(frozen=True)
 class SkillRequirement:
     key: str

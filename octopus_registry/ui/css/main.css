@@ -683,7 +683,8 @@ select {
 }
 
 .badge-running,
-.badge-connected {
+.badge-connected,
+.badge-healthy {
     background: rgba(32, 108, 82, 0.12);
     border-color: rgba(32, 108, 82, 0.22);
     color: var(--success);
@@ -699,7 +700,8 @@ select {
 
 .badge-failed,
 .badge-disconnected,
-.badge-cancelled {
+.badge-cancelled,
+.badge-faulted {
     background: rgba(165, 59, 42, 0.12);
     border-color: rgba(165, 59, 42, 0.22);
     color: var(--danger);
@@ -1083,6 +1085,15 @@ select {
     word-break: break-word;
 }
 
+.agent-execution-note {
+    margin-top: var(--space-3);
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(32, 108, 82, 0.22);
+    background: rgba(32, 108, 82, 0.08);
+    color: var(--text-secondary);
+}
+
 .inline-metrics {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -1261,11 +1272,18 @@ select {
     gap: var(--space-3);
 }
 
-.dashboard-work-grid {
+.dashboard-board {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
     gap: var(--space-3);
     align-items: start;
+}
+
+.dashboard-column {
+    display: grid;
+    gap: var(--space-3);
+    align-content: start;
+    min-width: 0;
 }
 
 .conversation-screen {
@@ -1295,8 +1313,9 @@ select {
 
 .conversation-management-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--space-3);
+    max-width: min(760px, 100%);
+    align-content: start;
 }
 
 .conversation-management-card {
@@ -1306,6 +1325,17 @@ select {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--bg-secondary);
+    box-shadow: var(--shadow-card);
+}
+
+.conversation-management-close {
+    min-width: 40px;
+    padding-inline: 0.78rem;
+    font-size: 1.15rem;
+    line-height: 1;
+}
+
+.conversation-manage-trigger[aria-pressed="true"] {
     box-shadow: var(--shadow-card);
 }
 
@@ -2227,7 +2257,7 @@ select {
         padding: var(--space-5);
     }
 
-    .dashboard-work-grid,
+    .dashboard-board,
     .task-board,
     .task-board-conversation {
         grid-template-columns: 1fr;

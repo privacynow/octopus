@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse
@@ -32,6 +30,10 @@ class ConversationResetRequest(BaseModel):
     actor_key: str = Field(default="", description="Actor resetting the conversation")
 
 
+class AgentExecutionResetRequest(BaseModel):
+    actor_key: str = Field(default="", description="Actor resetting the agent execution fault")
+
+
 class ProviderGuidancePreviewRequest(BaseModel):
     role: str = Field(default="", description="Role/persona text to include")
     active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
@@ -53,20 +55,6 @@ class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
     body: str = Field(..., min_length=1, description="Draft provider-guidance body")
     scope_kind: str = Field(default="system", description="Guidance scope kind")
     scope_key: str = Field(default="", description="Guidance scope key")
-
-
-def int_value(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def float_value(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def operator_actor_key(raw: str = "") -> str:

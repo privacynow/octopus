@@ -12,6 +12,8 @@ from typing import Any
 
 from app.config import BotConfig
 from app.formatting import trim_text
+from app.provider_auth import auth_artifact_errors, runtime_auth_root
+from app.provider_health import command_failure, combined_output, run_health_command
 from app.progress import (
     CommandFinish, CommandStart, DraftReply, Liveness, Thinking,
     ToolFinish, ToolStart, render as render_progress,
@@ -57,38 +59,20 @@ class CodexProvider:
             errors.append("'codex' binary not found in PATH")
         return errors
 
-    @staticmethod
-    def _codex_auth_file() -> Path:
-        codex_home = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-        return Path(codex_home) / "auth.json"
-
-    async def _run_health_command(
-        self,
-        *cmd: str,
-        timeout: int,
-    ) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except (asyncio.TimeoutError, TimeoutError):
-            proc.kill()
-            await proc.wait()
-            raise
-        return proc.returncode, stdout.decode(), stderr.decode()
-
     async def check_auth_health(self) -> list[str]:
         errors: list[str] = []
+        combined = ""
         try:
-            returncode, stdout, stderr = await self._run_health_command(
-                "codex", "--version", timeout=10
+            returncode, stdout, stderr = await run_health_command(
+                "codex",
+                "--version",
+                timeout=10,
+                env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
             )
             if returncode != 0:
-                errors.append(f"'codex --version' failed (rc={returncode}): {stderr[:200]}")
+                errors.append(
+                    command_failure("'codex --version'", returncode, stdout=stdout, stderr=stderr)
+                )
             else:
                 log.info("codex version: %s", stdout.strip())
         except (asyncio.TimeoutError, TimeoutError):
@@ -98,31 +82,32 @@ class CodexProvider:
         if errors:
             return errors
 
-        auth_file = self._codex_auth_file()
         try:
-            returncode, stdout, stderr = await self._run_health_command(
-                "codex", "login", "status", timeout=10
+            returncode, stdout, stderr = await run_health_command(
+                "codex",
+                "login",
+                "status",
+                timeout=10,
+                env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
             )
-            combined = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part).strip()
+            combined = combined_output(stdout, stderr)
             if returncode != 0:
-                errors.append(
-                    f"'codex login status' failed (rc={returncode}): {combined[:200]}"
-                )
+                errors.append(command_failure("'codex login status'", returncode, stdout=stdout, stderr=stderr))
             else:
                 if combined:
                     log.info("codex login status: %s", trim_text(combined, 200))
-                if "logged in" not in combined.lower() and not auth_file.is_file():
-                    errors.append(
-                        "Codex login status did not confirm an authenticated session. "
-                        "Run 'codex login --device-auth'."
-                    )
         except (asyncio.TimeoutError, TimeoutError):
             errors.append("'codex login status' timed out")
         except OSError as e:
             errors.append(f"'codex login status' failed: {e}")
-
-        if not errors and not auth_file.is_file():
-            errors.append("Codex auth file not found. Run 'codex login --device-auth'.")
+        artifact_errors = auth_artifact_errors("codex", runtime_auth_root("codex"))
+        if artifact_errors:
+            errors.extend(artifact_errors)
+        elif not errors and "logged in" not in combined.lower():
+            errors.append(
+                "Codex login status did not confirm an authenticated session. "
+                "Run './octopus' and choose Diagnose -> Provider auth."
+            )
         return errors
 
     async def check_runtime_health(self) -> list[str]:
@@ -139,15 +124,27 @@ class CodexProvider:
             if self.config.codex_profile:
                 ping_cmd.extend(["--profile", self.config.codex_profile])
             ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
-            returncode, _, stderr = await self._run_health_command(*ping_cmd, timeout=30)
+            returncode, stdout, stderr = await run_health_command(
+                *ping_cmd,
+                timeout=30,
+                env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
+            )
             if returncode != 0:
-                errors.append(f"API ping failed (rc={returncode}): {stderr[:200]}")
+                errors.append(
+                    command_failure(
+                        "Codex runtime probe",
+                        returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                        fallback="Codex runtime probe failed.",
+                    )
+                )
             else:
                 log.info("codex API ping ok")
         except (asyncio.TimeoutError, TimeoutError):
-            errors.append("API ping timed out (30s)")
+            errors.append("Codex runtime probe timed out (30s)")
         except OSError as e:
-            errors.append(f"API ping error: {e}")
+            errors.append(f"Codex runtime probe failed: {e}")
         return errors
 
     # -- command building --------------------------------------------------
@@ -547,13 +544,17 @@ class CodexProvider:
         tool_counter = 0
         usage_input = 0
         usage_output = 0
+        cached_usage_input: int | None = None
+        cached_usage_output: int | None = None
 
         def append_unique(values: list[str], value: str) -> None:
             if value and value not in values:
                 values.append(value)
 
         async def consume_stdout() -> None:
-            nonlocal thread_id, final_text, draft_text, usage_input, usage_output
+            nonlocal thread_id, final_text, draft_text
+            nonlocal usage_input, usage_output
+            nonlocal cached_usage_input, cached_usage_output
             while True:
                 read_coro = proc.stdout.readline()
                 if cancel is not None:
@@ -628,6 +629,19 @@ class CodexProvider:
                     total = msg.get("info", {}).get("total_token_usage", {})
                     usage_input = int(total.get("input_tokens", 0) or 0)
                     usage_output = int(total.get("output_tokens", 0) or 0)
+                    if "cached_input_tokens" in total:
+                        cached_usage_input = int(total.get("cached_input_tokens", 0) or 0)
+                    if "cached_output_tokens" in total:
+                        cached_usage_output = int(total.get("cached_output_tokens", 0) or 0)
+                elif etype == "turn_completed":
+                    usage = event.get("usage", {})
+                    if isinstance(usage, dict):
+                        usage_input = int(usage.get("input_tokens", 0) or 0)
+                        usage_output = int(usage.get("output_tokens", 0) or 0)
+                        if "cached_input_tokens" in usage:
+                            cached_usage_input = int(usage.get("cached_input_tokens", 0) or 0)
+                        if "cached_output_tokens" in usage:
+                            cached_usage_output = int(usage.get("cached_output_tokens", 0) or 0)
 
                 thread_id = self._extract_thread_id(event) or thread_id
                 if self._normalize_type(event.get("type")) == "session_meta":
@@ -716,6 +730,8 @@ class CodexProvider:
             provider_state_updates=state_updates,
             prompt_tokens=usage_input,
             completion_tokens=usage_output,
+            cached_prompt_tokens=cached_usage_input,
+            cached_completion_tokens=cached_usage_output,
             tool_executions=tool_records,
         )
 

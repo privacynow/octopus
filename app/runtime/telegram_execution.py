@@ -18,6 +18,7 @@ from app.runtime.telegram_session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
+from app.execution_faults import LocalExecutionFaultState
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.identity import (
     telegram_conversation_ref,
@@ -386,6 +387,7 @@ def build_dispatch_runtime(
         provider=runtime.provider,
         boot_id=runtime.boot_id,
         cancellations=runtime.cancellation_registry,
+        execution_inflight=runtime.execution_inflight,
     )
 
 
@@ -481,6 +483,7 @@ def build_execution_runtime(
         runtime_skill_setup=composition.workflows().runtime_skills.setup,
         sessions=_TelegramSessionRuntime(runtime),
         artifacts=_TelegramArtifactStore(runtime),
+        execution_faults=LocalExecutionFaultState(runtime.config.data_dir),
         agent_directory=runtime.services.control_plane.agent_directory,
         conversation_projection=projection,
     )

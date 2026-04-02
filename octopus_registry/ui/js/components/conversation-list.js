@@ -148,7 +148,7 @@ function renderConversationList(container) {
         row.dataset.key = 'quickstart-row';
 
         if (!state.agents.length) {
-            row.appendChild(UI.renderEmptyState('No connected agents.', true));
+            row.appendChild(UI.renderEmptyState('No execution-ready agents.', true));
         } else {
             state.agents.forEach((agent) => {
                 const button = document.createElement('button');
@@ -205,7 +205,9 @@ function renderConversationList(container) {
     async function loadQuickStart({ soft = false } = {}) {
         try {
             const data = await API.listAgents({ state: 'connected', limit: QUICK_START_INLINE_LIMIT + 1 });
-            const agents = data.agents || data || [];
+            const agents = (data.agents || data || []).filter(
+                (agent) => String((agent && agent.execution_state) || 'healthy') !== 'faulted',
+            );
             renderQuickStart(agents.slice(0, QUICK_START_INLINE_LIMIT), {
                 hasOverflow: !!data.has_more || agents.length > QUICK_START_INLINE_LIMIT,
             });

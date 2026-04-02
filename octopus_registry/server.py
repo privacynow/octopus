@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import hmac
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
@@ -46,6 +45,7 @@ from octopus_sdk.registry.models import (
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.realtime import ConversationProgressUpdate
+from octopus_sdk.time_utils import utc_now
 from .ingress import (
     approve_catalog_skill,
     approve_provider_guidance,
@@ -71,6 +71,7 @@ from .ingress import (
     reject_catalog_skill,
     reject_provider_guidance,
     reset_conversation,
+    reset_execution_fault,
     search_catalog_skills,
     set_conversation_setting,
     submit_conversation_skill_credential,
@@ -88,6 +89,7 @@ from .store_base import (
     validated_routed_task_request,
 )
 from .http_support import (
+    AgentExecutionResetRequest,
     ConversationResetRequest,
     ConversationSettingUpdateRequest,
     ConversationSkillCredentialRequest,
@@ -96,8 +98,6 @@ from .http_support import (
     ProviderGuidanceDraftUpdateRequest,
     ProviderGuidancePreviewRequest,
     RuntimeSkillDraftUpdateRequest,
-    float_value as _float_value,
-    int_value as _int_value,
     json_payload as _json_payload,
     operator_actor_key as _operator_actor_key,
     paginated_response as _paginated_response,
@@ -105,6 +105,7 @@ from .http_support import (
     scoped_agent_id as _scoped_agent_id,
     secure_html_response as _secure_html_response,
 )
+from .store_shared.usage import aggregate_usage_rows
 
 _REGISTRY_UI_SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -588,6 +589,29 @@ def resource_agent_status(
     return _json_payload(result)
 
 
+@app.post("/v1/agents/{agent_id}/execution/reset")
+async def api_agent_execution_reset(
+    agent_id: str,
+    payload: AgentExecutionResetRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        result = await reset_execution_fault(
+            store,
+            agent_id,
+            actor_key=_operator_actor_key(payload.actor_key),
+        )
+        await _broadcast_invalidations(
+            topics=("agents", f"agent:{agent_id}", "summary"),
+            reason="agent.execution.reset",
+            agent_id=agent_id,
+        )
+        return result
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @app.get("/v1/agents/{agent_id}/conversations")
 def resource_agent_conversations(
     agent_id: str,
@@ -694,8 +718,6 @@ async def resource_publish_progress(
         conversation_id,
         agent_id,
         {
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
             "content": payload.content,
             "created_at": payload.created_at,
         },
@@ -992,50 +1014,14 @@ def resource_usage(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     if not since:
-        since_iso = datetime.now(timezone.utc).replace(
+        since_iso = utc_now().replace(
             hour=0, minute=0, second=0, microsecond=0,
         ).isoformat()
     else:
         since_iso = since
     until_iso = until or ""
     rows = store.get_usage_summary(since_iso, until_iso=until_iso)
-    daily_total = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "cost_usd": 0.0,
-    }
-    by_conversation: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        metadata = row.get("metadata") or {}
-        prompt_tokens = _int_value(metadata.get("prompt_tokens"))
-        completion_tokens = _int_value(metadata.get("completion_tokens"))
-        cost_usd = _float_value(metadata.get("cost_usd"))
-        daily_total["prompt_tokens"] += prompt_tokens
-        daily_total["completion_tokens"] += completion_tokens
-        daily_total["cost_usd"] += cost_usd
-        item = by_conversation.setdefault(
-            row["conversation_id"],
-            {
-                "conversation_id": row["conversation_id"],
-                "title": row.get("title", ""),
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "cost_usd": 0.0,
-            },
-        )
-        item["prompt_tokens"] += prompt_tokens
-        item["completion_tokens"] += completion_tokens
-        item["cost_usd"] += cost_usd
-    return {
-        "daily_total": daily_total,
-        "by_conversation": sorted(
-            by_conversation.values(),
-            key=lambda item: (
-                -(item["prompt_tokens"] + item["completion_tokens"]),
-                item["conversation_id"],
-            ),
-        ),
-    }
+    return aggregate_usage_rows(rows)
 
 
 @app.get("/v1/summary")
@@ -1043,7 +1029,7 @@ def resource_summary(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = utcnow_iso()
     return _json_payload(store.get_summary(now_iso=now_iso))
 
 

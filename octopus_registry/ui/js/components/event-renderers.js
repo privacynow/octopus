@@ -154,12 +154,48 @@ function _renderProviderRequestCard(body, event, metadata) {
     }
 }
 
+function _cachedTokenAvailable(metadata, kind) {
+    return metadata && Object.prototype.hasOwnProperty.call(metadata, kind);
+}
+
+function _cachedTokenBreakdown(total, cached, available) {
+    if (!available) {
+        return null;
+    }
+    const cachedValue = Number(cached || 0);
+    return {
+        total: Number(total || 0),
+        cached: cachedValue,
+        uncached: Math.max(0, Number(total || 0) - cachedValue),
+    };
+}
+
 function _renderProviderResponseCard(body, metadata) {
     const metrics = document.createElement('div');
     metrics.className = 'inline-metrics';
-    metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), 'Input'));
-    metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), 'Reply'));
-    metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
+    const inputBreakdown = _cachedTokenBreakdown(
+        metadata.prompt_tokens || 0,
+        metadata.cached_prompt_tokens || 0,
+        _cachedTokenAvailable(metadata, 'cached_prompt_tokens'),
+    );
+    const outputBreakdown = _cachedTokenBreakdown(
+        metadata.completion_tokens || 0,
+        metadata.cached_completion_tokens || 0,
+        _cachedTokenAvailable(metadata, 'cached_completion_tokens'),
+    );
+    metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), inputBreakdown ? 'Input total' : 'Input'));
+    if (inputBreakdown) {
+        metrics.appendChild(_createInlineMetric(inputBreakdown.uncached.toLocaleString(), 'Input uncached'));
+        metrics.appendChild(_createInlineMetric(inputBreakdown.cached.toLocaleString(), 'Input cached'));
+    }
+    metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), outputBreakdown ? 'Reply total' : 'Reply'));
+    if (outputBreakdown) {
+        metrics.appendChild(_createInlineMetric(outputBreakdown.uncached.toLocaleString(), 'Reply uncached'));
+        metrics.appendChild(_createInlineMetric(outputBreakdown.cached.toLocaleString(), 'Reply cached'));
+    }
+    if (_providerReportsCost(metadata)) {
+        metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
+    }
     metrics.appendChild(_createInlineMetric(metadata.provider || 'unknown', 'Provider'));
     body.appendChild(metrics);
 }
@@ -361,6 +397,38 @@ function _renderTaskStatusCard(body, event, metadata, convoId) {
         content.innerHTML = `<p>${UI.esc(event.content)}</p>`;
         body.appendChild(content);
     }
+    if (
+        metadata.prompt_tokens !== null
+        && metadata.prompt_tokens !== undefined
+        && ['completed', 'failed', 'cancelled', 'timed_out'].includes(status)
+    ) {
+        const metrics = document.createElement('div');
+        metrics.className = 'inline-metrics';
+        const inputBreakdown = _cachedTokenBreakdown(
+            metadata.prompt_tokens || 0,
+            metadata.cached_prompt_tokens || 0,
+            _cachedTokenAvailable(metadata, 'cached_prompt_tokens'),
+        );
+        const outputBreakdown = _cachedTokenBreakdown(
+            metadata.completion_tokens || 0,
+            metadata.cached_completion_tokens || 0,
+            _cachedTokenAvailable(metadata, 'cached_completion_tokens'),
+        );
+        metrics.appendChild(_createInlineMetric(Number(metadata.prompt_tokens || 0).toLocaleString(), inputBreakdown ? 'Input total' : 'Input'));
+        if (inputBreakdown) {
+            metrics.appendChild(_createInlineMetric(inputBreakdown.uncached.toLocaleString(), 'Input uncached'));
+            metrics.appendChild(_createInlineMetric(inputBreakdown.cached.toLocaleString(), 'Input cached'));
+        }
+        metrics.appendChild(_createInlineMetric(Number(metadata.completion_tokens || 0).toLocaleString(), outputBreakdown ? 'Reply total' : 'Reply'));
+        if (outputBreakdown) {
+            metrics.appendChild(_createInlineMetric(outputBreakdown.uncached.toLocaleString(), 'Reply uncached'));
+            metrics.appendChild(_createInlineMetric(outputBreakdown.cached.toLocaleString(), 'Reply cached'));
+        }
+        if (_providerReportsCost(metadata)) {
+            metrics.appendChild(_createInlineMetric(`$${Number(metadata.cost_usd || 0).toFixed(4)}`, 'Cost'));
+        }
+        body.appendChild(metrics);
+    }
     const taskId = String(metadata.routed_task_id || '').trim();
     if (taskId && convoId) {
         const taskActions = UI.createTaskActionButtons(
@@ -430,6 +498,17 @@ function _createInlineMetric(value, label) {
     return metric;
 }
 
+function _providerReportsCost(metadata) {
+    const provider = String(metadata?.provider || '').trim().toLowerCase();
+    if (provider === 'codex') {
+        return false;
+    }
+    if (provider) {
+        return true;
+    }
+    return Number(metadata?.cost_usd || 0) > 0;
+}
+
 function _eventSummary(kind, event, taskContext = []) {
     const metadata = event.metadata || {};
     switch (kind) {
@@ -440,10 +519,25 @@ function _eventSummary(kind, event, taskContext = []) {
                 `${Number(metadata.prompt_char_count || (event.content || '').length || 0).toLocaleString()} chars`,
             ].filter(Boolean).join(' · ');
         case 'provider.response':
+            if (_cachedTokenAvailable(metadata, 'cached_prompt_tokens') || _cachedTokenAvailable(metadata, 'cached_completion_tokens')) {
+                const parts = [];
+                parts.push(`${Number(metadata.prompt_tokens || 0).toLocaleString()} in`);
+                if (_cachedTokenAvailable(metadata, 'cached_prompt_tokens')) {
+                    parts.push(`${Number(metadata.cached_prompt_tokens || 0).toLocaleString()} cached in`);
+                }
+                parts.push(`${Number(metadata.completion_tokens || 0).toLocaleString()} out`);
+                if (_cachedTokenAvailable(metadata, 'cached_completion_tokens')) {
+                    parts.push(`${Number(metadata.cached_completion_tokens || 0).toLocaleString()} cached out`);
+                }
+                if (_providerReportsCost(metadata)) {
+                    parts.push(`$${Number(metadata.cost_usd || 0).toFixed(4)}`);
+                }
+                return parts.filter(Boolean).join(' · ');
+            }
             return [
                 `${Number((metadata.prompt_tokens || 0) + (metadata.completion_tokens || 0)).toLocaleString()} tokens`,
-                `$${Number(metadata.cost_usd || 0).toFixed(4)}`,
-            ].join(' · ');
+                _providerReportsCost(metadata) ? `$${Number(metadata.cost_usd || 0).toFixed(4)}` : '',
+            ].filter(Boolean).join(' · ');
         case 'tool.execution':
             return [
                 metadata.tool_name || 'Tool',

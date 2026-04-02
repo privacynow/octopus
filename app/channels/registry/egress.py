@@ -7,7 +7,6 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,14 +34,11 @@ from octopus_sdk.workflows.delegation import (
 from octopus_sdk.providers import DenialRecord
 from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
 from octopus_sdk.skill_types import SkillRequirement
+from octopus_sdk.time_utils import utc_now_iso
 from app.runtime.services import BotServices
 
 log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class RegistryEditableHandle(EditableHandle):
@@ -156,7 +152,7 @@ class RegistryChannelEgress(TransportEgress):
             event_id=resolved_event_id,
             kind=kind,
             content=body or title,
-            created_at=_utcnow_iso(),
+            created_at=utc_now_iso(),
             metadata=merged_metadata,
         )
         # Extract conversation_id the qualified registry ref
@@ -229,7 +225,7 @@ class RegistryChannelEgress(TransportEgress):
             await client.publish_progress(
                 conversation_id,
                 content=summary,
-                created_at=_utcnow_iso(),
+                created_at=utc_now_iso(),
             )
         except Exception:
             log.warning(

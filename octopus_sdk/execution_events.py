@@ -24,7 +24,16 @@ class ExecutionEventSink(Protocol):
         image_count: int,
         prompt_char_count: int,
     ) -> None: ...
-    async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None: ...
+    async def on_provider_response(
+        self,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cached_prompt_tokens: int | None = None,
+        cached_completion_tokens: int | None = None,
+        cost_usd: float = 0.0,
+        provider: str = "",
+    ) -> None: ...
     async def on_tool_execution(self, record: ToolExecutionRecord, *, index: int = 0) -> None: ...
     async def on_approval_requested(
         self,

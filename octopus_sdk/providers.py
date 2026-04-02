@@ -214,6 +214,8 @@ class RunResult:
     coordination_intent: DelegationIntent | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int | None = None
+    cached_completion_tokens: int | None = None
     cost_usd: float = 0.0
     tool_executions: list[ToolExecutionRecord] = field(default_factory=list)
 

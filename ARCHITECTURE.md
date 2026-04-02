@@ -12,7 +12,7 @@ Three packages, three clean boundaries:
 |---------|------|-----------|
 | `octopus_registry/` | Management plane — API, store, UI, realtime | Registry service container |
 | `octopus_sdk/` | Shared contracts, orchestration, workflow logic | Shared dependency (not deployed alone) |
-| `app/` | Telegram bot runtime, providers, CLI, storage backends | Bot container(s) |
+| `app/` | Telegram bot runtime, providers, storage backends, and `./octopus` CLI | Bot container(s) + host-side CLI |
 
 Import direction is one-way: `app/` → `octopus_sdk/`; `octopus_registry/` → `octopus_sdk/`.
 Neither `app/` nor `octopus_registry/` imports the other. The SDK imports neither.
@@ -47,6 +47,7 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 ### What the registry owns
 
 - Agent enrollment, heartbeat, connectivity state, deregistration
+- Mirrored runtime-health state, including execution-fault status
 - Conversation storage, event timeline, message/action APIs
 - Routed task lifecycle (create, status, result, recipient projection)
 - Skill catalog and provider guidance management (via management protocol)
@@ -88,8 +89,8 @@ flowchart TB
 | Surface | Auth | Description |
 |---------|------|-------------|
 | Agent API | Agent token | Enroll, register, heartbeat, poll, ack, deregister |
-| Resource API | Agent or operator | Agents, conversations, tasks, events, usage, summary |
-| Management bridge | Operator session | Agent-scoped skill/guidance operations via management protocol |
+| Resource API | Agent token, operator session, or both (varies per endpoint) | Agents, conversations, tasks, events. Usage and summary are operator-only. |
+| Management bridge | Operator session or UI bearer token | Agent-scoped skill/guidance operations via management protocol |
 | Realtime API | Operator session | WebSocket — events, heartbeats, progress, invalidations |
 | Operator SPA | Session cookie | Dashboard, conversations, agents, tasks, approvals, skills, guidance, usage |
 
@@ -138,6 +139,10 @@ WebSocket topics:
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,
 `RealtimeProgressEnvelope`, `RealtimeInvalidationEnvelope`.
+
+The realtime contracts stay strict. The registry must emit payloads that match
+the SDK envelope schemas exactly; it does not accept or silently widen invalid
+payloads at the websocket boundary.
 
 SPA components subscribe to explicit topics (not wildcards). Updates use
 `UI.memoizedRender` with morphdom — signatures use rendered values (e.g.,
@@ -363,13 +368,16 @@ flowchart TD
         builders["transport_builders.py<br/>Register Telegram +<br/>registry transports"]
     end
 
-    runtime["BotRuntime.run()"]
+    runtime_build["RuntimeBuild"]
+    launch["startup.py<br/>asyncio.run(runtime.run())"]
 
     main --> startup
     startup --> services
     services --> stage1
     services --> stage2
-    services --> runtime
+    services --> runtime_build
+    main --> launch
+    runtime_build -.-> launch
 ```
 
 1. `services.py` calls `bot_services.py` which internally uses
@@ -378,8 +386,12 @@ flowchart TD
    service, etc.)
 2. `services.py` calls `transport_builders.py` to register Telegram
    and registry transports with the dispatcher
-3. `services.py` constructs `BotRuntime` with the assembled services
-   and transports, then calls `runtime.run()`
+3. `services.py` returns a `RuntimeBuild` containing the assembled
+   `BotRuntime`. `main.py` hands it to `startup.py`, which calls
+   `asyncio.run(runtime_build.bot_runtime.run())` to launch the process.
+
+Assembly (`services.py`) and process launch (`startup.py`) are separate
+concerns. `services.py` never calls `runtime.run()` directly.
 
 `composition.py` is a thin wrapper over `WorkflowComposer`. It does not
 own business logic. It is used inside `bot_services.py`, not as a
@@ -422,6 +434,54 @@ The shipped Telegram bot requires `registry` mode with full participant
 coverage. `standalone` mode is supported by the SDK but not by the
 shipped Telegram implementation.
 
+### Registry connection surfaces
+
+`./octopus` manages three distinct registry addresses for the shipped local
+deployment:
+
+- **bind host + port**: where Docker publishes the registry on the host
+  (`127.0.0.1`, `0.0.0.0`, or a concrete IP)
+- **public URL**: what operators open in the browser and what remote bots use
+- **internal Docker URL**: `http://registry:8787` for co-deployed local bot
+  containers
+
+That split is intentional. `0.0.0.0` is a valid bind address, but never a
+usable client destination.
+
+```mermaid
+flowchart LR
+    subgraph host ["Host deployment managed by ./octopus"]
+        CLI["./octopus CLI"]
+        Browser["Browser"]
+        LocalBot["Local bot container"]
+        Registry["Local registry container"]
+    end
+
+    CLI --> Bind["REGISTRY_BIND_HOST + REGISTRY_PORT"]
+    CLI --> Public["REGISTRY_PUBLIC_URL"]
+    Browser --> Public
+    Public --> Registry
+    LocalBot --> Internal["http://registry:8787"]
+    Internal --> Registry
+
+    RemoteBot["Remote bot managed elsewhere"] --> Public
+```
+
+Authentication is also split by role:
+
+- `REGISTRY_UI_TOKEN` authenticates operators to the browser/API
+- `REGISTRY_ENROLL_TOKEN` bootstraps bot enrollment
+- after enrollment, each bot uses its issued `agent_token`
+
+`./octopus connect` can now write either:
+
+- a local registry record pointing at `http://registry:8787`, or
+- a remote registry record pointing at an explicit `--registry-url` with an
+  operator-supplied enroll token
+
+Remote enroll tokens are still distributed out-of-band. The registry does not
+expose them back through the operator UI.
+
 ### Providers
 
 | Provider | Implementation | Notes |
@@ -431,6 +491,41 @@ shipped Telegram implementation.
 
 Both implement the SDK `Provider` protocol with deterministic `session_id`
 via `uuid5(conversation_key)`.
+
+For the shipped runtime, provider health is split into two levels:
+
+- startup-safe auth health:
+  `Provider.check_auth_health()`
+  This is what bot startup uses. It may inspect local auth artifacts and run
+  cheap CLI status commands, but it must not require a real model inference.
+- deep runtime health:
+  `Provider.check_runtime_health()`
+  This may run a real provider request. It is used by explicit diagnostics and
+  live provider checks, not by normal startup admission.
+
+Operationally that means:
+
+- `./octopus status` is static by default and reports only configured vs not
+  configured auth state
+- `./octopus status --live-provider`, `Diagnose -> Provider auth`, and other
+  action-oriented flows may run the deep provider probe and report
+  `authenticated` or `configured, unable to authenticate`
+- bot startup validates startup-safe auth health, not deep runtime health
+- `./octopus` provider-auth flows still reuse the live runtime probe after
+  login so a written auth file is not treated as success unless the provider
+  can actually authenticate
+
+Provider auth and execution availability are intentionally separate:
+
+- startup and deploy stay simple; they do not try to repair or proactively
+  prove live provider login
+- transport connectivity still means registry enrollment + heartbeats
+- real runtime provider failures can latch a bot into `execution faulted`
+- while faulted, the bot remains transport-connected and manageable, but new
+  provider executions are blocked until reset
+- fault state is mirrored through runtime health to the registry and surfaced
+  in CLI and UI status
+- operators clear the latch explicitly with the agent runtime reset control
 
 ---
 

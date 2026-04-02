@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
-
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from octopus_sdk.time_utils import utc_now, utc_now_iso
 
 
 def expires_after_hours(*, hours: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+    return (utc_now() + timedelta(hours=hours)).isoformat()
 
 
 @dataclass(frozen=True)
@@ -24,7 +22,7 @@ class DeferredNotification:
     actor_key: str = ""
     content: str = ""
     priority: str = "normal"
-    created_at: str = field(default_factory=utcnow_iso)
+    created_at: str = field(default_factory=utc_now_iso)
     expires_at: str = field(default_factory=lambda: expires_after_hours(hours=24))
 
 

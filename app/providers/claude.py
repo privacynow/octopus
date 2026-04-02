@@ -13,6 +13,8 @@ from typing import Any
 
 from app.config import BotConfig
 from app.formatting import trim_text
+from app.provider_auth import auth_artifact_errors, runtime_auth_root
+from app.provider_health import command_failure, run_health_command
 from app.progress import (
     CommandFinish, ContentDelta, Denial, ToolFinish, ToolStart,
     Thinking, render as render_progress,
@@ -47,59 +49,19 @@ class ClaudeProvider:
             errors.append("'claude' binary not found in PATH")
         return errors
 
-    @staticmethod
-    def _auth_file() -> Path:
-        return Path.home() / ".claude.json"
-
-    @staticmethod
-    def _auth_dir() -> Path:
-        return Path.home() / ".claude"
-
-    @classmethod
-    def _has_auth_artifacts(cls) -> bool:
-        auth_file = cls._auth_file()
-        if auth_file.is_file() and auth_file.stat().st_size > 0:
-            return True
-
-        auth_dir = cls._auth_dir()
-        if not auth_dir.is_dir():
-            return False
-
-        try:
-            for path in auth_dir.rglob("*"):
-                if path.is_file() and path.stat().st_size > 0:
-                    return True
-        except OSError:
-            return False
-        return False
-
-    async def _run_health_command(
-        self,
-        *cmd: str,
-        timeout: int,
-    ) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._clean_env(),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except (asyncio.TimeoutError, TimeoutError):
-            proc.kill()
-            await proc.wait()
-            raise
-        return proc.returncode, stdout.decode(), stderr.decode()
-
     async def check_auth_health(self) -> list[str]:
         errors: list[str] = []
         try:
-            returncode, stdout, stderr = await self._run_health_command(
-                "claude", "--version", timeout=10
+            returncode, stdout, stderr = await run_health_command(
+                "claude",
+                "--version",
+                timeout=10,
+                env=self._clean_env(),
             )
             if returncode != 0:
-                errors.append(f"'claude --version' failed (rc={returncode}): {stderr[:200]}")
+                errors.append(
+                    command_failure("'claude --version'", returncode, stdout=stdout, stderr=stderr)
+                )
             else:
                 log.info("claude version: %s", stdout.strip())
         except (asyncio.TimeoutError, TimeoutError):
@@ -109,29 +71,41 @@ class ClaudeProvider:
         if errors:
             return errors
 
-        if not self._has_auth_artifacts():
-            errors.append("Claude auth not found. Run 'claude' and complete /login.")
-        return errors
+        return auth_artifact_errors("claude", runtime_auth_root("claude"))
 
     async def check_runtime_health(self) -> list[str]:
         errors = await self.check_auth_health()
         if errors:
             return errors
         try:
-            model = self.config.model or "claude-sonnet-4-20250514"
-            returncode, _, stderr = await self._run_health_command(
-                "claude", "-p", "--model", model, "--max-turns", "1",
-                "--output-format", "text", "reply with ok",
+            returncode, stdout, stderr = await run_health_command(
+                "claude",
+                "-p",
+                "--output-format",
+                "text",
+                "--max-turns",
+                "1",
+                "--",
+                "reply with ok",
                 timeout=15,
+                env=self._clean_env(),
             )
             if returncode != 0:
-                errors.append(f"API ping failed (rc={returncode}): {stderr[:200]}")
+                errors.append(
+                    command_failure(
+                        "Claude runtime probe",
+                        returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                        fallback="Claude runtime probe failed.",
+                    )
+                )
             else:
-                log.info("claude API ping ok")
+                log.info("claude runtime probe ok")
         except (asyncio.TimeoutError, TimeoutError):
-            errors.append("API ping timed out (15s)")
+            errors.append("Claude runtime probe timed out")
         except OSError as e:
-            errors.append(f"API ping error: {e}")
+            errors.append(f"Claude runtime probe failed: {e}")
         return errors
 
     # -- subprocess env ----------------------------------------------------
@@ -379,10 +353,27 @@ class ClaudeProvider:
             return "", {}, -1, "", []  # sentinel for timeout
 
         if proc.returncode and proc.returncode != 0:
-            log.error("claude error (rc=%d): %s", proc.returncode, stderr[:300])
+            detail = self._build_failure_text(stderr, result_data, accumulated)
+            log.error("claude error (rc=%d): %s", proc.returncode, trim_text(detail, 300))
 
         tool_executions = list(result_data.pop("_tool_executions", []) or [])
         return accumulated, result_data, proc.returncode or 0, stderr, tool_executions
+
+    @staticmethod
+    def _build_failure_text(stderr: str, result_data: dict, accumulated: str) -> str:
+        error_text = str(stderr or "").strip()
+        result_text = str(result_data.get("result", "") or "").strip()
+        error_kind = str(result_data.get("error", "") or "").strip()
+        if result_data.get("errors"):
+            joined = " ".join(str(item) for item in result_data["errors"])
+            error_text = f"{error_text} {joined}".strip()
+        if result_text:
+            error_text = f"{error_text} {result_text}".strip()
+        if error_kind and error_kind not in error_text:
+            error_text = f"{error_text} ({error_kind})".strip()
+        if accumulated and accumulated not in error_text:
+            error_text = f"{error_text} {accumulated}".strip()
+        return error_text
 
     @staticmethod
     def _is_resume_failure(stderr: str) -> bool:
@@ -498,12 +489,13 @@ class ClaudeProvider:
             )
 
         if rc != 0:
-            # Check both stderr and structured JSON errors for resume failure
-            error_text = stderr
-            if result_data.get("errors"):
-                error_text = error_text + " " + " ".join(str(e) for e in result_data["errors"])
+            error_text = self._build_failure_text(stderr, result_data, accumulated)
+            detail = trim_text(error_text, 300) if error_text else ""
+            text = f"[Claude error (rc={rc})]"
+            if detail:
+                text = f"{text}\n{detail}"
             return RunResult(
-                text=f"[Claude error (rc={rc})]",
+                text=text,
                 returncode=rc,
                 resume_failed=is_resume and self._is_resume_failure(error_text),
                 tool_executions=tool_executions,
@@ -512,6 +504,17 @@ class ClaudeProvider:
         final_text = result_data.get("result", accumulated) or accumulated
         denials = result_data.get("permission_denials", [])
         usage = result_data.get("usage", {})
+        cached_prompt_tokens = None
+        cached_completion_tokens = None
+        if isinstance(usage, dict):
+            if "cache_read_input_tokens" in usage:
+                cached_prompt_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
+            elif "cached_input_tokens" in usage:
+                cached_prompt_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+            if "cache_read_output_tokens" in usage:
+                cached_completion_tokens = int(usage.get("cache_read_output_tokens", 0) or 0)
+            elif "cached_output_tokens" in usage:
+                cached_completion_tokens = int(usage.get("cached_output_tokens", 0) or 0)
 
         return RunResult(
             text=final_text,
@@ -519,6 +522,8 @@ class ClaudeProvider:
             provider_state_updates={"started": True},
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
+            cached_prompt_tokens=cached_prompt_tokens,
+            cached_completion_tokens=cached_completion_tokens,
             cost_usd=float(result_data.get("total_cost_usd") or 0.0),
             tool_executions=tool_executions,
         )
@@ -569,5 +574,23 @@ class ClaudeProvider:
             text=final_text,
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
+            cached_prompt_tokens=(
+                int(usage.get("cache_read_input_tokens", 0) or 0)
+                if isinstance(usage, dict) and "cache_read_input_tokens" in usage
+                else (
+                    int(usage.get("cached_input_tokens", 0) or 0)
+                    if isinstance(usage, dict) and "cached_input_tokens" in usage
+                    else None
+                )
+            ),
+            cached_completion_tokens=(
+                int(usage.get("cache_read_output_tokens", 0) or 0)
+                if isinstance(usage, dict) and "cache_read_output_tokens" in usage
+                else (
+                    int(usage.get("cached_output_tokens", 0) or 0)
+                    if isinstance(usage, dict) and "cached_output_tokens" in usage
+                    else None
+                )
+            ),
             cost_usd=float(result_data.get("total_cost_usd") or 0.0),
         )

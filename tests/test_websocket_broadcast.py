@@ -539,8 +539,6 @@ def test_publish_progress_broadcasts_ephemeral_progress(
                 "conversation_id": conv_id,
                 "agent_id": agent_id,
                 "progress_data": {
-                    "conversation_id": conv_id,
-                    "agent_id": agent_id,
                     "content": "Thinking about the delegation plan",
                     "created_at": "2026-03-22T00:00:00+00:00",
                 },

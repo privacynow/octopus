@@ -38,7 +38,8 @@ Setup offers three modes:
 After setup, verify the deployment before you start tuning features.
 
 1. Run `./octopus status`.
-2. Open the registry UI at `http://localhost:<port>/ui`.
+2. Open the registry UI at the URL shown by `./octopus status`
+   (default `http://127.0.0.1:<port>/ui`).
 3. Send the bot a normal Telegram message.
 4. If you chose **Safe** mode, approve the request in Telegram or the registry
    UI.
@@ -51,19 +52,83 @@ At this point the essential path is working:
 - bot reply back in the same chat
 - operator visibility in the registry UI
 
+Provider auth is reported at two levels:
+
+- `not configured`: no provider auth artifacts are present
+- `configured`: auth artifacts exist, but no live probe was requested
+
+By default, `./octopus status` is static and cheap. Use
+`./octopus status --live-provider`, `Diagnose -> Provider auth`, or
+`Recommended Actions` when you want a live provider check. Live checks can
+add:
+
+- `authenticated`: the live provider probe succeeded
+- `configured, unable to authenticate`: auth artifacts exist, but the live
+  provider probe failed
+
+Bot status now separates transport from execution:
+
+- `transport connected` means the bot is enrolled in the registry and
+  heartbeating normally
+- `execution ready` means requests are allowed to execute
+- `execution faulted` means a real runtime provider failure was classified as
+  irrecoverable and new requests are blocked until reset
+
+Execution faults are intentionally runtime-driven. Octopus does not try to
+repair provider login during startup or deploy. If a request fails because a
+provider login expired or an API key/account problem needs operator action,
+the bot stays transport-connected and manageable, but execution is latched off
+until an operator resets it.
+
 ## Deployment And Operations
 
-The shipped runtime in this repo is local-registry-first:
+The shipped runtime in this repo is registry-first:
 
 - bots run in `BOT_AGENT_MODE=registry`
 - Telegram startup expects registry connectivity
 - the operator UI and bot runtime are designed to run together
+- bots managed by `./octopus` can connect either to the co-deployed local
+  registry or to a remote registry URL
 
 Important URLs and env values:
 
-- local registry UI: `http://localhost:<port>/ui`
-- bot-to-registry URL inside Docker: `http://registry:8787`
+- local registry bind address:
+  `REGISTRY_BIND_HOST` + `REGISTRY_PORT`
+  (`127.0.0.1`, `0.0.0.0`, or a concrete IP)
+- local registry public/operator URL:
+  `REGISTRY_PUBLIC_URL`
+- bot-to-registry URL inside Docker for the co-deployed local registry:
+  `http://registry:8787`
 - operator login secret: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
+- bot enrollment secret: `REGISTRY_ENROLL_TOKEN` on the registry side, copied
+  into bot registry connection records as `BOT_AGENT_REGISTRY_<n>_ENROLL_TOKEN`
+
+The three registry URLs are intentionally different:
+
+- **bind host + port**: where Docker publishes the local registry on the host
+- **public URL**: what operators open in the browser and what remote bots use
+- **internal Docker URL**: what co-deployed local bot containers use
+
+`0.0.0.0` is only a listen address. It is never a usable browser or bot URL.
+
+Example local registry starts:
+
+```bash
+./octopus start registry
+./octopus start registry --registry-bind-host 0.0.0.0 --registry-public-url http://mybox.local:8787
+./octopus restart registry --registry-bind-host 192.168.1.20 --registry-port 9000 --registry-public-url http://registry.example.internal:9000
+```
+
+Example bot connections:
+
+```bash
+./octopus connect m1
+./octopus connect m1 --registry-url http://registry.example.internal:9000 --registry-enroll-token <token>
+./octopus connect bots --registry-url http://registry.example.internal:9000 --registry-enroll-token <token> --registry-id qa --registry-scope observe
+```
+
+Remote registry enroll tokens are still distributed out-of-band. `./octopus`
+does not fetch them from the registry UI or API.
 
 Core operator commands:
 
@@ -71,7 +136,7 @@ Core operator commands:
 ./octopus
 ./octopus status
 ./octopus start registry
-./octopus connect
+./octopus connect m1
 ./octopus restart bots
 ./octopus redeploy registry
 ./octopus shell m1
@@ -99,8 +164,9 @@ deployment state:
 7. verify registry health and bot freshness
 
 The runtime supports multiple registry records through indexed
-`BOT_AGENT_REGISTRY_<n>_*` env vars, but the `./octopus` CLI is intentionally
-focused on the local registry workflow.
+`BOT_AGENT_REGISTRY_<n>_*` env vars. `./octopus` keeps the local registry
+workflow simple while also supporting explicit remote registry connection
+records on bots.
 
 ## How People Use Octopus
 
@@ -190,9 +256,21 @@ If something fails:
 2. `./octopus doctor <bot>`
 3. inspect the relevant `.deploy/.../.env` file and registry settings
 
+If `./octopus status --live-provider` or `Diagnose -> Provider auth` shows
+`configured, unable to authenticate` for a provider, the auth files are
+present but the provider login is no longer valid. Run `./octopus`, choose
+`Diagnose`, then `Provider auth`, and complete the provider login flow again.
+
+If a bot shows `execution faulted`, fix the underlying provider/account issue
+first, then open the bot in the registry UI and use **Reset execution**. The
+reset clears the latched fault and allows the next real request through. If
+the provider is still broken, the bot faults again on that request and stays
+blocked.
+
 If a remote registry connection fails:
 
 1. confirm the URL is `https://...`
+   or `http://...` if that registry intentionally allows plain HTTP
 2. confirm the enrollment token and scope values
 3. inspect the indexed `BOT_AGENT_REGISTRY_<n>_*` env records
 4. run `./octopus doctor <bot>` and inspect per-registry state

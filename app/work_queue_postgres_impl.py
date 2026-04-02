@@ -36,6 +36,7 @@ from octopus_sdk.work_queue import (
     coerce_work_item_records,
     _validate_work_item_row,
 )
+from octopus_sdk.time_utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ def _claim_queued_item(
             f"_claim_queued_item: workflow rejected for item {item_id}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _cur(conn) as cur:
         cur.execute(
             f"""
@@ -221,7 +222,7 @@ def _apply_transport_event(
             f"_apply_transport_event: workflow rejected for item {item_id} event {event_name!r}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _cur(conn) as cur:
         if update_extras:
             placeholders = (result.new_state,) + update_extra_args + (item_id, expected_source_state)
@@ -273,7 +274,7 @@ def _apply_claim_event(
             f"_apply_claim_event: workflow rejected for item {item_id} event {event_name!r}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _cur(conn) as cur:
         cur.execute(
             f"""
@@ -366,7 +367,7 @@ def record_and_enqueue(
     *,
     worker_id: str | None = None,
 ) -> tuple[bool, str | None]:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     item_id = uuid.uuid4().hex
     try:
         with _write_tx(conn):
@@ -402,7 +403,7 @@ def record_and_admit_message(
 
     status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     item_id = uuid.uuid4().hex
     try:
         with _write_tx(conn):
@@ -448,7 +449,7 @@ def record_update(
 ) -> bool:
     """Insert update row; return False only for duplicate event_id (ON CONFLICT DO NOTHING).
     All other errors (schema, connection, etc.) propagate; do not swallow."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
@@ -470,7 +471,7 @@ def enqueue_work_item(
     worker_id: str | None = None,
 ) -> str:
     item_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         _insert_initial_work_item(
             conn, item_id=item_id, conversation_key=conversation_key, event_id=event_id,
@@ -608,7 +609,7 @@ def complete_work_item(conn, item_id: str) -> None:
                 f"complete_work_item: workflow rejected for item {item_id}: "
                 f"{result.disposition} — {result.reason}"
             )
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now_iso()
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -648,7 +649,7 @@ def fail_work_item(conn, item_id: str, error: str) -> None:
             raise TransportStateCorruption(
                 f"fail_work_item: workflow rejected for item {item_id}: {result.disposition} — {result.reason}"
             )
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now_iso()
         err = (error or "")[:500]
         with _cur(conn) as cur:
             cur.execute(
@@ -723,7 +724,7 @@ def cancel_queued_fresh_for_chat(conn, conversation_key: str) -> bool:
         if row is None:
             return False
         item_id = row["id"]
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now_iso()
         with _cur(conn) as cur:
             cur.execute(
                 f"""
@@ -742,7 +743,7 @@ def request_cancel(
     *,
     cancel_request_event_id: str = "",
 ) -> CancelRequestResult:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         with _cur(conn) as cur:
             claimed_extra = ""
@@ -1030,7 +1031,7 @@ def get_latest_pending_recovery(conn, conversation_key: str) -> WorkItemRecord |
 
 
 def supersede_pending_recovery(conn, conversation_key: str) -> int:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         with _cur(conn) as cur:
@@ -1061,7 +1062,7 @@ def supersede_pending_recovery(conn, conversation_key: str) -> int:
 
 
 def discard_recovery(conn, item_id: str) -> DiscardResult:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         res = _apply_transport_event(
             conn, item_id, "discard_recovery", "pending_recovery",

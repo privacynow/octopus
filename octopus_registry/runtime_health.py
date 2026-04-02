@@ -28,6 +28,14 @@ class RuntimeDiagnostic:
 @dataclass(frozen=True)
 class RuntimeHealthSummary:
     status: str = "healthy"
+    execution_state: str = "healthy"
+    execution_provider: str = ""
+    execution_fault_kind: str = ""
+    execution_fault_code: str = ""
+    execution_fault_detail: str = ""
+    execution_faulted_at: str = ""
+    execution_resettable: bool = False
+    execution_last_returncode: int | None = None
     healthy_worker_count: int = 0
     stale_worker_count: int = 0
     fresh_queued_count: int = 0
@@ -108,6 +116,18 @@ def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | No
         generated_at=str(payload.get("generated_at", "") or ""),
         summary=RuntimeHealthSummary(
             status=str(summary.get("status", "healthy")),
+            execution_state=str(summary.get("execution_state", "healthy") or "healthy"),
+            execution_provider=str(summary.get("execution_provider", "") or ""),
+            execution_fault_kind=str(summary.get("execution_fault_kind", "") or ""),
+            execution_fault_code=str(summary.get("execution_fault_code", "") or ""),
+            execution_fault_detail=str(summary.get("execution_fault_detail", "") or ""),
+            execution_faulted_at=str(summary.get("execution_faulted_at", "") or ""),
+            execution_resettable=bool(summary.get("execution_resettable", False)),
+            execution_last_returncode=(
+                None
+                if summary.get("execution_last_returncode") in (None, "")
+                else int(summary.get("execution_last_returncode", 0))
+            ),
             healthy_worker_count=int(summary.get("healthy_worker_count", 0) or 0),
             stale_worker_count=int(summary.get("stale_worker_count", 0) or 0),
             fresh_queued_count=int(summary.get("fresh_queued_count", 0) or 0),
@@ -139,6 +159,14 @@ def _to_wire(value: Any) -> Any:
     if isinstance(value, RuntimeHealthSummary):
         return {
             "status": value.status,
+            "execution_state": value.execution_state,
+            "execution_provider": value.execution_provider,
+            "execution_fault_kind": value.execution_fault_kind,
+            "execution_fault_code": value.execution_fault_code,
+            "execution_fault_detail": value.execution_fault_detail,
+            "execution_faulted_at": value.execution_faulted_at,
+            "execution_resettable": value.execution_resettable,
+            "execution_last_returncode": value.execution_last_returncode,
             "healthy_worker_count": value.healthy_worker_count,
             "stale_worker_count": value.stale_worker_count,
             "fresh_queued_count": value.fresh_queued_count,

@@ -263,7 +263,13 @@ def update_routed_task_result(
     payload,
     now: str,
 ) -> TaskRecord:
-    usage_fields = {"prompt_tokens", "completion_tokens", "cost_usd"}
+    usage_fields = {
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_prompt_tokens",
+        "cached_completion_tokens",
+        "cost_usd",
+    }
     if hasattr(payload, "model_fields_set"):
         include_usage_fields = bool(
             set(getattr(payload, "model_fields_set", set())) & usage_fields
@@ -382,6 +388,10 @@ def update_routed_task_result(
         if include_usage_fields:
             event_metadata["prompt_tokens"] = int(validated_payload.prompt_tokens or 0)
             event_metadata["completion_tokens"] = int(validated_payload.completion_tokens or 0)
+            if validated_payload.cached_prompt_tokens is not None:
+                event_metadata["cached_prompt_tokens"] = int(validated_payload.cached_prompt_tokens or 0)
+            if validated_payload.cached_completion_tokens is not None:
+                event_metadata["cached_completion_tokens"] = int(validated_payload.cached_completion_tokens or 0)
             event_metadata["cost_usd"] = float(validated_payload.cost_usd or 0.0)
         if validated_payload.provider:
             event_metadata["provider"] = validated_payload.provider

@@ -157,9 +157,78 @@ def test_dashboard_surfaces_recently_completed_tasks() -> None:
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
     ).read_text(encoding="utf-8")
 
-    assert "Recently completed" in dashboard
+    assert "createGroupedSection(" in dashboard
+    assert "'Tasks'" in dashboard
+    assert "loadActiveTasks()" in dashboard
+    assert "loadTasksByStatus(['queued', 'submitted', 'leased', 'running'])" in dashboard
+    assert "loadTasksByStatus(['failed', 'cancelled', 'timed_out'])" in dashboard
+    assert "label: 'Recently completed'" in dashboard
     assert "completed_since_iso: recentCompletedSinceIso()" in dashboard
     assert "status: 'completed'" in dashboard
+    assert "function renderRunningSection(" not in dashboard
+    assert "function renderRecentCompletedSection(" not in dashboard
+
+
+def test_dashboard_uses_stable_board_layout_and_unified_snapshot_refresh() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "dashboardBoard.className = 'dashboard-board';" in dashboard
+    assert "primaryColumn.className = 'dashboard-column';" in dashboard
+    assert "secondaryColumn.className = 'dashboard-column';" in dashboard
+    assert "function refreshSnapshot(" in dashboard
+    assert "refreshSummaryOnly" not in dashboard
+    assert "refreshAgents" not in dashboard
+    assert "refreshConversations" not in dashboard
+    assert "refreshTasks" not in dashboard
+    assert "refreshApprovals" not in dashboard
+    assert ".dashboard-board {" in css
+    assert ".dashboard-column {" in css
+    assert ".dashboard-work-grid {" not in css
+
+
+def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function renderApprovalSection(" in dashboard
+    assert "function renderNeedsAttentionSection(" not in dashboard
+    assert "buildNeedsAttention" not in dashboard
+    assert "label: 'Queued backlog'" in dashboard
+    assert "label: 'Unhealthy agents'" in dashboard
+    assert "label: 'Tokens · 24h'" in dashboard
+    assert "label: costAvailable ? 'Usage cost · 24h' : 'Usage cost unavailable'" in dashboard
+    assert "value: String(summary.conversations?.open || 0)" not in dashboard
+    assert "value: String(summary.tasks?.running || 0)" not in dashboard
+    assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard
+    assert "value: String(summary.agents?.connected || 0)" not in dashboard
+
+
+def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    usage_view = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "usage-view.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    event_renderers = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "event-renderers.js"
+    ).read_text(encoding="utf-8")
+
+    assert "cached_prompt_tokens_available" in usage_view
+    assert "cached_completion_tokens_available" in usage_view
+    assert "uncached" in usage_view
+    assert "cached in" in dashboard
+    assert "Input uncached" in event_renderers
+    assert "Reply uncached" in event_renderers
 
 
 def test_conversation_views_distinguish_task_threads() -> None:
@@ -188,6 +257,56 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "taskThreadListEl = taskList" in agent_detail
     assert "conversationPaginationEl = pag" in agent_detail
     assert "conversationPaginator = UI.createCursorPaginator" in agent_detail
+
+
+def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-detail.js"
+    ).read_text(encoding="utf-8")
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+
+    assert "transport " in agent_detail
+    assert "execution faulted" in agent_detail
+    assert "Reset execution" in agent_detail
+    assert "resetAgentExecutionFault" in agent_detail
+    assert "execution faulted" in agent_list
+    assert "badge-faulted" in agent_list
+    assert "execution_faulted" in dashboard
+    assert "badge-faulted" in dashboard
+    assert "resetAgentExecutionFault" in api_js
+
+
+def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "let managementMode = 'closed';" in detail
+    assert "function openManagement(" in detail
+    assert "function closeManagement(" in detail
+    assert "function scheduleManagementIdleClose(" in detail
+    assert "function scheduleManagementSuccessClose(" in detail
+    assert "skillsManageBtn.textContent = 'Skills';" in detail
+    assert "settingsManageBtn.textContent = 'Settings';" in detail
+    assert "textContent = '×';" in detail
+    assert "managementPanel.hidden = !managementAgentId();" not in detail
+    assert "openManagement('skills')" in detail
+    assert "openManagement('settings'" in detail
+    assert "&& !pendingSkillSetup" in detail
+    assert ".conversation-management-close {" in css
 
 
 def test_live_refresh_lists_use_signature_skips_for_keyed_subtrees() -> None:

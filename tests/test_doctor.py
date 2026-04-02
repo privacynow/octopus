@@ -2,7 +2,11 @@ import datetime
 import time
 from pathlib import Path
 
+import pytest
+
 from app import runtime_backend, work_queue
+from app.content_store import reset_for_test as reset_content_store_for_test
+from app.credential_store import reset_for_test as reset_credential_store_for_test
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from app.runtime_health import (
     WorkerHeartbeat,
@@ -10,6 +14,7 @@ from app.runtime_health import (
     format_runtime_health_for_doctor,
     scan_stale_delegations,
 )
+from app.runtime.startup import run_doctor
 from app.storage import ensure_data_dirs
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config, make_registry_connection
@@ -334,3 +339,28 @@ async def test_doctor_errors_when_no_healthy_shared_workers(tmp_path: Path):
         assert any("no healthy worker heartbeats" in err.lower() for err in _diagnostic_messages(report, "error"))
     finally:
         runtime_backend.reset_for_test()
+
+
+async def test_run_doctor_initializes_runtime_health_dependencies(tmp_path: Path, capsys, monkeypatch):
+    config = make_config(
+        data_dir=tmp_path,
+        telegram_token="",
+        credential_key="doctor-test-key",
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(url="http://registry:8787"),),
+        allow_open=False,
+        allowed_actor_keys=frozenset({"tg:1"}),
+        working_dir=tmp_path,
+    )
+    provider = FakeProvider()
+    monkeypatch.setattr(runtime_backend, "_backend", None)
+    reset_content_store_for_test()
+    reset_credential_store_for_test()
+
+    with pytest.raises(SystemExit) as excinfo:
+        await run_doctor(config, provider)
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 0
+    assert "All checks passed." in captured.out
+    assert "Session database error" not in captured.err

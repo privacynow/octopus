@@ -20,6 +20,7 @@ from octopus_sdk.content_models import (
     skill_precedence,
 )
 from app.content_store_base import AbstractContentStore
+from octopus_sdk.time_utils import utc_now_iso
 
 _SCHEMA_VERSION = 2
 
@@ -98,7 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_guidance_tracks_lookup ON provider_guidance_track
 
 
 def _utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now_iso()
 
 
 def _json_ready(value):

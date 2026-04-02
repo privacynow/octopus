@@ -47,6 +47,22 @@ function renderUsageView(container) {
     tableEl.id = 'usage-table';
     tableShell.appendChild(tableEl);
 
+    function tokenDetail(total, cached, available) {
+        if (!available) {
+            return '';
+        }
+        const uncached = Math.max(0, Number(total || 0) - Number(cached || 0));
+        return `${uncached.toLocaleString()} uncached · ${Number(cached || 0).toLocaleString()} cached`;
+    }
+
+    function tokenCell(total, cached, available) {
+        if (!available) {
+            return Number(total || 0).toLocaleString();
+        }
+        const uncached = Math.max(0, Number(total || 0) - Number(cached || 0));
+        return `${Number(total || 0).toLocaleString()} total · ${uncached.toLocaleString()} uncached · ${Number(cached || 0).toLocaleString()} cached`;
+    }
+
     function _rangeToParams(range) {
         const now = new Date();
         const since = new Date(now);
@@ -66,14 +82,38 @@ function renderUsageView(container) {
     }
 
     function renderSummary(daily) {
+        const costAvailable = daily.cost_available !== false;
         const items = [
-            ['prompt', (daily.prompt_tokens || 0).toLocaleString(), 'Prompt tokens'],
-            ['completion', (daily.completion_tokens || 0).toLocaleString(), 'Completion tokens'],
-            ['cost', '$' + (daily.cost_usd || 0).toFixed(4), 'Total cost'],
+            {
+                key: 'prompt',
+                value: (daily.prompt_tokens || 0).toLocaleString(),
+                label: 'Prompt tokens',
+                detail: tokenDetail(
+                    daily.prompt_tokens || 0,
+                    daily.cached_prompt_tokens || 0,
+                    daily.cached_prompt_tokens_available === true,
+                ),
+            },
+            {
+                key: 'completion',
+                value: (daily.completion_tokens || 0).toLocaleString(),
+                label: 'Completion tokens',
+                detail: tokenDetail(
+                    daily.completion_tokens || 0,
+                    daily.cached_completion_tokens || 0,
+                    daily.cached_completion_tokens_available === true,
+                ),
+            },
+            {
+                key: 'cost',
+                value: costAvailable ? ('$' + (daily.cost_usd || 0).toFixed(4)) : '—',
+                label: costAvailable ? 'Total cost' : 'Cost unavailable',
+                detail: '',
+            },
         ];
-        UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map(([key, value, label]) => {
-            const card = UI.renderStatCard({ value, label });
-            card.dataset.key = key;
+        UI.memoizedRender(summaryEl, items, (nextItems) => nextItems.map((item) => {
+            const card = UI.renderStatCard(item);
+            card.dataset.key = item.key;
             return card;
         }));
     }
@@ -85,7 +125,9 @@ function renderUsageView(container) {
             return;
         }
 
-        UI.memoizedRender(tableEl, rows, (nextRows) => {
+        const showCost = rows.some((item) => item.cost_available !== false);
+        UI.memoizedRender(tableEl, { rows, showCost }, (nextState) => {
+        const nextRows = nextState.rows || [];
         const wrap = document.createElement('div');
         wrap.className = 'table-wrap';
         wrap.dataset.key = 'usage-table-wrap';
@@ -94,7 +136,9 @@ function renderUsageView(container) {
         table.className = 'data-table responsive';
 
         const thead = document.createElement('thead');
-        thead.innerHTML = '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>';
+        thead.innerHTML = nextState.showCost
+            ? '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th><th>Cost</th></tr>'
+            : '<tr><th>Conversation</th><th>Prompt</th><th>Completion</th></tr>';
         table.appendChild(thead);
 
         const tbody = document.createElement('tbody');
@@ -110,11 +154,25 @@ function renderUsageView(container) {
             linkTd.appendChild(link);
             tr.appendChild(linkTd);
 
-            [
-                ['Prompt', (item.prompt_tokens || 0).toLocaleString()],
-                ['Completion', (item.completion_tokens || 0).toLocaleString()],
-                ['Cost', '$' + (item.cost_usd || 0).toFixed(4)],
-            ].forEach(([label, value]) => {
+            const cells = [
+                ['Prompt', tokenCell(
+                    item.prompt_tokens || 0,
+                    item.cached_prompt_tokens || 0,
+                    item.cached_prompt_tokens_available === true,
+                )],
+                ['Completion', tokenCell(
+                    item.completion_tokens || 0,
+                    item.cached_completion_tokens || 0,
+                    item.cached_completion_tokens_available === true,
+                )],
+            ];
+            if (nextState.showCost) {
+                cells.push([
+                    'Cost',
+                    item.cost_available === false ? '—' : ('$' + (item.cost_usd || 0).toFixed(4)),
+                ]);
+            }
+            cells.forEach(([label, value]) => {
                 const td = document.createElement('td');
                 td.setAttribute('data-label', label);
                 td.textContent = value;
@@ -127,13 +185,22 @@ function renderUsageView(container) {
         return [wrap];
         }, {
             signatureFn(nextRows) {
-                return (nextRows || []).map((item) => ({
-                    id: String(item.conversation_id || ''),
-                    title: String(item.title || ''),
-                    prompt: Number(item.prompt_tokens || 0),
-                    completion: Number(item.completion_tokens || 0),
-                    cost: Number(item.cost_usd || 0),
-                }));
+                const rows = nextRows?.rows || [];
+                return {
+                    showCost: !!nextRows?.showCost,
+                    rows: rows.map((item) => ({
+                        id: String(item.conversation_id || ''),
+                        title: String(item.title || ''),
+                        prompt: Number(item.prompt_tokens || 0),
+                        cachedPrompt: Number(item.cached_prompt_tokens || 0),
+                        cachedPromptAvailable: item.cached_prompt_tokens_available === true,
+                        completion: Number(item.completion_tokens || 0),
+                        cachedCompletion: Number(item.cached_completion_tokens || 0),
+                        cachedCompletionAvailable: item.cached_completion_tokens_available === true,
+                        cost: Number(item.cost_usd || 0),
+                        costAvailable: item.cost_available !== false,
+                    })),
+                };
             },
         });
     }

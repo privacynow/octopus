@@ -100,17 +100,21 @@ async def test_check_auth_health_requires_nonempty_auth_file(monkeypatch, tmp_pa
     provider = ClaudeProvider(make_config(provider_name="claude"))
     auth_file = tmp_path / ".claude.json"
     auth_file.write_text('{"token":"secret"}', encoding="utf-8")
-    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: auth_file))
-    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: tmp_path / ".claude"))
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
+    seen: list[tuple[str, ...]] = []
 
-    async def fake_run(*cmd: str, timeout: int):
-        assert cmd == ("claude", "--version")
-        assert timeout == 10
-        return 0, "claude 2.1.79\n", ""
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
+        seen.append(cmd)
+        if cmd == ("claude", "--version"):
+            assert timeout == 10
+            return 0, "claude 2.1.79\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
 
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
 
     assert await provider.check_auth_health() == []
+    assert seen == [("claude", "--version")]
 
 
 async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tmp_path: Path):
@@ -118,30 +122,64 @@ async def test_check_auth_health_accepts_nonempty_auth_dir_files(monkeypatch, tm
     auth_dir = tmp_path / ".claude"
     auth_dir.mkdir()
     (auth_dir / "session.json").write_text('{"token":"secret"}', encoding="utf-8")
-    monkeypatch.setattr(ClaudeProvider, "_auth_file", staticmethod(lambda: tmp_path / ".claude.json"))
-    monkeypatch.setattr(ClaudeProvider, "_auth_dir", staticmethod(lambda: auth_dir))
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
+    seen: list[tuple[str, ...]] = []
 
-    async def fake_run(*cmd: str, timeout: int):
-        assert cmd == ("claude", "--version")
-        assert timeout == 10
-        return 0, "claude 2.1.81\n", ""
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
+        seen.append(cmd)
+        if cmd == ("claude", "--version"):
+            assert timeout == 10
+            return 0, "claude 2.1.81\n", ""
+        raise AssertionError(f"unexpected command: {cmd}")
 
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
 
     assert await provider.check_auth_health() == []
+    assert seen[0] == ("claude", "--version")
 
 
-async def test_check_runtime_health_short_circuits_when_auth_fails():
+async def test_check_runtime_health_reports_live_login_failure(monkeypatch, tmp_path: Path):
+    provider = ClaudeProvider(make_config(provider_name="claude"))
+    auth_file = tmp_path / ".claude.json"
+    auth_file.write_text('{"token":"secret"}', encoding="utf-8")
+    monkeypatch.setattr("app.providers.claude.runtime_auth_root", lambda provider_name: tmp_path)
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
+        if cmd == ("claude", "--version"):
+            return 0, "claude 2.1.87\n", ""
+        assert cmd == (
+            "claude",
+            "-p",
+            "--output-format",
+            "text",
+            "--max-turns",
+            "1",
+            "--",
+            "reply with ok",
+        )
+        return 1, "Not logged in · Please run /login\n", ""
+
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
+
+    errors = await provider.check_runtime_health()
+
+    assert errors == ["Claude runtime probe failed (rc=1): Not logged in · Please run /login"]
+
+
+async def test_check_runtime_health_short_circuits_when_auth_fails(monkeypatch):
     provider = ClaudeProvider(make_config(provider_name="claude"))
 
     async def fake_auth():
         return ["auth missing"]
 
-    async def fake_run(*cmd: str, timeout: int):
+    async def fake_run(*cmd: str, timeout: int, env):
+        del env
         raise AssertionError(f"runtime probe should not run: {cmd} timeout={timeout}")
 
     provider.check_auth_health = fake_auth  # type: ignore[method-assign]
-    provider._run_health_command = fake_run  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.claude.run_health_command", fake_run)
 
     assert await provider.check_runtime_health() == ["auth missing"]
 
@@ -319,6 +357,88 @@ async def test_mcp_temp_file_is_removed_after_run_exception():
         )
 
     assert not os.path.exists(seen["path"])
+
+
+async def test_run_maps_cached_prompt_usage_when_available():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return (
+            "ok",
+            {
+                "result": "ok",
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 8,
+                    "cache_read_input_tokens": 48,
+                },
+                "total_cost_usd": 0.12,
+            },
+            0,
+            "",
+            [],
+        )
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+    )
+
+    assert result.prompt_tokens == 120
+    assert result.completion_tokens == 8
+    assert result.cached_prompt_tokens == 48
+    assert result.cached_completion_tokens is None
+    assert result.cost_usd == 0.12
+
+
+async def test_run_surfaces_structured_error_detail():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return (
+            "",
+            {
+                "result": "Not logged in · Please run /login",
+                "error": "authentication_failed",
+            },
+            1,
+            "",
+            [],
+        )
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+    )
+
+    assert result.returncode == 1
+    assert result.text.startswith("[Claude error (rc=1)]")
+    assert "Not logged in · Please run /login" in result.text
+    assert "authentication_failed" in result.text
 
 
 # -- Claude command safety (test_high_risk.py) --

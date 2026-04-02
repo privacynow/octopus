@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from datetime import datetime, timezone
 from typing import Literal, NewType
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, field_validator, model_validator
 
 from octopus_sdk.realtime import ConversationProgressUpdate
+from octopus_sdk.time_utils import utc_now_iso as utcnow_iso
 
 AuthorityId = NewType("AuthorityId", str)
 AgentId = NewType("AgentId", str)
@@ -20,10 +20,6 @@ ExternalConversationRef = NewType("ExternalConversationRef", str)
 DeliveryId = NewType("DeliveryId", str)
 ConnectivityState = NewType("ConnectivityState", str)
 RegistryJsonValue = JsonValue
-
-
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class RegistryRecordModel(BaseModel):
@@ -77,6 +73,14 @@ class RegistryJsonRecord(RootModel[dict[str, RegistryJsonValue]], Mapping[str, R
 class RuntimeHealthSummaryRecord(RegistryRecordModel):
     ok: bool | None = None
     status: str = ""
+    execution_state: str = "healthy"
+    execution_provider: str = ""
+    execution_fault_kind: str = ""
+    execution_fault_code: str = ""
+    execution_fault_detail: str = ""
+    execution_faulted_at: str = ""
+    execution_resettable: bool = False
+    execution_last_returncode: int | None = None
     healthy_worker_count: int = 0
     stale_worker_count: int = 0
     fresh_queued_count: int = 0
@@ -86,6 +90,17 @@ class RuntimeHealthSummaryRecord(RegistryRecordModel):
     oldest_claim_age_seconds: int | None = None
     warning_count: int = 0
     error_count: int = 0
+
+
+class ExecutionStateRecord(RegistryRecordModel):
+    state: str = "healthy"
+    provider: str = ""
+    fault_kind: str = ""
+    fault_code: str = ""
+    detail: str = ""
+    faulted_at: str = ""
+    resettable: bool = False
+    last_returncode: int | None = None
 
 
 class RuntimeHealthDiagnosticRecord(RegistryRecordModel):
@@ -218,6 +233,14 @@ class AgentRecord(RegistryRecordModel):
     created_at: str = ""
     updated_at: str = ""
     last_heartbeat_at: str = ""
+    execution_state: str = "healthy"
+    execution_provider: str = ""
+    execution_fault_kind: str = ""
+    execution_fault_code: str = ""
+    execution_fault_detail: str = ""
+    execution_faulted_at: str = ""
+    execution_resettable: bool = False
+    execution_last_returncode: int | None = None
     runtime_health_summary: RuntimeHealthSummaryRecord = Field(default_factory=RuntimeHealthSummaryRecord)
     runtime_health_generated_at: str = ""
 
@@ -422,6 +445,7 @@ class AgentStatusRecord(AgentRecord):
     workers: list[RuntimeWorkerRecord] = Field(default_factory=list)
     active_conversations: int = 0
     recent_errors: int = 0
+    runtime_health_detail: RuntimeHealthDetailRecord | None = None
 
 
 class RoutedTaskRequest(RegistryRecordModel):
@@ -732,6 +756,8 @@ class RoutedTaskResult(RegistryRecordModel):
     follow_up_questions: list[str] = Field(default_factory=list)
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
+    cached_prompt_tokens: int | None = Field(default=None, ge=0)
+    cached_completion_tokens: int | None = Field(default=None, ge=0)
     cost_usd: float = Field(default=0.0, ge=0.0)
     provider: str = ""
     completed_at: str = Field(default_factory=utcnow_iso, min_length=1)

@@ -40,6 +40,10 @@ function renderConversationDetail(container, params) {
     let availableConversationSkills = [];
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
+    let managementMode = 'closed';
+    let managementIdleTimer = null;
+    let managementSuccessTimer = null;
+    let managementBusyCount = 0;
     let managementSupport = {
         skills: true,
         settings: true,
@@ -109,8 +113,23 @@ function renderConversationDetail(container, params) {
     cancelBtn.textContent = 'Cancel';
     actionGroup.appendChild(cancelBtn);
 
+    const skillsManageBtn = document.createElement('button');
+    skillsManageBtn.className = 'btn btn-sm conversation-manage-trigger';
+    skillsManageBtn.type = 'button';
+    skillsManageBtn.textContent = 'Skills';
+    skillsManageBtn.hidden = true;
+    actionGroup.appendChild(skillsManageBtn);
+
+    const settingsManageBtn = document.createElement('button');
+    settingsManageBtn.className = 'btn btn-sm conversation-manage-trigger';
+    settingsManageBtn.type = 'button';
+    settingsManageBtn.textContent = 'Settings';
+    settingsManageBtn.hidden = true;
+    actionGroup.appendChild(settingsManageBtn);
+
     const managementPanel = document.createElement('section');
     managementPanel.className = 'conversation-management-grid';
+    managementPanel.id = 'conversation-management-panel';
     managementPanel.hidden = true;
     shell.appendChild(managementPanel);
 
@@ -121,6 +140,8 @@ function renderConversationDetail(container, params) {
     const settingsPanel = document.createElement('section');
     settingsPanel.className = 'card conversation-management-card';
     managementPanel.appendChild(settingsPanel);
+    skillsManageBtn.setAttribute('aria-controls', managementPanel.id);
+    settingsManageBtn.setAttribute('aria-controls', managementPanel.id);
 
     const layout = document.createElement('div');
     layout.className = 'conversation-layout';
@@ -232,6 +253,9 @@ function renderConversationDetail(container, params) {
                 availableTargets.push(item);
             }
             agents.forEach((agent) => {
+                if (String((agent && agent.execution_state) || 'healthy') === 'faulted') {
+                    return;
+                }
                 const slug = (agent.slug || agent.agent_id || '').trim();
                 if (!slug) return;
                 const displayName = String(agent.display_name || '').trim();
@@ -310,13 +334,128 @@ function renderConversationDetail(container, params) {
         return convoId;
     }
 
+    function managementAvailable() {
+        return Boolean(managementAgentId());
+    }
+
+    function clearManagementTimers() {
+        clearTimeout(managementIdleTimer);
+        clearTimeout(managementSuccessTimer);
+    }
+
+    function managementHasFocusedInput() {
+        const active = document.activeElement;
+        if (!active || !managementPanel.contains(active)) return false;
+        return active.matches('input, textarea, select');
+    }
+
+    function canAutoCloseManagement() {
+        return managementMode !== 'closed'
+            && !pendingSkillSetup
+            && managementBusyCount === 0
+            && !managementHasFocusedInput();
+    }
+
+    function syncManagementControls() {
+        const available = managementAvailable();
+        skillsManageBtn.hidden = !available;
+        settingsManageBtn.hidden = !available;
+        skillsManageBtn.className = managementMode === 'skills'
+            ? 'btn btn-sm btn-primary conversation-manage-trigger'
+            : 'btn btn-sm conversation-manage-trigger';
+        settingsManageBtn.className = managementMode === 'settings'
+            ? 'btn btn-sm btn-primary conversation-manage-trigger'
+            : 'btn btn-sm conversation-manage-trigger';
+        skillsManageBtn.setAttribute('aria-pressed', String(managementMode === 'skills'));
+        settingsManageBtn.setAttribute('aria-pressed', String(managementMode === 'settings'));
+        skillsManageBtn.setAttribute('aria-expanded', String(available && managementMode === 'skills'));
+        settingsManageBtn.setAttribute('aria-expanded', String(available && managementMode === 'settings'));
+        managementPanel.hidden = !available || managementMode === 'closed';
+        managementPanel.dataset.mode = managementMode;
+        skillsPanel.hidden = managementMode !== 'skills';
+        settingsPanel.hidden = managementMode !== 'settings';
+    }
+
+    function scheduleManagementIdleClose(timeoutMs = 10000) {
+        clearTimeout(managementIdleTimer);
+        if (managementMode === 'closed' || timeoutMs <= 0) return;
+        managementIdleTimer = setTimeout(() => {
+            if (canAutoCloseManagement()) {
+                closeManagement();
+                return;
+            }
+            if (managementMode !== 'closed' && !pendingSkillSetup) {
+                scheduleManagementIdleClose(timeoutMs);
+            }
+        }, timeoutMs);
+    }
+
+    function scheduleManagementSuccessClose(timeoutMs = 2600) {
+        clearTimeout(managementSuccessTimer);
+        managementSuccessTimer = setTimeout(() => {
+            if (canAutoCloseManagement()) {
+                closeManagement();
+            } else if (managementMode !== 'closed' && !pendingSkillSetup) {
+                scheduleManagementIdleClose();
+            }
+        }, timeoutMs);
+    }
+
+    function markManagementInteraction() {
+        if (managementMode !== 'closed' && !pendingSkillSetup) {
+            scheduleManagementIdleClose();
+        }
+    }
+
+    function openManagement(nextMode, { focus = false } = {}) {
+        if (!managementAvailable()) return;
+        managementMode = nextMode;
+        syncManagementControls();
+        scheduleManagementIdleClose();
+        if (focus) {
+            requestAnimationFrame(() => {
+                const firstControl = managementPanel.querySelector('input, select, textarea')
+                    || managementPanel.querySelector('button:not(.conversation-management-close)');
+                if (firstControl instanceof HTMLElement) {
+                    firstControl.focus();
+                }
+            });
+        }
+    }
+
+    function closeManagement({ clearStatus = true } = {}) {
+        clearManagementTimers();
+        managementMode = 'closed';
+        if (clearStatus) {
+            skillsStatusMessage = '';
+            settingsStatusMessage = '';
+        }
+        syncManagementControls();
+        if (activeView !== 'tasks' && !textarea.disabled) {
+            requestAnimationFrame(() => textarea.focus());
+        }
+    }
+
+    async function runManagementRequest(task) {
+        managementBusyCount += 1;
+        clearTimeout(managementSuccessTimer);
+        try {
+            return await task();
+        } finally {
+            managementBusyCount = Math.max(0, managementBusyCount - 1);
+            if (managementMode !== 'closed' && !pendingSkillSetup) {
+                scheduleManagementIdleClose();
+            }
+        }
+    }
+
     function isCapabilityUnavailableError(err) {
         const message = String((err && err.message) || '');
         return message.startsWith('409:');
     }
 
     function resetManagementView() {
-        managementPanel.hidden = !managementAgentId();
+        syncManagementControls();
         renderSkillsPanel();
         renderSettingsPanel();
     }
@@ -335,11 +474,36 @@ function renderConversationDetail(container, params) {
             requirement: setup.requirement,
             validationError: pendingSkillSetup ? String(pendingSkillSetup.validationError || '') : '',
         };
+        openManagement('skills');
+    }
+
+    function createManagementHeader(title) {
+        const header = document.createElement('div');
+        header.className = 'workspace-header-main';
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'workspace-title-group';
+        const titleEl = document.createElement('h3');
+        titleEl.className = 'editor-section-title';
+        titleEl.textContent = title;
+        titleGroup.appendChild(titleEl);
+        header.appendChild(titleGroup);
+        const actions = document.createElement('div');
+        actions.className = 'workspace-actions';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn btn-sm conversation-management-close';
+        closeBtn.type = 'button';
+        closeBtn.setAttribute('aria-label', `Close ${title}`);
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => closeManagement());
+        actions.appendChild(closeBtn);
+        header.appendChild(actions);
+        header._actionGroup = actions;
+        return header;
     }
 
     function renderSkillsPanel() {
         const agentId = managementAgentId();
-        managementPanel.hidden = !agentId;
+        syncManagementControls();
         if (!agentId) {
             UI.clearMemoizedRender(skillsPanel);
             UI.reconcileChildren(skillsPanel, []);
@@ -363,9 +527,7 @@ function renderConversationDetail(container, params) {
             statusMessage: String(skillsStatusMessage || ''),
         }, (state) => {
             const nodes = [];
-            const header = document.createElement('div');
-            header.className = 'workspace-header-main';
-            header.innerHTML = '<div class="workspace-title-group"><h3 class="editor-section-title">Conversation skills</h3></div>';
+            const header = createManagementHeader('Conversation skills');
             if (state.supported && (state.skillState.active_skills || []).length) {
                 const clearBtn = document.createElement('button');
                 clearBtn.className = 'btn btn-sm';
@@ -374,16 +536,17 @@ function renderConversationDetail(container, params) {
                 clearBtn.addEventListener('click', async () => {
                     clearBtn.disabled = true;
                     try {
-                        const result = await API.clearConversationSkills(agentId, managementConversationPath());
+                        const result = await runManagementRequest(() => API.clearConversationSkills(agentId, managementConversationPath()));
                         skillsStatusMessage = result.status === 'cleared' ? 'Cleared active skills.' : String(result.status || 'Updated');
                         pendingSkillSetup = null;
                         scheduleConversationManagementRefresh();
+                        scheduleManagementSuccessClose();
                     } catch (err) {
                         UI.reportError('Failed to clear conversation skills', err, { context: 'Conversation skill clear failed' });
                     }
                     clearBtn.disabled = false;
                 });
-                header.appendChild(clearBtn);
+                header._actionGroup.prepend(clearBtn);
             }
             nodes.push(header);
 
@@ -444,10 +607,11 @@ function renderConversationDetail(container, params) {
                     cancelSetup.addEventListener('click', async () => {
                         cancelSetup.disabled = true;
                         try {
-                            await API.conversationAction(convoId, 'cancel_conversation');
+                            await runManagementRequest(() => API.conversationAction(convoId, 'cancel_conversation'));
                             pendingSkillSetup = null;
                             skillsStatusMessage = 'Cancelled pending credential setup.';
                             scheduleConversationManagementRefresh();
+                            scheduleManagementSuccessClose();
                         } catch (err) {
                             UI.reportError('Failed to cancel the setup', err, { context: 'Conversation skill setup cancel failed' });
                         }
@@ -465,12 +629,12 @@ function renderConversationDetail(container, params) {
                         e.preventDefault();
                         submit.disabled = true;
                         try {
-                            const result = await API.submitConversationSkillCredential(
+                            const result = await runManagementRequest(() => API.submitConversationSkillCredential(
                                 agentId,
                                 managementConversationPath(),
                                 state.pendingSetup.skillName,
                                 { value: input.value },
-                            );
+                            ));
                             if (result.status === 'validation_failed') {
                                 pendingSkillSetup = Object.assign({}, pendingSkillSetup || {}, {
                                     validationError: String(result.validation_error || 'Validation failed.'),
@@ -495,6 +659,7 @@ function renderConversationDetail(container, params) {
                                 ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the skill'}.`
                                 : String(result.status || 'Updated');
                             scheduleConversationManagementRefresh();
+                            scheduleManagementSuccessClose();
                         } catch (err) {
                             UI.reportError('Failed to submit the credential value', err, { context: 'Conversation skill credential submit failed' });
                         }
@@ -530,12 +695,13 @@ function renderConversationDetail(container, params) {
                     deactivate.addEventListener('click', async () => {
                         deactivate.disabled = true;
                         try {
-                            const result = await API.deactivateConversationSkill(agentId, managementConversationPath(), skill.name);
+                            const result = await runManagementRequest(() => API.deactivateConversationSkill(agentId, managementConversationPath(), skill.name));
                             skillsStatusMessage = result.status === 'removed'
                                 ? `Deactivated ${skill.display_name || skill.name}.`
                                 : String(result.status || 'Updated');
                             pendingSkillSetup = null;
                             scheduleConversationManagementRefresh();
+                            scheduleManagementSuccessClose();
                         } catch (err) {
                             UI.reportError('Failed to deactivate the skill', err, { context: 'Conversation skill deactivate failed' });
                         }
@@ -588,12 +754,12 @@ function renderConversationDetail(container, params) {
                             skillName,
                             confirm ? { confirm: true } : {},
                         );
-                        let result = await runActivation(false);
+                        let result = await runManagementRequest(() => runActivation(false));
                         if (result.status === 'needs_confirmation') {
                             activateBtn.disabled = false;
                             UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
                                 try {
-                                    const confirmed = await runActivation(true);
+                                    const confirmed = await runManagementRequest(() => runActivation(true));
                                     if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
                                         pendingSkillSetup = {
                                             skillName,
@@ -610,6 +776,7 @@ function renderConversationDetail(container, params) {
                                         ? `Activated ${skillName}.`
                                         : String(confirmed.status || 'Updated');
                                     scheduleConversationManagementRefresh();
+                                    scheduleManagementSuccessClose();
                                 } catch (err) {
                                     UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activation confirm failed' });
                                 }
@@ -644,6 +811,7 @@ function renderConversationDetail(container, params) {
                             ? `Activated ${skillName}.`
                             : String(result.status || 'Updated');
                         scheduleConversationManagementRefresh();
+                        scheduleManagementSuccessClose();
                     } catch (err) {
                         UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activate failed' });
                     }
@@ -669,7 +837,7 @@ function renderConversationDetail(container, params) {
 
     function renderSettingsPanel() {
         const agentId = managementAgentId();
-        managementPanel.hidden = !agentId;
+        syncManagementControls();
         if (!agentId) {
             UI.clearMemoizedRender(settingsPanel);
             UI.reconcileChildren(settingsPanel, []);
@@ -682,9 +850,7 @@ function renderConversationDetail(container, params) {
             statusMessage: String(settingsStatusMessage || ''),
         }, (state) => {
             const nodes = [];
-            const header = document.createElement('div');
-            header.className = 'workspace-header-main';
-            header.innerHTML = '<div class="workspace-title-group"><h3 class="editor-section-title">Conversation settings</h3></div>';
+            const header = createManagementHeader('Conversation settings');
             if (state.supported && state.settings) {
                 const reset = document.createElement('button');
                 reset.className = 'btn btn-sm btn-danger';
@@ -694,18 +860,19 @@ function renderConversationDetail(container, params) {
                     UI.showConfirm('Reset Conversation', 'Start a fresh session in this conversation?', async () => {
                         reset.disabled = true;
                         try {
-                            const result = await API.resetConversation(agentId, managementConversationPath());
+                            const result = await runManagementRequest(() => API.resetConversation(agentId, managementConversationPath()));
                             conversationSettings = result.state || conversationSettings;
                             settingsStatusMessage = String((result.result && result.result.message) || 'Conversation reset.');
                             pendingSkillSetup = null;
                             scheduleConversationManagementRefresh();
+                            scheduleManagementSuccessClose();
                         } catch (err) {
                             UI.reportError('Failed to reset the conversation', err, { context: 'Conversation reset failed' });
                         }
                         reset.disabled = false;
                     });
                 });
-                header.appendChild(reset);
+                header._actionGroup.prepend(reset);
             }
             nodes.push(header);
 
@@ -764,13 +931,14 @@ function renderConversationDetail(container, params) {
 
             async function updateSetting(setting, value, successMessage) {
                 try {
-                    const response = await API.updateConversationSetting(agentId, managementConversationPath(), {
+                    const response = await runManagementRequest(() => API.updateConversationSetting(agentId, managementConversationPath(), {
                         setting,
                         value,
-                    });
+                    }));
                     conversationSettings = response.state || conversationSettings;
                     settingsStatusMessage = String((response.result && response.result.message) || successMessage || 'Updated');
                     renderSettingsPanel();
+                    scheduleManagementSuccessClose();
                 } catch (err) {
                     UI.reportError(`Failed to update ${setting.replace(/_/g, ' ')}`, err, { context: 'Conversation setting update failed' });
                 }
@@ -1031,6 +1199,34 @@ function renderConversationDetail(container, params) {
             }
             cancelBtn.disabled = false;
         });
+    });
+
+    skillsManageBtn.addEventListener('click', () => {
+        if (managementMode === 'skills') {
+            closeManagement();
+            return;
+        }
+        openManagement('skills', { focus: true });
+    });
+
+    settingsManageBtn.addEventListener('click', () => {
+        if (managementMode === 'settings') {
+            closeManagement();
+            return;
+        }
+        openManagement('settings', { focus: true });
+    });
+
+    managementPanel.addEventListener('pointerdown', markManagementInteraction);
+    managementPanel.addEventListener('input', markManagementInteraction);
+    managementPanel.addEventListener('change', markManagementInteraction);
+    managementPanel.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeManagement();
+            return;
+        }
+        markManagementInteraction();
     });
 
     textarea.addEventListener('keydown', handleComposerKeydown);
@@ -1544,7 +1740,7 @@ function renderConversationDetail(container, params) {
         try {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
-            managementPanel.hidden = !managementAgentId();
+            syncManagementControls();
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
         } catch (err) {
@@ -1738,7 +1934,9 @@ function renderConversationDetail(container, params) {
     cleanups.add(() => clearTimeout(progressTimer));
     cleanups.add(() => clearTimeout(relatedTasksReloadDebounce));
     cleanups.add(() => clearTimeout(managementReloadDebounce));
+    cleanups.add(clearManagementTimers);
     updateComposerAssist();
+    syncManagementControls();
     container.__routeReady = Promise.allSettled(initialLoads);
 
     function syncConversationDensity(compact) {

@@ -14,6 +14,9 @@ function renderAgentDetail(container, params) {
     let taskThreadGroupEl = null;
     let conversationPaginationEl = null;
     let conversationPaginator = null;
+    let resetBusy = false;
+    let executionOverride = null;
+    let resetNotice = '';
 
     const header = document.createElement('header');
     header.className = 'workspace-header workspace-header-compact';
@@ -23,7 +26,34 @@ function renderAgentDetail(container, params) {
     content.className = 'agent-detail-grid';
     container.appendChild(content);
 
+    function executionSnapshot(agent) {
+        if (executionOverride) {
+            return executionOverride;
+        }
+        return {
+            state: String((agent && agent.execution_state) || 'healthy').trim() || 'healthy',
+            provider: String((agent && agent.execution_provider) || (agent && agent.provider) || '').trim(),
+            faultKind: String((agent && agent.execution_fault_kind) || '').trim(),
+            faultCode: String((agent && agent.execution_fault_code) || '').trim(),
+            detail: String((agent && agent.execution_fault_detail) || '').trim(),
+            faultedAt: String((agent && agent.execution_faulted_at) || '').trim(),
+            resettable: Boolean(agent && agent.execution_resettable),
+        };
+    }
+
+    function executionBadge(snapshot) {
+        const badge = document.createElement('span');
+        const faulted = snapshot.state === 'faulted';
+        badge.className = `badge badge-${faulted ? 'faulted' : 'healthy'}`;
+        badge.textContent = faulted ? 'execution faulted' : 'execution ready';
+        if (faulted && snapshot.detail) {
+            badge.title = snapshot.detail;
+        }
+        return badge;
+    }
+
     function buildHeader(agent) {
+        const execution = executionSnapshot(agent);
         const titleRow = document.createElement('div');
         titleRow.className = 'workspace-header-main';
 
@@ -51,16 +81,20 @@ function renderAgentDetail(container, params) {
 
         const actions = document.createElement('div');
         actions.className = 'workspace-actions';
-        const status = document.createElement('span');
-        status.className = `badge badge-${agent.connectivity_state || 'stopped'}`;
-        status.textContent = agent.connectivity_state || 'unknown';
-        actions.appendChild(status);
+        const transportStatus = document.createElement('span');
+        transportStatus.className = `badge badge-${agent.connectivity_state || 'stopped'}`;
+        transportStatus.textContent = `transport ${agent.connectivity_state || 'unknown'}`;
+        actions.appendChild(transportStatus);
+        actions.appendChild(executionBadge(execution));
 
         const openConversationBtn = document.createElement('button');
         openConversationBtn.type = 'button';
         openConversationBtn.className = 'btn btn-sm btn-primary';
-        openConversationBtn.textContent = 'Open conversation';
-        openConversationBtn.disabled = openConversationBusy;
+        openConversationBtn.textContent = execution.state === 'faulted' ? 'Execution faulted' : 'Open conversation';
+        openConversationBtn.disabled = openConversationBusy || execution.state === 'faulted';
+        if (execution.state === 'faulted' && execution.detail) {
+            openConversationBtn.title = execution.detail;
+        }
         openConversationBtn.addEventListener('click', async () => {
             if (openConversationBusy) return;
             openConversationBusy = true;
@@ -79,12 +113,52 @@ function renderAgentDetail(container, params) {
             }
         });
         actions.appendChild(openConversationBtn);
+
+        if (execution.state === 'faulted' && execution.resettable) {
+            const resetBtn = document.createElement('button');
+            resetBtn.type = 'button';
+            resetBtn.className = 'btn btn-sm';
+            resetBtn.textContent = resetBusy ? 'Resetting…' : 'Reset execution';
+            resetBtn.disabled = resetBusy;
+            resetBtn.addEventListener('click', async () => {
+                if (resetBusy) return;
+                resetBusy = true;
+                resetBtn.disabled = true;
+                resetBtn.textContent = 'Resetting…';
+                try {
+                    const result = await API.resetAgentExecutionFault(agentId, {});
+                    const state = (result && result.state) || {};
+                    executionOverride = {
+                        state: String(state.state || 'healthy'),
+                        provider: String(state.provider || agent.provider || ''),
+                        faultKind: String(state.fault_kind || ''),
+                        faultCode: String(state.fault_code || ''),
+                        detail: String(state.detail || ''),
+                        faultedAt: String(state.faulted_at || ''),
+                        resettable: Boolean(state.resettable),
+                        staleFaultedAt: String(execution.faultedAt || ''),
+                        staleDetail: String(execution.detail || ''),
+                        until: Date.now() + 15000,
+                    };
+                    resetNotice = 'Execution fault reset. New requests are allowed again.';
+                    void loadDetail({ soft: true });
+                } catch (err) {
+                    UI.reportError('Failed to reset execution fault', err, { context: 'Agent execution fault reset failed' });
+                    resetBtn.disabled = false;
+                    resetBtn.textContent = 'Reset execution';
+                } finally {
+                    resetBusy = false;
+                }
+            });
+            actions.appendChild(resetBtn);
+        }
         titleRow.appendChild(actions);
 
         UI.reconcileChildren(header, [titleRow]);
     }
 
     function buildOverviewCard(agent) {
+        const execution = executionSnapshot(agent);
         const card = document.createElement('section');
         card.className = 'card workspace-section';
         card.dataset.key = 'overview';
@@ -100,14 +174,25 @@ function renderAgentDetail(container, params) {
             ['Agent ID', agent.agent_id || '—'],
             ['Scope', agent.registry_scope || '—'],
             ['Version', agent.version || '—'],
+            ['Transport', agent.connectivity_state || 'unknown'],
+            ['Execution', execution.state || 'healthy'],
             ['Last heartbeat', agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never'],
-        ].forEach(([label, value]) => {
+            execution.faultedAt ? ['Faulted at', UI.relativeTime(execution.faultedAt)] : null,
+            execution.detail ? ['Last failure', execution.detail] : null,
+        ].filter(Boolean).forEach(([label, value]) => {
             const fact = document.createElement('div');
             fact.className = 'metadata-item';
             fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
             grid.appendChild(fact);
         });
         card.appendChild(grid);
+
+        if (resetNotice) {
+            const note = document.createElement('div');
+            note.className = 'agent-execution-note';
+            note.textContent = resetNotice;
+            card.appendChild(note);
+        }
 
         if ((agent.capabilities || []).length) {
             const chips = document.createElement('div');
@@ -336,6 +421,17 @@ function renderAgentDetail(container, params) {
                 return;
             }
             const agent = status.agent || status;
+            const actualExecutionState = String((agent && agent.execution_state) || 'healthy').trim() || 'healthy';
+            if (executionOverride) {
+                const overrideExpired = Date.now() > Number(executionOverride.until || 0);
+                const sameStaleFault = actualExecutionState === 'faulted'
+                    && String(agent.execution_faulted_at || '') === String(executionOverride.staleFaultedAt || '')
+                    && String(agent.execution_fault_detail || '') === String(executionOverride.staleDetail || '');
+                if (overrideExpired || (!sameStaleFault && actualExecutionState === 'faulted') || actualExecutionState !== 'faulted') {
+                    executionOverride = null;
+                    resetNotice = '';
+                }
+            }
             const workers = status.workers || [];
             const signature = UI.dataSignature({
                 agent: {
@@ -345,6 +441,9 @@ function renderAgentDetail(container, params) {
                     role: String(agent.role || ''),
                     provider: String(agent.provider || ''),
                     connectivity: String(agent.connectivity_state || ''),
+                    execution: executionOverride ? String(executionOverride.state || 'healthy') : actualExecutionState,
+                    executionDetail: executionOverride ? String(executionOverride.detail || '') : String(agent.execution_fault_detail || ''),
+                    executionNote: String(resetNotice || ''),
                     heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),

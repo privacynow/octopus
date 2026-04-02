@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from octopus_sdk.identity import filesystem_component_for_key
+from octopus_sdk.time_utils import utc_now_iso
 from app.startup_diagnostics import redact_sensitive_startup_text
 from app.subprocess_env import build_subprocess_env
 
@@ -99,7 +100,7 @@ def save_raw(
     new_num = last_num + 1
 
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now_iso(),
         "prompt": prompt,
         "raw_text": raw_text,
         "kind": kind,

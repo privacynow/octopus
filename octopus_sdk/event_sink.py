@@ -12,19 +12,15 @@ All failures are logged as warnings and swallowed — never blocks execution.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from uuid import uuid4
 
 from octopus_sdk.config import BotConfigBase, should_publish_event
 from octopus_sdk.conversation_projection import ConversationProjectionPort
-from octopus_sdk.providers import ToolExecutionRecord
 from octopus_sdk.execution import TransportIdentity
+from octopus_sdk.providers import ToolExecutionRecord
+from octopus_sdk.time_utils import utc_now_iso
 
 log = logging.getLogger(__name__)
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class NoOpEventSink:
@@ -47,7 +43,16 @@ class NoOpEventSink:
     ) -> None:
         pass
 
-    async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None:
+    async def on_provider_response(
+        self,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cached_prompt_tokens: int | None = None,
+        cached_completion_tokens: int | None = None,
+        cost_usd: float = 0.0,
+        provider: str = "",
+    ) -> None:
         pass
 
     async def on_tool_execution(self, record: ToolExecutionRecord, *, index: int = 0) -> None:
@@ -154,7 +159,7 @@ class RegistryEventSink:
                 kind=kind,
                 actor=actor,
                 content=content,
-                created_at=_utcnow_iso(),
+                created_at=utc_now_iso(),
                 metadata=metadata or {},
             )
             await self._projection.publish_events(
@@ -201,16 +206,30 @@ class RegistryEventSink:
             },
         )
 
-    async def on_provider_response(self, *, prompt_tokens: int = 0, completion_tokens: int = 0, cost_usd: float = 0.0, provider: str = "") -> None:
+    async def on_provider_response(
+        self,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cached_prompt_tokens: int | None = None,
+        cached_completion_tokens: int | None = None,
+        cost_usd: float = 0.0,
+        provider: str = "",
+    ) -> None:
+        metadata = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cost_usd": cost_usd,
+            "provider": provider,
+        }
+        if cached_prompt_tokens is not None:
+            metadata["cached_prompt_tokens"] = cached_prompt_tokens
+        if cached_completion_tokens is not None:
+            metadata["cached_completion_tokens"] = cached_completion_tokens
         await self._publish(
             "provider.response",
             event_id=f"exec:{self._execution_event_prefix}:response",
-            metadata={
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "cost_usd": cost_usd,
-                "provider": provider,
-            },
+            metadata=metadata,
         )
 
     async def on_tool_execution(self, record: ToolExecutionRecord, *, index: int = 0) -> None:

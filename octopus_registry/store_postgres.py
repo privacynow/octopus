@@ -112,8 +112,10 @@ from .store_base import (
     canonical_registry_connectivity_state,
     effective_connectivity_state,
     hash_agent_token,
+    offline_before_iso,
     require_registry_scope,
     runtime_health_generated_at,
+    runtime_health_execution_fields,
     runtime_health_summary,
     utcnow_iso,
     validated_registry_scope,
@@ -304,7 +306,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return epoch
 
     def _offline_before(self) -> str:
-        return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        return offline_before_iso()
 
     def _token_row(self, conn, token: str) -> dict[str, object] | None:
         with _cur(conn) as cur:
@@ -338,6 +340,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row["connectivity_state"], row["last_heartbeat_at"]
         )
         return _record(AgentRecord, {
+            **runtime_health_execution_fields(row.get("runtime_health_json")),
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
@@ -853,7 +856,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             with _cur(conn) as cur:
                 cur.execute("".join(sql), params)
                 rows = cur.fetchall()
-        return [self._row_to_agent(row) for row in rows]
+        agents = [self._row_to_agent(row) for row in rows]
+        return [agent for agent in agents if str(agent.execution_state or "healthy") != "faulted"]
 
     def create_delivery(
         self,

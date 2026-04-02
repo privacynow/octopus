@@ -36,6 +36,7 @@ from octopus_sdk.workflows.recovery_machine import (
     run_transport_event,
 )
 from octopus_sdk.work_queue import TransportDisposition, TransportStateCorruption
+from octopus_sdk.time_utils import utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -581,7 +582,7 @@ def _claim_queued_item(
             f"_claim_queued_item: workflow rejected for item {item_id}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     cursor = conn.execute(
         "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ? "
         "WHERE id = ? AND state = 'queued'",
@@ -633,7 +634,7 @@ def _apply_transport_event(
             f"_apply_transport_event: workflow rejected for item {item_id} event {event_name!r}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     if update_extras:
         placeholders = (result.new_state,) + update_extra_args + (item_id, expected_source_state)
         cursor = conn.execute(
@@ -685,7 +686,7 @@ def _apply_claim_event(
             f"_apply_claim_event: workflow rejected for item {item_id} event {event_name!r}: "
             f"{result.disposition} — {result.reason}"
         )
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     cursor = conn.execute(
         "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ?, completed_at = NULL "
         "WHERE id = ? AND state = ?",
@@ -770,7 +771,7 @@ def record_and_enqueue(
     *,
     worker_id: str | None = None,
 ) -> tuple[bool, str | None]:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     item_id = uuid.uuid4().hex
     try:
         with _write_tx(conn):
@@ -806,7 +807,7 @@ def record_and_admit_message(
 
     status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     item_id = uuid.uuid4().hex
     try:
         with _write_tx(conn):
@@ -836,7 +837,7 @@ def record_update(
     kind: str,
     payload: str = "{}",
 ) -> bool:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     try:
         with _write_tx(conn):
             conn.execute(
@@ -859,7 +860,7 @@ def enqueue_work_item(
     worker_id: str | None = None,
 ) -> str:
     item_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         _insert_initial_work_item(
             conn,
@@ -993,7 +994,7 @@ def complete_work_item(conn: sqlite3.Connection, item_id: str) -> None:
                 f"complete_work_item: workflow rejected for item {item_id}: "
                 f"{result.disposition} — {result.reason}"
             )
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now_iso()
         cursor = conn.execute(
             "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
             "WHERE id = ? AND state = ?",
@@ -1032,7 +1033,7 @@ def fail_work_item(conn: sqlite3.Connection, item_id: str, error: str) -> None:
                 f"fail_work_item: workflow rejected for item {item_id}: "
                 f"{result.disposition} — {result.reason}"
             )
-        now = datetime.now(timezone.utc).isoformat()
+        now = utc_now_iso()
         err = (error or "")[:500]
         cursor = conn.execute(
             "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
@@ -1087,7 +1088,7 @@ def has_fresh_queued_or_claimed(conn: sqlite3.Connection, conversation_key: str)
 
 def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, conversation_key: str) -> bool:
     """If this conversation has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         row = conn.execute(
             "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'queued' AND dispatch_mode = 'fresh' "
@@ -1111,7 +1112,7 @@ def request_cancel(
     *,
     cancel_request_event_id: str = "",
 ) -> CancelRequestResult:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         claimed_sql = (
             "SELECT id, cancel_requested_at FROM work_items "
@@ -1349,7 +1350,7 @@ def get_latest_pending_recovery(
 
 
 def supersede_pending_recovery(conn: sqlite3.Connection, conversation_key: str) -> int:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         rows = conn.execute(
@@ -1385,7 +1386,7 @@ def supersede_pending_recovery(conn: sqlite3.Connection, conversation_key: str) 
 
 
 def discard_recovery(conn: sqlite3.Connection, item_id: str) -> DiscardResult:
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     with _write_tx(conn):
         res = _apply_transport_event(
             conn,

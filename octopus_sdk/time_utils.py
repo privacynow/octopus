@@ -10,9 +10,19 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def utc_now_iso() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
+    return utc_now().isoformat()
+
+
 def utc_now_timestamp() -> float:
     """Return the current UTC time as Unix epoch seconds."""
     return utc_now().timestamp()
+
+
+def seconds_from_now_iso(seconds: float) -> str:
+    """Return an ISO 8601 timestamp offset from the current UTC time."""
+    return (utc_now() + datetime.timedelta(seconds=seconds)).isoformat()
 
 
 def coerce_utc_datetime(value: object) -> datetime.datetime | None:

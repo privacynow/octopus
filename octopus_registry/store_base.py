@@ -66,6 +66,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     UsageSummaryRecord,
 )
+from octopus_sdk.time_utils import seconds_from_now_iso, utc_now_iso as utcnow_iso
 
 _OFFLINE_AFTER_SECONDS = 60
 _MISSING = object()
@@ -122,9 +123,9 @@ class RegistryScopeError(PermissionError):
         )
 
 
-def utcnow_iso() -> str:
-    """Return the current UTC timestamp in ISO 8601 format."""
-    return datetime.now(timezone.utc).isoformat()
+def offline_before_iso() -> str:
+    """Return the cutoff timestamp for agents considered offline."""
+    return seconds_from_now_iso(-_OFFLINE_AFTER_SECONDS)
 
 
 _DefaultT = TypeVar("_DefaultT")
@@ -411,6 +412,20 @@ def runtime_health_summary(value: object) -> RuntimeHealthSummaryRecord:
     if report is None:
         return RuntimeHealthSummaryRecord()
     return RuntimeHealthSummaryRecord.model_validate(asdict(report.summary))
+
+
+def runtime_health_execution_fields(value: object) -> dict[str, object]:
+    summary = runtime_health_summary(value)
+    return {
+        "execution_state": str(summary.execution_state or "healthy"),
+        "execution_provider": str(summary.execution_provider or ""),
+        "execution_fault_kind": str(summary.execution_fault_kind or ""),
+        "execution_fault_code": str(summary.execution_fault_code or ""),
+        "execution_fault_detail": str(summary.execution_fault_detail or ""),
+        "execution_faulted_at": str(summary.execution_faulted_at or ""),
+        "execution_resettable": bool(summary.execution_resettable),
+        "execution_last_returncode": summary.execution_last_returncode,
+    }
 
 
 def runtime_health_generated_at(value: object) -> str:

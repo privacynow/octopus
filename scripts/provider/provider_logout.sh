@@ -38,20 +38,6 @@ docker compose \
   -p "octopus-auth-${provider}" \
   -f infra/compose/docker-compose.yml \
   --profile bot \
-  run --rm bot-provider sh -c '
-    removed=
-    for d in /home/bot/.claude /home/bot/.claude.json /home/bot/.codex; do
-      if [ -d "$d" ] || [ -f "$d" ]; then
-        rm -rf "$d"
-        removed="$removed $d"
-      fi
-    done
-    if [ -n "$removed" ]; then
-      echo "Removed:$removed"
-    else
-      echo "No known provider auth paths found under /home/bot."
-    fi
-  '
+  run --rm bot-provider python -m app.provider_auth cleanup-runtime "$provider" /home/bot
 rm -f "$auth_dir/.authed"
 echo "Done."
-

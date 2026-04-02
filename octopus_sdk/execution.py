@@ -64,6 +64,22 @@ def _progress_completed() -> str:
     return "Completed."
 
 
+def _busy_message() -> str:
+    return "Another request is in progress. Try again in a moment."
+
+
+def _execution_fault_latched_note() -> str:
+    return "Execution fault latched. Reset required before retry."
+
+
+def _blocked_execution_message(detail: str) -> str:
+    detail_text = str(detail or "Execution is faulted.").strip()
+    return (
+        "Bot execution is faulted and new requests are blocked until reset.\n"
+        f"Last failure: {detail_text}"
+    )
+
+
 def _approval_already_waiting() -> str:
     return "A plan is already waiting. Use /approve or /reject first."
 
@@ -130,6 +146,8 @@ class RequestExecutionOutcome:
     denials: tuple[DenialRecord, ...] = ()
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int | None = None
+    cached_completion_tokens: int | None = None
     cost_usd: float = 0.0
 
 
@@ -357,7 +375,7 @@ async def check_credential_satisfaction(
     return None
 
 
-async def execute_request(
+async def _execute_request_locked(
     transport: TransportIdentity,
     prompt: str,
     image_paths: list[str],
@@ -491,6 +509,8 @@ async def execute_request(
     await event_sink.on_provider_response(
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        cached_prompt_tokens=result.cached_prompt_tokens,
+        cached_completion_tokens=result.cached_completion_tokens,
         cost_usd=result.cost_usd,
         provider=prov.name,
     )
@@ -502,12 +522,25 @@ async def execute_request(
         return RequestExecutionOutcome(status="timed_out")
 
     if result.returncode != 0:
-        error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
-        error_text = html.escape(error_text)
+        raw_error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
+        latched_fault = None
+        if runtime.services.execution_faults is not None:
+            latched_fault = runtime.services.execution_faults.record_provider_failure(
+                provider_name=prov.name,
+                error_text=raw_error_text,
+                returncode=result.returncode,
+            )
+        error_text = html.escape(raw_error_text)
+        if latched_fault is not None:
+            error_text = f"{error_text}\n\n{html.escape(_execution_fault_latched_note())}"
         if result.resume_failed:
             error_text += html.escape(_progress_session_not_resumed())
         await progress.update(error_text, force=True)
-        await event_sink.on_error(error_text, error_type="provider_error", message=error_text[:500])
+        await event_sink.on_error(
+            error_text,
+            error_type="provider_error",
+            message=raw_error_text[:500],
+        )
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
@@ -547,6 +580,8 @@ async def execute_request(
             denials=tuple(result.denials),
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
+            cached_prompt_tokens=result.cached_prompt_tokens,
+            cached_completion_tokens=result.cached_completion_tokens,
             cost_usd=result.cost_usd,
         )
 
@@ -582,8 +617,64 @@ async def execute_request(
         reply_text=cleaned_reply,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        cached_prompt_tokens=result.cached_prompt_tokens,
+        cached_completion_tokens=result.cached_completion_tokens,
         cost_usd=result.cost_usd,
     )
+
+
+async def execute_request(
+    transport: TransportIdentity,
+    prompt: str,
+    image_paths: list[str],
+    message: TransportEgress,
+    extra_dirs: list[str] | None = None,
+    skip_permissions: bool = False,
+    trust_tier: str = "trusted",
+    cancel_event: asyncio.Event | None = None,
+    *,
+    runtime: ExecutionRuntime,
+) -> RequestExecutionOutcome | None:
+    conversation_key = transport.conversation_key
+    event_sink = _event_sink(runtime, transport)
+
+    if runtime.services.execution_faults is not None:
+        execution_state = runtime.services.execution_faults.load()
+        if str(execution_state.state or "healthy") == "faulted":
+            blocked_text = html.escape(_blocked_execution_message(execution_state.detail))
+            await message.send_formatted_reply(blocked_text)
+            await event_sink.on_error(
+                blocked_text,
+                error_type="execution_fault",
+                message=str(execution_state.detail or blocked_text)[:500],
+            )
+            return RequestExecutionOutcome(status="failed", error_text=blocked_text)
+
+    if conversation_key in runtime.dispatch.execution_inflight:
+        busy_text = html.escape(_busy_message())
+        await message.send_formatted_reply(busy_text)
+        await event_sink.on_error(
+            busy_text,
+            error_type="busy",
+            message=_busy_message(),
+        )
+        return RequestExecutionOutcome(status="failed", error_text=busy_text)
+
+    runtime.dispatch.execution_inflight.add(conversation_key)
+    try:
+        return await _execute_request_locked(
+            transport,
+            prompt,
+            image_paths,
+            message,
+            extra_dirs,
+            skip_permissions,
+            trust_tier,
+            cancel_event,
+            runtime=runtime,
+        )
+    finally:
+        runtime.dispatch.execution_inflight.discard(conversation_key)
 
 
 async def dispatch_message_request(

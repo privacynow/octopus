@@ -6,28 +6,6 @@ set -euo pipefail
 
 provider="${BOT_PROVIDER:-claude}"
 
-provider_has_local_auth_files() {
-  local provider="$1" home_dir="${HOME:-/home/bot}"
-  case "$provider" in
-    claude)
-      if [ -f "$home_dir/.claude.json" ] && [ -s "$home_dir/.claude.json" ]; then
-        return 0
-      fi
-      if [ -d "$home_dir/.claude" ] && find "$home_dir/.claude" -mindepth 1 -type f -size +0c -print -quit 2>/dev/null | grep -q .; then
-        return 0
-      fi
-      return 1
-      ;;
-    codex)
-      local codex_home="${CODEX_HOME:-$home_dir/.codex}"
-      [ -f "$codex_home/auth.json" ]
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 case "$provider" in
   codex)
     cat <<'BANNER'
@@ -47,7 +25,7 @@ BANNER
     codex login --device-auth
     exit_code=$?
     set -e
-    if provider_has_local_auth_files codex; then
+    if python -m app.provider_auth has-runtime-artifacts codex "${HOME:-/home/bot}"; then
       echo "✓ Codex authentication complete. Returning to setup..."
     else
       echo "✗ Codex authentication is still incomplete." >&2
@@ -71,7 +49,7 @@ BANNER
     # Pre-create bind-mount targets so the copy-back after login has
     # a destination even if ensure_provider_auth_dir wasn't called.
     if [ -d /home/bot/.provider-auth ]; then
-      mkdir -p /home/bot/.provider-auth/.claude
+      python -m app.provider_auth ensure-shared-layout claude /home/bot/.provider-auth
     fi
     set +e
     claude
@@ -81,10 +59,9 @@ BANNER
     # with regular files in the container layer. Copy auth back to the bind
     # mount so credentials persist on the host after this container exits.
     if [ -d /home/bot/.provider-auth ]; then
-      cp -a /home/bot/.claude.json /home/bot/.provider-auth/.claude.json 2>/dev/null || true
-      cp -a /home/bot/.claude/* /home/bot/.provider-auth/.claude/ 2>/dev/null || true
+      python -m app.provider_auth sync-runtime-to-shared claude "${HOME:-/home/bot}" /home/bot/.provider-auth || true
     fi
-    if provider_has_local_auth_files claude; then
+    if python -m app.provider_auth has-runtime-artifacts claude "${HOME:-/home/bot}"; then
       echo "✓ Claude authentication complete. Returning to setup..."
     else
       echo "✗ Claude authentication is still incomplete." >&2
@@ -99,23 +76,5 @@ BANNER
     ;;
 esac
 
-echo "Verifying provider login..."
-# Quick version check only — do not run the full API ping here.
-# The login succeeded if auth files were written. A slow or
-# unreachable API should not block setup after a successful login.
-case "$provider" in
-  codex)
-    if codex --version >/dev/null 2>&1; then
-      echo "Provider login verified."
-    else
-      echo "Warning: could not verify codex CLI. Continuing anyway — auth files were saved." >&2
-    fi
-    ;;
-  claude)
-    if claude --version >/dev/null 2>&1; then
-      echo "Provider login verified."
-    else
-      echo "Warning: could not verify claude CLI. Continuing anyway — auth files were saved." >&2
-    fi
-    ;;
-esac
+echo "Provider auth files saved."
+echo "Octopus will run a live provider health check next."

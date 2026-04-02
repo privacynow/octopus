@@ -130,5 +130,9 @@ def get_agent_status(
             "workers": workers,
             "active_conversations": int(active_count_row.get("cnt") or 0),
             "recent_errors": int(error_count_row.get("cnt") or 0),
+            "runtime_health_detail": runtime_health_detail(
+                row.get("runtime_health_json"),
+                workers,
+            ),
         },
     )

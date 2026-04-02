@@ -200,18 +200,11 @@ function renderTaskList(container) {
             detail.appendChild(summaryBlock);
         }
 
-        const facts = document.createElement('div');
-        facts.className = 'task-item-facts';
-        [
-            ['Origin', UI.visibleLabel(task.origin_display_name, task.origin_agent_id) || '—'],
-            ['Target', UI.visibleLabel(task.target_display_name, task.target_agent_id) || '—'],
-            ['Conversation', UI.visibleLabel(task.parent_conversation_title) || 'Current thread'],
-        ].forEach(([label, value]) => {
-            const fact = document.createElement('div');
-            fact.className = 'metadata-item';
-            fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
-            facts.appendChild(fact);
-        });
+        const facts = UI.renderMetadataGrid([
+            { label: 'Origin', value: UI.visibleLabel(task.origin_display_name, task.origin_agent_id) || '—' },
+            { label: 'Target', value: UI.visibleLabel(task.target_display_name, task.target_agent_id) || '—' },
+            { label: 'Conversation', value: UI.visibleLabel(task.parent_conversation_title) || 'Current thread' },
+        ], { compact: true });
         detail.appendChild(facts);
 
         const actions = document.createElement('div');

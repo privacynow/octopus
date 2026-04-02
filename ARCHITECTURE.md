@@ -110,6 +110,22 @@ With orthogonal dimensions:
 - `Setup`: `Needs setup | Ready`
 - `Lifecycle`: draft/review/publish/archive for mutable custom skills
 
+Custom skills now use one package-aware draft model across clients:
+
+- metadata: `name`, `display_name`, `description`
+- instructions: `body`
+- setup requirements: `requirements`
+- provider extensions: `provider_config`
+- supporting artifacts: `files`
+
+The package content is the persisted source of truth. The following fields are
+derived on read or lifecycle transitions:
+
+- `validation_problems`
+- `publish_ready`
+- `runtime_available`
+- `has_unpublished_changes`
+
 ### Management protocol
 
 When an operator manages a bot's skills or guidance from the registry UI, or a
@@ -143,6 +159,18 @@ sequenceDiagram
 Management responses are cached server-side in `ingress.py` with TTL and
 in-flight deduplication. Mutations (install, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
+
+For custom skill authoring, the registry UI and chat clients both target the
+same management operations. The browser can bundle them into a richer editor,
+while chat exposes the same package mutations and lifecycle transitions in
+smaller steps. Validation, lifecycle guards, and file policy stay in the
+shared backend workflow:
+
+- submit and publish always run shared validation
+- attached files use one ingestion/validation path regardless of client
+- only safe relative paths are allowed
+- only `.sh` files may be marked executable
+- package limits are 16 attached files, 64 KB per file, 256 KB total
 
 ### Realtime model
 

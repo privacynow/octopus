@@ -481,6 +481,61 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
     assert "Registry Guidance" in preview_after.json()["effective_guidance"]
 
 
+def test_registry_skill_draft_endpoint_accepts_full_package_updates(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    _install_management_loopback(monkeypatch)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+    agent_id, _token = _enroll_and_register(client, "Package Bot", "package-bot")
+
+    created = client.put(
+        f"/v1/agents/{agent_id}/catalog/skills/pkg-skill/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "display_name": "Package Skill",
+            "body": "Package-aware draft body.",
+            "description": "Registry package test",
+            "requirements": [
+                {
+                    "key": "API_TOKEN",
+                    "prompt": "Enter token",
+                    "help_url": "https://example.test/token",
+                }
+            ],
+            "provider_config": {
+                "claude": {
+                    "allowed_tools": ["bash"],
+                }
+            },
+            "files": [
+                {
+                    "relative_path": "helper.sh",
+                    "content_type": "text/x-shellscript",
+                    "executable": True,
+                    "content_text": "echo package",
+                }
+            ],
+            "changelog": "initial package",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "draft_saved"
+
+    detail = client.get(
+        f"/v1/agents/{agent_id}/catalog/skills/pkg-skill/lifecycle",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["display_name"] == "Package Skill"
+    assert payload["publish_ready"] is True
+    assert payload["requirements"][0]["key"] == "API_TOKEN"
+    assert payload["provider_config"]["claude"]["allowed_tools"] == ["bash"]
+    assert payload["files"][0]["relative_path"] == "helper.sh"
+
+
 def test_provider_guidance_preview_404_hides_raw_validation_text(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     _configure_runtime_surface(monkeypatch, tmp_path)

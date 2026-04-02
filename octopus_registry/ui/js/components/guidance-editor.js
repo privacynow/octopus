@@ -308,36 +308,7 @@ function renderGuidanceEditor(container) {
     }
 
     function showPreview(text) {
-        const overlay = document.createElement('div');
-        overlay.className = 'confirm-overlay';
-
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.style.maxWidth = '720px';
-        dialog.style.maxHeight = '80vh';
-        dialog.style.overflow = 'auto';
-
-        const h3 = document.createElement('h3');
-        h3.textContent = 'Guidance preview';
-        dialog.appendChild(h3);
-
-        const pre = document.createElement('pre');
-        pre.className = 'event-pre';
-        pre.style.whiteSpace = 'pre-wrap';
-        pre.textContent = text;
-        dialog.appendChild(pre);
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'btn';
-        closeBtn.textContent = 'Close';
-        closeBtn.addEventListener('click', () => overlay.remove());
-        dialog.appendChild(closeBtn);
-
-        overlay.appendChild(dialog);
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) overlay.remove();
-        });
-        document.body.appendChild(overlay);
+        UI.showTextDialog('Guidance preview', text, { maxWidth: '720px' });
     }
 
     container.__routeReady = loadAgents();

@@ -47,7 +47,7 @@ The shared backend operations are:
 - install, update, or uninstall a store skill on a bot
 - activate, deactivate, or clear skills in a conversation
 - start setup and submit credential values
-- create, edit, submit, approve, reject, publish, or archive custom skills
+- create, inspect, edit, submit, approve, reject, publish, or archive custom skills
 
 Clients can compose these operations into smoother flows, but they should not
 reimplement their rules or invent extra state machines.
@@ -78,6 +78,38 @@ The registry UI is allowed to be a richer wrapper because it can present
 multi-step flows, detail panels, and lifecycle history more comfortably than a
 chat surface. That richer UX must still be built on the shared backend
 capability graph.
+
+## Draft Package Model
+
+Custom skills use the same package shape as Core and Store skills. The mutable
+draft model includes:
+
+- metadata
+  - `name`
+  - `display_name`
+  - `description`
+- instructions
+  - `body`
+- setup
+  - `requirements`
+- provider extensions
+  - `provider_config`
+- artifacts
+  - `files`
+- lifecycle
+  - revision history
+  - approval history
+  - publish/archive state
+
+The package content is the source of truth. The following fields are derived on
+read or lifecycle transitions:
+
+- `validation_problems`
+- `publish_ready`
+- `runtime_available`
+- `has_unpublished_changes`
+
+These values may be cached, but they are not a second persisted truth source.
 
 ## Skill Package Spec
 
@@ -118,12 +150,70 @@ Provider-specific configuration can live in:
 These files extend the runtime context for the relevant provider without
 changing the shared skill lifecycle.
 
+### Additional files
+
+Additional files are stored as text artifacts inside the package. They are used
+for helper scripts, templates, or supporting content referenced by the skill at
+runtime.
+
+Shared package policy:
+
+- safe relative paths only
+- reserved package filenames may not be reused
+- shell scripts are the only files that may be marked executable
+- attached file limits are:
+  - at most 16 files
+  - 64 KB per file
+  - 256 KB total
+- file count and file size limits are validated in the backend
+- registry uploads and chat-provided file mutations go through the same
+  ingestion and validation rules
+
+## Validation And Lifecycle Rules
+
+- validation is backend-owned, not client-owned
+- submit and publish both invoke shared validation
+- clients show the same validation problems, even if they present them
+  differently
+- invalid drafts can be saved only if they still satisfy package policy;
+  submit/publish remain blocked until validation passes
+
+Backward-compatible defaults for older body-centric drafts:
+
+- missing `display_name` defaults from the skill slug
+- `requirements` default empty
+- `provider_config` default empty
+- `files` default empty
+
+Registry and chat are peers here:
+
+- registry can show inline panels, lists, and guided flows
+- chat can expose the same backend operations in smaller or more text-oriented
+  steps
+- neither client is allowed to invent a separate lifecycle or draft format
+
+Current client exposure over the same backend capability graph:
+
+- registry `Skills -> Studio`
+  - package-aware draft editing
+  - validation/readiness display
+  - lifecycle actions
+- Telegram `/skills package <name>`
+  - inspect the full draft package JSON
+- Telegram `/skills package <name> <json>`
+  - replace the full draft package
+
+The registry is the richer wrapper, not the authority. Chat remains a peer
+capability client.
+
 ## Product Rules
 
 - Store listings feed the same `Catalog -> Installed on bot` flow. The store is
   a source, not a separate product concept.
 - Custom skills use the same install and activation model after they are
   published.
+- Core, Store, and Custom skills share one logical package model even if their
+  ingestion paths differ (disk seed, store import, in-product draft authoring).
 - User-facing copy should prefer:
   - `Catalog`
   - `Installed on bot`

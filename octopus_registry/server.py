@@ -1115,7 +1115,11 @@ async def api_catalog_skill_edit_draft(
             skill_name,
             actor_key=_operator_actor_key(payload.actor_key),
             body=payload.body,
+            display_name=payload.display_name,
             description=payload.description or None,
+            requirements=payload.requirements,
+            provider_config=payload.provider_config,
+            files=payload.files,
             changelog=payload.changelog,
         )
     except RegistryIngressError as exc:

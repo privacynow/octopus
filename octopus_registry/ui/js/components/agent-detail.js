@@ -168,23 +168,16 @@ function renderAgentDetail(container, params) {
         head.innerHTML = '<strong>Overview</strong>';
         card.appendChild(head);
 
-        const grid = document.createElement('div');
-        grid.className = 'metadata-grid';
-        [
-            ['Agent ID', agent.agent_id || '—'],
-            ['Scope', agent.registry_scope || '—'],
-            ['Version', agent.version || '—'],
-            ['Transport', agent.connectivity_state || 'unknown'],
-            ['Execution', execution.state || 'healthy'],
-            ['Last heartbeat', agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never'],
-            execution.faultedAt ? ['Faulted at', UI.relativeTime(execution.faultedAt)] : null,
-            execution.detail ? ['Last failure', execution.detail] : null,
-        ].filter(Boolean).forEach(([label, value]) => {
-            const fact = document.createElement('div');
-            fact.className = 'metadata-item';
-            fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
-            grid.appendChild(fact);
-        });
+        const grid = UI.renderMetadataGrid([
+            { label: 'Agent ID', value: agent.agent_id || '—' },
+            { label: 'Scope', value: agent.registry_scope || '—' },
+            { label: 'Version', value: agent.version || '—' },
+            { label: 'Transport', value: agent.connectivity_state || 'unknown' },
+            { label: 'Execution', value: execution.state || 'healthy' },
+            { label: 'Last heartbeat', value: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never' },
+            execution.faultedAt ? { label: 'Faulted at', value: UI.relativeTime(execution.faultedAt) } : null,
+            execution.detail ? { label: 'Last failure', value: execution.detail } : null,
+        ].filter(Boolean));
         card.appendChild(grid);
 
         if (resetNotice) {

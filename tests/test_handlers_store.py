@@ -408,6 +408,45 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         _cleanup_runtime(data_dir)
 
 
+async def test_handler_skill_package_command_roundtrips_full_draft(monkeypatch, tmp_path: Path):
+    import app.runtime.telegram_ingress as th
+
+    data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
+    try:
+        regular = FakeUser(uid=200, username="regular")
+        chat = FakeChat(1001)
+
+        created = await send_command(th.cmd_skills, chat, regular, "/skills create pkg-skill", ["create", "pkg-skill"])
+        assert "Created custom draft" in last_reply(created)
+
+        shown = await send_command(th.cmd_skills, chat, regular, "/skills package pkg-skill", ["package", "pkg-skill"])
+        assert "Draft package" in last_reply(shown)
+
+        payload = (
+            '{"display_name":"Package Skill","description":"Chat package draft",'
+            '"body":"Use the chat package editor.","requirements":[{"key":"API_TOKEN","prompt":"Enter token"}],'
+            '"provider_config":{"claude":{"allowed_tools":["bash"]}},'
+            '"files":[{"relative_path":"helper.sh","content_type":"text/x-shellscript","executable":true,"content_text":"echo chat"}]}'
+        )
+        saved = await send_command(
+            th.cmd_skills,
+            chat,
+            regular,
+            f"/skills package pkg-skill {payload}",
+            ["package", "pkg-skill", payload],
+        )
+        assert "Saved draft" in last_reply(saved)
+
+        track = get_skill_catalog_service().resolve_track("pkg-skill")
+        assert track is not None
+        assert track.display_name == "Package Skill"
+        assert track.revision.requirements[0].key == "API_TOKEN"
+        assert track.revision.provider_config["claude"]["allowed_tools"] == ["bash"]
+        assert track.revision.files[0].relative_path == "helper.sh"
+    finally:
+        _cleanup_runtime(data_dir)
+
+
 async def test_handler_skill_create_invalid_name_uses_safe_message(monkeypatch, tmp_path: Path):
     import app.runtime.telegram_ingress as th
 

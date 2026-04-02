@@ -308,8 +308,12 @@ async def edit_catalog_skill_draft(
     skill_name: str,
     *,
     actor_key: str,
-    body: str,
+    body: str | None = None,
+    display_name: str | None = None,
     description: str | None = None,
+    requirements=None,
+    provider_config=None,
+    files=None,
     changelog: str = "",
 ) -> dict[str, object]:
     payload = await _send(
@@ -319,7 +323,11 @@ async def edit_catalog_skill_draft(
             skill_name=skill_name,
             actor_key=actor_key,
             body=body,
-            description=description or "",
+            display_name=display_name,
+            description=description,
+            requirements=requirements,
+            provider_config=provider_config,
+            files=files,
             changelog=changelog,
         ),
     )

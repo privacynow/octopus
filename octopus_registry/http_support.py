@@ -6,6 +6,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from octopus_sdk.identity import parse_actor_key
+from octopus_sdk.registry.management import SkillFileRecord, SkillRequirementRecord
+from octopus_sdk.registry.models import RegistryJsonRecord
 
 from .auth import AuthContext
 
@@ -46,8 +48,12 @@ class LifecycleActionRequest(BaseModel):
 
 
 class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
-    body: str = Field(..., min_length=1, description="Draft instruction body")
-    description: str = Field(default="", description="Optional skill description override")
+    body: str | None = Field(default=None, description="Draft instruction body override")
+    display_name: str | None = Field(default=None, description="Optional display name override")
+    description: str | None = Field(default=None, description="Optional skill description override")
+    requirements: list[SkillRequirementRecord] | None = Field(default=None, description="Optional requirement list override")
+    provider_config: RegistryJsonRecord | None = Field(default=None, description="Optional provider config override")
+    files: list[SkillFileRecord] | None = Field(default=None, description="Optional draft file list override")
     changelog: str = Field(default="", description="Optional changelog entry")
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass
 from dataclasses import asdict, is_dataclass
@@ -572,7 +573,10 @@ def runtime_skill_history_message(detail: RuntimeSkillLifecycleDetail) -> Telegr
         f"Source: <code>{html.escape(detail.source_label)}</code>",
         f"Status: <code>{html.escape(detail.lifecycle_status)}</code>",
         f"Runtime available: {'yes' if detail.runtime_available else 'no'}",
+        f"Publish ready: {'yes' if detail.publish_ready else 'no'}",
         f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>",
+        f"Requirements: <code>{html.escape(', '.join(item.key for item in detail.requirements) or '(none)')}</code>",
+        f"Files: <code>{len(detail.files)}</code>",
         "",
         "<b>Revisions</b>",
     ]
@@ -588,7 +592,24 @@ def runtime_skill_history_message(detail: RuntimeSkillLifecycleDetail) -> Telegr
         for item in detail.approvals[:8]:
             note = f" — {html.escape(item.note)}" if item.note else ""
             lines.append(f"  {html.escape(item.action)} by {html.escape(item.actor)}{note}")
+    if detail.validation_problems:
+        lines.append("")
+        lines.append("<b>Validation</b>")
+        for item in detail.validation_problems[:8]:
+            field_label = f"{item.field_path}: " if item.field_path else ""
+            lines.append(f"  {html.escape(field_label + item.message)}")
     return _html_message("\n".join(lines))
+
+
+def runtime_skill_package_message(name: str, payload: dict[str, object]) -> TelegramRenderedMessage:
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if len(rendered) > 3500:
+        rendered = rendered[:3500] + "\n... (truncated)"
+    return _html_message(
+        f"<b>Draft package · {html.escape(name)}</b>\n"
+        f"Use <code>/skills package {html.escape(name)} &lt;json&gt;</code> to replace the draft package.\n\n"
+        f"<pre>{html.escape(rendered)}</pre>"
+    )
 
 
 def runtime_skill_admin_only_message(text: str) -> TelegramRenderedMessage:
@@ -711,6 +732,12 @@ def runtime_skill_info_message(detail: RuntimeSkillDetail) -> TelegramRenderedMe
         parts.append("Setup: none")
     if detail.providers:
         parts.append(f"Providers: {', '.join(sorted(detail.providers))}")
+    if detail.files:
+        parts.append(f"Files: {len(detail.files)} attached")
+    if detail.validation_problems:
+        parts.append(f"Validation: {len(detail.validation_problems)} problem(s)")
+    elif detail.publish_ready:
+        parts.append("Validation: ready")
     parts.append("Use /skills add <name> to activate it in this conversation.")
     preview = detail.body
     if len(preview) > 1000:
@@ -995,6 +1022,8 @@ HELP_SKILLS = (
     "/skills clear — deactivate all skills in this conversation\n"
     "/skills create &lt;name&gt; — create a custom draft skill on this bot\n"
     "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
+    "/skills package &lt;name&gt; — show the full custom draft package as JSON\n"
+    "/skills package &lt;name&gt; &lt;json&gt; — replace the full custom draft package\n"
     "/skills history &lt;name&gt; — show revision and approval history\n"
     "/skills submit &lt;name&gt; — submit the draft for review\n"
     "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"

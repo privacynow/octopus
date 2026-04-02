@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import difflib
 import logging
-import shutil
 import tempfile
 from pathlib import Path
-
-import yaml
 
 from app import registry as registry_client
 from octopus_sdk.content_models import RuntimeSkillTrackRecord
 from app.content_seed import track_from_skill_dir
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+from octopus_sdk.skill_packages import build_skill_virtual_files
 from octopus_sdk.workflows.skills import RegistrySkillSearchRecord, SkillMutationResult, SkillUpdateStatus
 
 
@@ -31,31 +29,6 @@ def _parse_registry_source_uri(source_uri: str) -> tuple[str, str] | None:
     if not registry_url or not skill_name:
         return None
     return registry_url, skill_name
-
-
-def _track_to_virtual_files(record: RuntimeSkillTrackRecord) -> dict[str, str]:
-    skill_md = (
-        "---\n"
-        f"name: {record.slug}\n"
-        f"display_name: {record.display_name}\n"
-        f"description: {record.description}\n"
-        "---\n\n"
-        f"{record.revision.instruction_body.rstrip()}\n"
-    )
-    files = {"skill.md": skill_md}
-    if record.revision.requirements:
-        files["requires.yaml"] = yaml.safe_dump(
-            {"credentials": record.revision.requirements},
-            sort_keys=False,
-        )
-    for provider_name, config in sorted(record.revision.provider_config.items()):
-        if isinstance(config, dict) and config:
-            files[f"{provider_name}.yaml"] = yaml.safe_dump(config, sort_keys=False)
-    for item in record.revision.files:
-        files[item.relative_path] = item.content_text
-    return files
-
-
 def _diff_tracks(
     current: RuntimeSkillTrackRecord,
     incoming: RuntimeSkillTrackRecord,
@@ -64,8 +37,8 @@ def _diff_tracks(
     to_label: str,
     max_chars: int,
 ) -> str:
-    current_files = _track_to_virtual_files(current)
-    incoming_files = _track_to_virtual_files(incoming)
+    current_files = build_skill_virtual_files(current)
+    incoming_files = build_skill_virtual_files(incoming)
     paths = sorted(set(current_files) | set(incoming_files))
     lines: list[str] = []
     for rel in paths:

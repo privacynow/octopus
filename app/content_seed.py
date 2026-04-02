@@ -4,20 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import frontmatter
-import yaml
-
 from octopus_sdk.content_models import (
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
-    RuntimeSkillTrackRecord,
-    SkillFileRecord,
     SkillRevisionRecord,
+    RuntimeSkillTrackRecord,
 )
 from app.content_store_base import AbstractContentStore
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
+from octopus_sdk.skill_packages import (
+    SKILL_PROVIDER_FILES,
+    default_skill_display_name,
+    load_provider_config,
+    load_skill_files,
+    load_skill_markdown,
+    load_skill_requirements,
+)
 
-_SKILL_RESERVED_FILES = {"skill.md", "requires.yaml", "claude.yaml", "codex.yaml"}
 _DEFAULT_PROVIDER_GUIDANCE = {
     "claude": (
         "# Claude Runtime Guidance\n\n"
@@ -30,50 +33,6 @@ _DEFAULT_PROVIDER_GUIDANCE = {
         "the session role, active runtime skills, and provider-specific capability settings."
     ),
 }
-
-
-def _load_frontmatter(path: Path) -> tuple[dict, str]:
-    post = frontmatter.load(str(path))
-    return dict(post.metadata), post.content.strip()
-
-
-def _parse_requires_file(path: Path) -> list[dict]:
-    if not path.is_file():
-        return []
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    credentials = data.get("credentials", [])
-    if not isinstance(credentials, list):
-        return []
-    return [item for item in credentials if isinstance(item, dict)]
-
-
-def _parse_provider_yaml(path: Path) -> dict:
-    if not path.is_file():
-        return {}
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _content_type_for(path: Path) -> str:
-    if path.suffix == ".sh":
-        return "text/x-shellscript"
-    if path.suffix == ".json":
-        return "application/json"
-    if path.suffix in {".yaml", ".yml"}:
-        return "application/yaml"
-    if path.suffix == ".md":
-        return "text/markdown"
-    return "text/plain"
-
-
 def track_from_skill_dir(
     path: Path,
     *,
@@ -87,35 +46,23 @@ def track_from_skill_dir(
     display_name_override: str = "",
     description_override: str = "",
 ) -> RuntimeSkillTrackRecord:
-    meta, body = _load_frontmatter(path / "skill.md")
+    meta, body = load_skill_markdown(path / "skill.md")
     slug = path.name
-    files: list[SkillFileRecord] = []
-    for child in sorted(path.iterdir()):
-        if not child.is_file() or child.name in _SKILL_RESERVED_FILES:
-            continue
-        files.append(
-            SkillFileRecord(
-                relative_path=child.name,
-                content_text=child.read_text(encoding="utf-8"),
-                content_type=_content_type_for(child),
-                executable=child.suffix == ".sh",
-            )
-        )
     revision = SkillRevisionRecord(
         instruction_body=body,
-        requirements=_parse_requires_file(path / "requires.yaml"),
+        requirements=load_skill_requirements(path / "requires.yaml"),
         provider_config={
             provider: config
-            for provider in ("claude", "codex")
-            if (config := _parse_provider_yaml(path / f"{provider}.yaml"))
+            for provider, filename in SKILL_PROVIDER_FILES.items()
+            if (config := load_provider_config(path / filename))
         },
-        files=tuple(files),
+        files=load_skill_files(path),
         version_label=version_label,
         created_by=created_by,
     )
     return RuntimeSkillTrackRecord(
         slug=slug,
-        display_name=display_name_override or str(meta.get("display_name") or meta.get("name") or slug),
+        display_name=display_name_override or str(meta.get("display_name") or meta.get("name") or default_skill_display_name(slug)),
         description=description_override or str(meta.get("description") or ""),
         source_kind=source_kind,
         source_uri=source_uri,

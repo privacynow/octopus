@@ -164,10 +164,39 @@ def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> 
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
+    assert "workspace.className = 'dashboard-board';" in skill_catalog
+    assert "UI.renderMetadataGrid([" in skill_catalog
+    assert "UI.showTextDialog(" in skill_catalog
     assert "Active in this conversation" in conversation_detail
     assert "Installed on this bot" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
+
+
+def test_skills_surface_does_not_reintroduce_skills_only_layout_classes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    for legacy in (
+        "skills-workspace",
+        "skills-explainer-grid",
+        "skills-meta-list",
+        "skills-meta-block",
+        "skills-markdown-preview",
+        "skills-studio-create",
+        "skills-studio-editor",
+        "skills-history-panel",
+        "skills-inline-form",
+        "badge-primary",
+        "list-row-selected",
+    ):
+        assert legacy not in skill_catalog
+        assert legacy not in css
 
 
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:
@@ -525,7 +554,7 @@ def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_l
     assert "event-card-lead" not in event_renderers
     assert "content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';" in event_renderers
     assert ".event-text-block-outcome {" in css
-    assert "facts.className = 'task-item-facts';" in task_list
+    assert "UI.renderMetadataGrid([" in task_list
     assert ".task-item-facts {" in css
 
 

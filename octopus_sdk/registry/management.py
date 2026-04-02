@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from octopus_sdk.content_models import SkillFileRecord as DomainSkillFileRecord
+from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
 from octopus_sdk.registry.models import ExecutionStateRecord, RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.conversation import (
@@ -27,6 +29,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillDetail,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleMutation,
+    RuntimeSkillValidationProblem,
     RuntimeSkillMutationOutcome,
     RuntimeSkillSearchResults,
     RuntimeSkillSetupAdvanceOutcome,
@@ -93,6 +96,21 @@ class SkillRequirementRecord(RegistryRecordModel):
         validation_alias="validate",
         serialization_alias="validate",
     )
+
+
+class SkillFileRecord(RegistryRecordModel):
+    relative_path: str = ""
+    content_text: str = ""
+    content_type: str = "text/plain"
+    executable: bool = False
+    digest: str = ""
+
+
+class RuntimeSkillValidationProblemRecord(RegistryRecordModel):
+    code: str = ""
+    message: str = ""
+    field_path: str = ""
+    severity: str = "error"
 
 
 class RuntimeSkillCatalogItemRecord(RegistryRecordModel):
@@ -162,6 +180,11 @@ class RuntimeSkillDetailRecord(RegistryRecordModel):
     visibility: str = "shared"
     is_mutable: bool = False
     has_unpublished_changes: bool = False
+    requirements: list[SkillRequirementRecord] = Field(default_factory=list)
+    provider_config: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    files: list[SkillFileRecord] = Field(default_factory=list)
+    validation_problems: list[RuntimeSkillValidationProblemRecord] = Field(default_factory=list)
+    publish_ready: bool = False
 
 
 class RuntimeSkillLifecycleRevisionRecord(RegistryRecordModel):
@@ -193,6 +216,11 @@ class RuntimeSkillLifecycleDetailRecord(RegistryRecordModel):
     active_revision_id: str = ""
     published_revision_id: str = ""
     runtime_available: bool = False
+    publish_ready: bool = False
+    requirements: list[SkillRequirementRecord] = Field(default_factory=list)
+    provider_config: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    files: list[SkillFileRecord] = Field(default_factory=list)
+    validation_problems: list[RuntimeSkillValidationProblemRecord] = Field(default_factory=list)
     revisions: list[RuntimeSkillLifecycleRevisionRecord] = Field(default_factory=list)
     approvals: list[RuntimeSkillLifecycleApprovalRecord] = Field(default_factory=list)
 
@@ -340,6 +368,58 @@ def skill_requirement_record(requirement: SkillRequirement) -> SkillRequirementR
     )
 
 
+def skill_requirement(value: SkillRequirementRecord | SkillRequirement) -> SkillRequirement:
+    if isinstance(value, SkillRequirement):
+        return value
+    validate = value.validation.as_dict() if value.validation is not None else None
+    return SkillRequirement(
+        key=value.key,
+        prompt=value.prompt,
+        help_url=value.help_url or None,
+        validate=validate,
+    )
+
+
+def skill_file_record(file_record) -> SkillFileRecord:
+    return SkillFileRecord(
+        relative_path=file_record.relative_path,
+        content_text=file_record.content_text,
+        content_type=file_record.content_type,
+        executable=file_record.executable,
+        digest=file_record.digest,
+    )
+
+
+def skill_file(value: SkillFileRecord | DomainSkillFileRecord) -> DomainSkillFileRecord:
+    if isinstance(value, DomainSkillFileRecord):
+        return value
+    return DomainSkillFileRecord(
+        relative_path=value.relative_path,
+        content_text=value.content_text,
+        content_type=value.content_type,
+        executable=value.executable,
+    )
+
+
+def provider_config(value: RegistryJsonRecord | ProviderConfigRecord | None) -> ProviderConfigRecord:
+    if value is None:
+        return ProviderConfigRecord()
+    if isinstance(value, ProviderConfigRecord):
+        return value
+    return coerce_provider_config(value.as_dict())
+
+
+def runtime_skill_validation_problem_record(
+    problem: RuntimeSkillValidationProblem,
+) -> RuntimeSkillValidationProblemRecord:
+    return RuntimeSkillValidationProblemRecord(
+        code=problem.code,
+        message=problem.message,
+        field_path=problem.field_path,
+        severity=problem.severity,
+    )
+
+
 def runtime_skill_catalog_item_record(item: RuntimeSkillCatalogItem) -> RuntimeSkillCatalogItemRecord:
     return RuntimeSkillCatalogItemRecord(
         name=item.name,
@@ -422,6 +502,14 @@ def runtime_skill_detail_record(detail: RuntimeSkillDetail) -> RuntimeSkillDetai
         visibility=detail.visibility,
         is_mutable=detail.is_mutable,
         has_unpublished_changes=detail.has_unpublished_changes,
+        requirements=[skill_requirement_record(item) for item in detail.requirements],
+        provider_config=RegistryJsonRecord(detail.provider_config.to_dict()),
+        files=[skill_file_record(item) for item in detail.files],
+        validation_problems=[
+            runtime_skill_validation_problem_record(item)
+            for item in detail.validation_problems
+        ],
+        publish_ready=detail.publish_ready,
     )
 
 
@@ -439,6 +527,14 @@ def runtime_skill_lifecycle_detail_record(
         active_revision_id=detail.active_revision_id,
         published_revision_id=detail.published_revision_id,
         runtime_available=detail.runtime_available,
+        publish_ready=detail.publish_ready,
+        requirements=[skill_requirement_record(item) for item in detail.requirements],
+        provider_config=RegistryJsonRecord(detail.provider_config.to_dict()),
+        files=[skill_file_record(item) for item in detail.files],
+        validation_problems=[
+            runtime_skill_validation_problem_record(item)
+            for item in detail.validation_problems
+        ],
         revisions=[
             RuntimeSkillLifecycleRevisionRecord(
                 revision_id=item.revision_id,
@@ -661,8 +757,12 @@ class EditCatalogSkillDraftRequest(RegistryRecordModel):
     operation: Literal["edit_catalog_skill_draft"] = "edit_catalog_skill_draft"
     skill_name: str
     actor_key: str
-    body: str
-    description: str = ""
+    body: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    requirements: list[SkillRequirementRecord] | None = None
+    provider_config: RegistryJsonRecord | None = None
+    files: list[SkillFileRecord] | None = None
     changelog: str = ""
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from app.runtime import composition
 from app.runtime.session_runtime import resolve_session_context
 from octopus_sdk.sessions import SessionState
 from app import work_queue
+from octopus_sdk.skill_packages import coerce_skill_files, coerce_skill_requirements
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +154,9 @@ async def handle_skills_command(event, update: Update, *, runtime: TelegramRunti
         return
     if sub == "update" and len(args) >= 2:
         await skills_update(event, update, args[1], runtime=runtime)
+        return
+    if sub == "package" and len(args) >= 2:
+        await skills_package(event, update, args[1], " ".join(args[2:]), runtime=runtime)
         return
     if sub == "edit" and len(args) >= 3:
         await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=runtime)
@@ -325,6 +330,76 @@ async def skills_edit(event, update: Update, name: str, body: str, *, runtime: T
         name,
         actor_key=str(event.user.id),
         body=body,
+    )
+    rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+
+
+def _draft_package_payload(detail) -> dict[str, object]:
+    provider_config = detail.provider_config.to_dict() if hasattr(detail.provider_config, "to_dict") else dict(detail.provider_config or {})
+    return {
+        "display_name": detail.display_name,
+        "description": detail.description,
+        "body": detail.body,
+        "requirements": [item.to_dict() for item in detail.requirements],
+        "provider_config": provider_config,
+        "files": [
+            {
+                "relative_path": item.relative_path,
+                "content_type": item.content_type,
+                "executable": item.executable,
+                "content_text": item.content_text,
+            }
+            for item in detail.files
+        ],
+        "publish_ready": detail.publish_ready,
+        "validation_problems": [
+            {
+                "code": item.code,
+                "field_path": item.field_path,
+                "severity": item.severity,
+                "message": item.message,
+            }
+            for item in detail.validation_problems
+        ],
+    }
+
+
+async def skills_package(event, update: Update, name: str, raw_json: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
+    del runtime
+    detail = _flows().runtime_skills.authoring.detail(name)
+    if detail is None:
+        rendered = telegram_presenters.runtime_skill_history_not_found_message(name)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if not str(raw_json or "").strip():
+        rendered = telegram_presenters.runtime_skill_package_message(name, _draft_package_payload(detail))
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    try:
+        package = json.loads(raw_json)
+    except json.JSONDecodeError:
+        rendered = telegram_presenters.runtime_skill_mutation_message(
+            "Draft package payload must be valid JSON."
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    if not isinstance(package, dict):
+        rendered = telegram_presenters.runtime_skill_mutation_message(
+            "Draft package payload must be a JSON object."
+        )
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    result = _flows().runtime_skills.authoring.edit_draft(
+        name,
+        actor_key=str(event.user.id),
+        display_name=package.get("display_name"),
+        description=package.get("description"),
+        body=package.get("body"),
+        requirements=coerce_skill_requirements(package.get("requirements")),
+        provider_config=package.get("provider_config"),
+        files=coerce_skill_files(package.get("files")),
+        changelog=str(package.get("changelog", "") or ""),
     )
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())

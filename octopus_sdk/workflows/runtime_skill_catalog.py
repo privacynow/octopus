@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from octopus_sdk.skill_packages import (
+    publish_ready,
+    validate_skill_package,
+    skill_has_unpublished_changes,
+    skill_runtime_available,
+)
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.skills import (
     RuntimeSkillCatalogItem,
@@ -10,6 +16,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillDraftRecord,
     SkillCatalogServicePort,
     SkillImportServicePort,
+    RuntimeSkillValidationProblem,
 )
 
 
@@ -51,11 +58,10 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             can_update=(source_kind == "imported"),
             can_uninstall=(source_kind == "imported"),
             lifecycle_status=track.revision.status,
-            runtime_available=bool(track.published_revision_id) or not track.is_mutable,
+            runtime_available=skill_runtime_available(track),
             visibility=track.visibility,
             is_mutable=track.is_mutable,
-            has_unpublished_changes=bool(track.published_revision_id)
-            and track.published_revision_id != track.active_revision_id,
+            has_unpublished_changes=skill_has_unpublished_changes(track),
         )
 
     def list_skills(self, query: str = "") -> list[RuntimeSkillCatalogItem]:
@@ -85,6 +91,22 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
         info = self._catalog.resolve_info(skill_name)
         if info is None:
             return None
+        validation_problems = tuple(
+            RuntimeSkillValidationProblem(
+                code=item.code,
+                message=item.message,
+                field_path=item.field_path,
+                severity=item.severity,
+            )
+            for item in validate_skill_package(
+                skill_name=summary.name,
+                display_name=summary.display_name,
+                body=info.body,
+                requirements=list(info.requirements),
+                provider_config=info.provider_config,
+                files=info.files,
+            )
+        )
         return RuntimeSkillDetail(
             name=summary.name,
             display_name=summary.display_name,
@@ -104,6 +126,18 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             visibility=summary.visibility,
             is_mutable=summary.is_mutable,
             has_unpublished_changes=summary.has_unpublished_changes,
+            requirements=info.requirements,
+            provider_config=info.provider_config,
+            files=info.files,
+            validation_problems=validation_problems,
+            publish_ready=publish_ready(
+                skill_name=summary.name,
+                display_name=summary.display_name,
+                body=info.body,
+                requirements=list(info.requirements),
+                provider_config=info.provider_config,
+                files=info.files,
+            ),
         )
 
     def has_skill(self, skill_name: str) -> bool:

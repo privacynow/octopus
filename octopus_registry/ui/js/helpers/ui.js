@@ -325,6 +325,31 @@ window.UI = (() => {
         return card;
     }
 
+    function renderMetadataGrid(items, { compact = false } = {}) {
+        const grid = document.createElement('div');
+        grid.className = compact ? 'task-item-facts' : 'metadata-grid';
+        for (const item of items || []) {
+            if (!item) continue;
+            const fact = document.createElement('div');
+            fact.className = 'metadata-item';
+
+            const label = document.createElement('span');
+            label.textContent = String(item.label || '');
+            fact.appendChild(label);
+
+            const value = item.value;
+            if (value instanceof Node) {
+                fact.appendChild(value);
+            } else {
+                const strong = document.createElement('strong');
+                strong.textContent = String(value || '');
+                fact.appendChild(strong);
+            }
+            grid.appendChild(fact);
+        }
+        return grid;
+    }
+
     function createErrorCard(message, retryFn) {
         const card = document.createElement('div');
         card.className = 'error-card';
@@ -341,6 +366,39 @@ window.UI = (() => {
             card.appendChild(btn);
         }
         return card;
+    }
+
+    function showTextDialog(title, text, { maxWidth = '760px' } = {}) {
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+
+        const dialog = document.createElement('div');
+        dialog.className = 'confirm-dialog';
+        dialog.style.maxWidth = maxWidth;
+        dialog.style.maxHeight = '80vh';
+        dialog.style.overflow = 'auto';
+
+        const heading = document.createElement('h3');
+        heading.textContent = title;
+        dialog.appendChild(heading);
+
+        const pre = document.createElement('pre');
+        pre.className = 'event-pre';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.textContent = text;
+        dialog.appendChild(pre);
+
+        const close = document.createElement('button');
+        close.className = 'btn';
+        close.textContent = 'Close';
+        close.addEventListener('click', () => overlay.remove());
+        dialog.appendChild(close);
+
+        overlay.appendChild(dialog);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) overlay.remove();
+        });
+        document.body.appendChild(overlay);
     }
 
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
@@ -928,6 +986,7 @@ window.UI = (() => {
         renderSettingsRow,
         renderEmptyState,
         renderStatCard,
+        renderMetadataGrid,
         isOpaqueIdentifier,
         visibleLabel,
         renderPagination,
@@ -949,5 +1008,6 @@ window.UI = (() => {
         createErrorCard,
         renderError,
         showConfirm,
+        showTextDialog,
     };
 })();

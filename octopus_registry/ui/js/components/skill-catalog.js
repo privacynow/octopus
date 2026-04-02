@@ -78,20 +78,21 @@ function renderSkillCatalog(container) {
     controls.appendChild(searchInput);
 
     const explainer = document.createElement('section');
-    explainer.className = 'editor-panel skills-explainer-card';
+    explainer.className = 'editor-panel';
     explainer.dataset.key = 'skills-explainer';
-    explainer.innerHTML = [
-        '<div class="editor-section-title">How skills work</div>',
-        '<div class="skills-explainer-grid">',
-        '<div><strong>Catalog</strong><p>Skills installed on this bot, plus store results when you search.</p></div>',
-        '<div><strong>Installed on bot</strong><p>Core, store, and custom skills available for this agent to use.</p></div>',
-        '<div><strong>Active in conversation</strong><p>Enable skills from a conversation’s Skills panel when you want them in that chat.</p></div>',
-        '</div>',
-    ].join('');
+    const explainerTitle = document.createElement('div');
+    explainerTitle.className = 'editor-section-title';
+    explainerTitle.textContent = 'How skills work';
+    explainer.appendChild(explainerTitle);
+    explainer.appendChild(UI.renderMetadataGrid([
+        { label: 'Catalog', value: 'Skills installed on this bot, plus store results when you search.' },
+        { label: 'Installed on bot', value: 'Core, store, and custom skills available for this agent to use.' },
+        { label: 'Active in conversation', value: 'Enable skills from a conversation’s Skills panel when you want them in that chat.' },
+    ]));
     shell.appendChild(explainer);
 
     const workspace = document.createElement('section');
-    workspace.className = 'skills-workspace';
+    workspace.className = 'dashboard-board';
     shell.appendChild(workspace);
 
     const listWrap = document.createElement('section');
@@ -373,7 +374,6 @@ function renderSkillCatalog(container) {
             label: skill.display_name || skill.name || '',
             sublabel: fragments.join(' • ') || 'Installed on this bot',
             badgeText: _sourceBadgeText(skill),
-            badgeClass: selected ? 'badge-primary' : '',
             onClick: () => {
                 selectedSkillName = skill.name || '';
                 selectedSkillOrigin = 'local';
@@ -383,7 +383,7 @@ function renderSkillCatalog(container) {
                 void loadSelectionData({ soft: true });
                 renderList();
             },
-            className: selected ? 'list-row-selected' : '',
+            className: selected ? 'is-selected' : '',
         });
         shellRow.appendChild(row);
         const actions = document.createElement('div');
@@ -396,7 +396,7 @@ function renderSkillCatalog(container) {
             }));
             actions.appendChild(_actionButton('Diff', async () => {
                 const result = await API.diffSkill(currentAgentId, skill.name);
-                _showTextDialog(`Store diff · ${skill.display_name || skill.name}`, result.diff || 'No differences.');
+                UI.showTextDialog(`Store diff · ${skill.display_name || skill.name}`, result.diff || 'No differences.');
             }));
         }
         if (skill.can_uninstall) {
@@ -424,7 +424,6 @@ function renderSkillCatalog(container) {
             label: skill.display_name || skill.name || '',
             sublabel: fragments.join(' • ') || 'Available from the skill store',
             badgeText: String(skill.source_label || 'Store'),
-            badgeClass: selected ? 'badge-primary' : '',
             onClick: () => {
                 selectedSkillName = skill.name || '';
                 selectedSkillOrigin = 'store';
@@ -433,7 +432,7 @@ function renderSkillCatalog(container) {
                 _writeState();
                 renderList();
             },
-            className: selected ? 'list-row-selected' : '',
+            className: selected ? 'is-selected' : '',
         });
         shellRow.appendChild(row);
         const actions = document.createElement('div');
@@ -584,15 +583,31 @@ function renderSkillCatalog(container) {
             const overview = document.createElement('section');
             overview.className = 'editor-panel';
             overview.dataset.key = 'store-overview';
-            overview.innerHTML = [
-                `<div class="workspace-header-main"><div class="workspace-title-group"><h3 class="editor-section-title">${UI.esc(state.skill.display_name || state.skill.name || 'Skill')}</h3></div><span class="badge">${UI.esc(state.skill.source_label || 'Store')}</span></div>`,
-                state.skill.description ? `<p class="quiet-note">${UI.esc(state.skill.description)}</p>` : '',
-                '<div class="skills-meta-list">',
-                `<div><span class="detail-label">State</span><div>Available from the skill store</div></div>`,
-                `<div><span class="detail-label">Publisher</span><div>${UI.esc(state.skill.publisher || 'Unknown')}</div></div>`,
-                `<div><span class="detail-label">Version</span><div>${UI.esc(state.skill.version || 'Unknown')}</div></div>`,
-                '</div>',
-            ].join('');
+            const headerRow = document.createElement('div');
+            headerRow.className = 'workspace-header-main';
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'workspace-title-group';
+            const title = document.createElement('h3');
+            title.className = 'editor-section-title';
+            title.textContent = state.skill.display_name || state.skill.name || 'Skill';
+            titleWrap.appendChild(title);
+            if (state.skill.description) {
+                const description = document.createElement('p');
+                description.className = 'quiet-note';
+                description.textContent = state.skill.description;
+                titleWrap.appendChild(description);
+            }
+            headerRow.appendChild(titleWrap);
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = state.skill.source_label || 'Store';
+            headerRow.appendChild(badge);
+            overview.appendChild(headerRow);
+            overview.appendChild(UI.renderMetadataGrid([
+                { label: 'State', value: 'Available from the skill store' },
+                { label: 'Publisher', value: state.skill.publisher || 'Unknown' },
+                { label: 'Version', value: state.skill.version || 'Unknown' },
+            ], { compact: true }));
             const actions = document.createElement('div');
             actions.className = 'editor-actions';
             if (state.skill.can_import) {
@@ -638,7 +653,7 @@ function renderSkillCatalog(container) {
             lifecycle,
         }, (state) => {
             const nodes = [];
-            nodes.push(_buildOverviewPanel(state.summary, state.detail));
+            nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
             if (state.mode === 'catalog') {
                 nodes.push(_buildCatalogHelpPanel(state.summary, state.detail));
             }
@@ -660,10 +675,25 @@ function renderSkillCatalog(container) {
         });
     }
 
-    function _buildOverviewPanel(summary, detail) {
+    function _buildOverviewPanel(summary, detail, lifecycle) {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
         panel.dataset.key = `skill-overview:${summary.name || detail.name || ''}`;
+
+        const packageState = lifecycle || detail;
+        const requirements = Array.isArray(packageState.requirements) && packageState.requirements.length
+            ? packageState.requirements
+            : (detail.requirements || []).map((item) => ({
+                key: item.key,
+                prompt: item.prompt,
+                help_url: item.help_url,
+                validate: item.validate,
+            }));
+        const providerConfig = packageState.provider_config || detail.provider_config || {};
+        const files = Array.isArray(packageState.files) ? packageState.files : (detail.files || []);
+        const validationProblems = Array.isArray(packageState.validation_problems)
+            ? packageState.validation_problems
+            : [];
 
         const headerRow = document.createElement('div');
         headerRow.className = 'workspace-header-main';
@@ -686,17 +716,32 @@ function renderSkillCatalog(container) {
         headerRow.appendChild(badge);
         panel.appendChild(headerRow);
 
-        const meta = document.createElement('div');
-        meta.className = 'skills-meta-list';
-        meta.appendChild(_metaBlock('Installed on bot', 'Yes'));
-        meta.appendChild(_metaBlock('Runtime availability', detail.runtime_available ? 'Ready to activate' : 'Publish before activation'));
-        meta.appendChild(_metaBlock('Setup', detail.requires_credentials ? `Needs setup (${(detail.requirement_keys || []).join(', ')})` : 'No credentials required'));
-        meta.appendChild(_metaBlock('Providers', (detail.providers || []).length ? detail.providers.join(', ') : 'All'));
-        meta.appendChild(_metaBlock('Lifecycle', String(detail.lifecycle_status || 'published').replace(/_/g, ' ')));
-        if (detail.visibility) {
-            meta.appendChild(_metaBlock('Visibility', detail.visibility));
-        }
-        panel.appendChild(meta);
+        panel.appendChild(UI.renderMetadataGrid([
+            { label: 'Installed on bot', value: 'Yes' },
+            {
+                label: 'Runtime availability',
+                value: detail.runtime_available ? 'Ready to activate' : 'Publish before activation',
+            },
+            {
+                label: 'Setup',
+                value: requirements.length
+                    ? `Needs setup (${requirements.map((item) => item.key).join(', ')})`
+                    : 'No credentials required',
+            },
+            {
+                label: 'Providers',
+                value: (detail.providers || []).length ? detail.providers.join(', ') : 'All',
+            },
+            {
+                label: 'Lifecycle',
+                value: String(detail.lifecycle_status || 'published').replace(/_/g, ' '),
+            },
+            detail.visibility ? { label: 'Visibility', value: detail.visibility } : null,
+            detail.has_unpublished_changes ? { label: 'Draft state', value: 'Unpublished changes' } : null,
+            typeof packageState.publish_ready === 'boolean'
+                ? { label: 'Publish readiness', value: packageState.publish_ready ? 'Ready' : 'Needs fixes' }
+                : null,
+        ].filter(Boolean), { compact: true }));
 
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
@@ -708,7 +753,7 @@ function renderSkillCatalog(container) {
             }, 'Updating…'));
             actions.appendChild(_actionButton('View store diff', async () => {
                 const result = await API.diffSkill(currentAgentId, detail.name);
-                _showTextDialog(`Store diff · ${detail.display_name || detail.name}`, result.diff || 'No differences.');
+                UI.showTextDialog(`Store diff · ${detail.display_name || detail.name}`, result.diff || 'No differences.');
             }));
         }
         if (detail.can_uninstall) {
@@ -722,14 +767,95 @@ function renderSkillCatalog(container) {
             panel.appendChild(actions);
         }
 
+        if (validationProblems.length) {
+            const label = document.createElement('div');
+            label.className = 'detail-label';
+            label.textContent = 'Validation problems';
+            panel.appendChild(label);
+
+            const list = document.createElement('ul');
+            list.className = 'change-list';
+            validationProblems.forEach((problem) => {
+                const item = document.createElement('li');
+                item.innerHTML = [
+                    `<strong>${UI.esc(problem.field_path || problem.code || 'problem')}</strong>`,
+                    `<div>${UI.esc(problem.message || '')}</div>`,
+                ].join('');
+                list.appendChild(item);
+            });
+            panel.appendChild(list);
+        }
+
         const bodyLabel = document.createElement('div');
         bodyLabel.className = 'detail-label';
         bodyLabel.textContent = 'Instructions preview';
         panel.appendChild(bodyLabel);
         const preview = document.createElement('div');
-        preview.className = 'skills-markdown-preview';
+        preview.className = 'task-item-summary';
         preview.innerHTML = UI.renderContent(detail.body || '');
         panel.appendChild(preview);
+
+        if (requirements.length) {
+            const requirementsLabel = document.createElement('div');
+            requirementsLabel.className = 'detail-label';
+            requirementsLabel.textContent = 'Setup requirements';
+            panel.appendChild(requirementsLabel);
+            panel.appendChild(UI.renderMetadataGrid(
+                requirements.map((item) => ({
+                    label: item.key || 'credential',
+                    value: item.help_url
+                        ? `${item.prompt || ''} · ${item.help_url}`
+                        : (item.prompt || 'Credential required'),
+                })),
+                { compact: true },
+            ));
+        }
+
+        if (providerConfig && Object.keys(providerConfig).length) {
+            const configLabel = document.createElement('div');
+            configLabel.className = 'detail-label';
+            configLabel.textContent = 'Provider config';
+            panel.appendChild(configLabel);
+            const configActions = document.createElement('div');
+            configActions.className = 'editor-actions';
+            Object.keys(providerConfig).sort().forEach((providerName) => {
+                configActions.appendChild(_actionButton(`View ${providerName}`, async () => {
+                    UI.showTextDialog(
+                        `${providerName} config · ${detail.display_name || detail.name}`,
+                        JSON.stringify(providerConfig[providerName] || {}, null, 2),
+                    );
+                }));
+            });
+            panel.appendChild(configActions);
+        }
+
+        if (files.length) {
+            const filesLabel = document.createElement('div');
+            filesLabel.className = 'detail-label';
+            filesLabel.textContent = 'Attached files';
+            panel.appendChild(filesLabel);
+            const fileList = document.createElement('div');
+            fileList.className = 'list-container';
+            files.forEach((item) => {
+                const trailing = document.createElement('div');
+                trailing.className = 'editor-actions';
+                trailing.appendChild(_actionButton('View', async () => {
+                    UI.showTextDialog(
+                        `${item.relative_path} · ${detail.display_name || detail.name}`,
+                        item.content_text || '',
+                    );
+                }));
+                fileList.appendChild(UI.renderListRow({
+                    label: item.relative_path || 'file',
+                    sublabel: [
+                        item.content_type || 'text/plain',
+                        item.executable ? 'executable' : '',
+                    ].filter(Boolean).join(' • '),
+                    trailing,
+                }));
+            });
+            panel.appendChild(fileList);
+        }
 
         return panel;
     }
@@ -786,17 +912,17 @@ function renderSkillCatalog(container) {
     }
 
     function _buildDraftCreateForm() {
-        const section = document.createElement('div');
-        section.className = 'skills-studio-create';
+        const section = document.createElement('section');
+        section.className = 'editor-panel';
         section.dataset.key = 'skill-draft-create';
 
-        const label = document.createElement('div');
-        label.className = 'detail-label';
-        label.textContent = 'Create custom draft';
-        section.appendChild(label);
+        const title = document.createElement('div');
+        title.className = 'editor-section-title';
+        title.textContent = 'Create custom draft';
+        section.appendChild(title);
 
         const form = document.createElement('form');
-        form.className = 'skills-inline-form';
+        form.className = 'route-controls';
         const nameInput = document.createElement('input');
         nameInput.className = 'input';
         nameInput.placeholder = 'skill-slug';
@@ -819,6 +945,7 @@ function renderSkillCatalog(container) {
             try {
                 await API.saveSkillDraft(currentAgentId, skillName, {
                     body: 'Add your instructions here.',
+                    display_name: skillName.replace(/-/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
                     description: String(descriptionInput.value || '').trim(),
                     changelog: 'Initial draft',
                 });
@@ -843,9 +970,28 @@ function renderSkillCatalog(container) {
     }
 
     function _buildDraftEditor(detail, lifecycle) {
-        const section = document.createElement('div');
-        section.className = 'skills-studio-editor';
+        const section = document.createElement('section');
+        section.className = 'editor-panel';
         section.dataset.key = `skill-draft-editor:${detail.name || ''}`;
+
+        const packageState = lifecycle || detail;
+        const requirements = Array.isArray(packageState.requirements)
+            ? packageState.requirements.map((item) => ({
+                key: item.key || '',
+                prompt: item.prompt || '',
+                help_url: item.help_url || '',
+                validate: item.validate || {},
+            }))
+            : [];
+        const providerConfig = packageState.provider_config || {};
+        const files = Array.isArray(packageState.files)
+            ? packageState.files.map((item) => ({
+                relative_path: item.relative_path || '',
+                content_text: item.content_text || '',
+                content_type: item.content_type || '',
+                executable: Boolean(item.executable),
+            }))
+            : [];
 
         const status = document.createElement('div');
         status.className = 'workspace-header-main';
@@ -855,6 +1001,19 @@ function renderSkillCatalog(container) {
         badge.textContent = String((lifecycle && lifecycle.lifecycle_status) || detail.lifecycle_status || 'draft').replace(/_/g, ' ');
         status.appendChild(badge);
         section.appendChild(status);
+
+        const readiness = document.createElement('p');
+        readiness.className = 'quiet-note';
+        readiness.textContent = packageState.publish_ready
+            ? 'This draft is structurally ready for submit and publish.'
+            : 'This draft still has validation problems. Fix them before submitting or publishing.';
+        section.appendChild(readiness);
+
+        const displayNameInput = document.createElement('input');
+        displayNameInput.className = 'input';
+        displayNameInput.value = detail.display_name || '';
+        displayNameInput.placeholder = 'Display name';
+        section.appendChild(displayNameInput);
 
         const descriptionInput = document.createElement('input');
         descriptionInput.className = 'input';
@@ -873,12 +1032,243 @@ function renderSkillCatalog(container) {
         bodyInput.value = detail.body || '';
         section.appendChild(bodyInput);
 
+        const requirementsLabel = document.createElement('div');
+        requirementsLabel.className = 'detail-label';
+        requirementsLabel.textContent = 'Setup requirements';
+        section.appendChild(requirementsLabel);
+        const requirementsList = document.createElement('div');
+        requirementsList.className = 'list-shell';
+        section.appendChild(requirementsList);
+
+        function addRequirementRow(requirement = {}) {
+            const card = document.createElement('div');
+            card.className = 'editor-panel';
+            const inputs = document.createElement('div');
+            inputs.className = 'route-controls';
+
+            const keyInput = document.createElement('input');
+            keyInput.className = 'input';
+            keyInput.placeholder = 'Credential key';
+            keyInput.value = requirement.key || '';
+            inputs.appendChild(keyInput);
+
+            const promptInput = document.createElement('input');
+            promptInput.className = 'input';
+            promptInput.placeholder = 'Prompt shown during setup';
+            promptInput.value = requirement.prompt || '';
+            inputs.appendChild(promptInput);
+            card.appendChild(inputs);
+
+            const helpUrlInput = document.createElement('input');
+            helpUrlInput.className = 'input';
+            helpUrlInput.placeholder = 'Help URL (optional)';
+            helpUrlInput.value = requirement.help_url || '';
+            card.appendChild(helpUrlInput);
+
+            const validationInput = document.createElement('textarea');
+            validationInput.className = 'guidance-textarea';
+            validationInput.rows = 4;
+            validationInput.placeholder = 'Validation JSON (optional)';
+            validationInput.value = requirement.validate && Object.keys(requirement.validate).length
+                ? JSON.stringify(requirement.validate, null, 2)
+                : '';
+            card.appendChild(validationInput);
+
+            const remove = _dangerActionButton('Remove requirement', async () => {
+                card.remove();
+            });
+            const actionsRow = document.createElement('div');
+            actionsRow.className = 'editor-actions';
+            actionsRow.appendChild(remove);
+            card.appendChild(actionsRow);
+            requirementsList.appendChild(card);
+        }
+
+        requirements.forEach((item) => addRequirementRow(item));
+        const addRequirement = _actionButton('Add requirement', async () => addRequirementRow());
+        section.appendChild(addRequirement);
+
+        const providerLabel = document.createElement('div');
+        providerLabel.className = 'detail-label';
+        providerLabel.textContent = 'Provider config';
+        section.appendChild(providerLabel);
+        const providerEditors = new Map();
+        const providerList = document.createElement('div');
+        providerList.className = 'list-shell';
+        section.appendChild(providerList);
+
+        function ensureProviderEditor(providerName, initialValue = {}) {
+            const normalized = String(providerName || '').trim();
+            if (!normalized || providerEditors.has(normalized)) {
+                return;
+            }
+            const card = document.createElement('div');
+            card.className = 'editor-panel';
+            card.dataset.provider = normalized;
+            const heading = document.createElement('div');
+            heading.className = 'editor-section-title';
+            heading.textContent = normalized;
+            card.appendChild(heading);
+            const textarea = document.createElement('textarea');
+            textarea.className = 'guidance-textarea';
+            textarea.rows = 6;
+            textarea.value = initialValue && Object.keys(initialValue).length
+                ? JSON.stringify(initialValue, null, 2)
+                : '';
+            card.appendChild(textarea);
+            const actionsRow = document.createElement('div');
+            actionsRow.className = 'editor-actions';
+            actionsRow.appendChild(_dangerActionButton('Remove provider config', async () => {
+                providerEditors.delete(normalized);
+                card.remove();
+            }));
+            card.appendChild(actionsRow);
+            providerList.appendChild(card);
+            providerEditors.set(normalized, textarea);
+        }
+
+        ['claude', 'codex'].forEach((providerName) => ensureProviderEditor(providerName, providerConfig[providerName] || {}));
+        Object.keys(providerConfig).sort().forEach((providerName) => ensureProviderEditor(providerName, providerConfig[providerName] || {}));
+        const providerControls = document.createElement('div');
+        providerControls.className = 'route-controls';
+        const providerInput = document.createElement('input');
+        providerInput.className = 'input';
+        providerInput.placeholder = 'Provider name';
+        providerControls.appendChild(providerInput);
+        const addProvider = _actionButton('Add provider config', async () => {
+            ensureProviderEditor(providerInput.value, {});
+            providerInput.value = '';
+        });
+        providerControls.appendChild(addProvider);
+        section.appendChild(providerControls);
+
+        const filesLabel = document.createElement('div');
+        filesLabel.className = 'detail-label';
+        filesLabel.textContent = 'Attached files';
+        section.appendChild(filesLabel);
+        const filesList = document.createElement('div');
+        filesList.className = 'list-shell';
+        section.appendChild(filesList);
+
+        function addFileRow(fileState = {}) {
+            const card = document.createElement('div');
+            card.className = 'editor-panel';
+
+            const pathInput = document.createElement('input');
+            pathInput.className = 'input';
+            pathInput.placeholder = 'relative/path.ext';
+            pathInput.value = fileState.relative_path || '';
+            card.appendChild(pathInput);
+
+            const fileMeta = document.createElement('div');
+            fileMeta.className = 'route-controls';
+            const typeInput = document.createElement('input');
+            typeInput.className = 'input';
+            typeInput.placeholder = 'Content type';
+            typeInput.value = fileState.content_type || '';
+            fileMeta.appendChild(typeInput);
+            const execWrap = document.createElement('label');
+            execWrap.className = 'toggle-switch';
+            const execInput = document.createElement('input');
+            execInput.type = 'checkbox';
+            execInput.checked = Boolean(fileState.executable);
+            const execSlider = document.createElement('span');
+            execSlider.className = 'slider';
+            execWrap.appendChild(execInput);
+            execWrap.appendChild(execSlider);
+            fileMeta.appendChild(execWrap);
+            card.appendChild(fileMeta);
+
+            const contentInput = document.createElement('textarea');
+            contentInput.className = 'guidance-textarea';
+            contentInput.rows = 8;
+            contentInput.placeholder = 'File contents';
+            contentInput.value = fileState.content_text || '';
+            card.appendChild(contentInput);
+
+            const actionsRow = document.createElement('div');
+            actionsRow.className = 'editor-actions';
+            actionsRow.appendChild(_dangerActionButton('Remove file', async () => {
+                card.remove();
+            }));
+            card.appendChild(actionsRow);
+
+            card.__stateInputs = { pathInput, typeInput, execInput, contentInput };
+            filesList.appendChild(card);
+        }
+
+        files.forEach((item) => addFileRow(item));
+        const addFile = _actionButton('Add file', async () => addFileRow());
+        section.appendChild(addFile);
+
+        function collectRequirements() {
+            return Array.from(requirementsList.children).map((card) => {
+                const inputs = card.querySelectorAll('input, textarea');
+                const key = String(inputs[0]?.value || '').trim();
+                const prompt = String(inputs[1]?.value || '').trim();
+                const helpUrl = String(inputs[2]?.value || '').trim();
+                const validationText = String(inputs[3]?.value || '').trim();
+                let validate = null;
+                if (validationText) {
+                    try {
+                        validate = JSON.parse(validationText);
+                    } catch (error) {
+                        throw new Error(`Requirement '${key || 'credential'}' has invalid validation JSON.`);
+                    }
+                }
+                return {
+                    key,
+                    prompt,
+                    help_url: helpUrl,
+                    validate,
+                };
+            });
+        }
+
+        function collectProviderConfig() {
+            const nextConfig = {};
+            for (const [providerName, textarea] of providerEditors.entries()) {
+                const text = String(textarea.value || '').trim();
+                if (!text) continue;
+                let parsed;
+                try {
+                    parsed = JSON.parse(text);
+                } catch (error) {
+                    throw new Error(`Provider config for '${providerName}' must be valid JSON.`);
+                }
+                if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+                    throw new Error(`Provider config for '${providerName}' must be a JSON object.`);
+                }
+                nextConfig[providerName] = parsed;
+            }
+            return nextConfig;
+        }
+
+        function collectFiles() {
+            return Array.from(filesList.children).map((card) => {
+                const state = card.__stateInputs || {};
+                return {
+                    relative_path: String(state.pathInput?.value || '').trim(),
+                    content_type: String(state.typeInput?.value || '').trim(),
+                    executable: Boolean(state.execInput?.checked),
+                    content_text: String(state.contentInput?.value || ''),
+                };
+            });
+        }
+
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         actions.appendChild(_actionButton('Save draft', async () => {
+            const requirementsPayload = collectRequirements();
+            const providerConfigPayload = collectProviderConfig();
+            const filesPayload = collectFiles();
             await API.saveSkillDraft(currentAgentId, detail.name, {
                 body: bodyInput.value,
+                display_name: displayNameInput.value,
                 description: descriptionInput.value,
+                requirements: requirementsPayload,
+                provider_config: providerConfigPayload,
+                files: filesPayload,
                 changelog: changelogInput.value,
             });
             _invalidateSkillCaches(currentAgentId, detail.name);
@@ -917,12 +1307,30 @@ function renderSkillCatalog(container) {
         }));
         section.appendChild(actions);
 
+        if (Array.isArray(packageState.validation_problems) && packageState.validation_problems.length) {
+            const validationLabel = document.createElement('div');
+            validationLabel.className = 'detail-label';
+            validationLabel.textContent = 'Validation problems';
+            section.appendChild(validationLabel);
+            const list = document.createElement('ul');
+            list.className = 'change-list';
+            packageState.validation_problems.forEach((problem) => {
+                const item = document.createElement('li');
+                item.innerHTML = [
+                    `<strong>${UI.esc(problem.field_path || problem.code || 'problem')}</strong>`,
+                    `<div>${UI.esc(problem.message || '')}</div>`,
+                ].join('');
+                list.appendChild(item);
+            });
+            section.appendChild(list);
+        }
+
         return section;
     }
 
     function _buildLifecycleHistory(lifecycle) {
-        const section = document.createElement('div');
-        section.className = 'skills-history-panel';
+        const section = document.createElement('section');
+        section.className = 'editor-panel';
         section.dataset.key = `skill-history:${lifecycle.name || ''}`;
 
         const revisionsLabel = document.createElement('div');
@@ -968,51 +1376,6 @@ function renderSkillCatalog(container) {
             section.appendChild(UI.renderEmptyState('No lifecycle activity yet.', true));
         }
         return section;
-    }
-
-    function _metaBlock(label, value) {
-        const block = document.createElement('div');
-        block.className = 'skills-meta-block';
-        const heading = document.createElement('span');
-        heading.className = 'detail-label';
-        heading.textContent = label;
-        block.appendChild(heading);
-        const text = document.createElement('div');
-        text.textContent = value;
-        block.appendChild(text);
-        return block;
-    }
-
-    function _showTextDialog(title, text) {
-        const overlay = document.createElement('div');
-        overlay.className = 'confirm-overlay';
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.style.maxWidth = '760px';
-        dialog.style.maxHeight = '80vh';
-        dialog.style.overflow = 'auto';
-
-        const heading = document.createElement('h3');
-        heading.textContent = title;
-        dialog.appendChild(heading);
-
-        const pre = document.createElement('pre');
-        pre.className = 'event-pre';
-        pre.style.whiteSpace = 'pre-wrap';
-        pre.textContent = text;
-        dialog.appendChild(pre);
-
-        const close = document.createElement('button');
-        close.className = 'btn';
-        close.textContent = 'Close';
-        close.addEventListener('click', () => overlay.remove());
-        dialog.appendChild(close);
-
-        overlay.appendChild(dialog);
-        overlay.addEventListener('click', (event) => {
-            if (event.target === overlay) overlay.remove();
-        });
-        document.body.appendChild(overlay);
     }
 
     async function loadSkills({ soft = false, forceCatalog = false } = {}) {

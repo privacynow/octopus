@@ -3187,6 +3187,26 @@ async def test_compact_change_does_not_reset_provider_state():
         assert session_after.get("compact_mode") is True
 
 
+async def test_failed_request_persists_provider_state_updates():
+    """Failed Claude runs must still persist continuity state for the next retry."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        prov.run_results = [
+            RunResult(
+                text="[Claude error (rc=1)]\nNot logged in · Please run /login",
+                returncode=1,
+                provider_state_updates=ProviderStateRecord({"started": True}),
+            )
+        ]
+
+        await send_text(chat, user, "hi")
+        await drain_one_worker_item(data_dir)
+
+        session_after = load_session_disk(data_dir, telegram_conversation_key(1), prov)
+        assert session_after["provider_state"].get("started") is True
+
+
 async def test_settings_command_shows_current_values():
     """/settings shows current project, model, policy, compact, approval and inline controls."""
     import app.runtime.telegram_ingress as th

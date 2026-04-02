@@ -1,5 +1,6 @@
 """Tests for claude provider — command building, session state."""
 
+import asyncio
 import json
 import os
 import stat
@@ -439,6 +440,91 @@ async def test_run_surfaces_structured_error_detail():
     assert result.text.startswith("[Claude error (rc=1)]")
     assert "Not logged in · Please run /login" in result.text
     assert "authentication_failed" in result.text
+    assert result.provider_state_updates.get("started") is True
+
+
+async def test_run_failed_fresh_session_promotes_retry_to_resume():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return "", {"error": "boom"}, 1, "generic failure", []
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+    )
+
+    assert result.returncode == 1
+    assert result.provider_state_updates.get("started") is True
+
+
+async def test_run_timed_out_fresh_session_promotes_retry_to_resume():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return "", {}, -1, "", []
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+    )
+
+    assert result.timed_out is True
+    assert result.provider_state_updates.get("started") is True
+
+
+async def test_run_cancelled_fresh_session_promotes_retry_to_resume():
+    provider = ClaudeProvider(make_config())
+    progress = FakeProgress()
+
+    async def fake_run_process(cmd, progress, timeout=None, extra_env=None, working_dir="", cancel=None):
+        del cmd, progress, timeout, extra_env, working_dir, cancel
+        return "partial", {}, 0, "", []
+
+    provider._run_process = fake_run_process  # type: ignore[method-assign]
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+    result = await provider.run(
+        ProviderStateRecord({"session_id": "abc-123", "started": False}),
+        "hello",
+        [],
+        progress,
+        context=RunContext(
+            extra_dirs=[],
+            system_prompt="",
+            capability_summary="",
+            provider_config=ProviderConfigRecord(),
+            credential_env=CredentialEnvRecord(),
+        ),
+        cancel=cancel_event,
+    )
+
+    assert result.cancelled is True
+    assert result.provider_state_updates.get("started") is True
 
 
 # -- Claude command safety (test_high_risk.py) --

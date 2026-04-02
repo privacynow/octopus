@@ -446,7 +446,7 @@ def test_runtime_skill_active_summary_message_renders_expected_html():
     assert rendered.parse_mode == ParseMode.HTML
     assert "<b>Active in this conversation (2):</b>" in rendered.text
     assert "Planner" in rendered.text
-    assert "Installed on this bot: 7 skill(s)" in rendered.text
+    assert "Available on this bot: 7 skill(s)" in rendered.text
 
 
 def test_runtime_skill_history_message_renders_revisions_and_approvals():

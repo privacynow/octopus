@@ -504,6 +504,29 @@ def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
 PROMPT_SIZE_WARNING_THRESHOLD = 8000
 
 
+def _provider_semantics_note(provider_name: str) -> str:
+    if provider_name != "codex":
+        return ""
+    return (
+        "## Octopus Skill Semantics\n\n"
+        "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
+        "default-for-new-conversations settings, and per-conversation activation. "
+        "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
+        "other non-Octopus skill system. If a user asks how skills work, describe which skills "
+        "are available on this bot, which are defaults for new conversations, and which are "
+        "active in this conversation."
+    )
+
+
+def _apply_provider_semantics(system_prompt: str, provider_name: str) -> str:
+    note = _provider_semantics_note(provider_name)
+    if not note:
+        return system_prompt
+    if system_prompt:
+        return f"{system_prompt}\n\n{note}"
+    return note
+
+
 def check_prompt_size(role: str, active_skills: list[str]) -> str | None:
     """Check if composed prompt exceeds the warning threshold.
 
@@ -581,7 +604,7 @@ def build_run_context(
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return RunContext(
         extra_dirs=extra_dirs,
-        system_prompt=build_system_prompt(role, active_skills),
+        system_prompt=_apply_provider_semantics(build_system_prompt(role, active_skills), provider_name),
         capability_summary=cap_summary,
         provider_config=provider_config,
         credential_env=cred_env,
@@ -604,7 +627,7 @@ def build_preflight_context(
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return PreflightContext(
         extra_dirs=extra_dirs,
-        system_prompt=build_preflight_system_prompt(role, active_skills),
+        system_prompt=_apply_provider_semantics(build_preflight_system_prompt(role, active_skills), provider_name),
         capability_summary=cap_summary,
         working_dir=working_dir,
         file_policy=file_policy,

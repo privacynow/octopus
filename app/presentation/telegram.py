@@ -468,7 +468,11 @@ def provider_guidance_mutation_message(message: str) -> TelegramRenderedMessage:
     return _escaped_html_message(message)
 
 
-def runtime_skill_active_summary_message(active_display_names: list[str], catalog_count: int) -> TelegramRenderedMessage:
+def runtime_skill_active_summary_message(
+    active_display_names: list[str],
+    catalog_count: int,
+    default_count: int = 0,
+) -> TelegramRenderedMessage:
     if active_display_names:
         lines = [f"<b>Active in this conversation ({len(active_display_names)}):</b>"]
         for display in active_display_names:
@@ -476,9 +480,14 @@ def runtime_skill_active_summary_message(active_display_names: list[str], catalo
     else:
         lines = ["<b>No skills active in this conversation.</b>"]
     lines.append(
-        f"\nInstalled on this bot: {catalog_count} skill(s). "
+        f"\nAvailable on this bot: {catalog_count} skill(s). "
         "Use /skills list for the bot catalog and /skills add <name> to activate one here."
     )
+    if default_count:
+        lines.append(
+            f"Default for new conversations: {default_count} skill(s). "
+            "Defaults seed new sessions only; they do not activate every existing conversation."
+        )
     return _html_message("\n".join(lines))
 
 
@@ -487,12 +496,14 @@ def runtime_skill_catalog_message(
     status_by_name: dict[str, str],
 ) -> TelegramRenderedMessage:
     if not catalog:
-        return TelegramRenderedMessage(text="No skills are installed on this bot.")
-    lines = ["<b>Installed on this bot:</b>"]
+        return TelegramRenderedMessage(text="No skills are available on this bot.")
+    lines = ["<b>Available on this bot:</b>"]
     for item in sorted(catalog, key=lambda value: value.name):
         extra: list[str] = [item.source_label]
         if item.has_custom_override:
             extra.append("custom override")
+        if item.default_for_new_conversations:
+            extra.append("default for new conversations")
         if item.requires_credentials:
             extra.append("setup required")
         desc = f" — {html.escape(item.description)}" if item.description else ""
@@ -505,7 +516,7 @@ def runtime_skill_catalog_message(
 
 def runtime_skill_unknown_message(name: str) -> TelegramRenderedMessage:
     return _html_message(
-        f"Unknown skill: {html.escape(name)}. Use /skills list to see what is installed on this bot."
+        f"Unknown skill: {html.escape(name)}. Use /skills list to see what is available on this bot."
     )
 
 
@@ -515,7 +526,7 @@ def runtime_skill_foreign_setup_message(setup) -> TelegramRenderedMessage:
 
 def runtime_skill_needs_setup_message(name: str, first_requirement: dict[str, Any]) -> TelegramRenderedMessage:
     return _html_message(
-        f"Skill <code>{html.escape(name)}</code> is installed on this bot but needs setup before it can be active in this conversation.\n\n"
+        f"Skill <code>{html.escape(name)}</code> is available on this bot but needs setup before it can be active in this conversation.\n\n"
         f"{format_credential_prompt(first_requirement)}"
     )
 
@@ -689,7 +700,7 @@ def runtime_skill_search_results_message(
 ) -> TelegramRenderedMessage:
     lines: list[str] = []
     if results.catalog:
-        lines.append(f"<b>Installed on this bot matching '{html.escape(query)}':</b>")
+        lines.append(f"<b>Available on this bot matching '{html.escape(query)}':</b>")
         for info in results.catalog:
             desc = f" — {html.escape(info.description)}" if info.description else ""
             lines.append(
@@ -722,6 +733,10 @@ def runtime_skill_info_message(detail: RuntimeSkillDetail) -> TelegramRenderedMe
     if detail.description:
         parts.append(html.escape(detail.description))
     parts.append(f"Source: <code>{html.escape(detail.source_label)}</code>")
+    parts.append(
+        "Default for new conversations: "
+        + ("yes" if detail.default_for_new_conversations else "no")
+    )
     parts.append(
         "State: "
         + ("ready to activate in a conversation" if detail.runtime_available else "not ready for activation until published")
@@ -1011,9 +1026,9 @@ def raw_missing_message() -> TelegramRenderedMessage:
 
 HELP_SKILLS = (
     "<b>Skills</b>\n\n"
-    "Skills have three layers: what is installed on this bot, what needs setup, and what is active in this conversation.\n\n"
-    "/skills list — show the bot catalog with conversation status\n"
-    "/skills add &lt;name&gt; — activate an installed skill in this conversation\n"
+    "Skills have three runtime states: available on this bot, default for new conversations, and active in this conversation.\n\n"
+    "/skills list — show what is available on this bot and what is active here\n"
+    "/skills add &lt;name&gt; — activate an available skill in this conversation\n"
     "/skills remove &lt;name&gt; — deactivate a skill in this conversation\n"
     "/skills setup &lt;name&gt; — re-enter setup credentials for a skill\n"
     "/skills info &lt;name&gt; — view skill details\n"

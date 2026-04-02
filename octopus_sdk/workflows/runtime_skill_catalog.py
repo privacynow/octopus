@@ -28,9 +28,15 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
         *,
         catalog_service: SkillCatalogServicePort,
         import_service: SkillImportServicePort,
+        default_skills: tuple[str, ...] = (),
     ) -> None:
         self._catalog = catalog_service
         self._imports = import_service
+        self._default_skills = frozenset(
+            str(name or "").strip()
+            for name in default_skills
+            if str(name or "").strip()
+        )
 
     def _summary(self, skill_name: str) -> RuntimeSkillCatalogItem | None:
         meta = self._catalog.catalog().get(skill_name)
@@ -59,6 +65,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             can_uninstall=(source_kind == "imported"),
             lifecycle_status=track.revision.status,
             runtime_available=skill_runtime_available(track),
+            default_for_new_conversations=(skill_name in self._default_skills),
             visibility=track.visibility,
             is_mutable=track.is_mutable,
             has_unpublished_changes=skill_has_unpublished_changes(track),
@@ -123,6 +130,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             can_uninstall=summary.can_uninstall,
             lifecycle_status=summary.lifecycle_status,
             runtime_available=summary.runtime_available,
+            default_for_new_conversations=summary.default_for_new_conversations,
             visibility=summary.visibility,
             is_mutable=summary.is_mutable,
             has_unpublished_changes=summary.has_unpublished_changes,

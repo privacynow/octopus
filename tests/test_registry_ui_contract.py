@@ -154,21 +154,25 @@ def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> 
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Catalog shows what is installed on this bot." in skill_catalog
-    assert "Studio manages custom skill drafts and lifecycle without changing the backend model." in skill_catalog
+    assert "Choose a bot to browse the skills available there." in skill_catalog
     assert "label: 'Bot catalog'" in skill_catalog
     assert "label: 'Studio'" in skill_catalog
-    assert "'Installed on bot'" in skill_catalog
+    assert "'Available on this bot'" in skill_catalog
     assert "'Skill store'" in skill_catalog
     assert "'Create custom draft'" in skill_catalog
+    assert "'No custom skills yet for this bot. Create a draft to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
     assert "workspace.className = 'dashboard-board';" in skill_catalog
-    assert "UI.renderMetadataGrid([" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
+    assert "allowEmpty: true" in skill_catalog
+    assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
+    assert "How skills work" not in skill_catalog
+    assert "Open this bot’s conversations" not in skill_catalog
+    assert "activate_skill" in skill_catalog
     assert "Active in this conversation" in conversation_detail
-    assert "Installed on this bot" in conversation_detail
+    assert "Available on this bot" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
 

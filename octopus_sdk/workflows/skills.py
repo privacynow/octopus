@@ -42,6 +42,7 @@ class RuntimeSkillCatalogItem:
     can_uninstall: bool
     lifecycle_status: str = ""
     runtime_available: bool = True
+    default_for_new_conversations: bool = False
     visibility: str = "shared"
     is_mutable: bool = False
     has_unpublished_changes: bool = False
@@ -64,6 +65,7 @@ class RuntimeSkillDetail:
     can_uninstall: bool
     lifecycle_status: str = ""
     runtime_available: bool = True
+    default_for_new_conversations: bool = False
     visibility: str = "shared"
     is_mutable: bool = False
     has_unpublished_changes: bool = False
@@ -94,6 +96,7 @@ class RuntimeSkillInfoRecord:
     visibility: str
     is_mutable: bool
     has_unpublished_changes: bool
+    default_for_new_conversations: bool = False
     requirements: tuple[SkillRequirement, ...] = ()
     provider_config: ProviderConfigRecord = ProviderConfigRecord()
     files: tuple[SkillFileRecord, ...] = ()

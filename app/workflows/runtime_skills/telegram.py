@@ -101,7 +101,8 @@ def _check_prompt_size_cross_chat(
 
 
 async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    catalog = {item.name: item for item in _flows().runtime_skills.catalog.list_skills()}
+    catalog_items = _flows().runtime_skills.catalog.list_skills()
+    catalog = {item.name: item for item in catalog_items}
     session = _session_io_load(runtime.state, event.chat_id)
     resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
     active = _flows().runtime_skills.activation.list_conversation_skills(
@@ -110,6 +111,7 @@ async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRu
     rendered = telegram_presenters.runtime_skill_active_summary_message(
         [catalog.get(name).display_name if catalog.get(name) else name for name in active],
         len(catalog),
+        sum(1 for item in catalog_items if item.default_for_new_conversations),
     )
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 

@@ -1,5 +1,5 @@
 /**
- * Skills hub — installed-on-bot catalog plus custom skill studio.
+ * Skills hub — bot-scoped skill catalog plus custom skill studio.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
@@ -26,8 +26,7 @@ function renderSkillCatalog(container) {
     header.innerHTML = [
         '<h2>Skills</h2>',
         '<p class="quiet-note">',
-        'Catalog shows what is installed on this bot. Skills become active inside a conversation. ',
-        'Studio manages custom skill drafts and lifecycle without changing the backend model.',
+        'Choose a bot to browse the skills available there. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -47,7 +46,7 @@ function renderSkillCatalog(container) {
         ],
         (nextMode) => {
             currentMode = nextMode;
-            searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search installed skills or store';
+            searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
             _writeState();
             _renderAgentOptions();
             void loadSkills({ forceCatalog: true });
@@ -67,29 +66,18 @@ function renderSkillCatalog(container) {
         currentAgentId = nextAgentId;
         _writeState();
         void loadSkills({ forceCatalog: true });
+    }, {
+        allowEmpty: true,
+        emptyLabel: 'Choose a bot',
     });
     controls.appendChild(agentDropdown.element);
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search installed skills or store';
+    searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search skills');
     controls.appendChild(searchInput);
-
-    const explainer = document.createElement('section');
-    explainer.className = 'editor-panel';
-    explainer.dataset.key = 'skills-explainer';
-    const explainerTitle = document.createElement('div');
-    explainerTitle.className = 'editor-section-title';
-    explainerTitle.textContent = 'How skills work';
-    explainer.appendChild(explainerTitle);
-    explainer.appendChild(UI.renderMetadataGrid([
-        { label: 'Catalog', value: 'Skills installed on this bot, plus store results when you search.' },
-        { label: 'Installed on bot', value: 'Core, store, and custom skills available for this agent to use.' },
-        { label: 'Active in conversation', value: 'Enable skills from a conversation’s Skills panel when you want them in that chat.' },
-    ]));
-    shell.appendChild(explainer);
 
     const workspace = document.createElement('section');
     workspace.className = 'dashboard-board';
@@ -140,6 +128,16 @@ function renderSkillCatalog(container) {
         });
     }
 
+    function _currentAgent() {
+        return availableAgents.find((agent) => agent.agent_id === currentAgentId) || null;
+    }
+
+    function _currentAgentLabel() {
+        const agent = _currentAgent();
+        if (!agent) return 'this bot';
+        return UI.visibleLabel(agent.display_name, agent.slug, agent.agent_id) || 'this bot';
+    }
+
     function _eligibleAgents() {
         const needed = currentMode === 'studio' ? 'skill_lifecycle' : 'skill_catalog';
         return _managementAgents(needed);
@@ -157,7 +155,7 @@ function renderSkillCatalog(container) {
             return;
         }
         if (!agents.some((agent) => agent.agent_id === currentAgentId)) {
-            currentAgentId = agents[0].agent_id || '';
+            currentAgentId = '';
         }
         agentDropdown.update(agents, currentAgentId);
         _writeState();
@@ -268,11 +266,16 @@ function renderSkillCatalog(container) {
     function renderList() {
         if (!currentAgentId) {
             UI.clearMemoizedRender(listEl);
+            const hasEligibleAgents = _eligibleAgents().length > 0;
             UI.reconcileChildren(listEl, [
                 UI.renderEmptyState(
-                    currentMode === 'studio'
-                        ? 'No connected bot advertises custom skill lifecycle management.'
-                        : 'No connected bot advertises skill catalog management.',
+                    hasEligibleAgents
+                        ? (currentMode === 'studio'
+                            ? 'Choose a bot to create or edit custom skills.'
+                            : 'Choose a bot to browse available skills.')
+                        : (currentMode === 'studio'
+                            ? 'No connected bot advertises custom skill lifecycle management.'
+                            : 'No connected bot advertises skill catalog management.'),
                     true,
                 ),
             ]);
@@ -286,8 +289,10 @@ function renderSkillCatalog(container) {
         if (!visibleLocal.length && !visibleStore.length) {
             UI.clearMemoizedRender(listEl);
             const message = currentMode === 'studio'
-                ? 'No custom skills match this filter.'
-                : (allSkills.length ? 'No installed or store skills match this search.' : 'No skills are installed on this bot yet.');
+                ? (_queryText()
+                    ? 'No custom skills match this filter.'
+                    : 'No custom skills yet for this bot. Create a draft to get started.')
+                : (allSkills.length ? 'No available or store skills match this search.' : 'No skills are available on this bot yet.');
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
             renderDetail();
             return;
@@ -303,7 +308,7 @@ function renderSkillCatalog(container) {
         }, (state) => {
             const nodes = [];
             if (state.mode === 'catalog') {
-                nodes.push(_sectionLabel('Installed on bot', 'skills-installed-heading'));
+                nodes.push(_sectionLabel('Available on this bot', 'skills-available-heading'));
             } else {
                 nodes.push(_sectionLabel('Custom skills', 'skills-studio-heading'));
             }
@@ -333,6 +338,7 @@ function renderSkillCatalog(container) {
                         source: String(skill.source_label || skill.source_kind || ''),
                         lifecycle: String(skill.lifecycle_status || ''),
                         runtime: Boolean(skill.runtime_available),
+                        defaultForNewConversations: Boolean(skill.default_for_new_conversations),
                         install: Boolean(skill.can_update || skill.can_uninstall || skill.can_activate),
                     })),
                     store: (state.store || []).map((skill) => ({
@@ -368,11 +374,12 @@ function renderSkillCatalog(container) {
         if (skill.description) fragments.push(String(skill.description));
         if (skill.runtime_available === false) fragments.push('not active until published');
         if (skill.requires_credentials) fragments.push('setup required on activation');
+        if (skill.default_for_new_conversations) fragments.push('default for new conversations');
         if (skill.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
         if (skill.has_unpublished_changes) fragments.push('unpublished changes');
         const row = UI.renderListRow({
             label: skill.display_name || skill.name || '',
-            sublabel: fragments.join(' • ') || 'Installed on this bot',
+            sublabel: fragments.join(' • ') || 'Available on this bot',
             badgeText: _sourceBadgeText(skill),
             onClick: () => {
                 selectedSkillName = skill.name || '';
@@ -550,14 +557,13 @@ function renderSkillCatalog(container) {
         const selected = _findSelectedSkill();
         if (!selected) {
             UI.clearMemoizedRender(detailEl);
-            UI.reconcileChildren(detailEl, [
-                UI.renderEmptyState(
-                    currentMode === 'studio'
-                        ? 'Select a custom skill to edit it, or create a new draft below.'
-                        : 'Select an installed skill or a store match to inspect it.',
-                    true,
-                ),
-            ]);
+            if (currentMode === 'studio') {
+                UI.reconcileChildren(detailEl, [_buildStudioPanel({}, {}, null)]);
+            } else {
+                UI.reconcileChildren(detailEl, [
+                    UI.renderEmptyState('Select an available skill or a store match to inspect it.', true),
+                ]);
+            }
             return;
         }
         if (selected.origin === 'store') {
@@ -717,7 +723,11 @@ function renderSkillCatalog(container) {
         panel.appendChild(headerRow);
 
         panel.appendChild(UI.renderMetadataGrid([
-            { label: 'Installed on bot', value: 'Yes' },
+            { label: 'Available on this bot', value: 'Yes' },
+            {
+                label: 'Default for new conversations',
+                value: detail.default_for_new_conversations ? 'Yes' : 'No',
+            },
             {
                 label: 'Runtime availability',
                 value: detail.runtime_available ? 'Ready to activate' : 'Publish before activation',
@@ -871,14 +881,38 @@ function renderSkillCatalog(container) {
         const copy = document.createElement('p');
         copy.className = 'quiet-note';
         copy.textContent = detail.runtime_available
-            ? 'This skill is installed on this bot. Open a conversation and use its Skills panel to activate it there.'
-            : 'This skill is installed on this bot, but it must be published before it can be activated in a conversation.';
+            ? `This skill is available on ${_currentAgentLabel()}. Open a conversation with that bot and use its Skills panel to activate it there.`
+            : `This skill is available on ${_currentAgentLabel()}, but it must be published before it can be activated in a conversation.`;
         panel.appendChild(copy);
-        const link = document.createElement('a');
-        link.className = 'section-link';
-        link.href = `/ui/agents/${encodeURIComponent(currentAgentId)}/conversations`;
-        link.textContent = 'Open this bot’s conversations';
-        panel.appendChild(link);
+        if (detail.default_for_new_conversations) {
+            const defaultsNote = document.createElement('p');
+            defaultsNote.className = 'quiet-note';
+            defaultsNote.textContent = `This skill is also a default for new conversations on ${_currentAgentLabel()}. Existing conversations still require activation here.`;
+            panel.appendChild(defaultsNote);
+        }
+        if (detail.runtime_available) {
+            const openBtn = document.createElement('button');
+            openBtn.type = 'button';
+            openBtn.className = 'btn btn-sm';
+            openBtn.textContent = `Open a conversation with ${_currentAgentLabel()}`;
+            openBtn.addEventListener('click', async () => {
+                openBtn.disabled = true;
+                try {
+                    const conversation = await API.openConversationForAgent(currentAgentId, {
+                        title: `Conversation with ${_currentAgentLabel()}`,
+                    });
+                    Router.navigate(
+                        `/ui/conversations/${encodeURIComponent(conversation.conversation_id)}?manage=skills&activate_skill=${encodeURIComponent(detail.name || summary.name || '')}`,
+                    );
+                } catch (err) {
+                    UI.reportError('Failed to open a conversation for skill activation', err, {
+                        context: 'Skill activation conversation open failed',
+                    });
+                }
+                openBtn.disabled = false;
+            });
+            panel.appendChild(openBtn);
+        }
         return panel;
     }
 
@@ -893,6 +927,15 @@ function renderSkillCatalog(container) {
             ? 'Skill studio'
             : 'Custom skill studio';
         panel.appendChild(heading);
+
+        if (!detail || !detail.name) {
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = `Create a custom draft for ${_currentAgentLabel()}. Publish it before activating it in a conversation.`;
+            panel.appendChild(note);
+            panel.appendChild(_buildDraftCreateForm());
+            return panel;
+        }
 
         if (String(summary.source_kind || detail.source_kind) !== 'custom') {
             const note = document.createElement('p');
@@ -964,7 +1007,7 @@ function renderSkillCatalog(container) {
 
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'Custom drafts become available in conversations only after submit, approval, and publish.';
+        note.textContent = `Custom drafts become available on ${_currentAgentLabel()} conversations only after submit, approval, and publish.`;
         section.appendChild(note);
         return section;
     }

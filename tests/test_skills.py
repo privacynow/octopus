@@ -936,6 +936,26 @@ def test_run_context_with_provider_config():
     assert not isinstance(pf_p3, RunContext)
 
 
+def test_codex_context_builders_apply_octopus_skill_semantics():
+    run_ctx = build_run_context(
+        "engineer",
+        ["code-review"],
+        ["/tmp/test"],
+        provider_name="codex",
+    )
+    preflight_ctx = build_preflight_context(
+        "engineer",
+        ["code-review"],
+        ["/tmp/test"],
+        provider_name="codex",
+    )
+
+    for prompt in (run_ctx.system_prompt, preflight_ctx.system_prompt):
+        assert "Octopus Skill Semantics" in prompt
+        assert "Do not answer in terms of Codex-native skills" in prompt
+        assert "available on this bot" in prompt
+
+
 # =====================================================================
 # Phase 3: load_provider_yaml for real skills
 # =====================================================================

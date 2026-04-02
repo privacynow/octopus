@@ -128,6 +128,7 @@ class RuntimeSkillCatalogItemRecord(RegistryRecordModel):
     can_uninstall: bool = False
     lifecycle_status: str = ""
     runtime_available: bool = True
+    default_for_new_conversations: bool = False
     visibility: str = "shared"
     is_mutable: bool = False
     has_unpublished_changes: bool = False
@@ -177,6 +178,7 @@ class RuntimeSkillDetailRecord(RegistryRecordModel):
     can_uninstall: bool = False
     lifecycle_status: str = ""
     runtime_available: bool = True
+    default_for_new_conversations: bool = False
     visibility: str = "shared"
     is_mutable: bool = False
     has_unpublished_changes: bool = False
@@ -436,6 +438,7 @@ def runtime_skill_catalog_item_record(item: RuntimeSkillCatalogItem) -> RuntimeS
         can_uninstall=item.can_uninstall,
         lifecycle_status=item.lifecycle_status,
         runtime_available=item.runtime_available,
+        default_for_new_conversations=item.default_for_new_conversations,
         visibility=item.visibility,
         is_mutable=item.is_mutable,
         has_unpublished_changes=item.has_unpublished_changes,
@@ -499,6 +502,7 @@ def runtime_skill_detail_record(detail: RuntimeSkillDetail) -> RuntimeSkillDetai
         can_uninstall=detail.can_uninstall,
         lifecycle_status=detail.lifecycle_status,
         runtime_available=detail.runtime_available,
+        default_for_new_conversations=detail.default_for_new_conversations,
         visibility=detail.visibility,
         is_mutable=detail.is_mutable,
         has_unpublished_changes=detail.has_unpublished_changes,

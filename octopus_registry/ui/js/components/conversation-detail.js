@@ -19,6 +19,8 @@ function renderConversationDetail(container, params) {
     let hasMoreBefore = false;
     let loadingOlder = false;
     let activeView = _readConversationViewParam();
+    let requestedManagementMode = _readManagementModeParam();
+    let requestedActivationSkill = _readRequestedActivationSkillParam();
     let topObserver = null;
     const conversationLoadKinds = [
         'message.user',
@@ -338,6 +340,13 @@ function renderConversationDetail(container, params) {
         return Boolean(managementAgentId());
     }
 
+    function syncManagementQueryParams() {
+        UI.updateQueryParams({
+            manage: managementMode === 'closed' ? '' : managementMode,
+            activate_skill: requestedActivationSkill || '',
+        });
+    }
+
     function clearManagementTimers() {
         clearTimeout(managementIdleTimer);
         clearTimeout(managementSuccessTimer);
@@ -410,6 +419,8 @@ function renderConversationDetail(container, params) {
     function openManagement(nextMode, { focus = false } = {}) {
         if (!managementAvailable()) return;
         managementMode = nextMode;
+        requestedManagementMode = nextMode;
+        syncManagementQueryParams();
         syncManagementControls();
         scheduleManagementIdleClose();
         if (focus) {
@@ -426,6 +437,9 @@ function renderConversationDetail(container, params) {
     function closeManagement({ clearStatus = true } = {}) {
         clearManagementTimers();
         managementMode = 'closed';
+        requestedManagementMode = 'closed';
+        requestedActivationSkill = '';
+        syncManagementQueryParams();
         if (clearStatus) {
             skillsStatusMessage = '';
             settingsStatusMessage = '';
@@ -729,10 +743,10 @@ function renderConversationDetail(container, params) {
             activateSection.className = 'conversation-management-section';
             const activateTitle = document.createElement('div');
             activateTitle.className = 'detail-label';
-            activateTitle.textContent = 'Installed on this bot';
+            activateTitle.textContent = 'Available on this bot';
             activateSection.appendChild(activateTitle);
             if (!state.activatable.length) {
-                activateSection.appendChild(UI.renderEmptyState('No additional installed skills are ready to activate here.', true));
+                activateSection.appendChild(UI.renderEmptyState('No additional available skills are ready to activate here.', true));
             } else {
                 const controls = document.createElement('div');
                 controls.className = 'conversation-management-form';
@@ -740,7 +754,7 @@ function renderConversationDetail(container, params) {
                 select.className = 'input';
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = 'Choose an installed skill';
+                placeholder.textContent = 'Choose an available skill';
                 select.appendChild(placeholder);
                 state.activatable.forEach((skill) => {
                     const option = document.createElement('option');
@@ -749,6 +763,16 @@ function renderConversationDetail(container, params) {
                     option.textContent = `${skill.display_name || skill.name}${setupLabel}`;
                     select.appendChild(option);
                 });
+                if (requestedActivationSkill) {
+                    if (state.activatable.some((skill) => skill.name === requestedActivationSkill)) {
+                        select.value = requestedActivationSkill;
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
+                    } else if (activeNames.has(requestedActivationSkill)) {
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
+                    }
+                }
                 controls.appendChild(select);
                 const activateBtn = document.createElement('button');
                 activateBtn.className = 'btn btn-sm btn-primary';
@@ -783,6 +807,8 @@ function renderConversationDetail(container, params) {
                                         return;
                                     }
                                     pendingSkillSetup = null;
+                                    requestedActivationSkill = '';
+                                    syncManagementQueryParams();
                                     skillsStatusMessage = confirmed.status === 'activated'
                                         ? `Activated ${skillName}.`
                                         : String(confirmed.status || 'Updated');
@@ -818,6 +844,8 @@ function renderConversationDetail(container, params) {
                             return;
                         }
                         pendingSkillSetup = null;
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
                         skillsStatusMessage = result.status === 'activated'
                             ? `Activated ${skillName}.`
                             : String(result.status || 'Updated');
@@ -1752,6 +1780,9 @@ function renderConversationDetail(container, params) {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
             syncManagementControls();
+            if (requestedManagementMode === 'skills' || requestedManagementMode === 'settings') {
+                openManagement(requestedManagementMode);
+            }
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
         } catch (err) {
@@ -1982,5 +2013,24 @@ function _writeConversationViewParam(activeView) {
         history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     } catch {
         // Ignore URL update issues; the toggle still works.
+    }
+}
+
+function _readManagementModeParam() {
+    try {
+        const url = new URL(window.location.href);
+        const value = url.searchParams.get('manage');
+        return value === 'skills' || value === 'settings' ? value : 'closed';
+    } catch {
+        return 'closed';
+    }
+}
+
+function _readRequestedActivationSkillParam() {
+    try {
+        const url = new URL(window.location.href);
+        return String(url.searchParams.get('activate_skill') || '').trim();
+    } catch {
+        return '';
     }
 }

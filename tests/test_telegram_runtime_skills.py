@@ -54,7 +54,7 @@ async def test_runtime_skills_show_runs__explicit_runtime_boundary():
             await skills_show(event, update, runtime=runtime)
 
             assert message.replies
-            assert "Installed on this bot:" in message.replies[-1]["text"]
+            assert "Available on this bot:" in message.replies[-1]["text"]
         finally:
             reset_handler_test_runtime()
 

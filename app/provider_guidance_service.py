@@ -106,6 +106,28 @@ class ProviderGuidanceService:
             parts.append(f"Active runtime skills: {labels}.\n")
         return "\n".join(parts) if parts else ""
 
+    @staticmethod
+    def _provider_semantics_note(provider_name: str) -> str:
+        if provider_name != "codex":
+            return ""
+        return (
+            "## Octopus Skill Semantics\n\n"
+            "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
+            "default-for-new-conversations settings, and per-conversation activation. "
+            "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
+            "other non-Octopus skill system. If a user asks how skills work, describe which skills "
+            "are available on this bot, which are defaults for new conversations, and which are "
+            "active in this conversation."
+        )
+
+    def _apply_provider_semantics(self, system_prompt: str, provider_name: str) -> str:
+        note = self._provider_semantics_note(provider_name)
+        if not note:
+            return system_prompt
+        if system_prompt:
+            return f"{system_prompt}\n\n{note}"
+        return note
+
     def prompt_weight(
         self,
         role: str,
@@ -261,7 +283,10 @@ class ProviderGuidanceService:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return RunContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.system_prompt(role, active_skills, available_agents=available_agents),
+            system_prompt=self._apply_provider_semantics(
+                self.system_prompt(role, active_skills, available_agents=available_agents),
+                provider_name,
+            ),
             capability_summary=capability_summary,
             provider_config=provider_config,
             credential_env=credential_env,
@@ -284,7 +309,10 @@ class ProviderGuidanceService:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return PreflightContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.preflight_prompt(role, active_skills),
+            system_prompt=self._apply_provider_semantics(
+                self.preflight_prompt(role, active_skills),
+                provider_name,
+            ),
             capability_summary=capability_summary,
             working_dir=working_dir,
             file_policy=file_policy,

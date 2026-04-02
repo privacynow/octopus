@@ -19,6 +19,7 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
+from app.execution_faults import LocalExecutionFaultState
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
@@ -576,6 +577,7 @@ async def handle_registry_delivery(
                 config=config,
                 workflows=runtime.services.workflows,
                 provider_state_factory=runtime.provider_state_factory,
+                execution_faults=LocalExecutionFaultState(config.data_dir),
             ),
         )
         client = AgentRegistryClient(registry.url, agent_token=state.agent_token)

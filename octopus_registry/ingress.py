@@ -54,6 +54,8 @@ from octopus_sdk.registry.management import (
     PublishProviderGuidanceResult,
     ResetConversationRequest,
     ResetConversationResult,
+    ResetExecutionFaultRequest,
+    ResetExecutionFaultResult,
     RejectCatalogSkillRequest,
     RejectCatalogSkillResult,
     RejectProviderGuidanceRequest,
@@ -678,6 +680,23 @@ async def reset_conversation(
     assert isinstance(payload, ResetConversationResult)
     return {
         "result": payload.result.model_dump(mode="json", by_alias=True),
+        "state": payload.state.model_dump(mode="json", by_alias=True),
+    }
+
+
+async def reset_execution_fault(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    *,
+    actor_key: str,
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=ResetExecutionFaultRequest(actor_key=actor_key),
+    )
+    assert isinstance(payload, ResetExecutionFaultResult)
+    return {
         "state": payload.state.model_dump(mode="json", by_alias=True),
     }
 

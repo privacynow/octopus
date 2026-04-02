@@ -47,6 +47,7 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 ### What the registry owns
 
 - Agent enrollment, heartbeat, connectivity state, deregistration
+- Mirrored runtime-health state, including execution-fault status
 - Conversation storage, event timeline, message/action APIs
 - Routed task lifecycle (create, status, result, recipient projection)
 - Skill catalog and provider guidance management (via management protocol)
@@ -138,6 +139,10 @@ WebSocket topics:
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,
 `RealtimeProgressEnvelope`, `RealtimeInvalidationEnvelope`.
+
+The realtime contracts stay strict. The registry must emit payloads that match
+the SDK envelope schemas exactly; it does not accept or silently widen invalid
+payloads at the websocket boundary.
 
 SPA components subscribe to explicit topics (not wildcards). Updates use
 `UI.memoizedRender` with morphdom — signatures use rendered values (e.g.,
@@ -509,6 +514,18 @@ Operationally that means:
 - `./octopus` provider-auth flows still reuse the live runtime probe after
   login so a written auth file is not treated as success unless the provider
   can actually authenticate
+
+Provider auth and execution availability are intentionally separate:
+
+- startup and deploy stay simple; they do not try to repair or proactively
+  prove live provider login
+- transport connectivity still means registry enrollment + heartbeats
+- real runtime provider failures can latch a bot into `execution faulted`
+- while faulted, the bot remains transport-connected and manageable, but new
+  provider executions are blocked until reset
+- fault state is mirrored through runtime health to the registry and surfaced
+  in CLI and UI status
+- operators clear the latch explicitly with the agent runtime reset control
 
 ---
 

@@ -1,4 +1,4 @@
-"""Local persisted registry connection state and stable bot identity."""
+"""Local persisted registry connection state and execution health."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.registry_errors import normalize_registry_error_state
+from octopus_sdk.registry.models import ExecutionStateRecord
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +29,33 @@ class RegistryConnectionState:
     connectivity_state: str = "standalone"
     last_error: str = ""
     last_error_detail: str = ""
+
+
+def execution_state_path(data_dir: Path) -> Path:
+    return data_dir / "agent" / "execution-state.json"
+
+
+def load_execution_state(data_dir: Path) -> ExecutionStateRecord:
+    path = execution_state_path(data_dir)
+    if not path.exists():
+        return ExecutionStateRecord()
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:
+        log.warning("Execution state load failed, using defaults", exc_info=True)
+        return ExecutionStateRecord()
+    try:
+        return ExecutionStateRecord.model_validate(raw)
+    except Exception:
+        log.warning("Execution state validation failed, using defaults", exc_info=True)
+        return ExecutionStateRecord()
+
+
+def save_execution_state(data_dir: Path, state: ExecutionStateRecord) -> None:
+    _atomic_write_private_json(
+        execution_state_path(data_dir),
+        state.model_dump(mode="json", by_alias=True),
+    )
 
 
 def registry_state_dir(data_dir: Path) -> Path:

@@ -269,9 +269,46 @@ def test_read_bot_registry_state_uses_exec_against_running_bot(tmp_path: Path) -
             docker.commands[0][-1],
         )
     ]
+
+
+def test_read_bot_execution_state_uses_exec_against_running_bot(tmp_path: Path) -> None:
+    _write_registry_bot_env(tmp_path, "m1", "M1")
+    docker = _ComposeDockerRunner()
+    manager = OctopusManager(tmp_path, docker=docker)
+
+    def _bot_compose(slug, *args, **kwargs):  # noqa: ANN001
+        del kwargs
+        docker.commands.append((slug, *args))
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(
+            ["docker"],
+            0,
+            json.dumps(
+                {
+                    "state": "faulted",
+                    "provider": "claude",
+                    "fault_kind": "provider_auth",
+                    "fault_code": "authentication_required",
+                    "detail": "Not logged in · Please run /login",
+                    "faulted_at": "2026-04-01T01:02:03+00:00",
+                    "resettable": True,
+                    "last_returncode": 1,
+                }
+            ),
+            "",
+        )
+
+    docker.bot_compose = _bot_compose  # type: ignore[method-assign]
+
+    state = manager.read_bot_execution_state("m1")
+
+    assert state["state"] == "faulted"
+    assert state["provider"] == "claude"
+    assert state["detail"] == "Not logged in · Please run /login"
     script = docker.commands[0][-1]
     assert "from pathlib import Path" in script
-    assert "agent' / 'registries'" in script
+    assert "agent' / 'execution-state.json'" in script
 
 
 def test_registry_deploy_defaults_public_url_for_ip_bind(tmp_path: Path) -> None:

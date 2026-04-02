@@ -30,6 +30,10 @@ class ConversationResetRequest(BaseModel):
     actor_key: str = Field(default="", description="Actor resetting the conversation")
 
 
+class AgentExecutionResetRequest(BaseModel):
+    actor_key: str = Field(default="", description="Actor resetting the agent execution fault")
+
+
 class ProviderGuidancePreviewRequest(BaseModel):
     role: str = Field(default="", description="Role/persona text to include")
     active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")

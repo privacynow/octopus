@@ -132,6 +132,8 @@ const API = (() => {
             request('GET', '/v1/agents', { params: opts }),
         getAgentStatus: (id) =>
             request('GET', `/v1/agents/${encodeURIComponent(id)}/status`),
+        resetAgentExecutionFault: (id, body = {}) =>
+            request('POST', `/v1/agents/${encodeURIComponent(id)}/execution/reset`, { body }),
         getAgentConversations: (id, opts = {}) =>
             request('GET', `/v1/agents/${encodeURIComponent(id)}/conversations`, { params: opts }),
         openConversationForAgent: async (agentId, opts = {}) => {

@@ -259,6 +259,32 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "conversationPaginator = UI.createCursorPaginator" in agent_detail
 
 
+def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-detail.js"
+    ).read_text(encoding="utf-8")
+    agent_list = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-list.js"
+    ).read_text(encoding="utf-8")
+    dashboard = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+
+    assert "transport " in agent_detail
+    assert "execution faulted" in agent_detail
+    assert "Reset execution" in agent_detail
+    assert "resetAgentExecutionFault" in agent_detail
+    assert "execution faulted" in agent_list
+    assert "badge-faulted" in agent_list
+    assert "execution_faulted" in dashboard
+    assert "badge-faulted" in dashboard
+    assert "resetAgentExecutionFault" in api_js
+
+
 def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     detail = (

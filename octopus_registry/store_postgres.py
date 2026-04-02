@@ -115,6 +115,7 @@ from .store_base import (
     offline_before_iso,
     require_registry_scope,
     runtime_health_generated_at,
+    runtime_health_execution_fields,
     runtime_health_summary,
     utcnow_iso,
     validated_registry_scope,
@@ -339,6 +340,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row["connectivity_state"], row["last_heartbeat_at"]
         )
         return _record(AgentRecord, {
+            **runtime_health_execution_fields(row.get("runtime_health_json")),
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
@@ -854,7 +856,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             with _cur(conn) as cur:
                 cur.execute("".join(sql), params)
                 rows = cur.fetchall()
-        return [self._row_to_agent(row) for row in rows]
+        agents = [self._row_to_agent(row) for row in rows]
+        return [agent for agent in agents if str(agent.execution_state or "healthy") != "faulted"]
 
     def create_delivery(
         self,

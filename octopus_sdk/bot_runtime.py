@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Awaitable
 from typing import Callable
 from typing import MutableMapping
+from typing import MutableSet
 from typing import Protocol
 from typing import runtime_checkable
 from uuid import uuid4
@@ -33,7 +34,7 @@ from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUs
 from octopus_sdk.messages import MessageTemplatePort
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
-from octopus_sdk.registry.models import DiscoveredAgentRef, RoutedTaskUpdate
+from octopus_sdk.registry.models import DiscoveredAgentRef, ExecutionStateRecord, RoutedTaskUpdate
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import EditableHandle
@@ -228,6 +229,21 @@ class ArtifactStorePort(Protocol):
 
 
 @runtime_checkable
+class ExecutionFaultStatePort(Protocol):
+    def load(self) -> ExecutionStateRecord: ...
+
+    def clear(self) -> ExecutionStateRecord: ...
+
+    def record_provider_failure(
+        self,
+        *,
+        provider_name: str,
+        error_text: str,
+        returncode: int,
+    ) -> ExecutionStateRecord | None: ...
+
+
+@runtime_checkable
 class ControlPlanePort(Protocol):
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
@@ -242,6 +258,7 @@ class ExecutionServices:
     runtime_skill_setup: WorkflowRuntimeSkillSetupPort
     sessions: SessionRuntimePort
     artifacts: ArtifactStorePort
+    execution_faults: ExecutionFaultStatePort | None = None
     agent_directory: AgentDirectoryPort | None = None
     conversation_projection: ConversationProjectionPort | None = None
 
@@ -382,6 +399,7 @@ class BotRuntime:
     boot_id: str = ""
     allow_test_mode: bool = False
     cancellations: MutableMapping[str, asyncio.Event] = field(default_factory=dict)
+    execution_inflight: MutableSet[str] = field(default_factory=set)
 
     async def submit(
         self,
@@ -663,6 +681,7 @@ class BotRuntime:
             runtime_skill_setup=self.workflows.runtime_skills.setup,
             sessions=self.sessions,
             artifacts=services.artifacts,
+            execution_faults=services.execution_faults,
             agent_directory=services.agent_directory,
             conversation_projection=services.conversation_projection,
         )
@@ -672,6 +691,7 @@ class BotRuntime:
                 provider=self.provider,
                 boot_id=self.boot_id,
                 cancellations=self.cancellations,
+                execution_inflight=self.execution_inflight,
             ),
             services=execution_services,
             interrupted_exc=LeaveClaimed,
@@ -1781,6 +1801,7 @@ class ProviderDispatchRuntime:
     provider: Provider
     boot_id: str
     cancellations: MutableMapping[int | str, asyncio.Event]
+    execution_inflight: MutableSet[int | str]
 
     async def send_status(self, message: TransportEgress, label: str) -> EditableHandle:
         return await message.send_status(label)

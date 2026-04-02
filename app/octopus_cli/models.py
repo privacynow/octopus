@@ -128,6 +128,14 @@ class BotState:
     registry_connection_statuses: list[RegistryConnectionStatus] = field(default_factory=list)
     local_registry_connection_state: str = "none"
     local_registry_live_state: str = "none"
+    execution_state: str = "unknown"
+    execution_provider: str = ""
+    execution_fault_kind: str = ""
+    execution_fault_code: str = ""
+    execution_fault_detail: str = ""
+    execution_faulted_at: str = ""
+    execution_resettable: bool = False
+    execution_last_returncode: int | None = None
     workspace_memberships: list[str] = field(default_factory=list)
 
     @property

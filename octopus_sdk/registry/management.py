@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
-from octopus_sdk.registry.models import RegistryJsonRecord, RegistryRecordModel, utcnow_iso
+from octopus_sdk.registry.models import ExecutionStateRecord, RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.conversation import (
     ConversationResetOutcome,
@@ -38,6 +38,7 @@ ManagementCapability = Literal[
     "provider_guidance",
     "conversation_skills",
     "conversation_settings",
+    "agent_runtime",
 ]
 
 ManagementOperation = Literal[
@@ -63,6 +64,7 @@ ManagementOperation = Literal[
     "conversation_settings_state",
     "set_conversation_setting",
     "reset_conversation",
+    "reset_execution_fault",
     "preview_provider_guidance",
     "provider_guidance_detail",
     "edit_provider_guidance_draft",
@@ -744,6 +746,11 @@ class ResetConversationRequest(RegistryRecordModel):
     actor_key: str
 
 
+class ResetExecutionFaultRequest(RegistryRecordModel):
+    operation: Literal["reset_execution_fault"] = "reset_execution_fault"
+    actor_key: str
+
+
 class PreviewProviderGuidanceRequest(RegistryRecordModel):
     operation: Literal["preview_provider_guidance"] = "preview_provider_guidance"
     provider_name: str
@@ -836,6 +843,7 @@ ManagementRequestPayload = Annotated[
     | ConversationSettingsStateRequest
     | SetConversationSettingRequest
     | ResetConversationRequest
+    | ResetExecutionFaultRequest
     | PreviewProviderGuidanceRequest
     | ProviderGuidanceDetailRequest
     | EditProviderGuidanceDraftRequest
@@ -963,6 +971,11 @@ class ResetConversationResult(RegistryRecordModel):
     state: ConversationSettingsStateRecord
 
 
+class ResetExecutionFaultResult(RegistryRecordModel):
+    operation: Literal["reset_execution_fault"] = "reset_execution_fault"
+    state: ExecutionStateRecord
+
+
 class PreviewProviderGuidanceResult(RegistryRecordModel):
     operation: Literal["preview_provider_guidance"] = "preview_provider_guidance"
     preview: ProviderGuidancePreviewRecord
@@ -1026,6 +1039,7 @@ ManagementResultPayload = Annotated[
     | ConversationSettingsStateResult
     | SetConversationSettingResult
     | ResetConversationResult
+    | ResetExecutionFaultResult
     | PreviewProviderGuidanceResult
     | ProviderGuidanceDetailResult
     | EditProviderGuidanceDraftResult
@@ -1097,6 +1111,7 @@ MANAGEMENT_OPERATION_CAPABILITIES: dict[ManagementOperation, ManagementCapabilit
     "conversation_settings_state": "conversation_settings",
     "set_conversation_setting": "conversation_settings",
     "reset_conversation": "conversation_settings",
+    "reset_execution_fault": "agent_runtime",
 }
 
 

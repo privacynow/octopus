@@ -116,6 +116,7 @@ from .store_base import (
     offline_before_iso,
     require_registry_scope,
     runtime_health_generated_at,
+    runtime_health_execution_fields,
     runtime_health_summary,
     utcnow_iso,
     validated_registry_scope,
@@ -525,6 +526,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             else effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
         )
         return _record(AgentRecord, {
+            **runtime_health_execution_fields(row["runtime_health_json"]),
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
@@ -1039,7 +1041,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 params.append(like)
             sql.append(" ORDER BY lower(display_name)")
             rows = conn.execute("".join(sql), params).fetchall()
-        return [self._row_to_agent(row) for row in rows]
+        agents = [self._row_to_agent(row) for row in rows]
+        return [agent for agent in agents if str(agent.execution_state or "healthy") != "faulted"]
 
     def create_delivery(
         self,

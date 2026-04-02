@@ -132,9 +132,10 @@ class AgentRuntime:
         return self._registry.enroll_token
 
     def _management_capabilities(self) -> tuple[str, ...]:
-        if self._management_capabilities_resolver is not None:
-            return self._management_capabilities_resolver()
-        return ()
+        capabilities = list(self._management_capabilities_resolver() if self._management_capabilities_resolver is not None else ())
+        if "agent_runtime" not in capabilities:
+            capabilities.append("agent_runtime")
+        return tuple(capabilities)
 
     def requested_card(self) -> AgentCard:
         capabilities = self._effective_capabilities()

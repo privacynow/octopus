@@ -128,9 +128,20 @@ class OctopusCLI:
             running = "running" if bot.running else "stopped"
             detail = f"({bot.docker_status})" if bot.docker_status else ""
             self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
+            self.io.print(f"      execution {self._execution_status_label(bot)}")
+            if bot.execution_fault_detail:
+                self.io.print(f"        detail: {bot.execution_fault_detail}")
             for connection in bot.registry_connection_statuses:
                 label = "local" if connection.local else connection.registry_id
                 self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
+
+    def _execution_status_label(self, bot: BotState) -> str:
+        state = str(bot.execution_state or "unknown")
+        if state == "faulted":
+            return f"faulted ({bot.execution_provider or bot.provider or 'provider'})"
+        if state == "healthy":
+            return "healthy"
+        return state
 
     def cmd_status(self, targets: list[str], *, live_provider: bool = False) -> int:
         state = self._state(live_provider_auth=live_provider)
@@ -167,6 +178,9 @@ class OctopusCLI:
             running = "running" if bot.running else "stopped"
             detail = f"({bot.docker_status})" if bot.docker_status else ""
             self.io.print(f"  {bot.label}    {bot.provider}   {bot.mode}   {running}   {detail}".rstrip())
+            self.io.print(f"      execution {self._execution_status_label(bot)}")
+            if bot.execution_fault_detail:
+                self.io.print(f"        detail: {bot.execution_fault_detail}")
             for connection in bot.registry_connection_statuses:
                 label = "local" if connection.local else connection.registry_id
                 self.io.print(f"      {label:<8} {connection.scope:<8} {connection.live_state:<18} {connection.url}")
@@ -178,6 +192,11 @@ class OctopusCLI:
         self.io.print(f"  Provider:  {bot.provider}")
         self.io.print(f"  Mode:      {bot.mode}")
         self.io.print(f"  State:     {'running' if bot.running else 'stopped'}")
+        self.io.print(f"  Execution: {self._execution_status_label(bot)}")
+        if bot.execution_fault_detail:
+            self.io.print(f"  Fault:     {bot.execution_fault_detail}")
+        if bot.execution_faulted_at:
+            self.io.print(f"  Faulted:   {bot.execution_faulted_at}")
         if bot.docker_status:
             self.io.print(f"  Docker:    {bot.docker_status}")
         self.io.print(f"  Role:      {bot.role or '(not set)'}")
@@ -218,6 +237,9 @@ class OctopusCLI:
         else:
             for bot, connection in connected:
                 self.io.print(f"  {bot.label}    scope: {connection.scope}    state: connected")
+                self.io.print(f"      execution: {self._execution_status_label(bot)}")
+                if bot.execution_fault_detail:
+                    self.io.print(f"      detail: {bot.execution_fault_detail}")
         self.io.print("")
         self.io.print("Configured but not connected:")
         configured = [
@@ -231,6 +253,16 @@ class OctopusCLI:
         else:
             for bot, connection in configured:
                 self.io.print(f"  {bot.label}    scope: {connection.scope}    state: {connection.live_state}")
+        self.io.print("")
+        self.io.print("Execution faults:")
+        execution_faults = [bot for bot in state.bots if bot.execution_state == "faulted"]
+        if not execution_faults:
+            self.io.print("  (none)")
+        else:
+            for bot in execution_faults:
+                self.io.print(f"  {bot.label}    provider: {bot.execution_provider or bot.provider}    state: faulted")
+                if bot.execution_fault_detail:
+                    self.io.print(f"      detail: {bot.execution_fault_detail}")
 
     def render_provider_auth_status(self, state: SystemState) -> None:
         self.io.print("Provider auth:")

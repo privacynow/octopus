@@ -10,13 +10,14 @@ from typing import Any, Generic, Protocol, TYPE_CHECKING, TypeVar
 
 import httpx
 
+from app.agents.state import load_execution_state
 from app.config import ProcessRole, RuntimeMode, validate_config
 from app.registry_errors import registry_error_detail
 from octopus_sdk.registry.models import RuntimeHealthPayload
 from octopus_sdk.sessions import session_from_dict
+from octopus_sdk.time_utils import age_seconds, utc_now, utc_now_iso
 from octopus_sdk.work_queue import QueueSnapshot, WorkerHeartbeat
 from app.storage import list_sessions, load_session
-from octopus_sdk.time_utils import age_seconds, utc_now
 
 if TYPE_CHECKING:
     from app.config import BotConfig
@@ -55,6 +56,14 @@ class RuntimeHealthSummary:
     """Compact health summary derived once the canonical report."""
 
     status: str = "healthy"
+    execution_state: str = "healthy"
+    execution_provider: str = ""
+    execution_fault_kind: str = ""
+    execution_fault_code: str = ""
+    execution_fault_detail: str = ""
+    execution_faulted_at: str = ""
+    execution_resettable: bool = False
+    execution_last_returncode: int | None = None
     healthy_worker_count: int = 0
     stale_worker_count: int = 0
     fresh_queued_count: int = 0
@@ -71,9 +80,7 @@ class RuntimeHealthReport:
     """Canonical runtime-health report shared by all operator channels."""
 
     schema_version: int = _RUNTIME_HEALTH_SCHEMA_VERSION
-    generated_at: str = field(
-        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
-    )
+    generated_at: str = field(default_factory=utc_now_iso)
     summary: RuntimeHealthSummary = field(default_factory=RuntimeHealthSummary)
     snapshot: SharedRuntimeSnapshot | None = None
     diagnostics: tuple[RuntimeDiagnostic, ...] = ()
@@ -164,14 +171,30 @@ def _summary_status(diagnostics: tuple[RuntimeDiagnostic, ...]) -> str:
     return "healthy"
 
 
+def _execution_fault_message(provider: str, detail: str) -> str:
+    prefix = f"{provider} " if provider else ""
+    suffix = detail.strip() or "Execution is faulted."
+    return f"{prefix}execution is faulted. {suffix} Reset required before new work can run."
+
+
 def _build_summary(
     diagnostics: tuple[RuntimeDiagnostic, ...],
     snapshot: SharedRuntimeSnapshot | None,
+    *,
+    execution_state,
 ) -> RuntimeHealthSummary:
     queue = snapshot.queue if snapshot else QueueSnapshot()
     oldest_claim_age = age_seconds(queue.oldest_claimed_at, now=utc_now())
     return RuntimeHealthSummary(
         status=_summary_status(diagnostics),
+        execution_state=str(execution_state.state or "healthy"),
+        execution_provider=str(execution_state.provider or ""),
+        execution_fault_kind=str(execution_state.fault_kind or ""),
+        execution_fault_code=str(execution_state.fault_code or ""),
+        execution_fault_detail=str(execution_state.detail or ""),
+        execution_faulted_at=str(execution_state.faulted_at or ""),
+        execution_resettable=bool(execution_state.resettable),
+        execution_last_returncode=execution_state.last_returncode,
         healthy_worker_count=snapshot.healthy_worker_count if snapshot else 0,
         stale_worker_count=snapshot.stale_worker_count if snapshot else 0,
         fresh_queued_count=queue.fresh_queued_count,
@@ -244,6 +267,18 @@ def report_from_dict(payload: dict[str, Any] | None) -> RuntimeHealthReport | No
         generated_at=str(payload.get("generated_at", "") or ""),
         summary=RuntimeHealthSummary(
             status=str(summary.get("status", "healthy")),
+            execution_state=str(summary.get("execution_state", "healthy") or "healthy"),
+            execution_provider=str(summary.get("execution_provider", "") or ""),
+            execution_fault_kind=str(summary.get("execution_fault_kind", "") or ""),
+            execution_fault_code=str(summary.get("execution_fault_code", "") or ""),
+            execution_fault_detail=str(summary.get("execution_fault_detail", "") or ""),
+            execution_faulted_at=str(summary.get("execution_faulted_at", "") or ""),
+            execution_resettable=bool(summary.get("execution_resettable", False)),
+            execution_last_returncode=(
+                None
+                if summary.get("execution_last_returncode") in (None, "")
+                else int(summary.get("execution_last_returncode", 0))
+            ),
             healthy_worker_count=int(summary.get("healthy_worker_count", 0) or 0),
             stale_worker_count=int(summary.get("stale_worker_count", 0) or 0),
             fresh_queued_count=int(summary.get("fresh_queued_count", 0) or 0),
@@ -283,6 +318,11 @@ class DoctorTextFormatter(RuntimeHealthFormatter):
     def format(self, report: RuntimeHealthReport) -> list[str]:
         parts: list[str] = []
         parts.append(f"Overall status: {report.summary.status}")
+        if report.summary.execution_state == "faulted":
+            provider = f" ({report.summary.execution_provider})" if report.summary.execution_provider else ""
+            parts.append(f"Execution: faulted{provider}")
+            if report.summary.execution_fault_detail:
+                parts.append(f"Execution detail: {report.summary.execution_fault_detail}")
         if report.snapshot is not None:
             parts.append(
                 "Shared Runtime workers: "
@@ -340,6 +380,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
     ) -> RuntimeHealthReport:
         diagnostics: list[RuntimeDiagnostic] = []
         snapshot: SharedRuntimeSnapshot | None = None
+        execution_state = load_execution_state(config.data_dir)
 
         diagnostics.extend(
             _diag("error", "config.invalid", message)
@@ -447,6 +488,17 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
                 )
 
         diagnostics.extend(_collect_registry_diagnostics(config))
+        if execution_state.state == "faulted":
+            diagnostics.append(
+                _diag(
+                    "error",
+                    "execution.faulted",
+                    _execution_fault_message(
+                        str(execution_state.provider or ""),
+                        str(execution_state.detail or ""),
+                    ),
+                )
+            )
 
         if config.data_dir.is_dir():
             try:
@@ -504,7 +556,11 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
 
         diagnostics_tuple = tuple(diagnostics)
         return RuntimeHealthReport(
-            summary=_build_summary(diagnostics_tuple, snapshot),
+            summary=_build_summary(
+                diagnostics_tuple,
+                snapshot,
+                execution_state=execution_state,
+            ),
             snapshot=snapshot,
             diagnostics=diagnostics_tuple,
         )
@@ -882,6 +938,14 @@ def _to_wire(value: Any) -> Any:
     if isinstance(value, RuntimeHealthSummary):
         return {
             "status": value.status,
+            "execution_state": value.execution_state,
+            "execution_provider": value.execution_provider,
+            "execution_fault_kind": value.execution_fault_kind,
+            "execution_fault_code": value.execution_fault_code,
+            "execution_fault_detail": value.execution_fault_detail,
+            "execution_faulted_at": value.execution_faulted_at,
+            "execution_resettable": value.execution_resettable,
+            "execution_last_returncode": value.execution_last_returncode,
             "healthy_worker_count": value.healthy_worker_count,
             "stale_worker_count": value.stale_worker_count,
             "fresh_queued_count": value.fresh_queued_count,

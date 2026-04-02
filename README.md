@@ -66,6 +66,20 @@ add:
 - `configured, unable to authenticate`: auth artifacts exist, but the live
   provider probe failed
 
+Bot status now separates transport from execution:
+
+- `transport connected` means the bot is enrolled in the registry and
+  heartbeating normally
+- `execution ready` means requests are allowed to execute
+- `execution faulted` means a real runtime provider failure was classified as
+  irrecoverable and new requests are blocked until reset
+
+Execution faults are intentionally runtime-driven. Octopus does not try to
+repair provider login during startup or deploy. If a request fails because a
+provider login expired or an API key/account problem needs operator action,
+the bot stays transport-connected and manageable, but execution is latched off
+until an operator resets it.
+
 ## Deployment And Operations
 
 The shipped runtime in this repo is registry-first:
@@ -246,6 +260,12 @@ If `./octopus status --live-provider` or `Diagnose -> Provider auth` shows
 `configured, unable to authenticate` for a provider, the auth files are
 present but the provider login is no longer valid. Run `./octopus`, choose
 `Diagnose`, then `Provider auth`, and complete the provider login flow again.
+
+If a bot shows `execution faulted`, fix the underlying provider/account issue
+first, then open the bot in the registry UI and use **Reset execution**. The
+reset clears the latched fault and allows the next real request through. If
+the provider is still broken, the bot faults again on that request and stays
+blocked.
 
 If a remote registry connection fails:
 

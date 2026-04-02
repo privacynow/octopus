@@ -93,6 +93,7 @@ class TelegramRuntime:
     chat_locks: defaultdict[int | str, asyncio.Lock] = field(
         default_factory=lambda: defaultdict(asyncio.Lock)
     )
+    execution_inflight: set[int | str] = field(default_factory=set)
     pending_work_items: dict[int, str] = field(default_factory=dict)
     transport_dispatcher: TransportDispatcher | None = None
     current_update_id: contextvars.ContextVar[int | None] = field(

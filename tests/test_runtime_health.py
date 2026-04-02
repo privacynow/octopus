@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import runtime_backend, work_queue
+from app.execution_faults import LocalExecutionFaultState
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime_health import (
     CanonicalRuntimeHealthProvider,
@@ -161,6 +162,35 @@ async def test_runtime_health_provider_live_probe_is_opt_in(tmp_path: Path):
 
     assert not any(item.code == "provider.runtime_unavailable" for item in default_report.diagnostics)
     assert any(item.code == "provider.runtime_unavailable" for item in live_report.diagnostics)
+
+
+async def test_runtime_health_provider_surfaces_execution_fault_state(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        working_dir=tmp_path,
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        allow_open=False,
+        allowed_actor_keys=frozenset({telegram_actor_key(42)}),
+        admin_users_explicit=True,
+    )
+    provider = FakeProvider()
+    fault_state = LocalExecutionFaultState(tmp_path)
+    latched = fault_state.record_provider_failure(
+        provider_name="claude",
+        error_text="Not logged in · Please run /login",
+        returncode=1,
+    )
+    assert latched is not None
+
+    report = await collect_runtime_health_report(config, provider)
+
+    assert report.summary.execution_state == "faulted"
+    assert report.summary.execution_fault_kind == "provider_auth"
+    assert "Not logged in" in report.summary.execution_fault_detail
+    assert any(item.code == "execution.faulted" for item in report.diagnostics)
 
 
 def test_runtime_health_projector_round_trip_preserves_report():

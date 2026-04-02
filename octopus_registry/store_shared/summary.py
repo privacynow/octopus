@@ -8,7 +8,7 @@ from octopus_sdk.registry.models import (
     UsageSummaryRecord,
 )
 
-from octopus_registry.store_base import decode_json_field, effective_connectivity_state
+from octopus_registry.store_base import decode_json_field, effective_connectivity_state, runtime_health_summary
 from octopus_registry.store_dialect import StoreDialect
 from octopus_registry.store_shared.common import records
 from octopus_registry.store_shared.usage import aggregate_usage_totals
@@ -63,7 +63,7 @@ def get_summary(
     ).isoformat()
     agent_rows = dialect.fetchall(
         conn,
-        f"SELECT connectivity_state, last_heartbeat_at FROM {dialect.qualify('agents')}",
+        f"SELECT connectivity_state, last_heartbeat_at, runtime_health_json FROM {dialect.qualify('agents')}",
     )
     conversation_totals = dialect.fetchone(
         conn,
@@ -108,14 +108,18 @@ def get_summary(
     connected = 0
     degraded = 0
     disconnected = 0
+    execution_faulted = 0
     for row in agent_rows:
         state = effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
+        health = runtime_health_summary(row.get("runtime_health_json"))
         if state == "connected":
             connected += 1
         elif state == "degraded":
             degraded += 1
         else:
             disconnected += 1
+        if str(health.execution_state or "healthy") == "faulted":
+            execution_faulted += 1
 
     usage_rows = get_usage_summary(conn, dialect=dialect, since_iso=window_start, until_iso=now_iso)
     usage_total = aggregate_usage_totals(usage_rows)
@@ -127,6 +131,7 @@ def get_summary(
             "connected": connected,
             "degraded": degraded,
             "disconnected": disconnected,
+            "execution_faulted": execution_faulted,
         },
         "conversations": {
             "total": int(conversation_totals.get("total") or 0),

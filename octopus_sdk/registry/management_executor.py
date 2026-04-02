@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from octopus_sdk.bot_runtime import WorkflowComposition
+from octopus_sdk.bot_runtime import ExecutionFaultStatePort, WorkflowComposition
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.providers import ProviderStateRecord
 from octopus_sdk.sessions import SessionState
@@ -61,6 +61,8 @@ from octopus_sdk.registry.management import (
     RejectCatalogSkillResult,
     RejectProviderGuidanceRequest,
     RejectProviderGuidanceResult,
+    ResetExecutionFaultRequest,
+    ResetExecutionFaultResult,
     SetConversationSettingRequest,
     SetConversationSettingResult,
     SearchCatalogSkillsRequest,
@@ -102,6 +104,7 @@ class ManagementExecutionContext:
     config: BotConfigBase
     workflows: WorkflowComposition
     provider_state_factory: ProviderStateFactory
+    execution_faults: ExecutionFaultStatePort | None = None
 
 
 def _warning_context(context: ManagementExecutionContext) -> PromptWarningContext | None:
@@ -627,6 +630,23 @@ async def execute_management_request(
                         conversation_key=payload.conversation_key,
                         session=next_session,
                     ),
+                ),
+            )
+        if isinstance(payload, ResetExecutionFaultRequest):
+            if context.execution_faults is None:
+                return ManagementResult(
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    success=False,
+                    error_code="capability_not_available",
+                    error_detail="Execution reset is not available on this bot.",
+                )
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=ResetExecutionFaultResult(
+                    state=context.execution_faults.clear(),
                 ),
             )
         if isinstance(payload, PreviewProviderGuidanceRequest):

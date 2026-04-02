@@ -683,7 +683,8 @@ select {
 }
 
 .badge-running,
-.badge-connected {
+.badge-connected,
+.badge-healthy {
     background: rgba(32, 108, 82, 0.12);
     border-color: rgba(32, 108, 82, 0.22);
     color: var(--success);
@@ -699,7 +700,8 @@ select {
 
 .badge-failed,
 .badge-disconnected,
-.badge-cancelled {
+.badge-cancelled,
+.badge-faulted {
     background: rgba(165, 59, 42, 0.12);
     border-color: rgba(165, 59, 42, 0.22);
     color: var(--danger);
@@ -1081,6 +1083,15 @@ select {
 .metadata-item strong {
     color: var(--text);
     word-break: break-word;
+}
+
+.agent-execution-note {
+    margin-top: var(--space-3);
+    padding: 0.9rem 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(32, 108, 82, 0.22);
+    background: rgba(32, 108, 82, 0.08);
+    color: var(--text-secondary);
 }
 
 .inline-metrics {

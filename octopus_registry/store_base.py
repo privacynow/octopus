@@ -414,6 +414,20 @@ def runtime_health_summary(value: object) -> RuntimeHealthSummaryRecord:
     return RuntimeHealthSummaryRecord.model_validate(asdict(report.summary))
 
 
+def runtime_health_execution_fields(value: object) -> dict[str, object]:
+    summary = runtime_health_summary(value)
+    return {
+        "execution_state": str(summary.execution_state or "healthy"),
+        "execution_provider": str(summary.execution_provider or ""),
+        "execution_fault_kind": str(summary.execution_fault_kind or ""),
+        "execution_fault_code": str(summary.execution_fault_code or ""),
+        "execution_fault_detail": str(summary.execution_fault_detail or ""),
+        "execution_faulted_at": str(summary.execution_faulted_at or ""),
+        "execution_resettable": bool(summary.execution_resettable),
+        "execution_last_returncode": summary.execution_last_returncode,
+    }
+
+
 def runtime_health_generated_at(value: object) -> str:
     """Return the mirrored health timestamp, or empty string when absent."""
     report = report_from_dict(decode_json_field(value, {}))

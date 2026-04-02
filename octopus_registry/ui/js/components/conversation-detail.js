@@ -253,6 +253,9 @@ function renderConversationDetail(container, params) {
                 availableTargets.push(item);
             }
             agents.forEach((agent) => {
+                if (String((agent && agent.execution_state) || 'healthy') === 'faulted') {
+                    return;
+                }
                 const slug = (agent.slug || agent.agent_id || '').trim();
                 if (!slug) return;
                 const displayName = String(agent.display_name || '').trim();

@@ -53,6 +53,24 @@ function renderAgentList(container) {
     const stateBar = stateControl.element;
     controls.appendChild(stateBar);
 
+    function executionState(agent) {
+        return String((agent && agent.execution_state) || 'healthy').trim() || 'healthy';
+    }
+
+    function executionFaulted(agent) {
+        return executionState(agent) === 'faulted';
+    }
+
+    function executionBadge(agent) {
+        if (!executionFaulted(agent)) {
+            return null;
+        }
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-faulted';
+        badge.textContent = 'faulted';
+        return badge;
+    }
+
     function applyStateFilter(value) {
         stateFilter = value;
         paginator.reset();
@@ -106,36 +124,49 @@ function renderAgentList(container) {
             const shell = document.createElement('div');
             shell.className = 'list-row-shell';
             shell.dataset.key = agent.agent_id;
-            shell.dataset.signature = UI.dataSignature({
-                id: String(agent.agent_id || ''),
-                display: String(agent.display_name || agent.slug || ''),
-                state: String(agent.connectivity_state || ''),
-                heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
-                role: String(agent.role || ''),
-                provider: String(agent.provider || ''),
-            });
+                shell.dataset.signature = UI.dataSignature({
+                    id: String(agent.agent_id || ''),
+                    display: String(agent.display_name || agent.slug || ''),
+                    state: String(agent.connectivity_state || ''),
+                    execution: executionState(agent),
+                    executionDetail: String(agent.execution_fault_detail || ''),
+                    heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
+                    role: String(agent.role || ''),
+                    provider: String(agent.provider || ''),
+                });
 
-            const sub = document.createElement('span');
-            sub.textContent = [
-                agent.role || 'agent',
-                agent.provider || '',
-                agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
-            ].filter(Boolean).join(' · ');
+                const sub = document.createElement('span');
+                const parts = [
+                    agent.role || 'agent',
+                    agent.provider || '',
+                    agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
+                ].filter(Boolean);
+                if (executionFaulted(agent)) {
+                    parts.push('execution faulted');
+                }
+                sub.textContent = parts.join(' · ');
 
-            const row = UI.renderListRow({
-                href: '/ui/agents/' + agent.agent_id,
-                label: agent.display_name || agent.slug || agent.agent_id,
-                sublabelNode: sub,
-                badgeText: agent.connectivity_state || 'unknown',
-                badgeClass: 'badge-' + (agent.connectivity_state || 'stopped'),
-            });
-            shell.appendChild(row);
+                const row = UI.renderListRow({
+                    href: '/ui/agents/' + agent.agent_id,
+                    label: agent.display_name || agent.slug || agent.agent_id,
+                    sublabelNode: sub,
+                    badgeText: agent.connectivity_state || 'unknown',
+                    badgeClass: 'badge-' + (agent.connectivity_state || 'stopped'),
+                    trailing: executionBadge(agent),
+                });
+                shell.appendChild(row);
 
             const actionBtn = document.createElement('button');
             actionBtn.type = 'button';
             actionBtn.className = 'btn btn-sm list-row-action';
-            actionBtn.textContent = 'Open';
-            actionBtn.setAttribute('aria-label', `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
+            actionBtn.textContent = executionFaulted(agent) ? 'Faulted' : 'Open';
+            actionBtn.disabled = executionFaulted(agent);
+            actionBtn.setAttribute('aria-label', executionFaulted(agent)
+                ? `${agent.display_name || agent.slug || agent.agent_id} is execution faulted`
+                : `Open or start a conversation with ${agent.display_name || agent.slug || agent.agent_id}`);
+            if (executionFaulted(agent) && agent.execution_fault_detail) {
+                actionBtn.title = agent.execution_fault_detail;
+            }
             actionBtn.addEventListener('click', async () => {
                 if (activeConversationOpen === agent.agent_id) return;
                 activeConversationOpen = agent.agent_id;
@@ -165,6 +196,8 @@ function renderAgentList(container) {
                     agents: (state.agents || []).map((agent) => ({
                         id: String(agent.agent_id || ''),
                         state: String(agent.connectivity_state || ''),
+                        execution: executionState(agent),
+                        executionDetail: String(agent.execution_fault_detail || ''),
                         heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                         display: String(agent.display_name || agent.slug || ''),
                         role: String(agent.role || ''),

@@ -125,13 +125,31 @@ function renderDashboard(container) {
         return section;
     }
 
-    function createRow({ key, title, subtitle, badge, badgeClass = '', href }) {
+    function executionState(agent) {
+        return String((agent && agent.execution_state) || 'healthy').trim() || 'healthy';
+    }
+
+    function executionFaultBadge(agent) {
+        if (executionState(agent) !== 'faulted') {
+            return null;
+        }
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-faulted';
+        badge.textContent = 'faulted';
+        if (agent && agent.execution_fault_detail) {
+            badge.title = String(agent.execution_fault_detail);
+        }
+        return badge;
+    }
+
+    function createRow({ key, title, subtitle, badge, badgeClass = '', href, trailing = null }) {
         const row = UI.renderListRow({
             href,
             label: title,
             sublabel: subtitle,
             badgeText: badge,
             badgeClass,
+            trailing,
         });
         if (key) row.dataset.key = key;
         return row;
@@ -223,7 +241,9 @@ function renderDashboard(container) {
         const cachedPromptAvailable = summary.usage_24h?.cached_prompt_tokens_available === true;
         const cachedCompletionAvailable = summary.usage_24h?.cached_completion_tokens_available === true;
         const totalTokens = promptTokens + completionTokens;
-        const unhealthyAgents = Number(summary.agents?.degraded || 0) + Number(summary.agents?.disconnected || 0);
+        const unhealthyAgents = Number(summary.agents?.degraded || 0)
+            + Number(summary.agents?.disconnected || 0)
+            + Number(summary.agents?.execution_faulted || 0);
         const costAvailable = summary.usage_24h?.cost_available !== false;
         let tokenDetail = `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
         if (cachedPromptAvailable || cachedCompletionAvailable) {
@@ -248,7 +268,7 @@ function renderDashboard(container) {
                 key: 'unhealthy-agents',
                 value: String(unhealthyAgents),
                 label: 'Unhealthy agents',
-                detail: `${summary.agents?.connected || 0} connected`,
+                detail: `${summary.agents?.connected || 0} connected · ${summary.agents?.execution_faulted || 0} execution faulted`,
                 href: '/ui/agents',
             },
             {
@@ -380,6 +400,8 @@ function renderDashboard(container) {
             id: String(item.agent_id || ''),
             display: String(item.display_name || item.slug || ''),
             state: String(item.connectivity_state || ''),
+            execution: executionState(item),
+            executionDetail: String(item.execution_fault_detail || ''),
             heartbeatLabel: item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
             role: String(item.role || ''),
             provider: String(item.provider || ''),
@@ -391,10 +413,12 @@ function renderDashboard(container) {
                 item.role || 'agent',
                 item.provider || '',
                 item.last_heartbeat_at ? UI.relativeTime(item.last_heartbeat_at) : '',
+                executionState(item) === 'faulted' ? 'execution faulted' : '',
             ].filter(Boolean).join(' · '),
             badge: item.connectivity_state || 'connected',
             badgeClass: 'badge-' + (item.connectivity_state || 'connected'),
             href: '/ui/agents/' + item.agent_id,
+            trailing: executionFaultBadge(item),
         }));
         UI.memoizedRender(agentsHost, rowsState, () => [
             createSection(

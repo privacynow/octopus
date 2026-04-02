@@ -719,6 +719,41 @@ class OctopusManager:
             return {}
         return {str(key): str(value) for key, value in raw.items()}
 
+    def read_bot_execution_state(self, slug: str) -> dict[str, object]:
+        script = (
+            "from pathlib import Path\n"
+            "import json, os\n"
+            "path = Path(os.environ.get('BOT_DATA_DIR', '/home/bot/data')) / 'agent' / 'execution-state.json'\n"
+            "if not path.exists():\n"
+            "    print(json.dumps({'state': 'healthy', 'provider': '', 'fault_kind': '', 'fault_code': '', 'detail': '', 'faulted_at': '', 'resettable': False, 'last_returncode': None}))\n"
+            "    raise SystemExit(0)\n"
+            "print(path.read_text())\n"
+        )
+        if not self.bot_is_running(slug):
+            return {"state": "unknown"}
+        try:
+            result = self.docker.bot_compose(
+                slug,
+                "exec",
+                "-T",
+                "bot",
+                "python",
+                "-c",
+                script,
+                check=False,
+            )
+        except subprocess.SubprocessError:
+            return {"state": "unknown"}
+        if result.returncode != 0 or not result.stdout.strip():
+            return {"state": "unknown"}
+        try:
+            raw = json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            return {"state": "unknown"}
+        if not isinstance(raw, dict):
+            return {"state": "unknown"}
+        return raw
+
     def clear_bot_registry_state(self, slug: str, registry_ids: list[str] | None = None) -> None:
         ids = registry_ids or []
         script = (
@@ -772,6 +807,7 @@ class OctopusManager:
         bots: list[BotState] = []
         for slug in self.list_bot_slugs():
             values = self.bot_values(slug)
+            execution_state = self.read_bot_execution_state(slug)
             bots.append(
                 BotState(
                     slug=slug,
@@ -789,6 +825,18 @@ class OctopusManager:
                     registry_connection_statuses=self.bot_registry_connection_statuses(slug),
                     local_registry_connection_state=self.bot_local_registry_connection_state(slug),
                     local_registry_live_state=self.bot_local_registry_live_state(slug),
+                    execution_state=str(execution_state.get("state", "unknown") or "unknown"),
+                    execution_provider=str(execution_state.get("provider", "") or ""),
+                    execution_fault_kind=str(execution_state.get("fault_kind", "") or ""),
+                    execution_fault_code=str(execution_state.get("fault_code", "") or ""),
+                    execution_fault_detail=str(execution_state.get("detail", "") or ""),
+                    execution_faulted_at=str(execution_state.get("faulted_at", "") or ""),
+                    execution_resettable=bool(execution_state.get("resettable", False)),
+                    execution_last_returncode=(
+                        None
+                        if execution_state.get("last_returncode") in (None, "")
+                        else int(execution_state.get("last_returncode", 0))
+                    ),
                     workspace_memberships=self.workspace_memberships(slug),
                 )
             )

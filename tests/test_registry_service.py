@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 import app.content_store as content_store_mod
+from app.execution_faults import LocalExecutionFaultState
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
@@ -46,6 +47,7 @@ _FULL_MANAGEMENT_CAPABILITIES = [
     "skill_lifecycle",
     "provider_guidance",
     "conversation_skills",
+    "agent_runtime",
 ]
 
 
@@ -93,6 +95,7 @@ def _install_management_loopback(monkeypatch) -> None:
                 provider_state_factory=lambda _provider_name: ProviderStateRecord(
                     {"session_id": "registry-test", "started": False}
                 ),
+                execution_faults=LocalExecutionFaultState(config.data_dir),
             ),
         )
         return result
@@ -1423,6 +1426,7 @@ def test_summary_endpoint_returns_canonical_dashboard_aggregates(monkeypatch, tm
         "connected": 2,
         "degraded": 0,
         "disconnected": 0,
+        "execution_faulted": 0,
     }
     assert payload["conversations"] == {
         "total": 3,
@@ -2482,3 +2486,35 @@ def test_agent_status_endpoint_returns_typed_agent_status(monkeypatch, tmp_path:
     assert payload["workers"] == []
     assert payload["active_conversations"] == 0
     assert payload["recent_errors"] == 0
+
+
+def test_agent_execution_reset_clears_faulted_state(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    _install_management_loopback(monkeypatch)
+
+    with TestClient(app) as client:
+        _login_ui(client)
+        csrf_token = _ui_csrf_token(client)
+        agent_id, _token = _enroll_and_register(client, "Reset Bot", "reset-bot")
+
+        fault_state = LocalExecutionFaultState(data_dir)
+        latched = fault_state.record_provider_failure(
+            provider_name="claude",
+            error_text="Not logged in · Please run /login",
+            returncode=1,
+        )
+        assert latched is not None
+        assert latched.state == "faulted"
+
+        response = client.post(
+            f"/v1/agents/{agent_id}/execution/reset",
+            headers={"X-CSRF-Token": csrf_token},
+            json={},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["state"]["state"] == "healthy"
+        assert payload["state"]["detail"] == ""
+        assert fault_state.load().state == "healthy"

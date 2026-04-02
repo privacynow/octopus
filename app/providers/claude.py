@@ -353,10 +353,27 @@ class ClaudeProvider:
             return "", {}, -1, "", []  # sentinel for timeout
 
         if proc.returncode and proc.returncode != 0:
-            log.error("claude error (rc=%d): %s", proc.returncode, stderr[:300])
+            detail = self._build_failure_text(stderr, result_data, accumulated)
+            log.error("claude error (rc=%d): %s", proc.returncode, trim_text(detail, 300))
 
         tool_executions = list(result_data.pop("_tool_executions", []) or [])
         return accumulated, result_data, proc.returncode or 0, stderr, tool_executions
+
+    @staticmethod
+    def _build_failure_text(stderr: str, result_data: dict, accumulated: str) -> str:
+        error_text = str(stderr or "").strip()
+        result_text = str(result_data.get("result", "") or "").strip()
+        error_kind = str(result_data.get("error", "") or "").strip()
+        if result_data.get("errors"):
+            joined = " ".join(str(item) for item in result_data["errors"])
+            error_text = f"{error_text} {joined}".strip()
+        if result_text:
+            error_text = f"{error_text} {result_text}".strip()
+        if error_kind and error_kind not in error_text:
+            error_text = f"{error_text} ({error_kind})".strip()
+        if accumulated and accumulated not in error_text:
+            error_text = f"{error_text} {accumulated}".strip()
+        return error_text
 
     @staticmethod
     def _is_resume_failure(stderr: str) -> bool:
@@ -472,18 +489,7 @@ class ClaudeProvider:
             )
 
         if rc != 0:
-            # Check both stderr and structured JSON errors for resume failure
-            error_text = stderr
-            result_text = str(result_data.get("result", "") or "").strip()
-            error_kind = str(result_data.get("error", "") or "").strip()
-            if result_data.get("errors"):
-                error_text = error_text + " " + " ".join(str(e) for e in result_data["errors"])
-            if result_text:
-                error_text = f"{error_text} {result_text}".strip()
-            if error_kind and error_kind not in error_text:
-                error_text = f"{error_text} ({error_kind})".strip()
-            if accumulated and accumulated not in error_text:
-                error_text = f"{error_text} {accumulated}".strip()
+            error_text = self._build_failure_text(stderr, result_data, accumulated)
             detail = trim_text(error_text, 300) if error_text else ""
             text = f"[Claude error (rc={rc})]"
             if detail:

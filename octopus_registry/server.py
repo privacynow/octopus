@@ -71,6 +71,7 @@ from .ingress import (
     reject_catalog_skill,
     reject_provider_guidance,
     reset_conversation,
+    reset_execution_fault,
     search_catalog_skills,
     set_conversation_setting,
     submit_conversation_skill_credential,
@@ -88,6 +89,7 @@ from .store_base import (
     validated_routed_task_request,
 )
 from .http_support import (
+    AgentExecutionResetRequest,
     ConversationResetRequest,
     ConversationSettingUpdateRequest,
     ConversationSkillCredentialRequest,
@@ -587,6 +589,29 @@ def resource_agent_status(
     return _json_payload(result)
 
 
+@app.post("/v1/agents/{agent_id}/execution/reset")
+async def api_agent_execution_reset(
+    agent_id: str,
+    payload: AgentExecutionResetRequest,
+    store: AbstractRegistryStore = Depends(get_store),
+    _: None = Depends(require_ui_write_access),
+) -> dict[str, Any]:
+    try:
+        result = await reset_execution_fault(
+            store,
+            agent_id,
+            actor_key=_operator_actor_key(payload.actor_key),
+        )
+        await _broadcast_invalidations(
+            topics=("agents", f"agent:{agent_id}", "summary"),
+            reason="agent.execution.reset",
+            agent_id=agent_id,
+        )
+        return result
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @app.get("/v1/agents/{agent_id}/conversations")
 def resource_agent_conversations(
     agent_id: str,
@@ -693,8 +718,6 @@ async def resource_publish_progress(
         conversation_id,
         agent_id,
         {
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
             "content": payload.content,
             "created_at": payload.created_at,
         },

@@ -59,6 +59,7 @@ class _DispatchEgress(TransportEgress):
     def __init__(self, *, target: object) -> None:
         self.labels: list[str] = []
         self.actions: list[str] = []
+        self.formatted_replies: list[str] = []
         self.target = target
         self.typing_targets: list[object] = []
         self.typing_started = asyncio.Event()
@@ -123,7 +124,7 @@ class _DispatchEgress(TransportEgress):
         del callback_token
 
     async def send_formatted_reply(self, text: str) -> None:
-        del text
+        self.formatted_replies.append(text)
 
     async def send_directed_artifacts(
         self,
@@ -204,6 +205,7 @@ async def test_run_provider_request_does_not_require_telegram_message_api():
             provider=prov,
             boot_id="dispatch-test",
             cancellations={},
+            execution_inflight=set(),
         )
         message = _DispatchEgress(target=target)
 
@@ -232,6 +234,7 @@ def test_dispatch_runtime_has_no_callable_constructor_fields() -> None:
             "provider",
             "boot_id",
             "cancellations",
+            "execution_inflight",
         ]
         assert runtime.boot_id == current_runtime().boot_id
 
@@ -272,6 +275,109 @@ async def test_execute_request_runs__explicit_execution_runtime():
 
         assert outcome is not None
         assert outcome.status == "completed"
+        assert len(prov.run_calls) == 1
+
+
+async def test_execute_request_latches_irrecoverable_provider_failure_and_blocks_retry():
+    with fresh_env() as (_data_dir, _cfg, prov):
+        prov.run_results = [
+            RunResult(text="Not logged in · Please run /login", returncode=1),
+        ]
+        chat = FakeChat(12345)
+        message = TelegramExecutionMessage(current_runtime(), FakeMessage(chat=chat, text="hello"))
+        runtime = current_execution_runtime()
+        transport = build_telegram_transport_identity(
+            current_runtime(),
+            message,
+            chat.id,
+            actor_key=telegram_actor_key(42),
+        )
+
+        first = await execute_request(
+            transport,
+            "test prompt",
+            [],
+            message,
+            runtime=runtime,
+        )
+        second = await execute_request(
+            transport,
+            "test prompt",
+            [],
+            message,
+            runtime=runtime,
+        )
+
+        assert first is not None
+        assert first.status == "failed"
+        assert "Execution fault latched" in first.error_text
+        assert second is not None
+        assert second.status == "failed"
+        assert "Bot execution is faulted" in second.error_text
+        assert len(prov.run_calls) == 1
+        assert runtime.services.execution_faults is not None
+        assert runtime.services.execution_faults.load().state == "faulted"
+
+
+async def test_execute_request_rejects_same_conversation_while_inflight():
+    with fresh_env() as (_data_dir, _cfg, prov):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_run(provider_state, prompt, image_paths, progress, context=None, cancel=None):
+            prov.run_calls.append({
+                "provider_state": dict(provider_state),
+                "prompt": prompt,
+                "image_paths": image_paths,
+                "context": context,
+            })
+            del cancel
+            started.set()
+            await progress.update("working…", force=True)
+            await release.wait()
+            return RunResult(text="done")
+
+        prov.run = delayed_run
+        runtime = current_execution_runtime()
+        transport = TransportIdentity(
+            conversation_key="registry:prod:conversation:conv-1",
+            origin_channel="registry",
+            actor="registry:operator",
+            external_conversation_ref="conv-1",
+            target_agent_id="",
+            conversation_ref="registry:conv-1",
+            routed_task_id="",
+            authority_ref="",
+        )
+        first_message = _DispatchEgress(target=object())
+        second_message = _DispatchEgress(target=object())
+
+        first_task = asyncio.create_task(
+            execute_request(
+                transport,
+                "first prompt",
+                [],
+                first_message,
+                runtime=runtime,
+            )
+        )
+        await started.wait()
+        second = await execute_request(
+            transport,
+            "second prompt",
+            [],
+            second_message,
+            runtime=runtime,
+        )
+        release.set()
+        first = await first_task
+
+        assert first is not None
+        assert first.status == "completed"
+        assert second is not None
+        assert second.status == "failed"
+        assert "Another request is in progress" in second.error_text
+        assert second_message.formatted_replies == ["Another request is in progress. Try again in a moment."]
         assert len(prov.run_calls) == 1
 
 

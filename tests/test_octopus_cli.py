@@ -22,6 +22,8 @@ def _bot(
     slug: str,
     *,
     registry_connection_statuses: list[RegistryConnectionStatus] | None = None,
+    execution_state: str = "healthy",
+    execution_fault_detail: str = "",
 ) -> BotState:
     return BotState(
         slug=slug,
@@ -33,6 +35,8 @@ def _bot(
         env_file=Path("/tmp") / slug / ".env",
         running=True,
         registry_connection_statuses=registry_connection_statuses or [],
+        execution_state=execution_state,
+        execution_fault_detail=execution_fault_detail,
     )
 
 
@@ -218,6 +222,50 @@ def test_status_live_provider_opt_in(tmp_path: Path) -> None:
 
     assert result == 0
     assert called == [(("claude",), True)]
+
+
+def test_render_registry_status_surfaces_execution_faults_without_hiding_transport_connected(tmp_path: Path) -> None:
+    class _Output:
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+
+        def write(self, value: str) -> None:
+            self.parts.append(value)
+
+        def flush(self) -> None:
+            return None
+
+        def isatty(self) -> bool:
+            return False
+
+    output = _Output()
+    cli = OctopusCLI(tmp_path, io=PromptIO(stdout=output))
+    state = _state(
+        _bot(
+            "m1",
+            registry_connection_statuses=[
+                RegistryConnectionStatus(
+                    registry_id="local",
+                    url="http://registry:8787",
+                    scope="full",
+                    connection_state="enrolled",
+                    live_state="connected",
+                    local=True,
+                )
+            ],
+            execution_state="faulted",
+            execution_fault_detail="Not logged in · Please run /login",
+        )
+    )
+
+    cli.render_registry_status(state)
+
+    rendered = "".join(output.parts)
+    assert "Connected bots:" in rendered
+    assert "state: connected" in rendered
+    assert "execution: faulted" in rendered
+    assert "Execution faults:" in rendered
+    assert "Not logged in · Please run /login" in rendered
 
 
 def test_recommended_actions_include_authenticate_for_invalid_live_auth(tmp_path: Path) -> None:

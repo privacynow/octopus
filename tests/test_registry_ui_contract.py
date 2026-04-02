@@ -456,6 +456,8 @@ def test_conversation_detail_is_split_into_supporting_modules() -> None:
     assert '/ui/js/components/composer-autocomplete.js' in index_html
     assert '/ui/js/components/event-renderers.js' in index_html
     assert '/ui/js/components/task-board.js' in index_html
+    assert 'class="nav-icon"' in index_html
+    assert 'data-icon=' not in index_html
 
     conversation_detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"

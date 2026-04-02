@@ -276,15 +276,12 @@ select {
     transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.nav-links li a::before {
-    content: attr(data-icon);
+.nav-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 20px;
     height: 20px;
-    font-size: 0.73rem;
-    font-weight: 700;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: rgba(255, 255, 255, 0.82);
@@ -292,8 +289,26 @@ select {
     flex-shrink: 0;
 }
 
-[data-theme="dark"] .nav-links li a::before {
+[data-theme="dark"] .nav-icon {
     background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    stroke-width: 1.65;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.nav-icon svg rect,
+.nav-icon svg circle {
+    stroke: currentColor;
+}
+
+.nav-label {
+    min-width: 0;
 }
 
 .nav-links li a:hover,
@@ -302,7 +317,7 @@ select {
     color: var(--text);
 }
 
-.nav-links li a.active::before {
+.nav-links li a.active .nav-icon {
     background: var(--accent);
     color: #fff;
     border-color: transparent;

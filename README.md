@@ -288,8 +288,7 @@ by each client. File and script policy is also shared across clients:
 If you need the full shared skill model, package format, lifecycle, and
 provider guidance structure, see
 [docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md),
-[ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md)
-and [docs/manual/README.md](/Users/tinker/output/bots/telegram-agent-bot/docs/manual/README.md).
+[ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md).
 
 ## Troubleshooting
 
@@ -332,11 +331,7 @@ The codebase is split into three main packages:
 
 - [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md):
   registry, bot SDK, bot implementation, extending Octopus, and cross-cutting concerns
-- [docs/manual/README.md](/Users/tinker/output/bots/telegram-agent-bot/docs/manual/README.md):
-  operator and user manual
-- [docs/registry-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-guide.md):
-  registry lifecycle and browser walkthrough
-- [docs/flows-catalog.md](/Users/tinker/output/bots/telegram-agent-bot/docs/flows-catalog.md):
-  flow inventory with code pointers
+- [docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md):
+  shared skills model, package format, lifecycle, and client semantics
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

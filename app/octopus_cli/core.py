@@ -284,6 +284,7 @@ class DockerRunner:
         values = parse_env_file(env_file)
         provider = values.get("BOT_PROVIDER", "claude")
         provider_auth_dir = str(self.ensure_provider_auth_dir(provider))
+        database_host = f"{slug}-postgres"
         command = [
             "docker",
             "compose",
@@ -306,6 +307,7 @@ class DockerRunner:
         command += ["--env-file", str(env_file.relative_to(self.repo_dir)), *args]
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
+            "OCTOPUS_DB_HOST": database_host,
             "PROVIDER_AUTH_DIR": provider_auth_dir,
             "BOT_ENV_FILE": str(env_file.relative_to(self.repo_dir)),
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),
@@ -354,7 +356,10 @@ class DockerRunner:
             ".deploy/registry/.env",
             *args,
         ]
-        env = {"OCTOPUS_NETWORK": "octopus-net"}
+        env = {
+            "OCTOPUS_NETWORK": "octopus-net",
+            "OCTOPUS_DB_HOST": "registry-postgres",
+        }
         return command, env
 
     def bot_compose(self, slug: str, *args: str, capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:

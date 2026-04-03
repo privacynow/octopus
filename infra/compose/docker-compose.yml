@@ -23,6 +23,10 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
+    networks:
+      default:
+        aliases:
+          - ${OCTOPUS_DB_HOST:-postgres}
 
   db-bootstrap:
     build:
@@ -30,7 +34,7 @@ services:
       dockerfile: infra/docker/Dockerfile
     command: ["python", "-m", "app.db.cli", "bootstrap"]
     environment:
-      OCTOPUS_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,7 +45,7 @@ services:
       dockerfile: infra/docker/Dockerfile
     command: ["python", "-m", "app.db.cli", "update"]
     environment:
-      OCTOPUS_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,7 +56,7 @@ services:
       dockerfile: infra/docker/Dockerfile
     command: ["python", "-m", "app.db.cli", "doctor"]
     environment:
-      OCTOPUS_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy
@@ -121,7 +125,7 @@ services:
     profiles:
       - stub
     environment:
-      OCTOPUS_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy

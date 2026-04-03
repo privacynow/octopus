@@ -1260,8 +1260,8 @@ def doctor_report_message(lines: Iterable[str], prompt_weight_count: int | None)
 
 def discover_usage_message() -> TelegramRenderedMessage:
     return _html_message(
-        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|disconnected>]\n"
-        "Example: <code>/discover role:developer capability:python tag:backend schema review</code>"
+        "Usage: /discover <query> [role:<role>] [skill:<skill>] [tag:<tag>] [state:<connected|degraded|standalone|disconnected>]\n"
+        "Example: <code>/discover role:developer skill:architecture tag:backend schema review</code>"
     )
 
 
@@ -1316,9 +1316,9 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
         )
         if authority_ref:
             lines.append(f"Authority: <code>{authority_ref}</code>")
-        capabilities = [str(value) for value in agent.get("capabilities", []) if value]
-        if capabilities:
-            lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")
+        routing_skills = [str(value) for value in agent.get("routing_skills", []) if value]
+        if routing_skills:
+            lines.append(f"Routing skills: <code>{html.escape(', '.join(routing_skills))}</code>")
         tags = [str(value) for value in agent.get("tags", []) if value]
         if tags:
             lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")

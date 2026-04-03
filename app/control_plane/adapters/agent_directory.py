@@ -23,7 +23,7 @@ class BusAgentDirectory:
             return AgentSearchResult(status="unavailable")
         request = SearchAgentsRequest(
             role=query.role,
-            capabilities=list(query.capabilities),
+            skills=list(query.skills),
             tags=list(query.tags),
             free_text=query.free_text,
             exclude_agent_ids=list(query.exclude_agent_ids),

@@ -32,7 +32,7 @@ artifacts in the screenshot pipeline, not the default docs presentation.
 - [Conversation search](registry-ui/conversations-search.md)
 - [Conversation detail](registry-ui/conversation-detail.md)
 - [Tasks](registry-ui/tasks.md)
-- [Capabilities](registry-ui/capabilities.md)
+- [Routing](registry-ui/routing.md)
 - [Skills catalog](registry-ui/skills-catalog.md)
 - [Usage](registry-ui/usage.md)
 - [Provider guidance](registry-ui/guidance.md)

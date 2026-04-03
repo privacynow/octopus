@@ -566,9 +566,9 @@ class ClaudeProvider:
         system_prompt = ""
         if context and context.system_prompt:
             system_prompt = context.system_prompt
-        # Include capability summary in system prompt for preflight awareness
+        # Include active skill tool surface in the system prompt for preflight awareness
         if context and context.capability_summary:
-            cap = f"\n\n## Available capabilities\n\n{context.capability_summary}"
+            cap = f"\n\n## Active skill tool surface\n\n{context.capability_summary}"
             system_prompt = (system_prompt + cap) if system_prompt else cap
         if system_prompt:
             idx = cmd.index("--")

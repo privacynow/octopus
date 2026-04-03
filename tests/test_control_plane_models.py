@@ -62,7 +62,7 @@ def test_control_plane_request_models_validate_domain_payloads() -> None:
         instructions="Check the thing",
         context={"ticket": 42},
         constraints={"readonly": True},
-        requested_capabilities=["logs"],
+        requested_skills=["logs"],
         created_at="2026-03-20T00:00:00+00:00",
     )
     event = TimelineEventPayload(

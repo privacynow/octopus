@@ -139,7 +139,7 @@ same on desktop and mobile.
 | `/ui/agents` | Agent roster |
 | `/ui/conversations` | Quick start plus active thread list |
 | `/ui/tasks` | Routed-task queue |
-| `/ui/capabilities` | Global capability toggles |
+| `/ui/routing` | Routing policy for advertised skills |
 | `/ui/skills` | Skill catalog |
 | `/ui/usage` | Usage rollups |
 | `/ui/guidance` | Provider guidance |
@@ -181,7 +181,7 @@ Agent detail is the compact health-and-entry workspace for one agent.
 
 - `Open conversation`
 - overview facts
-- capabilities
+- routing
 - workers snapshot when published
 - inline conversations for that agent
 
@@ -239,7 +239,7 @@ Tabs:
 Composer behavior:
 
 - plain text sends a normal operator message
-- leading selectors such as `@m2`, `@cap:review`, or `@role:reviewer` submit a
+- leading selectors such as `@m2`, `@skill:review`, or `@role:reviewer` submit a
   typed direct assignment from the same composer
 
 Conversation milestones are rendered as human events, not raw task payloads:
@@ -262,11 +262,11 @@ Tasks is the routed-work queue across all conversations.
 
 ![Tasks](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/07-tasks.png)
 
-### Capabilities
+### Routing
 
-Capabilities shows global capability toggles exposed by the registry service.
+Routing shows global registry policy for advertised routing skills.
 
-![Capabilities](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/08-capabilities.png)
+![Routing](/Users/tinker/output/bots/telegram-agent-bot/docs/assets/registry/ui/08-capabilities.png)
 
 ### Skills
 

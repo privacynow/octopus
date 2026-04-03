@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from octopus_registry.store import RegistrySQLiteStore
-from octopus_registry.store_base import CapabilityDisabledError
+from octopus_registry.store_base import RoutingSkillDisabledError
 from octopus_registry.store_base import PROTECTED_ROUTED_TASK_STATUSES
 from octopus_registry.store_base import RegistryScopeError
 from octopus_registry.store_base import conversation_status_for_event
@@ -49,7 +49,7 @@ from octopus_sdk.registry.models import (
 
 def _card(
     slug: str,
-    capabilities: list[str] | None = None,
+    routing_skills: list[str] | None = None,
     *,
     display_name: str | None = None,
     registry_scope: str = "full",
@@ -59,7 +59,7 @@ def _card(
         slug=slug,
         role="developer",
         registry_scope=registry_scope,
-        capabilities=capabilities or ["python"],
+        routing_skills=routing_skills or ["python"],
         tags=["backend"],
         description=f"{slug} description",
         provider="codex",
@@ -74,16 +74,16 @@ def _card(
 def _enroll(
     store,
     slug: str,
-    capabilities: list[str] | None = None,
+    routing_skills: list[str] | None = None,
     *,
     display_name: str | None = None,
     registry_scope: str = "full",
 ) -> tuple[str, str]:
-    enrolled = store.enroll(_card(slug, capabilities, display_name=display_name, registry_scope=registry_scope))
+    enrolled = store.enroll(_card(slug, routing_skills, display_name=display_name, registry_scope=registry_scope))
     store.register(
         enrolled.agent_token,
         AgentRegisterRequest(
-            agent_card=_card(slug, capabilities, display_name=display_name, registry_scope=registry_scope),
+            agent_card=_card(slug, routing_skills, display_name=display_name, registry_scope=registry_scope),
             connectivity_state="connected",
             current_capacity=0,
             max_capacity=2,
@@ -240,7 +240,7 @@ def _create_routed_task(
             instructions="Review the spec.",
             context=RegistryJsonRecord(),
             constraints=RegistryJsonRecord(),
-            requested_capabilities=["reviewer"],
+            requested_skills=["reviewer"],
             priority="normal",
             created_at="2026-03-16T00:00:00+00:00",
         )
@@ -306,7 +306,7 @@ def test_enroll_requires_explicit_registry_scope(store):
                 "display_name": "Missing Scope Bot",
                 "slug": "missing-scope-bot",
                 "role": "developer",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Missing scope",
                 "provider": "codex",
@@ -421,11 +421,11 @@ def test_ack_rejects_invalid_classification(store):
         store.ack(agent_token, delivery_ids=[delivery_id], classification="later")
 
 
-def test_search_agents_by_capability(store):
+def test_search_agents_by_skill(store):
     _enroll(store, "rust-bot", ["rust"])
 
-    hits = store.search_agents(AgentDiscoveryQuery(capabilities=["rust"], required_state="connected"))
-    misses = store.search_agents(AgentDiscoveryQuery(capabilities=["python"], required_state="connected"))
+    hits = store.search_agents(AgentDiscoveryQuery(skills=["rust"], required_state="connected"))
+    misses = store.search_agents(AgentDiscoveryQuery(skills=["python"], required_state="connected"))
 
     assert [item.slug for item in hits] == ["rust-bot"]
     assert misses == []
@@ -579,7 +579,7 @@ def test_create_routed_task_requires_required_fields(store):
                 target_agent_id=target_id,
                 title="",
                 instructions="Review the spec.",
-                requested_capabilities=["reviewer"],
+                requested_skills=["reviewer"],
             )
         )
 
@@ -946,13 +946,13 @@ def test_create_routed_task_disabled_capability_raises(store):
     target_id, _ = _enroll(store, "target-bot", ["reviewer"])
     conversation = store.create_conversation(
         target_agent_id=origin_id,
-        title="Disabled capability conversation",
+        title="Disabled routing skill conversation",
         origin_channel="registry",
         external_conversation_ref="conv-1",
     )
-    store.set_capability_override("reviewer", enabled=False)
+    store.set_routing_skill_override("reviewer", enabled=False)
 
-    with pytest.raises(CapabilityDisabledError):
+    with pytest.raises(RoutingSkillDisabledError):
         store.create_routed_task(
             RoutedTaskRequest(
                 routed_task_id="task-disabled",
@@ -961,7 +961,7 @@ def test_create_routed_task_disabled_capability_raises(store):
                 target_agent_id=target_id,
                 title="Disabled review task",
                 instructions="Review the spec.",
-                requested_capabilities=["reviewer"],
+                requested_skills=["reviewer"],
                 context=RegistryJsonRecord(),
                 constraints=RegistryJsonRecord(),
                 priority="normal",
@@ -1410,42 +1410,42 @@ def test_register_preserves_omitted_capacity_and_card_lists(store):
     assert updated.agent_id == agent_id
     assert updated.current_capacity == 2
     assert updated.max_capacity == 5
-    assert updated.capabilities == ["python", "tests"]
+    assert updated.routing_skills == ["python", "tests"]
     assert updated.tags == ["backend"]
     assert updated.channel_capabilities == ["registry"]
     assert updated.registry_scope == "coordination"
 
 
-def test_capability_override_disabled_excludes__search(store):
+def test_routing_skill_override_disabled_excludes_search(store):
     _enroll(store, "rust-bot", ["rust"])
-    store.set_capability_override("rust", enabled=False)
+    store.set_routing_skill_override("rust", enabled=False)
 
-    assert store.search_agents(AgentDiscoveryQuery(capabilities=["rust"], required_state="connected")) == []
+    assert store.search_agents(AgentDiscoveryQuery(skills=["rust"], required_state="connected")) == []
 
 
 def test_search_agents_rejects_string_filters(store):
     _enroll(store, "alpha-bot", ["python"])
 
     with pytest.raises(ValidationError):
-        AgentDiscoveryQuery(capabilities="python", required_state="connected")
+        AgentDiscoveryQuery(skills="python", required_state="connected")
 
 
-def test_list_capabilities_aggregates_declared(store):
+def test_list_routing_skills_aggregates_declared(store):
     _enroll(store, "alpha-bot", ["python"])
     _enroll(store, "beta-bot", ["python"])
 
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
 
-    assert "python" in capabilities
-    assert capabilities["python"].declared_by_agents == ["alpha-bot", "beta-bot"]
+    assert "python" in skills
+    assert skills["python"].advertised_by_agents == ["alpha-bot", "beta-bot"]
 
 
-def test_capability_override_survives_agent_deregistration(store):
+def test_routing_skill_override_survives_agent_deregistration(store):
     _, agent_token = _enroll(store, "go-bot", ["go"])
-    store.set_capability_override("go", enabled=False)
+    store.set_routing_skill_override("go", enabled=False)
     store.deregister(agent_token)
 
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
 
-    assert capabilities["go"].enabled is False
-    assert capabilities["go"].declared_by_agents == []
+    assert skills["go"].enabled is False
+    assert skills["go"].advertised_by_agents == []

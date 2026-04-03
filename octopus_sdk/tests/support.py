@@ -898,7 +898,6 @@ def make_test_config(
         agent_role="",
         agent_tags=(),
         agent_description="",
-        agent_capabilities=(),
         agent_registries=(),
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",

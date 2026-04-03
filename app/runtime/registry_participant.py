@@ -85,6 +85,7 @@ class AgentRuntime:
         runtime_health_projector: RuntimeHealthProjector[RuntimeHealthPayload] | None = None,
         provider=None,
         registry: RegistryConnectionConfig | None = None,
+        routing_skills_resolver: Callable[[], tuple[str, ...]] | None = None,
         channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
         management_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
@@ -93,6 +94,7 @@ class AgentRuntime:
         if registry is None and config.agent_mode == "registry":
             raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
         self._registry = registry
+        self._routing_skills_resolver = routing_skills_resolver
         self._channel_capabilities_resolver = channel_capabilities_resolver
         self._management_capabilities_resolver = management_capabilities_resolver
         if self._registry is None:
@@ -138,13 +140,13 @@ class AgentRuntime:
         return tuple(capabilities)
 
     def requested_card(self) -> AgentCard:
-        capabilities = self._effective_capabilities()
+        routing_skills = self._effective_routing_skills()
         return AgentCard(
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
             registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
-            capabilities=list(capabilities),
+            routing_skills=list(routing_skills),
             tags=list(self.config.agent_tags),
             description=self.config.agent_description,
             provider=self.config.provider_name,
@@ -158,8 +160,10 @@ class AgentRuntime:
             bot_key=bot_identity(self.config.data_dir),
         )
 
-    def _effective_capabilities(self) -> tuple[str, ...]:
-        return self.config.agent_capabilities
+    def _effective_routing_skills(self) -> tuple[str, ...]:
+        if self._routing_skills_resolver is None:
+            return ()
+        return self._routing_skills_resolver()
 
     def _client(self) -> AgentRegistryClient:
         return AgentRegistryClient(
@@ -609,7 +613,7 @@ class _ParticipantDiscovery(RegistryDiscovery):
         search = await self._control_plane.agent_directory.search_agents(
             query=AgentDiscoveryQuery(
                 role=selector.value if selector.kind == "role" else "",
-                capabilities=[selector.value] if selector.kind == "capability" else [],
+                skills=[selector.value] if selector.kind == "skill" else [],
                 required_state="connected",
             )
         )
@@ -818,7 +822,7 @@ class _ParticipantCoordination(RegistryCoordination):
         search: AgentSearchResult = await self._control_plane.agent_directory.search_agents(
             query=AgentDiscoveryQuery(
                 role=selector.value if selector.kind == "role" else "",
-                capabilities=[selector.value] if selector.kind == "capability" else [],
+                skills=[selector.value] if selector.kind == "skill" else [],
                 required_state="connected",
             )
         )

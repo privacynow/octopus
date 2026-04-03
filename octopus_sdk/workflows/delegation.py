@@ -443,7 +443,7 @@ def build_delegation_plan(
                     title=str(task.get("title", "")),
                     instructions=str(task.get("instructions", "")),
                     priority=str(task.get("priority", "normal")),
-                    requested_capabilities=list(task.get("requested_capabilities", []) or []),
+                    requested_skills=list(task.get("requested_skills", []) or []),
                     context=dict(task.get("context", {}) or {}),
                 )
                 for task in tasks
@@ -925,7 +925,7 @@ async def propose_participant_delegation(
                 "selector_value": item.selector.value,
                 "instructions": item.instructions,
                 "priority": item.priority,
-                "requested_capabilities": list(item.requested_capabilities),
+                "requested_skills": list(item.requested_skills),
                 "context": dict(item.context),
             }
             for item in intent.tasks

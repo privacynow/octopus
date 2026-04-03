@@ -125,7 +125,7 @@ test("live registry ui smoke", async ({ page }) => {
   }, { targetAgentId: TARGET_AGENT_ID });
 
   await page.getByLabel("Message text").fill("@");
-  await expect(page.locator(".compose-hint")).toContainText(/choose an agent, capability, or role/i);
+  await expect(page.locator(".compose-hint")).toContainText(/choose an agent, skill, or role/i);
   await expect(page.locator(".compose-suggestions")).toContainText(`@${targetSelector.selectorValue}`);
   await expect(
     page.locator(".compose-suggestion strong").filter({ hasText: new RegExp(`^@${escapeRegExp(targetSelector.selectorValue)}$`) })

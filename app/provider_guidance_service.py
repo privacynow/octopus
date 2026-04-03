@@ -77,14 +77,14 @@ class ProviderGuidanceService:
             "These specialists are currently reachable through the coordination layer.",
             "Reference them naturally if needed, but do not emit coordination protocol text.",
             "",
-            "| Agent | Slug | Role | Capabilities | Status |",
-            "|-------|------|------|--------------|--------|",
+            "| Agent | Slug | Role | Routing Skills | Status |",
+            "|-------|------|------|----------------|--------|",
         ]
         for agent in agents:
             name = agent.display_name
             slug = agent.slug
             a_role = agent.role
-            caps = ", ".join(agent.capabilities)
+            caps = ", ".join(agent.routing_skills)
             state = agent.connectivity_state or "connected"
             lines.append(f"| {name} | {slug} | {a_role} | {caps} | {state} |")
         lines.append("")

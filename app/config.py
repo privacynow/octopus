@@ -419,13 +419,6 @@ def load_config(instance: str | None = None) -> BotConfig:
     agent_tags = tuple(
         s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
     )
-    raw_agent_capabilities = (
-        get("BOT_AGENT_CAPABILITIES").strip()
-        or get("BOT_AGENT_SKILLS").strip()
-    )
-    agent_capabilities = tuple(
-        s.strip() for s in raw_agent_capabilities.split(",") if s.strip()
-    )
     agent_slug = derive_agent_slug(
         get("BOT_AGENT_SLUG").strip() or agent_display_name,
         fallback=derive_agent_slug(instance, fallback="agent"),
@@ -502,7 +495,6 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_role=agent_role,
         agent_tags=agent_tags,
         agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
-        agent_capabilities=agent_capabilities,
         agent_registries=agent_registries,
         agent_poll_interval_seconds=agent_poll_interval_seconds,
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
@@ -609,7 +601,6 @@ def load_config_provider_health() -> BotConfig:
         agent_role="",
         agent_tags=(),
         agent_description="",
-        agent_capabilities=(),
         agent_registries=(),
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",

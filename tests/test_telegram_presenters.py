@@ -387,7 +387,7 @@ def test_discover_results_message_renders_matching_agents():
                 "connectivity_state": "connected",
                 "current_capacity": 1,
                 "max_capacity": 4,
-                "capabilities": ["python", "review"],
+                "routing_skills": ["python", "review"],
                 "tags": ["backend"],
                 "description": "Reviews code changes.",
             }
@@ -398,6 +398,7 @@ def test_discover_results_message_renders_matching_agents():
     assert "Matching agents" in rendered.text
     assert "Reviewer" in rendered.text
     assert "registry:prod" in rendered.text
+    assert "Routing skills" in rendered.text
     assert "backend" in rendered.text
 
 

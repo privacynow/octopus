@@ -240,12 +240,12 @@ function renderConversationDetail(container, params) {
 
     async function loadTargetSuggestions() {
         try {
-            const [agentData, capabilityData] = await Promise.all([
+            const [agentData, routingData] = await Promise.all([
                 API.listAgents({ state: 'connected', limit: 100 }),
-                API.listCapabilities().catch(() => []),
+                API.listRoutingSkills().catch(() => []),
             ]);
             const agents = agentData.agents || agentData || [];
-            const capabilities = capabilityData.capabilities || capabilityData || [];
+            const routingSkills = routingData.routing_skills || routingData || [];
             const seen = new Set();
             availableTargets = [];
             function pushTarget(item) {
@@ -271,7 +271,7 @@ function renderConversationDetail(container, params) {
                 const detail = [
                     compactDisplayName && compactDisplayName.toLowerCase() !== slug.toLowerCase() ? slug : '',
                     agent.role || '',
-                    (agent.capabilities || []).slice(0, 2).join(', '),
+                    (agent.routing_skills || []).slice(0, 2).join(', '),
                 ].filter(Boolean).join(' · ');
                 pushTarget({
                     key: agent.agent_id || slug,
@@ -294,16 +294,16 @@ function renderConversationDetail(container, params) {
                     aliases: ['@role:' + role],
                 });
             });
-            capabilities.forEach((capability) => {
-                const value = String(capability.name || capability.capability || capability || '').trim();
+            routingSkills.forEach((routingSkill) => {
+                const value = String(routingSkill.name || routingSkill.skill_name || routingSkill || '').trim();
                 if (!value) return;
                 pushTarget({
                     key: value,
-                    label: '@cap:' + value,
-                    kind: 'capability',
+                    label: '@skill:' + value,
+                    kind: 'skill',
                     display: value,
-                    detail: 'Capability target',
-                    aliases: ['@cap:' + value],
+                    detail: 'Routing skill',
+                    aliases: ['@skill:' + value],
                 });
             });
             if (typeof Fuse === 'function') {
@@ -1399,26 +1399,26 @@ function renderConversationDetail(container, params) {
                 targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(selector)}.`;
                 setComposeHint('Add instructions after the selector to assign work directly.');
             } else if (selectorToken.startsWith('@')) {
-                setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+                setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
             }
             textarea.placeholder = 'Describe the delegated task';
             sendBtn.textContent = 'Assign';
             sendBtn.setAttribute('aria-label', 'Assign task');
             renderTargetSuggestions(selectorToken);
             if (!suggestionMatches.length && selectorToken.startsWith('@') && !exactSuggestionMatch) {
-                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+                setComposeHint('No connected agent, skill, or role matches that selector yet.');
             }
             return;
         }
         if (selectorPrefix) {
             targetPreview.hidden = true;
-            setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+            setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
             textarea.placeholder = 'Choose a target or keep typing';
             sendBtn.textContent = 'Send';
             sendBtn.setAttribute('aria-label', 'Send message');
             renderTargetSuggestions(selectorToken);
             if (!suggestionMatches.length) {
-                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+                setComposeHint('No connected agent, skill, or role matches that selector yet.');
             }
             return;
         }

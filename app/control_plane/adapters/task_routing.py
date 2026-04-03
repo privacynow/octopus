@@ -56,7 +56,7 @@ class BusTaskRouting:
             instructions=request.instructions,
             context=dict(request.context),
             constraints=dict(request.constraints),
-            requested_capabilities=list(request.requested_capabilities),
+            requested_skills=list(request.requested_skills),
             priority=request.priority,
             created_at=request.created_at,
         )

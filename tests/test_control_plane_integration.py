@@ -175,7 +175,7 @@ def _agent_card(*, name: str, slug: str, registry_scope: str) -> dict[str, objec
         "slug": slug,
         "role": "assistant",
         "registry_scope": registry_scope,
-        "capabilities": [],
+        "routing_skills": [],
         "tags": [],
         "description": "",
         "provider": "claude",

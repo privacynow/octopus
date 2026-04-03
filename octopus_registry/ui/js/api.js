@@ -200,13 +200,13 @@ const API = (() => {
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
 
-        // Capabilities
-        listCapabilities: () =>
-            request('GET', '/v1/capabilities'),
-        enableCapability: (name) =>
-            request('POST', `/v1/capabilities/${encodeURIComponent(name)}/enable`),
-        disableCapability: (name) =>
-            request('POST', `/v1/capabilities/${encodeURIComponent(name)}/disable`),
+        // Routing skills
+        listRoutingSkills: () =>
+            request('GET', '/v1/routing/skills'),
+        enableRoutingSkill: (name) =>
+            request('POST', `/v1/routing/skills/${encodeURIComponent(name)}/enable`),
+        disableRoutingSkill: (name) =>
+            request('POST', `/v1/routing/skills/${encodeURIComponent(name)}/disable`),
 
         // Skills
         listSkills: (agentId, opts = {}) =>

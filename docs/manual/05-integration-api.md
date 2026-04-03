@@ -16,7 +16,7 @@ browser or tools that mimic the browser session flow.
 - **Realtime:** [`app/channels/registry/ws.py`](../../app/channels/registry/ws.py) plus typed envelopes in [`octopus_sdk/realtime.py`](../../octopus_sdk/realtime.py)
 - **UI coverage:** the Registry SPA covers the dashboard summary, agents,
   paginated conversations/tasks, approvals, operator **compose / cancel /
-  export** on conversations, capabilities, skills catalog, usage ranges, and
+  export** on conversations, routing policy, skills catalog, usage ranges, and
   the **provider guidance** editor. **Not** covered as first-class UI flows:
   full skill **lifecycle** beyond install / uninstall, and conversation-bound
   skill activation.
@@ -26,7 +26,7 @@ browser or tools that mimic the browser session flow.
 - **Agent API** — enroll/register/heartbeat/delivery/task/search flows used by
   bots and processor/runtime code
 - **Resource API** — `/v1/summary`, `/v1/agents`, `/v1/conversations`,
-  `/v1/tasks`, `/v1/approvals`, `/v1/capabilities`, `/v1/usage`, skill
+  `/v1/tasks`, `/v1/approvals`, `/v1/routing/skills`, `/v1/usage`, skill
   catalog, provider guidance
 - **Realtime** — `WS /v1/ws` with typed envelopes:
   - `event`
@@ -53,4 +53,4 @@ Draft → submit → approve → publish → install/update/uninstall — all un
 
 ## CSRF and sessions
 
-State-changing **POST** requests from the browser use `/v1/auth/csrf` (see UI network traffic when toggling capabilities).
+State-changing **POST** requests from the browser use `/v1/auth/csrf` (see UI network traffic when toggling routing policy).

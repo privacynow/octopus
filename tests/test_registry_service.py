@@ -135,7 +135,7 @@ def _enroll_and_register(
                 "slug": slug,
                 "role": "developer",
                 "registry_scope": registry_scope,
-                "capabilities": ["python", "tests"],
+                "routing_skills": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -160,7 +160,7 @@ def _enroll_and_register(
                 "slug": slug,
                 "role": "developer",
                 "registry_scope": registry_scope,
-                "capabilities": ["python", "tests"],
+                "routing_skills": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -295,7 +295,7 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"role": "developer", "capabilities": ["python"], "required_state": "connected"},
+        json={"role": "developer", "skills": ["python"], "required_state": "connected"},
     )
     assert search.status_code == 200
     agents = search.json()["agents"]
@@ -901,7 +901,7 @@ def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path:
                 "display_name": "No Scope Bot",
                 "slug": "no-scope-bot",
                 "role": "developer",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Writes code",
                 "provider": "codex",
@@ -931,7 +931,7 @@ def test_registry_register_requires_agent_card(monkeypatch, tmp_path: Path):
     assert "agent_card" in response.json()["detail"]
 
 
-def test_registry_search_rejects_invalid_capabilities_shape(monkeypatch, tmp_path: Path):
+def test_registry_search_rejects_invalid_skills_shape(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     _agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot-search-invalid")
@@ -939,11 +939,11 @@ def test_registry_search_rejects_invalid_capabilities_shape(monkeypatch, tmp_pat
     response = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"required_state": "connected", "capabilities": "python"},
+        json={"required_state": "connected", "skills": "python"},
     )
 
     assert response.status_code == 422
-    assert "capabilities" in response.json()["detail"]
+    assert "skills" in response.json()["detail"]
 
 
 def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
@@ -989,7 +989,7 @@ def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_p
             "slug": "dev-bot",
             "role": "developer",
             "registry_scope": "full",
-            "capabilities": ["python"],
+            "routing_skills": ["python"],
             "provider": "codex",
             "mode": "registry",
         },
@@ -1016,7 +1016,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
             "slug": "dev-bot",
             "role": "developer",
             "registry_scope": "full",
-            "capabilities": ["python"],
+            "routing_skills": ["python"],
             "provider": "codex",
             "mode": "registry",
         },
@@ -1036,7 +1036,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
                 "slug": "dev-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "provider": "codex",
                 "mode": "registry",
             },
@@ -1946,7 +1946,7 @@ def test_agent_api_invalid_token_uses_generic_401_detail(monkeypatch, tmp_path: 
                 "display_name": "Bot",
                 "slug": "bot",
                 "role": "developer",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": [],
                 "description": "Writes code",
                 "provider": "codex",
@@ -1991,7 +1991,7 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
             "instructions": "Find missing test coverage.",
             "context": {},
             "constraints": {},
-            "requested_capabilities": ["reviewer", "tests"],
+            "requested_skills": ["reviewer", "tests"],
             "priority": "normal",
             "created_at": "2026-03-15T00:00:00+00:00",
         },
@@ -2116,7 +2116,7 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "slug": "epoch-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Epoch test bot",
                 "provider": "codex",
@@ -2143,7 +2143,7 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "slug": "epoch-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Epoch test bot",
                 "provider": "codex",

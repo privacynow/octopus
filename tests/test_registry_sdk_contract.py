@@ -292,17 +292,17 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
         )
 
 
-def test_parse_target_selector_accepts_agent_capability_and_role():
+def test_parse_target_selector_accepts_agent_skill_and_role():
     agent = parse_target_selector("@m2")
     assert agent is not None
     assert agent.kind == "agent"
     assert agent.value == "m2"
     assert agent.preferred_agent_id == ""
 
-    capability = parse_target_selector("@cap:review")
-    assert capability is not None
-    assert capability.kind == "capability"
-    assert capability.value == "review"
+    skill = parse_target_selector("@skill:review")
+    assert skill is not None
+    assert skill.kind == "skill"
+    assert skill.value == "review"
 
     role = parse_target_selector("@role:reviewer")
     assert role is not None

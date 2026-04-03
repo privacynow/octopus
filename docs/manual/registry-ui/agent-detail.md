@@ -8,7 +8,7 @@ Agent detail is a compact workspace for one enrolled agent. It includes:
 
 - a direct **Open conversation** action
 - **Overview** facts such as agent id, scope, version, and last heartbeat
-- capability chips
+- routing-skill chips
 - optional **Workers** table when the runtime publishes worker snapshots
 - inline **Conversations** for that agent, with the same rows you see elsewhere
 

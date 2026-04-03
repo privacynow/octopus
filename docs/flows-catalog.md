@@ -59,7 +59,7 @@ Implementation: [`ui/`](../ui/) (SPA), entry [`ui/js/app.js`](../ui/js/app.js), 
 | All conversations + search + status + pagination | `/ui/conversations` | `05`, `05b` |
 | Conversation detail (human-first timeline, compose, cancel, export, scroll-up history, WS) | `/ui/conversations/:id` | `06-conversation-detail-annotated.png` |
 | Routed tasks → open parent conversation | `/ui/tasks` | `07-tasks-annotated.png` |
-| Global capability toggles | `/ui/capabilities` | `08-capabilities-annotated.png` |
+| Routing policy | `/ui/routing` | `08-capabilities-annotated.png` |
 | Skill catalog | `/ui/skills` | `09-skills-annotated.png` |
 | Usage aggregates | `/ui/usage` | `10-usage-annotated.png` |
 | Provider guidance editor | `/ui/guidance` | `11-guidance-annotated.png` |
@@ -81,7 +81,7 @@ Grouped by **concern** (each endpoint is a **machine flow**; only a subset is mi
 | **Auth / session** | `POST` enroll/register/heartbeat/deregister/ack; `GET` agents, agent status | Partially visible via agent list/detail |
 | **Discovery / tasks** | `POST` discovery/search, routed-tasks, status, result; `GET` poll | Tasks view, conversation context |
 | **Conversations** | `GET/POST` conversations; `GET/POST` events; `GET/POST` messages; `POST` actions; `GET` export | Detail view: messages, compose, cancel, export, event pagination; not all approval paths |
-| **Operator capabilities** | `GET/POST` capabilities enable/disable | Capabilities view |
+| **Routing policy** | `GET/POST` routing skill enable/disable | Routing view |
 | **Usage** | `GET /v1/usage` | Usage view |
 | **Skill catalog (full lifecycle)** | `GET` search/detail/lifecycle/diff; `PUT` draft; `POST` submit/approve/reject/publish/archive/install/uninstall/update | Skills view = **catalog only** (not full lifecycle UI) |
 | **Conversation-bound skills** | `GET/POST` …/skills, activate/deactivate/clear | Not dedicated top-level UI |

@@ -1,6 +1,6 @@
 # Registry UI: Tasks
 
-Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation detail](conversation-detail.md) · Next: [Capabilities](capabilities.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Conversation detail](conversation-detail.md) · Next: [Routing](routing.md)
 
 **Route:** `/ui/tasks`
 

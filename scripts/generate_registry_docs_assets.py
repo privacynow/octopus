@@ -124,7 +124,7 @@ def _snapshot_data() -> dict:
             "display_name": "Product Bot",
             "role": "product lead",
             "description": "Drives specs, coordination, and rollout plans.",
-            "capabilities": ["planning", "python", "routing"],
+            "routing_skills": ["planning", "python", "routing"],
             "tags": ["product", "primary"],
             "provider": "codex",
             "version": "2026.03",
@@ -138,7 +138,7 @@ def _snapshot_data() -> dict:
             "display_name": "Reviewer Bot",
             "role": "reviewer",
             "description": "Reviews implementation risk and missing tests.",
-            "capabilities": ["reviewer", "tests"],
+            "routing_skills": ["reviewer", "tests"],
             "tags": ["qa"],
             "provider": "claude",
             "version": "2026.03",
@@ -152,7 +152,7 @@ def _snapshot_data() -> dict:
             "display_name": "Ops Bot",
             "role": "operations",
             "description": "Handles registry maintenance and provider rollouts.",
-            "capabilities": ["operations", "approval"],
+            "routing_skills": ["operations", "approval"],
             "tags": ["ops"],
             "provider": "codex",
             "version": "2026.03",
@@ -413,30 +413,30 @@ def _snapshot_data() -> dict:
         },
     }
 
-    capabilities = [
+    routing_skills = [
         {
-            "capability_name": "approval",
-            "declared_by_agents": ["Ops Bot"],
+            "skill_name": "approval",
+            "advertised_by_agents": ["Ops Bot"],
             "enabled": True,
         },
         {
-            "capability_name": "planning",
-            "declared_by_agents": ["Product Bot"],
+            "skill_name": "planning",
+            "advertised_by_agents": ["Product Bot"],
             "enabled": True,
         },
         {
-            "capability_name": "reviewer",
-            "declared_by_agents": ["Reviewer Bot"],
+            "skill_name": "reviewer",
+            "advertised_by_agents": ["Reviewer Bot"],
             "enabled": True,
         },
         {
-            "capability_name": "routing",
-            "declared_by_agents": ["Product Bot"],
+            "skill_name": "routing",
+            "advertised_by_agents": ["Product Bot"],
             "enabled": False,
         },
         {
-            "capability_name": "tests",
-            "declared_by_agents": ["Reviewer Bot"],
+            "skill_name": "tests",
+            "advertised_by_agents": ["Reviewer Bot"],
             "enabled": True,
         },
     ]
@@ -484,7 +484,7 @@ def _snapshot_data() -> dict:
         },
         "runtime_skills": runtime_skills,
         "provider_guidance": provider_guidance,
-        "capabilities": capabilities,
+        "routing_skills": routing_skills,
     }
 
 
@@ -514,7 +514,7 @@ window.fetch = async function(input, options = {{}}) {{
   }});
   if (url.endsWith("/v1/ui/bootstrap")) return jsonResponse(__REGISTRY_DOC_DATA__.bootstrap);
   if (url.endsWith("/v1/ui/usage")) return jsonResponse(__REGISTRY_DOC_DATA__.usage);
-  if (url.endsWith("/v1/ui/capabilities")) return jsonResponse(__REGISTRY_DOC_DATA__.capabilities);
+  if (url.endsWith("/v1/routing/skills")) return jsonResponse(__REGISTRY_DOC_DATA__.routing_skills);
   if (url.endsWith("/v1/catalog/skills")) return jsonResponse({{ skills: __REGISTRY_DOC_DATA__.runtime_skills.skills }});
   if (url.endsWith("/v1/catalog/skills/release-notes")) return jsonResponse(__REGISTRY_DOC_DATA__.runtime_skills.detail);
   if (url.endsWith("/v1/catalog/skills/release-notes/lifecycle")) return jsonResponse(__REGISTRY_DOC_DATA__.runtime_skills.lifecycle);
@@ -563,20 +563,20 @@ window.addEventListener("load", () => {{
       const conversations = document.getElementById("conversations");
       const tasks = document.getElementById("tasks");
       const skills = document.getElementById("runtime-skills");
-      const capabilities = document.getElementById("capabilities");
+      const routing = document.getElementById("capabilities");
       const guidance = document.getElementById("provider-guidance-detail");
       return Boolean(
         bots &&
         conversations &&
         tasks &&
         skills &&
-        capabilities &&
+        routing &&
         guidance &&
         !bots.textContent.includes("Loading") &&
         !conversations.textContent.includes("Loading") &&
         !tasks.textContent.includes("Loading") &&
         !skills.textContent.includes("Loading") &&
-        !capabilities.textContent.includes("Loading") &&
+        !routing.textContent.includes("Loading") &&
         !guidance.classList.contains("hidden")
       );
     }});
@@ -620,7 +620,7 @@ window.addEventListener("load", () => {{
       markReady();
       return;
     }}
-    if (__REGISTRY_DOC_SNAPSHOT__ === "capabilities") {{
+    if (__REGISTRY_DOC_SNAPSHOT__ === "routing") {{
       document.querySelectorAll("section.skills-panel")[2]?.scrollIntoView({{ block: "start" }});
       markReady();
       return;
@@ -676,7 +676,7 @@ def _write_snapshot_pages(temp_dir: Path, data: dict) -> dict[str, Path]:
         "conversation-detail": temp_dir / "conversation-detail.html",
         "runtime-skills": temp_dir / "runtime-skills.html",
         "provider-guidance": temp_dir / "provider-guidance.html",
-        "capabilities": temp_dir / "capabilities.html",
+        "routing": temp_dir / "routing.html",
     }
     pages["login"].write_text(ui.render_login_html("Agent Registry"), encoding="utf-8")
     for name, path in pages.items():
@@ -770,9 +770,9 @@ def main() -> None:
             viewport="1600,1200",
         )
         _screenshot(
-            pages["capabilities"],
+            pages["routing"],
             ASSET_DIR / "capabilities-tab.png",
-            selector='body[data-snapshot-ready="capabilities"]',
+            selector='body[data-snapshot-ready="routing"]',
             viewport="1600,1000",
         )
 

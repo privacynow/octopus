@@ -40,7 +40,7 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         "conversation-detail.js": "function renderConversationDetail(",
         "task-list.js": "function renderTaskList(",
         "approval-list.js": "function renderApprovalList(",
-        "capability-list.js": "function renderCapabilityList(",
+        "routing-policy-list.js": "function renderRoutingPolicyList(",
         "usage-view.js": "function renderUsageView(",
         "skill-catalog.js": "function renderSkillCatalog(",
         "guidance-editor.js": "function renderGuidanceEditor(",
@@ -572,7 +572,7 @@ def test_components_use_shared_refresh_and_do_not_duplicate_ws_invalidation_plum
     assert "function subscribeWithRefresh(" in helper
 
     for name in [
-        "capability-list.js",
+        "routing-policy-list.js",
         "usage-view.js",
         "skill-catalog.js",
         "guidance-editor.js",

@@ -20,7 +20,7 @@ type Bot = {
   role: string;
   provider: string;
   scope: "full" | "channel" | "coordination";
-  capabilities: string[];
+  routing_skills: string[];
   tags: string[];
   state: "connected" | "degraded";
 };
@@ -45,7 +45,7 @@ const BOTS: Bot[] = [
     role: "developer",
     provider: "codex",
     scope: "full",
-    capabilities: ["python", "reviewer", "registry"],
+    routing_skills: ["python", "reviewer", "registry"],
     tags: ["release", "ops", "docs"],
     state: "connected",
   },
@@ -55,7 +55,7 @@ const BOTS: Bot[] = [
     role: "developer",
     provider: "claude",
     scope: "full",
-    capabilities: ["reviewer", "security", "policy"],
+    routing_skills: ["reviewer", "security", "policy"],
     tags: ["risk", "compliance", "docs"],
     state: "connected",
   },
@@ -65,7 +65,7 @@ const BOTS: Bot[] = [
     role: "support",
     provider: "codex",
     scope: "channel",
-    capabilities: ["support", "crm", "python"],
+    routing_skills: ["support", "crm", "python"],
     tags: ["support", "tickets", "docs"],
     state: "connected",
   },
@@ -75,7 +75,7 @@ const BOTS: Bot[] = [
     role: "developer",
     provider: "claude",
     scope: "coordination",
-    capabilities: ["terraform", "kubernetes", "devops"],
+    routing_skills: ["terraform", "kubernetes", "devops"],
     tags: ["sre", "infra", "docs"],
     state: "degraded",
   },
@@ -85,7 +85,7 @@ const BOTS: Bot[] = [
     role: "developer",
     provider: "codex",
     scope: "full",
-    capabilities: ["retrieval", "python", "analysis"],
+    routing_skills: ["retrieval", "python", "analysis"],
     tags: ["rag", "research", "docs"],
     state: "connected",
   },
@@ -95,7 +95,7 @@ const BOTS: Bot[] = [
     role: "developer",
     provider: "claude",
     scope: "full",
-    capabilities: ["policy", "reviewer", "security"],
+    routing_skills: ["policy", "reviewer", "security"],
     tags: ["audit", "controls", "docs"],
     state: "connected",
   },
@@ -126,7 +126,7 @@ function card(bot: Bot) {
     slug: bot.slug,
     role: bot.role,
     registry_scope: bot.scope,
-    capabilities: bot.capabilities,
+    routing_skills: bot.routing_skills,
     tags: bot.tags,
     description: `Docs capture seed — ${bot.display}`,
     provider: bot.provider,
@@ -454,7 +454,7 @@ async function createRoutedTask(
   routedTaskId: string,
   title: string,
   instructions: string,
-  requestedCapabilities: string[],
+  requestedSkills: string[],
 ) {
   const resp = await fetch(`${BASE}/v1/agents/routed-tasks`, {
     method: "POST",
@@ -469,7 +469,7 @@ async function createRoutedTask(
       target_agent_id: target.id,
       title,
       instructions,
-      requested_capabilities: requestedCapabilities,
+      requested_skills: requestedSkills,
       priority: "high",
       created_at: new Date().toISOString(),
     }),
@@ -820,11 +820,11 @@ test("capture all registry UI surfaces", async ({ page }) => {
     { selector: ".task-item:nth-of-type(1)", label: "Expandable task row with origin, target, and parent conversation actions", color: "#2196f3", pad: 8 },
   ]);
 
-  await page.goto("/ui/capabilities");
+  await page.goto("/ui/routing");
   await waitForViewReady(page, "#cap-list .settings-row, #cap-list .empty-state");
   await page.screenshot({ path: path.join(OUT, "08-capabilities.png"), fullPage: true });
   await writeOverlayMeta(page, path.join(OUT, "08-capabilities.png"), [
-    { selector: "#cap-list", label: "Global capability overrides declared by active agents", color: "#2196f3", pad: 8 },
+    { selector: "#cap-list", label: "Global routing policy for skills advertised by active agents", color: "#2196f3", pad: 8 },
   ]);
 
   await page.goto("/ui/skills");

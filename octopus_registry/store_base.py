@@ -33,7 +33,7 @@ from octopus_sdk.registry.models import (
     ApproveRejectActionPayload,
     CancelDelegationActionPayload,
     CancelTaskActionPayload,
-    CapabilityRecord,
+    RoutingSkillRecord,
     ConversationRecord,
     ConversationSearchHitRecord,
     CoordinationActionEnvelope,
@@ -100,15 +100,15 @@ def direct_assignment_message_text(payload: DirectAssignActionPayload) -> str:
         return raw
     if payload.selector.kind == "agent":
         selector = f"@{payload.selector.value}"
-    elif payload.selector.kind == "capability":
-        selector = f"@cap:{payload.selector.value}"
+    elif payload.selector.kind == "skill":
+        selector = f"@skill:{payload.selector.value}"
     else:
         selector = f"@role:{payload.selector.value}"
     return f"{selector} {payload.instructions}".strip()
 
 
-class CapabilityDisabledError(RuntimeError):
-    """Raised when routing requests a capability that has been globally disabled."""
+class RoutingSkillDisabledError(RuntimeError):
+    """Raised when routing requests a routing skill that has been globally disabled."""
 
 
 class RegistryScopeError(PermissionError):
@@ -614,14 +614,14 @@ class AbstractRegistryStore(Protocol):
     def deregister(self, agent_token: str) -> AgentRecord:
         """Mark an agent disconnected while preserving its durable registry identity."""
 
-    def get_capability_override(self, capability_name: str) -> bool | None:
+    def get_routing_skill_override(self, skill_name: str) -> bool | None:
         """Return True/False for an override row, or None when no override exists."""
 
-    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
-        """Persist or update a global capability override."""
+    def set_routing_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
+        """Persist or update a global routing-skill override."""
 
-    def list_capabilities(self) -> list[CapabilityRecord]:
-        """Return the declared capability universe merged with override state."""
+    def list_routing_skills(self) -> list[RoutingSkillRecord]:
+        """Return the declared routing-skill universe merged with override state."""
 
     def list_agents(
         self,

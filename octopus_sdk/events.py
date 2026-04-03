@@ -113,7 +113,7 @@ class DelegationTaskSummary(BaseModel):
     selector_value: str = ""
     instructions: str = ""
     priority: str = ""
-    requested_capabilities: list[str] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
     context: dict[str, JsonValue] = Field(default_factory=dict)
 
 

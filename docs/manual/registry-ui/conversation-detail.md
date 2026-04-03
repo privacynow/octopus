@@ -44,7 +44,7 @@ Current metadata meanings:
 The same composer handles both normal replies and structured routing:
 
 - plain text sends a normal operator message
-- a leading selector such as `@m2`, `@cap:review`, or `@role:reviewer`
+- a leading selector such as `@m2`, `@skill:review`, or `@role:reviewer`
   submits a structured `direct_assign` action from the same input
 
 Older history loads automatically when you scroll to the top sentinel. With a

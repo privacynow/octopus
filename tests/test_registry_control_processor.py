@@ -220,7 +220,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
                 "display_name": "Target",
                 "slug": "target",
                 "role": "ops",
-                "capabilities": ["bash"],
+                "routing_skills": ["bash"],
                 "tags": ["prod"],
                 "description": "Target agent",
                 "connectivity_state": "connected",
@@ -250,7 +250,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
                 instructions="Check logs",
                 context={"severity": "high"},
                 constraints={"mode": "readonly"},
-                requested_capabilities=["bash"],
+                requested_skills=["bash"],
                 created_at="2026-03-20T00:00:00+00:00",
             ).model_dump_json(),
         )

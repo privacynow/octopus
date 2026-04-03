@@ -35,7 +35,7 @@ have enrolled the bots you want to see.
 8. [Conversation search](registry-ui/conversations-search.md) — debounced server-side query on the same route
 9. [Conversation detail](registry-ui/conversation-detail.md) — Conversation / Tasks / Full activity plus shared composer
 10. [Tasks](registry-ui/tasks.md) — routed-task queue with summary rail, filters, expandable details
-11. [Capabilities](registry-ui/capabilities.md) — coordination toggles
+11. [Routing](registry-ui/routing.md) — routing-skill policy
 12. [Skills catalog](registry-ui/skills-catalog.md) — catalog, install, uninstall
 13. [Usage](registry-ui/usage.md) — prompt/completion/cost rollups
 14. [Provider guidance](registry-ui/guidance.md) — provider-specific guidance lifecycle
@@ -46,7 +46,7 @@ have enrolled the bots you want to see.
 
 - Conversations are the main operator workspace.
 - The same composer handles normal replies and direct routing:
-  `@m2`, `@cap:review`, or `@role:reviewer`.
+  `@m2`, `@skill:review`, or `@role:reviewer`.
 - Routed work is represented as first-class tasks, not as provider-generated
   XML or free-form timeline text.
 - Usage totals come from provider-response usage data and can roll delegated

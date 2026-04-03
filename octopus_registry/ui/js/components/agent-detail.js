@@ -187,13 +187,13 @@ function renderAgentDetail(container, params) {
             card.appendChild(note);
         }
 
-        if ((agent.capabilities || []).length) {
+        if ((agent.routing_skills || []).length) {
             const chips = document.createElement('div');
             chips.className = 'chip-row';
-            agent.capabilities.forEach((capability) => {
+            agent.routing_skills.forEach((skillName) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
-                chip.textContent = capability;
+                chip.textContent = skillName;
                 chips.appendChild(chip);
             });
             card.appendChild(chips);
@@ -440,7 +440,7 @@ function renderAgentDetail(container, params) {
                     heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),
-                    capabilities: (agent.capabilities || []).map((capability) => String(capability || '')),
+                    routingSkills: (agent.routing_skills || []).map((skillName) => String(skillName || '')),
                 },
                 workers: workers.map((worker) => ({
                     id: String(worker.worker_id || ''),

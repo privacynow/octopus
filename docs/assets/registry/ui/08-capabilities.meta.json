@@ -5,7 +5,7 @@
       "y": 58.234375,
       "width": 1096,
       "height": 974.9375,
-      "label": "Global capability overrides declared by active agents",
+      "label": "Global routing policy for skills advertised by active agents",
       "color": "#2196f3"
     }
   ],

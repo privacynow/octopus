@@ -2,9 +2,9 @@ function _parseConversationTargetSelector(raw) {
     const text = String(raw || '').trim();
     if (!text.startsWith('@')) return null;
     const body = text.slice(1);
-    if (body.startsWith('cap:')) {
-        const value = body.slice(4).trim();
-        return value ? { kind: 'capability', value } : null;
+    if (body.startsWith('skill:')) {
+        const value = body.slice(6).trim();
+        return value ? { kind: 'skill', value } : null;
     }
     if (body.startsWith('role:')) {
         const value = body.slice(5).trim();

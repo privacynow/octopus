@@ -23,7 +23,7 @@ function card(slug: string, displayName: string) {
     slug,
     role: "developer",
     registry_scope: "full",
-    capabilities: ["python", "reviewer", "registry"],
+    routing_skills: ["python", "reviewer", "registry"],
     tags: ["playwright", "smoke"],
     description: `Smoke seed for ${displayName}`,
     provider: "codex",
@@ -399,7 +399,7 @@ test("dashboard and conversation views react to live registry updates", async ({
     target_agent_id: extraAgent.agentId,
     title: "Live delegated review",
     instructions: "Review the deployment plan.",
-    requested_capabilities: ["reviewer"],
+    requested_skills: ["reviewer"],
     created_at: iso(-2),
   });
   await updateRoutedTaskStatus(extraAgent.token, `task-live-${suffix}`, {

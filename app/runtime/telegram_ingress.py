@@ -715,7 +715,7 @@ def _parse_discovery_query(
     exclude_agent_id: str = "",
 ) -> tuple[AgentDiscoveryQuery | None, str | None]:
     role = ""
-    capabilities: list[str] = []
+    skills: list[str] = []
     tags: list[str] = []
     required_state = "connected"
     free_text_parts: list[str] = []
@@ -736,8 +736,8 @@ def _parse_discovery_query(
             continue
         if key == "role":
             role = value
-        elif key in {"capability", "capabilities", "skill", "skills"}:
-            capabilities.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"skill", "skills"}:
+            skills.extend(part.strip() for part in value.split(",") if part.strip())
         elif key in {"tag", "tags"}:
             tags.extend(part.strip() for part in value.split(",") if part.strip())
         elif key == "state":
@@ -746,12 +746,12 @@ def _parse_discovery_query(
             free_text_parts.append(token)
     if required_state not in {"connected", "degraded", "standalone", "disconnected"}:
         return None, telegram_presenters.discover_usage_message().text
-    if not role and not capabilities and not tags and not free_text_parts:
+    if not role and not skills and not tags and not free_text_parts:
         return None, telegram_presenters.discover_usage_message().text
     return (
         AgentDiscoveryQuery(
             role=role,
-            capabilities=tuple(capabilities),
+            skills=tuple(skills),
             tags=tuple(tags),
             free_text=" ".join(free_text_parts).strip(),
             exclude_agent_ids=(exclude_agent_id,) if exclude_agent_id else (),
@@ -806,13 +806,13 @@ async def cmd_delegate(
     args = tuple(event.args or ())
     if len(args) < 2:
         await update.effective_message.reply_text(
-            "Usage: /delegate @agent instructions\nYou can also use @cap:capability or @role:role."
+            "Usage: /delegate @agent instructions\nYou can also use @skill:skill-name or @role:role."
         )
         return
     selector = parse_target_selector(args[0])
     if selector is None:
         await update.effective_message.reply_text(
-            "Usage: /delegate @agent instructions\nYou can also use @cap:capability or @role:role."
+            "Usage: /delegate @agent instructions\nYou can also use @skill:skill-name or @role:role."
         )
         return
     instructions = " ".join(part.strip() for part in args[1:] if str(part).strip()).strip()

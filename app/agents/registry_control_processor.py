@@ -204,7 +204,7 @@ class RegistryControlProcessor(ControlProcessor):
                 instructions=payload.instructions,
                 context=dict(payload.context),
                 constraints=dict(payload.constraints),
-                requested_capabilities=list(payload.requested_capabilities),
+                requested_skills=list(payload.requested_skills),
                 priority=payload.priority,
                 created_at=payload.created_at,
             )
@@ -263,7 +263,7 @@ class RegistryControlProcessor(ControlProcessor):
             request = SearchAgentsRequest.model_validate_json(command.payload_json)
             query = AgentDiscoveryQuery(
                 role=request.role,
-                capabilities=list(request.capabilities),
+                skills=list(request.skills),
                 tags=list(request.tags),
                 free_text=request.free_text,
                 exclude_agent_ids=list(request.exclude_agent_ids),
@@ -277,7 +277,7 @@ class RegistryControlProcessor(ControlProcessor):
                     display_name=row.display_name,
                     slug=row.slug,
                     role=row.role,
-                    capabilities=[str(item) for item in row.capabilities if item],
+                    routing_skills=[str(item) for item in row.routing_skills if item],
                     tags=[str(item) for item in row.tags if item],
                     description=row.description,
                     connectivity_state=row.connectivity_state,

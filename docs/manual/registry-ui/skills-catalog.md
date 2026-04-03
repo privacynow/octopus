@@ -1,6 +1,6 @@
 # Registry UI: Skills catalog
 
-Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Capabilities](capabilities.md) · Next: [Usage](usage.md)
+Manual: [Home](../README.md) · Registry UI: [Overview](../03-operator-registry.md) · Previous: [Routing](routing.md) · Next: [Usage](usage.md)
 
 **Route:** `/ui/skills`
 

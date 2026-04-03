@@ -333,6 +333,7 @@ class DockerRunner:
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
             "BOT_PROVIDER": provider,
+            "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": auth_dir,
             "BOT_ENV_FILE": "/dev/null",
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),
@@ -359,6 +360,7 @@ class DockerRunner:
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
             "OCTOPUS_DB_HOST": "registry-postgres",
+            "OCTOPUS_RUNTIME_IMAGE": "octopus-registry-service:latest",
         }
         return command, env
 
@@ -651,6 +653,7 @@ class OctopusManager:
             paths = [
                 Path("requirements.txt"),
                 Path("infra/docker/Dockerfile.registry"),
+                Path("app"),
                 Path("octopus_registry"),
                 Path("octopus_sdk"),
             ]

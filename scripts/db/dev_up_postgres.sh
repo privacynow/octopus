@@ -8,6 +8,9 @@ cd "$REPO_DIR"
 echo "Starting Postgres..."
 docker compose --project-directory . -f infra/compose/docker-compose.yml up -d postgres
 
+echo "Building runtime image for DB tools..."
+docker build -f infra/docker/Dockerfile.registry -t octopus-registry-service:latest .
+
 echo "Waiting for Postgres to be ready..."
 for i in $(seq 1 30); do
   if docker compose --project-directory . -f infra/compose/docker-compose.yml exec postgres pg_isready -U bot -d bot 2>/dev/null; then
@@ -22,18 +25,18 @@ done
 
 echo "Running DB update (existing schema)..."
 set +e
-update_out=$(docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-update 2>&1)
+update_out=$(OCTOPUS_RUNTIME_IMAGE=octopus-registry-service:latest docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-update 2>&1)
 update_rc=$?
 set -e
 if [ "$update_rc" -eq 0 ]; then
   echo "$update_out"
   echo "Running DB doctor..."
-  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-doctor
+  OCTOPUS_RUNTIME_IMAGE=octopus-registry-service:latest docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-doctor
 elif echo "$update_out" | grep -q "Schema or schema_migrations table missing"; then
   echo "Schema missing; running DB bootstrap (fresh schema)..."
-  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-bootstrap
+  OCTOPUS_RUNTIME_IMAGE=octopus-registry-service:latest docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-bootstrap
   echo "Running DB doctor..."
-  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-doctor
+  OCTOPUS_RUNTIME_IMAGE=octopus-registry-service:latest docker compose --project-directory . -f infra/compose/docker-compose.yml --profile tools run --rm db-doctor
 else
   echo "This does not look like a fresh database. The error was:" >&2
   echo "$update_out" >&2

@@ -29,9 +29,7 @@ services:
           - ${OCTOPUS_DB_HOST:-postgres}
 
   db-bootstrap:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
+    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
     command: ["python", "-m", "app.db.cli", "bootstrap"]
     environment:
       OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
@@ -40,9 +38,7 @@ services:
         condition: service_healthy
 
   db-update:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
+    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
     command: ["python", "-m", "app.db.cli", "update"]
     environment:
       OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
@@ -51,9 +47,7 @@ services:
         condition: service_healthy
 
   db-doctor:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
+    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
     command: ["python", "-m", "app.db.cli", "doctor"]
     environment:
       OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}

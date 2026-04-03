@@ -53,6 +53,10 @@ class ProviderGuidanceService:
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str:
         parts: list[str] = []
@@ -64,6 +68,11 @@ class ProviderGuidanceService:
                 parts.append(stripped + "\n")
             else:
                 parts.append(f"You are a {stripped}.\n")
+        guidance_text = (guidance_override or "").strip()
+        if not guidance_text and provider_name:
+            guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
+        if guidance_text:
+            parts.append(guidance_text + "\n")
         for record in self._tracks(active_skills):
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
         if available_agents:
@@ -73,24 +82,33 @@ class ProviderGuidanceService:
     @staticmethod
     def _format_agent_discovery_section(agents: list[DiscoveredAgentRef]) -> str:
         lines = [
-            "## Available Agents\n",
-            "These specialists are currently reachable through the coordination layer.",
-            "Reference them naturally if needed, but do not emit coordination protocol text.",
+            "## Other Reachable Bots\n",
+            "These are other bots currently reachable through the coordination layer.",
+            "You are answering as the current bot in this conversation. Do not describe yourself as the main assistant, primary assistant, or coordinator.",
+            "Reference other bots naturally if needed, but do not emit coordination protocol text.",
             "",
-            "| Agent | Slug | Role | Capabilities | Status |",
-            "|-------|------|------|--------------|--------|",
+            "| Agent | Slug | Role | Routing Skills | Status |",
+            "|-------|------|------|----------------|--------|",
         ]
         for agent in agents:
             name = agent.display_name
             slug = agent.slug
             a_role = agent.role
-            caps = ", ".join(agent.capabilities)
+            caps = ", ".join(agent.routing_skills)
             state = agent.connectivity_state or "connected"
             lines.append(f"| {name} | {slug} | {a_role} | {caps} | {state} |")
         lines.append("")
         return "\n".join(lines)
 
-    def preflight_prompt(self, role: str, active_skills: list[str]) -> str:
+    def preflight_prompt(
+        self,
+        role: str,
+        active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
+    ) -> str:
         parts: list[str] = []
         if role:
             stripped = role.strip()
@@ -100,19 +118,61 @@ class ProviderGuidanceService:
                 parts.append(stripped + "\n")
             else:
                 parts.append(f"You are a {stripped}.\n")
+        guidance_text = (guidance_override or "").strip()
+        if not guidance_text and provider_name:
+            guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
+        if guidance_text:
+            parts.append(guidance_text + "\n")
         tracks = self._tracks(active_skills)
         if tracks:
             labels = ", ".join(record.display_name for record in tracks)
             parts.append(f"Active runtime skills: {labels}.\n")
         return "\n".join(parts) if parts else ""
 
+    @staticmethod
+    def _provider_semantics_note(provider_name: str) -> str:
+        if provider_name != "codex":
+            return ""
+        return (
+            "## Octopus Skill Semantics\n\n"
+            "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
+            "default-for-new-conversations settings, and per-conversation activation. "
+            "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
+            "other non-Octopus skill system. If a user asks how skills work, describe which skills "
+            "are available on this bot, which are defaults for new conversations, and which are "
+            "active in this conversation. If a user asks who is answering, say the current bot in "
+            "this conversation is answering; do not describe yourself as a main assistant, primary "
+            "assistant, or coordinator."
+        )
+
+    def _apply_provider_semantics(self, system_prompt: str, provider_name: str) -> str:
+        note = self._provider_semantics_note(provider_name)
+        if not note:
+            return system_prompt
+        if system_prompt:
+            return f"{system_prompt}\n\n{note}"
+        return note
+
     def prompt_weight(
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int:
-        return len(self.system_prompt(role, active_skills, available_agents=available_agents))
+        return len(
+            self.system_prompt(
+                role,
+                active_skills,
+                provider_name=provider_name,
+                instance_key=instance_key,
+                guidance_override=guidance_override,
+                available_agents=available_agents,
+            )
+        )
 
     def provider_config(
         self,
@@ -254,6 +314,7 @@ class ProviderGuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
         credential_env = credential_env or CredentialEnvRecord()
@@ -261,7 +322,16 @@ class ProviderGuidanceService:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return RunContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.system_prompt(role, active_skills, available_agents=available_agents),
+            system_prompt=self._apply_provider_semantics(
+                self.system_prompt(
+                    role,
+                    active_skills,
+                    provider_name=provider_name,
+                    guidance_override=guidance_override,
+                    available_agents=available_agents,
+                ),
+                provider_name,
+            ),
             capability_summary=capability_summary,
             provider_config=provider_config,
             credential_env=credential_env,
@@ -280,11 +350,20 @@ class ProviderGuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return PreflightContext(
             extra_dirs=extra_dirs,
-            system_prompt=self.preflight_prompt(role, active_skills),
+            system_prompt=self._apply_provider_semantics(
+                self.preflight_prompt(
+                    role,
+                    active_skills,
+                    provider_name=provider_name,
+                    guidance_override=guidance_override,
+                ),
+                provider_name,
+            ),
             capability_summary=capability_summary,
             working_dir=working_dir,
             file_policy=file_policy,
@@ -365,8 +444,24 @@ class ProviderGuidanceService:
 
         return get_content_store().resolve_provider_guidance(provider_name, instance_key=instance_key)
 
-    def effective_guidance_preview(self, provider_name: str, *, instance_key: str = "") -> str:
+    def published_guidance_text(self, provider_name: str, *, instance_key: str = "") -> str:
         track = self.effective_guidance(provider_name, instance_key=instance_key)
+        return track.revision.content if track is not None else ""
+
+    def draft_guidance_text(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        from app.content_store import get_content_store
+
+        track = get_content_store().get_provider_guidance(
+            provider_name,
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+        )
         return track.revision.content if track is not None else ""
 
 

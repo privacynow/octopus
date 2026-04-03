@@ -198,7 +198,7 @@ async def test_skills_info_shows_imported_requirements(monkeypatch, tmp_path: Pa
         await send_command(th.cmd_skills, chat, admin, "/skills install store-cred-skill", ["install", "store-cred-skill"])
         msg = await send_command(th.cmd_skills, chat, admin, "/skills info store-cred-skill", ["info", "store-cred-skill"])
 
-        assert "Requires: API_TOKEN" in " ".join(r.get("text", "") for r in msg.replies)
+        assert "Setup: API_TOKEN" in " ".join(r.get("text", "") for r in msg.replies)
     finally:
         _cleanup_runtime(data_dir)
 
@@ -293,7 +293,7 @@ async def test_skill_add_callback_confirm(monkeypatch, tmp_path: Path):
         assert len(query.answers) == 1
         assert not query.answer_show_alert
         assert has_markup_removal(cb_msg)
-        assert "activated" in (cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else "").lower()
+        assert "active in this conversation" in (cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else "").lower()
         session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert "helper" in session.get("active_skills", [])
     finally:
@@ -370,7 +370,7 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         chat = FakeChat(1001)
 
         created = await send_command(th.cmd_skills, chat, regular, "/skills create release-notes", ["create", "release-notes"])
-        assert "Created custom skill" in last_reply(created)
+        assert "Created custom draft" in last_reply(created)
         assert get_skill_catalog_service().resolve_runtime_track("release-notes") is None
 
         edited = await send_command(
@@ -404,6 +404,45 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
 
         archived_again = await send_command(th.cmd_skills, chat, admin, "/skills archive release-notes", ["archive", "release-notes"])
         assert "already archived" in last_reply(archived_again).lower()
+    finally:
+        _cleanup_runtime(data_dir)
+
+
+async def test_handler_skill_package_command_roundtrips_full_draft(monkeypatch, tmp_path: Path):
+    import app.runtime.telegram_ingress as th
+
+    data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
+    try:
+        regular = FakeUser(uid=200, username="regular")
+        chat = FakeChat(1001)
+
+        created = await send_command(th.cmd_skills, chat, regular, "/skills create pkg-skill", ["create", "pkg-skill"])
+        assert "Created custom draft" in last_reply(created)
+
+        shown = await send_command(th.cmd_skills, chat, regular, "/skills package pkg-skill", ["package", "pkg-skill"])
+        assert "Draft package" in last_reply(shown)
+
+        payload = (
+            '{"display_name":"Package Skill","description":"Chat package draft",'
+            '"body":"Use the chat package editor.","requirements":[{"key":"API_TOKEN","prompt":"Enter token"}],'
+            '"provider_config":{"claude":{"allowed_tools":["bash"]}},'
+            '"files":[{"relative_path":"helper.sh","content_type":"text/x-shellscript","executable":true,"content_text":"echo chat"}]}'
+        )
+        saved = await send_command(
+            th.cmd_skills,
+            chat,
+            regular,
+            f"/skills package pkg-skill {payload}",
+            ["package", "pkg-skill", payload],
+        )
+        assert "Saved draft" in last_reply(saved)
+
+        track = get_skill_catalog_service().resolve_track("pkg-skill")
+        assert track is not None
+        assert track.display_name == "Package Skill"
+        assert track.revision.requirements[0].key == "API_TOKEN"
+        assert track.revision.provider_config["claude"]["allowed_tools"] == ["bash"]
+        assert track.revision.files[0].relative_path == "helper.sh"
     finally:
         _cleanup_runtime(data_dir)
 

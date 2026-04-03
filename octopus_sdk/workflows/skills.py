@@ -10,11 +10,20 @@ from octopus_sdk.content_models import (
     LifecycleApprovalRecord,
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
+    SkillFileRecord,
 )
 from octopus_sdk.credential_types import CredentialValidator
-from octopus_sdk.providers import CredentialEnvRecord, ProviderStateRecord
+from octopus_sdk.providers import CredentialEnvRecord, ProviderConfigRecord, ProviderStateRecord
 from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
 from octopus_sdk.skill_types import SkillRequirement
+
+
+@dataclass(frozen=True)
+class RuntimeSkillValidationProblem:
+    code: str
+    message: str
+    field_path: str = ""
+    severity: str = "error"
 
 
 @dataclass(frozen=True)
@@ -23,13 +32,20 @@ class RuntimeSkillCatalogItem:
     display_name: str
     description: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
     has_custom_override: bool
     can_activate: bool
     can_update: bool
     can_uninstall: bool
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    default_for_new_conversations: bool = False
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,13 +55,25 @@ class RuntimeSkillDetail:
     description: str
     body: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
     has_custom_override: bool
     can_activate: bool
     can_update: bool
     can_uninstall: bool
     lifecycle_status: str = ""
+    runtime_available: bool = True
+    default_for_new_conversations: bool = False
+    visibility: str = "shared"
+    is_mutable: bool = False
+    has_unpublished_changes: bool = False
+    requirements: tuple[SkillRequirement, ...] = ()
+    provider_config: ProviderConfigRecord = ProviderConfigRecord()
+    files: tuple[SkillFileRecord, ...] = ()
+    validation_problems: tuple[RuntimeSkillValidationProblem, ...] = ()
+    publish_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,8 +88,18 @@ class RuntimeSkillInfoRecord:
     description: str
     body: str
     source_kind: str
+    source_label: str
     providers: tuple[str, ...]
     requirement_keys: tuple[str, ...]
+    requires_credentials: bool
+    runtime_available: bool
+    visibility: str
+    is_mutable: bool
+    has_unpublished_changes: bool
+    default_for_new_conversations: bool = False
+    requirements: tuple[SkillRequirement, ...] = ()
+    provider_config: ProviderConfigRecord = ProviderConfigRecord()
+    files: tuple[SkillFileRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -148,7 +186,11 @@ class ConversationSkillItem:
     display_name: str
     description: str
     source_kind: str
+    source_label: str
     has_custom_override: bool
+    providers: tuple[str, ...] = ()
+    requirement_keys: tuple[str, ...] = ()
+    requires_credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,6 +263,7 @@ class RegistryRuntimeSkillSearchHit:
     publisher: str
     version: str
     can_import: bool
+    source_label: str = "Store"
 
 
 @dataclass(frozen=True)
@@ -382,21 +425,25 @@ class RuntimeSkillLifecycleApproval:
     actor: str
     note: str
     created_at: str
-
-
 @dataclass(frozen=True)
 class RuntimeSkillLifecycleDetail:
     name: str
     display_name: str
     description: str
+    source_label: str
     visibility: str
     body: str
     lifecycle_status: str
     active_revision_id: str
     published_revision_id: str
     runtime_available: bool
-    revisions: tuple[RuntimeSkillLifecycleRevision, ...]
-    approvals: tuple[RuntimeSkillLifecycleApproval, ...]
+    publish_ready: bool = False
+    revisions: tuple[RuntimeSkillLifecycleRevision, ...] = ()
+    approvals: tuple[RuntimeSkillLifecycleApproval, ...] = ()
+    requirements: tuple[SkillRequirement, ...] = ()
+    provider_config: ProviderConfigRecord = ProviderConfigRecord()
+    files: tuple[SkillFileRecord, ...] = ()
+    validation_problems: tuple[RuntimeSkillValidationProblem, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -415,8 +462,12 @@ class RuntimeSkillAuthoringPort(Protocol):
         skill_name: str,
         *,
         actor_key: str,
-        body: str,
+        body: str | None = None,
+        display_name: str | None = None,
         description: str | None = None,
+        requirements: tuple[SkillRequirement, ...] | None = None,
+        provider_config: ProviderConfigRecord | None = None,
+        files: tuple[SkillFileRecord, ...] | None = None,
         changelog: str = "",
     ) -> RuntimeSkillLifecycleMutation: ...
     def submit(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...

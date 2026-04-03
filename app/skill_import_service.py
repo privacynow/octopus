@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import difflib
 import logging
-import shutil
 import tempfile
 from pathlib import Path
-
-import yaml
 
 from app import registry as registry_client
 from octopus_sdk.content_models import RuntimeSkillTrackRecord
 from app.content_seed import track_from_skill_dir
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+from octopus_sdk.skill_packages import build_skill_virtual_files
 from octopus_sdk.workflows.skills import RegistrySkillSearchRecord, SkillMutationResult, SkillUpdateStatus
 
 
@@ -31,31 +29,6 @@ def _parse_registry_source_uri(source_uri: str) -> tuple[str, str] | None:
     if not registry_url or not skill_name:
         return None
     return registry_url, skill_name
-
-
-def _track_to_virtual_files(record: RuntimeSkillTrackRecord) -> dict[str, str]:
-    skill_md = (
-        "---\n"
-        f"name: {record.slug}\n"
-        f"display_name: {record.display_name}\n"
-        f"description: {record.description}\n"
-        "---\n\n"
-        f"{record.revision.instruction_body.rstrip()}\n"
-    )
-    files = {"skill.md": skill_md}
-    if record.revision.requirements:
-        files["requires.yaml"] = yaml.safe_dump(
-            {"credentials": record.revision.requirements},
-            sort_keys=False,
-        )
-    for provider_name, config in sorted(record.revision.provider_config.items()):
-        if isinstance(config, dict) and config:
-            files[f"{provider_name}.yaml"] = yaml.safe_dump(config, sort_keys=False)
-    for item in record.revision.files:
-        files[item.relative_path] = item.content_text
-    return files
-
-
 def _diff_tracks(
     current: RuntimeSkillTrackRecord,
     incoming: RuntimeSkillTrackRecord,
@@ -64,8 +37,8 @@ def _diff_tracks(
     to_label: str,
     max_chars: int,
 ) -> str:
-    current_files = _track_to_virtual_files(current)
-    incoming_files = _track_to_virtual_files(incoming)
+    current_files = build_skill_virtual_files(current)
+    incoming_files = build_skill_virtual_files(incoming)
     paths = sorted(set(current_files) | set(incoming_files))
     lines: list[str] = []
     for rel in paths:
@@ -91,9 +64,9 @@ def _diff_tracks(
 
 def _safe_registry_failure_message(action: str) -> str:
     messages = {
-        "install": "Could not fetch skill registry. Try again later.",
-        "update": "Could not update skill. Try again later.",
-        "diff": "Could not fetch skill for update check. Try again later.",
+        "install": "Could not reach the skill store. Try again later.",
+        "update": "Could not update this skill from the store. Try again later.",
+        "diff": "Could not fetch the store version for this skill. Try again later.",
     }
     return messages[action]
 
@@ -201,7 +174,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=f"Skill '{name}' installed registry. Use /skills add {name} to activate.",
+            message=f"Skill '{name}' installed on this bot from the skill store. Use /skills add {name} to activate it in a conversation.",
         )
 
     def uninstall(self, name: str, default_skills: tuple[str, ...] = ()) -> SkillMutationResult:
@@ -210,7 +183,7 @@ class SkillImportService:
             return SkillMutationResult(
                 name=name,
                 ok=False,
-                message=f"Skill '{name}' is not installed as an imported skill.",
+                message=f"Skill '{name}' is not installed from the skill store on this bot.",
             )
         remaining_tracks = [item for item in self._catalog.list_tracks(name) if item.source_kind != "imported"]
         if name in default_skills and not remaining_tracks:
@@ -273,7 +246,7 @@ class SkillImportService:
     def update(self, name: str) -> SkillMutationResult:
         imported = self._imported_track(name)
         if imported is None:
-            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed as an imported skill.")
+            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed from the skill store on this bot.")
         parsed = _parse_registry_source_uri(imported.source_uri)
         if parsed is None:
             return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' does not have a valid registry source.")
@@ -295,7 +268,7 @@ class SkillImportService:
         if incoming.revision.digest == imported.revision.digest:
             return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' is already up to date.")
         self._store().replace_skill_track(incoming)
-        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated registry.")
+        return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' updated from the skill store.")
 
     def update_all(self) -> list[SkillMutationResult]:
         results: list[SkillMutationResult] = []
@@ -307,7 +280,7 @@ class SkillImportService:
     def diff(self, name: str, *, max_chars: int = 4000) -> SkillMutationResult:
         imported = self._imported_track(name)
         if imported is None:
-            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed as an imported skill.")
+            return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' is not installed from the skill store on this bot.")
         parsed = _parse_registry_source_uri(imported.source_uri)
         if parsed is None:
             return SkillMutationResult(name=name, ok=False, message=f"Skill '{name}' does not have a valid registry source.")
@@ -329,7 +302,7 @@ class SkillImportService:
         return SkillMutationResult(
             name=name,
             ok=True,
-            message=_diff_tracks(imported, incoming, _label="installed", to_label="registry", max_chars=max_chars),
+            message=_diff_tracks(imported, incoming, _label="installed on bot", to_label="skill store", max_chars=max_chars),
         )
 
     def is_installed(self, name: str) -> bool:

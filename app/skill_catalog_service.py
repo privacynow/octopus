@@ -5,8 +5,15 @@ from __future__ import annotations
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_seed import builtin_skill_tracks
 from app.content_store import get_content_store
-from octopus_sdk.skill_types import SkillMeta, SkillRequirement
+from octopus_sdk.skill_types import SkillMeta, SkillRequirement, skill_source_label
 from octopus_sdk.workflows.skills import RuntimeSkillInfoRecord
+from octopus_sdk.skill_packages import (
+    default_skill_display_name,
+    skill_has_unpublished_changes,
+    skill_provider_names,
+    skill_requirement_keys,
+    skill_runtime_available,
+)
 
 
 def _requirements__track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:
@@ -15,12 +22,6 @@ def _requirements__track(record: RuntimeSkillTrackRecord) -> list[SkillRequireme
 
 class SkillCatalogService:
     """Channel-neutral runtime skill catalog service."""
-
-    _SOURCE_LABELS = {
-        "builtin": "builtin",
-        "imported": "imported",
-        "custom": "custom",
-    }
 
     def _store(self):
         return get_content_store()
@@ -67,18 +68,22 @@ class SkillCatalogService:
         record = self.resolve_track(skill_name)
         if record is None:
             return None
-        provider_names = tuple(
-            provider
-            for provider in ("claude", "codex")
-            if isinstance(record.revision.provider_config.get(provider), dict)
-        )
         return RuntimeSkillInfoRecord(
             display_name=record.display_name,
             description=record.description,
             body=record.revision.instruction_body,
-            source_kind=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
-            providers=provider_names,
-            requirement_keys=tuple(item.key for item in _requirements__track(record)),
+            source_kind=record.source_kind,
+            source_label=skill_source_label(record.source_kind),
+            providers=skill_provider_names(record.revision.provider_config),
+            requirement_keys=skill_requirement_keys(_requirements__track(record)),
+            requires_credentials=bool(record.revision.requirements),
+            runtime_available=skill_runtime_available(record),
+            visibility=record.visibility,
+            is_mutable=record.is_mutable,
+            has_unpublished_changes=skill_has_unpublished_changes(record),
+            requirements=tuple(_requirements__track(record)),
+            provider_config=record.revision.provider_config,
+            files=record.revision.files,
         )
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillTrackRecord:
@@ -88,7 +93,7 @@ class SkillCatalogService:
             raise ValueError(f"Skill name must be lowercase letters, digits, and hyphens: {skill_name}")
         if self.has_skill(skill_name):
             raise ValueError(f"Skill '{skill_name}' already exists")
-        display_name = skill_name.replace("-", " ").title()
+        display_name = default_skill_display_name(skill_name)
         record = RuntimeSkillTrackRecord(
             slug=skill_name,
             display_name=display_name,

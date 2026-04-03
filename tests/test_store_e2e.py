@@ -182,7 +182,7 @@ async def test_uninstall_prunes__skills_output_and_list(monkeypatch, tmp_path: P
         await send_command(th.cmd_skills, chat, admin, "/skills uninstall helper", ["uninstall", "helper"])
 
         msg2 = await send_command(th.cmd_skills, chat, admin, "/skills", [])
-        assert "No active skills" in last_reply(msg2)
+        assert "No skills active in this conversation" in last_reply(msg2)
 
         msg3 = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
         reply3 = last_reply(msg3)
@@ -208,7 +208,7 @@ async def test_skills_info_shows_imported_content_not_registry_drift(monkeypatch
         reply = last_reply(msg)
         assert MARKER_V1 in reply
         assert MARKER_V2 not in reply
-        assert "Resolves to: imported" in reply
+        assert "Source: <code>Store</code>" in reply
     finally:
         _cleanup_runtime(data_dir)
 
@@ -225,7 +225,7 @@ async def test_skills_info_custom_only(monkeypatch, tmp_path: Path):
         msg = await send_command(th.cmd_skills, chat, admin, "/skills info my-custom", ["info", "my-custom"])
         reply = last_reply(msg)
         assert MARKER_CUSTOM in reply
-        assert "Resolves to: custom" in reply
+        assert "Source: <code>Custom</code>" in reply
     finally:
         _cleanup_runtime(data_dir)
 
@@ -242,7 +242,7 @@ async def test_skills_info_builtin(monkeypatch, tmp_path: Path):
         msg = await send_command(th.cmd_skills, chat, admin, "/skills info builtin-tool", ["info", "builtin-tool"])
         reply = last_reply(msg)
         assert MARKER_BUILTIN in reply
-        assert "Resolves to: builtin" in reply
+        assert "Source: <code>Core</code>" in reply
     finally:
         _cleanup_runtime(data_dir)
 
@@ -263,7 +263,7 @@ async def test_skills_info_custom_override(monkeypatch, tmp_path: Path):
         reply = last_reply(msg)
         assert MARKER_CUSTOM in reply
         assert MARKER_V1 not in reply
-        assert "Resolves to: custom" in reply
+        assert "Source: <code>Custom</code>" in reply
     finally:
         _cleanup_runtime(data_dir)
 
@@ -358,11 +358,11 @@ async def test_skills_list_shows_imported_and_override_tags(monkeypatch, tmp_pat
         await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
 
         msg = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
-        assert "(imported)" in last_reply(msg)
+        assert "(Store)" in last_reply(msg)
 
         _put_custom_skill("helper", body=MARKER_CUSTOM)
         msg2 = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
-        assert "[custom override]" in last_reply(msg2)
+        assert "(Custom, custom override)" in last_reply(msg2)
     finally:
         _cleanup_runtime(data_dir)
 

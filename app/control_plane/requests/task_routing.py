@@ -31,7 +31,7 @@ class SubmitRoutedTaskPayload(BaseModel):
     instructions: str = Field(..., min_length=1)
     context: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, Any] = Field(default_factory=dict)
-    requested_capabilities: list[str] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
     priority: str = "normal"
     created_at: str = Field(..., min_length=1)
 

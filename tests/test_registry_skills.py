@@ -1,4 +1,4 @@
-"""Tests for registry-managed capability overrides and discovery enforcement."""
+"""Tests for registry-managed routing-skill policy and discovery enforcement."""
 
 import os
 from pathlib import Path
@@ -12,14 +12,14 @@ from octopus_registry.store import RegistrySQLiteStore
 from octopus_sdk.registry.models import AgentCard, AgentDiscoveryQuery, AgentRegisterRequest
 
 
-def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabilities: list[str]) -> tuple[str, str]:
+def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, routing_skills: list[str]) -> tuple[str, str]:
     card = AgentCard(
         bot_key=f"bot:{slug}",
         display_name=name,
         slug=slug,
         role="developer",
         registry_scope="full",
-        capabilities=capabilities,
+        routing_skills=routing_skills,
         tags=["registry"],
         description=f"{name} description",
         provider="codex",
@@ -52,31 +52,31 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
 
 
-def test_list_capabilities_empty_when_no_agents(tmp_path: Path):
+def test_list_routing_skills_empty_when_no_agents(tmp_path: Path):
     store = _store(tmp_path)
 
-    assert store.list_capabilities() == []
+    assert store.list_routing_skills() == []
 
 
-def test_list_capabilities_aggregates_declared(tmp_path: Path):
+def test_list_routing_skills_aggregates_declared(tmp_path: Path):
     store = _store(tmp_path)
-    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search", "code_exec"])
-    _register_agent(store, name="Beta Bot", slug="beta-bot", capabilities=["web_search", "file_read"])
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search", "code_exec"])
+    _register_agent(store, name="Beta Bot", slug="beta-bot", routing_skills=["web_search", "file_read"])
 
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
 
-    assert set(capabilities) == {"code_exec", "file_read", "web_search"}
-    assert capabilities["code_exec"].declared_by_agents == ["alpha-bot"]
-    assert capabilities["file_read"].declared_by_agents == ["beta-bot"]
-    assert capabilities["web_search"].declared_by_agents == ["alpha-bot", "beta-bot"]
+    assert set(skills) == {"code_exec", "file_read", "web_search"}
+    assert skills["code_exec"].advertised_by_agents == ["alpha-bot"]
+    assert skills["file_read"].advertised_by_agents == ["beta-bot"]
+    assert skills["web_search"].advertised_by_agents == ["alpha-bot", "beta-bot"]
 
 
-def test_search_agents_free_text_handles_disabled_capabilities(tmp_path: Path):
+def test_search_agents_free_text_handles_disabled_routing_skills(tmp_path: Path):
     store = _store(tmp_path)
-    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     hits = store.search_agents(AgentDiscoveryQuery(free_text="web", required_state="connected"))
-    store.set_capability_override("web_search", enabled=False)
+    store.set_routing_skill_override("web_search", enabled=False)
     misses = store.search_agents(AgentDiscoveryQuery(free_text="web", required_state="connected"))
 
     assert [item.slug for item in hits] == ["alpha-bot"]
@@ -85,100 +85,100 @@ def test_search_agents_free_text_handles_disabled_capabilities(tmp_path: Path):
 
 def test_set_and_get_override(tmp_path: Path):
     store = _store(tmp_path)
-    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
-    store.set_capability_override("web_search", False)
+    store.set_routing_skill_override("web_search", False)
 
-    assert store.get_capability_override("web_search") is False
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
-    assert capabilities["web_search"].enabled is False
+    assert store.get_routing_skill_override("web_search") is False
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
+    assert skills["web_search"].enabled is False
 
 
 def test_enable_override(tmp_path: Path):
     store = _store(tmp_path)
-    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
-    store.set_capability_override("web_search", False)
-    store.set_capability_override("web_search", True)
+    store.set_routing_skill_override("web_search", False)
+    store.set_routing_skill_override("web_search", True)
 
-    assert store.get_capability_override("web_search") is True
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
-    assert capabilities["web_search"].enabled is True
+    assert store.get_routing_skill_override("web_search") is True
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
+    assert skills["web_search"].enabled is True
 
 
 def test_override_row_survives_agent_deregistration(tmp_path: Path):
     store = _store(tmp_path)
-    _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
-    store.set_capability_override("web_search", False)
+    store.set_routing_skill_override("web_search", False)
     store.deregister(agent_token)
 
-    capabilities = {item.capability_name: item for item in store.list_capabilities()}
-    assert capabilities["web_search"].enabled is False
-    assert capabilities["web_search"].declared_by_agents == []
+    skills = {item.skill_name: item for item in store.list_routing_skills()}
+    assert skills["web_search"].enabled is False
+    assert skills["web_search"].advertised_by_agents == []
 
 
-def test_disabled_skill_absent__search_results(tmp_path: Path):
+def test_disabled_skill_absent_from_search_results(tmp_path: Path):
     store = _store(tmp_path)
-    _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     assert [
         item.slug for item in store.search_agents(
-            AgentDiscoveryQuery(capabilities=["web_search"])
+            AgentDiscoveryQuery(skills=["web_search"])
         )
     ] == ["alpha-bot"]
 
-    store.set_capability_override("web_search", False)
+    store.set_routing_skill_override("web_search", False)
 
-    assert store.search_agents(AgentDiscoveryQuery(capabilities=["web_search"])) == []
+    assert store.search_agents(AgentDiscoveryQuery(skills=["web_search"])) == []
 
 
-def test_ui_capabilities_endpoints_toggle_override_and_affect_search(monkeypatch, tmp_path: Path):
+def test_ui_routing_skill_endpoints_toggle_override_and_affect_search(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
-    _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", capabilities=["web_search"])
+    _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     # Authenticate as operator
     client.post("/ui/login", data={"password": "ui-secret"})
     csrf = client.get("/v1/auth/csrf").json().get("csrf_token", "")
 
-    listed = client.get("/v1/capabilities")
+    listed = client.get("/v1/routing/skills")
     assert listed.status_code == 200
     assert listed.json() == [
         {
-            "capability_name": "web_search",
-            "declared_by_agents": ["alpha-bot"],
+            "skill_name": "web_search",
+            "advertised_by_agents": ["alpha-bot"],
             "enabled": None,
         }
     ]
 
     disabled = client.post(
-        "/v1/capabilities/web_search/disable",
+        "/v1/routing/skills/web_search/disable",
         headers={"X-CSRF-Token": csrf},
     )
     assert disabled.status_code == 200
-    assert disabled.json() == {"capability_name": "web_search", "enabled": False}
+    assert disabled.json() == {"skill_name": "web_search", "enabled": False}
 
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {agent_token}"},
-        json={"capabilities": ["web_search"]},
+        json={"skills": ["web_search"]},
     )
     assert search.status_code == 200
     assert search.json() == {"agents": []}
 
     enabled = client.post(
-        "/v1/capabilities/web_search/enable",
+        "/v1/routing/skills/web_search/enable",
         headers={"X-CSRF-Token": csrf},
     )
     assert enabled.status_code == 200
-    assert enabled.json() == {"capability_name": "web_search", "enabled": True}
+    assert enabled.json() == {"skill_name": "web_search", "enabled": True}
 
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {agent_token}"},
-        json={"capabilities": ["web_search"]},
+        json={"skills": ["web_search"]},
     )
     assert search.status_code == 200
     assert [item["slug"] for item in search.json()["agents"]] == ["alpha-bot"]

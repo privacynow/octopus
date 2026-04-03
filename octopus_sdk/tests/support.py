@@ -360,8 +360,14 @@ class StubCatalogService(SkillCatalogServicePort):
             description="Docs skill",
             body="Use docs",
             source_kind="builtin",
+            source_label="Core",
             providers=("stub",),
             requirement_keys=(),
+            requires_credentials=False,
+            runtime_available=True,
+            visibility="shared",
+            is_mutable=False,
+            has_unpublished_changes=False,
         )
 
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> WorkflowRuntimeSkillTrackRecord:
@@ -498,13 +504,29 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str:
-        del role, active_skills, available_agents
+        del role, active_skills, provider_name, instance_key, available_agents
+        if guidance_override:
+            return guidance_override
         return "system"
 
-    def effective_guidance_preview(self, provider_name: str, *, instance_key: str = "") -> str:
+    def published_guidance_text(self, provider_name: str, *, instance_key: str = "") -> str:
         del provider_name, instance_key
+        return "guidance"
+
+    def draft_guidance_text(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        del provider_name, scope_kind, scope_key
         return "guidance"
 
     def provider_config(
@@ -524,9 +546,13 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int:
-        del role, active_skills, available_agents
+        del role, active_skills, provider_name, instance_key, guidance_override, available_agents
         return 1
 
     def estimate_prompt_size(
@@ -560,12 +586,13 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
         del role, active_skills, provider_name, available_agents
         return RunContext(
             extra_dirs=list(extra_dirs),
-            system_prompt="system",
+            system_prompt=guidance_override or "system",
             capability_summary="caps",
             working_dir=working_dir,
             file_policy=file_policy,
@@ -584,11 +611,12 @@ class StubGuidanceService(ProviderGuidanceServicePort):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext:
         del role, active_skills, provider_name
         return PreflightContext(
             extra_dirs=list(extra_dirs),
-            system_prompt="preflight",
+            system_prompt=guidance_override or "preflight",
             capability_summary="caps",
             working_dir=working_dir,
             file_policy=file_policy,
@@ -892,7 +920,6 @@ def make_test_config(
         agent_role="",
         agent_tags=(),
         agent_description="",
-        agent_capabilities=(),
         agent_registries=(),
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",

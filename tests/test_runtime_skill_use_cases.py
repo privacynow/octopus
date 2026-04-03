@@ -9,6 +9,7 @@ from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from octopus_sdk.identity import telegram_actor_key
 from octopus_sdk.workflows.runtime_skill_activation import RuntimeSkillActivationUseCases
+from octopus_sdk.workflows.runtime_skill_catalog import RuntimeSkillCatalogUseCases
 from octopus_sdk.workflows.runtime_skill_setup import RuntimeSkillSetupUseCases
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skill_catalog_service import get_skill_catalog_service
@@ -28,11 +29,11 @@ from tests.support.runtime_skill_registry import FakeRuntimeSkillRegistry
 REGISTRY_URL = "https://registry.example.test/index.json"
 
 
-def _init_runtime_content(tmp_path: Path):
+def _init_runtime_content(tmp_path: Path, *, default_skills: tuple[str, ...] = ()):
     data_dir = tmp_path / "data"
     ensure_data_dirs(data_dir)
     content_store_mod.reset_for_test()
-    cfg = make_config(data_dir=data_dir, registry_url=REGISTRY_URL)
+    cfg = make_config(data_dir=data_dir, registry_url=REGISTRY_URL, default_skills=default_skills)
     init_content_store_for_config(cfg)
     init_credential_store_for_config(cfg)
     composition.workflows.cache_clear()
@@ -68,6 +69,27 @@ def test_catalog_use_cases_expose_clean_local_actions(monkeypatch, tmp_path: Pat
         assert imported.can_update is True
         assert imported.can_uninstall is True
         assert catalog.filter_resolvable(["code-review", "missing", "helper"]) == ["code-review", "helper"]
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_catalog_use_cases_mark_defaults_for_new_conversations(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path, default_skills=("code-review",))
+    try:
+        catalog = RuntimeSkillCatalogUseCases(
+            catalog_service=get_skill_catalog_service(),
+            import_service=get_skill_import_service(),
+            default_skills=("code-review",),
+        )
+
+        items = {item.name: item for item in catalog.list_skills()}
+        assert items["code-review"].default_for_new_conversations is True
+        assert items["testing"].default_for_new_conversations is False
+
+        detail = catalog.get_skill("code-review")
+        assert detail is not None
+        assert detail.default_for_new_conversations is True
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()
@@ -142,7 +164,7 @@ def test_provider_guidance_preview_use_case_returns_effective_prompt(tmp_path: P
         )
         assert preview.provider == "claude"
         assert preview.prompt_weight > 0
-        assert "summary first" in preview.system_prompt.lower()
+        assert "summary first" in preview.composed_prompt.lower()
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()
@@ -166,6 +188,35 @@ def test_preflight_context_excludes_raw_skill_instruction_bodies(tmp_path: Path)
         assert track.revision.instruction_body not in preflight_ctx.system_prompt
         assert track.display_name in preflight_ctx.system_prompt
         assert "Senior engineer" in preflight_ctx.system_prompt
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_codex_context_uses_octopus_skill_semantics(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        guidance = get_provider_guidance_service()
+
+        run_ctx = guidance.build_run_context(
+            "Senior engineer",
+            ["code-review"],
+            ["/tmp/uploads"],
+            provider_name="codex",
+        )
+        preflight_ctx = guidance.build_preflight_context(
+            "Senior engineer",
+            ["code-review"],
+            ["/tmp/uploads"],
+            provider_name="codex",
+        )
+
+        for prompt in (run_ctx.system_prompt, preflight_ctx.system_prompt):
+            assert "Octopus Skill Semantics" in prompt
+            assert "Do not answer in terms of Codex-native skills" in prompt
+            assert "available on this bot" in prompt
+            assert "active in this conversation" in prompt
+            assert "current bot in this conversation is answering" in prompt
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

@@ -65,6 +65,7 @@ class RuntimeSkillImportUseCases(RuntimeSkillImportPort):
                         publisher=item.publisher,
                         version=item.version,
                         can_import=True,
+                        source_label="Store",
                     )
                     for item in self._imports.registry_search(registry_url, query_text)
                 )

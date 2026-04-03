@@ -98,8 +98,14 @@ class _CatalogService:
             description="",
             body="",
             source_kind="builtin",
+            source_label="Core",
             providers=(),
             requirement_keys=(),
+            requires_credentials=False,
+            runtime_available=True,
+            visibility="shared",
+            is_mutable=False,
+            has_unpublished_changes=False,
         )
     def create_custom_draft(self, skill_name: str, *, owner_actor: str = ""):
         del skill_name, owner_actor
@@ -180,11 +186,25 @@ class _CredentialService:
 
 
 class _GuidanceService:
-    def system_prompt(self, role: str, active_skills: list[str], available_agents: list[DiscoveredAgentRef] | None = None) -> str:
-        del role, active_skills, available_agents
+    def system_prompt(
+        self,
+        role: str,
+        active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
+        available_agents: list[DiscoveredAgentRef] | None = None,
+    ) -> str:
+        del role, active_skills, provider_name, instance_key, available_agents
+        if guidance_override:
+            return guidance_override
         return "prompt"
-    def effective_guidance_preview(self, provider_name: str, *, instance_key: str = "") -> str:
+    def published_guidance_text(self, provider_name: str, *, instance_key: str = "") -> str:
         del provider_name, instance_key
+        return "guidance"
+    def draft_guidance_text(self, provider_name: str, *, scope_kind: str = "system", scope_key: str = "") -> str:
+        del provider_name, scope_kind, scope_key
         return "guidance"
     def provider_config(self, provider_name: str, active_skills: list[str], credential_env: CredentialEnvRecord | None = None) -> ProviderConfigRecord:
         del provider_name, active_skills, credential_env
@@ -192,8 +212,17 @@ class _GuidanceService:
     def capability_summary(self, provider_name: str, active_skills: list[str]) -> str:
         del provider_name, active_skills
         return "caps"
-    def prompt_weight(self, role: str, active_skills: list[str], available_agents: list[DiscoveredAgentRef] | None = None) -> int:
-        del role, active_skills, available_agents
+    def prompt_weight(
+        self,
+        role: str,
+        active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
+        available_agents: list[DiscoveredAgentRef] | None = None,
+    ) -> int:
+        del role, active_skills, provider_name, instance_key, guidance_override, available_agents
         return 1
     def estimate_prompt_size(self, role: str, current_skills: list[str], new_skill: str) -> tuple[int, bool]:
         del role, current_skills, new_skill
@@ -212,12 +241,13 @@ class _GuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
         del role, active_skills, extra_dirs, provider_name, credential_env, working_dir, file_policy, effective_model, available_agents
         return RunContext(
             extra_dirs=[],
-            system_prompt="prompt",
+            system_prompt=guidance_override or "prompt",
             capability_summary="caps",
             file_policy="edit",
         )
@@ -231,11 +261,12 @@ class _GuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext:
         del role, active_skills, extra_dirs, provider_name, working_dir, file_policy, effective_model
         return PreflightContext(
             extra_dirs=[],
-            system_prompt="prompt",
+            system_prompt=guidance_override or "prompt",
             capability_summary="caps",
         )
     def apply_compact_mode(self, system_prompt: str, compact: bool) -> str:

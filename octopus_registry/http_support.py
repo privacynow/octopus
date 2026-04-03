@@ -6,6 +6,8 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from octopus_sdk.identity import parse_actor_key
+from octopus_sdk.registry.management import SkillFileRecord, SkillRequirementRecord
+from octopus_sdk.registry.models import RegistryJsonRecord
 
 from .auth import AuthContext
 
@@ -38,6 +40,8 @@ class ProviderGuidancePreviewRequest(BaseModel):
     role: str = Field(default="", description="Role/persona text to include")
     active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
     compact_mode: bool = Field(default=False, description="Whether compact-mode instructions should be appended")
+    use_draft: bool = Field(default=False, description="Whether to preview the current draft instead of the published policy")
+    body_override: str = Field(default="", description="Optional transient guidance text to preview without saving")
 
 
 class LifecycleActionRequest(BaseModel):
@@ -46,8 +50,12 @@ class LifecycleActionRequest(BaseModel):
 
 
 class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
-    body: str = Field(..., min_length=1, description="Draft instruction body")
-    description: str = Field(default="", description="Optional skill description override")
+    body: str | None = Field(default=None, description="Draft instruction body override")
+    display_name: str | None = Field(default=None, description="Optional display name override")
+    description: str | None = Field(default=None, description="Optional skill description override")
+    requirements: list[SkillRequirementRecord] | None = Field(default=None, description="Optional requirement list override")
+    provider_config: RegistryJsonRecord | None = Field(default=None, description="Optional provider config override")
+    files: list[SkillFileRecord] | None = Field(default=None, description="Optional draft file list override")
     changelog: str = Field(default="", description="Optional changelog entry")
 
 

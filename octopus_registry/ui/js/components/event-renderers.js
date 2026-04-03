@@ -479,16 +479,14 @@ function _renderGenericMetadata(body, metadata) {
 }
 
 function _metadataGrid(entries) {
-    const grid = document.createElement('div');
-    grid.className = 'metadata-grid';
-    entries.forEach(([label, value]) => {
-        if (value === '' || value === null || value === undefined) return;
-        const item = document.createElement('div');
-        item.className = 'metadata-item';
-        item.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(String(value))}</strong>`;
-        grid.appendChild(item);
-    });
-    return grid;
+    return UI.renderMetadataGrid(
+        entries
+            .filter(([, value]) => value !== '' && value !== null && value !== undefined)
+            .map(([label, value]) => ({
+                label,
+                value: String(value),
+            }))
+    );
 }
 
 function _createInlineMetric(value, label) {

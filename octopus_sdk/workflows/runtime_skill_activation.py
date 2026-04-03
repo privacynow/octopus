@@ -48,6 +48,7 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
                         display_name=skill_name,
                         description="",
                         source_kind="unknown",
+                        source_label="Skill",
                         has_custom_override=False,
                     )
                 )
@@ -58,7 +59,11 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
                     display_name=summary.display_name,
                     description=summary.description,
                     source_kind=summary.source_kind,
+                    source_label=summary.source_label,
                     has_custom_override=summary.has_custom_override,
+                    providers=summary.providers,
+                    requirement_keys=summary.requirement_keys,
+                    requires_credentials=summary.requires_credentials,
                 )
             )
         return ConversationSkillListing(active_skills=active, active_skill_details=tuple(details))

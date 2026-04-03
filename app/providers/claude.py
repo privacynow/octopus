@@ -43,6 +43,19 @@ class ClaudeProvider:
         sid = str(uuid.uuid5(uuid.NAMESPACE_URL, conversation_key))
         return {"session_id": sid, "started": False}
 
+    @staticmethod
+    def _should_resume(provider_state: dict[str, Any]) -> bool:
+        return bool(provider_state.get("started"))
+
+    @staticmethod
+    def _continuity_updates(provider_state: dict[str, Any]) -> dict[str, Any]:
+        # Claude keeps one deterministic session lineage per conversation.
+        # After the first launched attempt, retries must switch to --resume
+        # rather than reusing --session-id for the same conversation.
+        if provider_state.get("session_id") or provider_state.get("started"):
+            return {"started": True}
+        return {}
+
     def check_health(self) -> list[str]:
         errors: list[str] = []
         if not shutil.which("claude"):
@@ -147,7 +160,7 @@ class ClaudeProvider:
     ) -> list[str]:
         cmd = self._base_cmd(effective_model)
         sid = provider_state["session_id"]
-        if provider_state.get("started"):
+        if self._should_resume(provider_state):
             cmd.extend(["--resume", sid])
         else:
             cmd.extend(["--session-id", sid])
@@ -460,7 +473,13 @@ class ClaudeProvider:
             extra_env = context.credential_env if context else {}
 
             working_dir = context.working_dir if context else ""
-            is_resume = provider_state.get("started", False)
+            is_resume = self._should_resume(provider_state)
+            continuity_updates = self._continuity_updates(provider_state)
+            log.info(
+                "claude session mode=%s session_id=%s",
+                "resume" if is_resume else "fresh",
+                str(provider_state.get("session_id", "") or ""),
+            )
             accumulated, result_data, rc, stderr, tool_executions = await self._run_process(
                 cmd, progress, extra_env=extra_env, working_dir=working_dir,
                 cancel=cancel,
@@ -474,9 +493,12 @@ class ClaudeProvider:
 
         # User-initiated cancel: _consume_stream killed the process.
         if cancel is not None and cancel.is_set():
-            return RunResult(text=accumulated, cancelled=True,
-                             provider_state_updates={"started": True} if provider_state.get("started") else {},
-                             tool_executions=tool_executions)
+            return RunResult(
+                text=accumulated,
+                cancelled=True,
+                provider_state_updates=continuity_updates,
+                tool_executions=tool_executions,
+            )
 
         if rc == -1:
             # A timeout during a resumed session is strong evidence the session
@@ -485,6 +507,7 @@ class ClaudeProvider:
             return RunResult(
                 text="", timed_out=True, returncode=124,
                 resume_failed=is_resume,
+                provider_state_updates=continuity_updates,
                 tool_executions=tool_executions,
             )
 
@@ -498,6 +521,7 @@ class ClaudeProvider:
                 text=text,
                 returncode=rc,
                 resume_failed=is_resume and self._is_resume_failure(error_text),
+                provider_state_updates=continuity_updates,
                 tool_executions=tool_executions,
             )
 
@@ -519,7 +543,7 @@ class ClaudeProvider:
         return RunResult(
             text=final_text,
             denials=denials,
-            provider_state_updates={"started": True},
+            provider_state_updates=continuity_updates,
             prompt_tokens=usage.get("input_tokens", 0),
             completion_tokens=usage.get("output_tokens", 0),
             cached_prompt_tokens=cached_prompt_tokens,
@@ -542,9 +566,9 @@ class ClaudeProvider:
         system_prompt = ""
         if context and context.system_prompt:
             system_prompt = context.system_prompt
-        # Include capability summary in system prompt for preflight awareness
+        # Include active skill tool surface in the system prompt for preflight awareness
         if context and context.capability_summary:
-            cap = f"\n\n## Available capabilities\n\n{context.capability_summary}"
+            cap = f"\n\n## Active skill tool surface\n\n{context.capability_summary}"
             system_prompt = (system_prompt + cap) if system_prompt else cap
         if system_prompt:
             idx = cmd.index("--")

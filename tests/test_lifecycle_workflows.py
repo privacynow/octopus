@@ -8,9 +8,11 @@ import app.content_store as content_store_mod
 from app.content_store import get_content_store, init_content_store_for_config
 from app.content_store_postgres import PostgresContentStore
 from app.credential_store import init_credential_store_for_config
+from octopus_sdk.content_models import SkillFileRecord
 from octopus_sdk.identity import telegram_actor_key
-from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.providers import ProviderConfigRecord, ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
+from octopus_sdk.skill_types import SkillRequirement
 from app.runtime import composition
 from app.storage import close_db, default_session, ensure_data_dirs
 from tests.support.config_support import make_config
@@ -122,6 +124,61 @@ def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: P
         content_store_mod.reset_for_test()
 
 
+def test_runtime_skill_draft_package_roundtrip_and_validation(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        actor_key = telegram_actor_key(42)
+        authoring = composition.workflows().runtime_skills.authoring
+
+        created = authoring.create_draft("package-skill", owner_actor=actor_key)
+        assert created.ok is True
+
+        invalid = authoring.edit_draft(
+            "package-skill",
+            actor_key=actor_key,
+            display_name="",
+            body="",
+            requirements=(
+                SkillRequirement(key="API_TOKEN", prompt=""),
+            ),
+            files=(
+                SkillFileRecord(relative_path="../bad.sh", content_text="echo nope", executable=True),
+            ),
+        )
+        assert invalid.ok is False
+        assert invalid.detail is not None
+        assert any(item.field_path == "display_name" for item in invalid.detail.validation_problems)
+        assert any(item.field_path == "body" for item in invalid.detail.validation_problems)
+        assert any(item.field_path == "requirements[0].prompt" for item in invalid.detail.validation_problems)
+        assert any(item.field_path == "files[0].relative_path" for item in invalid.detail.validation_problems)
+
+        edited = authoring.edit_draft(
+            "package-skill",
+            actor_key=actor_key,
+            display_name="Package Skill",
+            description="Structured package draft",
+            body="Use the package-aware draft.",
+            requirements=(
+                SkillRequirement(key="API_TOKEN", prompt="Enter API token"),
+            ),
+            provider_config=ProviderConfigRecord({"claude": {"allowed_tools": ["bash"]}}),
+            files=(
+                SkillFileRecord(relative_path="helper.sh", content_text="echo ready", executable=True),
+            ),
+            changelog="package update",
+        )
+        assert edited.ok is True
+        assert edited.detail is not None
+        assert edited.detail.publish_ready is True
+        assert edited.detail.display_name == "Package Skill"
+        assert edited.detail.requirements[0].key == "API_TOKEN"
+        assert edited.detail.provider_config["claude"]["allowed_tools"] == ["bash"]
+        assert edited.detail.files[0].relative_path == "helper.sh"
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
 def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
@@ -130,7 +187,7 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         preview = flows.provider_guidance.preview
 
         original = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Claude Runtime Guidance" in original.effective_guidance
+        assert "Claude Runtime Guidance" in original.published_guidance
 
         edited = management.edit_draft(
             "claude",
@@ -141,9 +198,11 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         assert edited.detail is not None
         assert edited.detail.lifecycle_status == "draft"
         assert edited.detail.runtime_available is True
+        assert "Edited Guidance" in edited.detail.draft_body
+        assert "Edited Guidance" not in edited.detail.published_body
 
         preview_before_publish = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Edited Guidance" not in preview_before_publish.effective_guidance
+        assert "Edited Guidance" not in preview_before_publish.published_guidance
 
         submitted = management.submit("claude", actor_key="admin:1")
         assert submitted.status == "submitted"
@@ -153,12 +212,13 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         assert published.status == "published"
 
         preview_after_publish = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Edited Guidance" in preview_after_publish.effective_guidance
+        assert "Edited Guidance" in preview_after_publish.published_guidance
+        assert "Edited Guidance" in preview_after_publish.composed_prompt
 
         archived = management.archive("claude", actor_key="admin:2")
         assert archived.status == "archived"
         preview_after_archive = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert preview_after_archive.effective_guidance == ""
+        assert preview_after_archive.published_guidance == ""
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

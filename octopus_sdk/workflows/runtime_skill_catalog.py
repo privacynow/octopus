@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from octopus_sdk.skill_packages import (
+    publish_ready,
+    validate_skill_package,
+    skill_has_unpublished_changes,
+    skill_runtime_available,
+)
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.workflows.skills import (
     RuntimeSkillCatalogItem,
@@ -10,6 +16,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillDraftRecord,
     SkillCatalogServicePort,
     SkillImportServicePort,
+    RuntimeSkillValidationProblem,
 )
 
 
@@ -21,9 +28,15 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
         *,
         catalog_service: SkillCatalogServicePort,
         import_service: SkillImportServicePort,
+        default_skills: tuple[str, ...] = (),
     ) -> None:
         self._catalog = catalog_service
         self._imports = import_service
+        self._default_skills = frozenset(
+            str(name or "").strip()
+            for name in default_skills
+            if str(name or "").strip()
+        )
 
     def _summary(self, skill_name: str) -> RuntimeSkillCatalogItem | None:
         meta = self._catalog.catalog().get(skill_name)
@@ -42,13 +55,20 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             display_name=str(getattr(meta, "display_name", skill_name)),
             description=str(getattr(meta, "description", "")),
             source_kind=source_kind,
+            source_label=info.source_label if info is not None else source_kind,
             providers=providers,
             requirement_keys=requirement_keys,
+            requires_credentials=bool(requirement_keys),
             has_custom_override=self._imports.has_custom_override(skill_name),
             can_activate=(runtime_track is not None),
             can_update=(source_kind == "imported"),
             can_uninstall=(source_kind == "imported"),
             lifecycle_status=track.revision.status,
+            runtime_available=skill_runtime_available(track),
+            default_for_new_conversations=(skill_name in self._default_skills),
+            visibility=track.visibility,
+            is_mutable=track.is_mutable,
+            has_unpublished_changes=skill_has_unpublished_changes(track),
         )
 
     def list_skills(self, query: str = "") -> list[RuntimeSkillCatalogItem]:
@@ -78,19 +98,54 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
         info = self._catalog.resolve_info(skill_name)
         if info is None:
             return None
+        validation_problems = tuple(
+            RuntimeSkillValidationProblem(
+                code=item.code,
+                message=item.message,
+                field_path=item.field_path,
+                severity=item.severity,
+            )
+            for item in validate_skill_package(
+                skill_name=summary.name,
+                display_name=summary.display_name,
+                body=info.body,
+                requirements=list(info.requirements),
+                provider_config=info.provider_config,
+                files=info.files,
+            )
+        )
         return RuntimeSkillDetail(
             name=summary.name,
             display_name=summary.display_name,
             description=summary.description,
             body=info.body,
             source_kind=summary.source_kind,
+            source_label=summary.source_label,
             providers=summary.providers,
             requirement_keys=summary.requirement_keys,
+            requires_credentials=summary.requires_credentials,
             has_custom_override=summary.has_custom_override,
             can_activate=summary.can_activate,
             can_update=summary.can_update,
             can_uninstall=summary.can_uninstall,
             lifecycle_status=summary.lifecycle_status,
+            runtime_available=summary.runtime_available,
+            default_for_new_conversations=summary.default_for_new_conversations,
+            visibility=summary.visibility,
+            is_mutable=summary.is_mutable,
+            has_unpublished_changes=summary.has_unpublished_changes,
+            requirements=info.requirements,
+            provider_config=info.provider_config,
+            files=info.files,
+            validation_problems=validation_problems,
+            publish_ready=publish_ready(
+                skill_name=summary.name,
+                display_name=summary.display_name,
+                body=info.body,
+                requirements=list(info.requirements),
+                provider_config=info.provider_config,
+                files=info.files,
+            ),
         )
 
     def has_skill(self, skill_name: str) -> bool:

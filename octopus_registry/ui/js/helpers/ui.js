@@ -325,6 +325,31 @@ window.UI = (() => {
         return card;
     }
 
+    function renderMetadataGrid(items, { compact = false } = {}) {
+        const grid = document.createElement('div');
+        grid.className = compact ? 'task-item-facts' : 'metadata-grid';
+        for (const item of items || []) {
+            if (!item) continue;
+            const fact = document.createElement('div');
+            fact.className = 'metadata-item';
+
+            const label = document.createElement('span');
+            label.textContent = String(item.label || '');
+            fact.appendChild(label);
+
+            const value = item.value;
+            if (value instanceof Node) {
+                fact.appendChild(value);
+            } else {
+                const strong = document.createElement('strong');
+                strong.textContent = String(value || '');
+                fact.appendChild(strong);
+            }
+            grid.appendChild(fact);
+        }
+        return grid;
+    }
+
     function createErrorCard(message, retryFn) {
         const card = document.createElement('div');
         card.className = 'error-card';
@@ -341,6 +366,128 @@ window.UI = (() => {
             card.appendChild(btn);
         }
         return card;
+    }
+
+    function _dialogFocusables(dialog) {
+        return Array.from(
+            dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+        ).filter((el) => !el.disabled && el.tabIndex !== -1);
+    }
+
+    function showDialog(
+        title,
+        body,
+        {
+            actions = [],
+            maxWidth = '560px',
+            role = 'dialog',
+            closeOnOverlay = true,
+            initialFocus = null,
+        } = {},
+    ) {
+        const previousFocus = document.activeElement;
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+
+        const dialog = document.createElement('div');
+        dialog.className = 'confirm-dialog';
+        dialog.setAttribute('role', role);
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.style.maxWidth = maxWidth;
+        const titleId = `dialog-title-${Date.now()}`;
+        dialog.setAttribute('aria-labelledby', titleId);
+
+        const heading = document.createElement('h3');
+        heading.id = titleId;
+        heading.textContent = title;
+        dialog.appendChild(heading);
+
+        if (body instanceof Node) {
+            dialog.appendChild(body);
+        } else if (String(body || '').trim()) {
+            const text = document.createElement('p');
+            text.textContent = String(body || '');
+            dialog.appendChild(text);
+        }
+
+        if (actions.length) {
+            const actionsEl = document.createElement('div');
+            actionsEl.className = 'confirm-actions';
+            actions.forEach((action) => {
+                if (action instanceof Node) {
+                    actionsEl.appendChild(action);
+                }
+            });
+            dialog.appendChild(actionsEl);
+        }
+
+        function close() {
+            overlay.remove();
+            document.removeEventListener('keydown', keyHandler);
+            if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+        }
+
+        overlay.appendChild(dialog);
+        overlay.addEventListener('click', (event) => {
+            if (closeOnOverlay && event.target === overlay) close();
+        });
+        document.body.appendChild(overlay);
+
+        function keyHandler(e) {
+            if (e.key === 'Escape') {
+                close();
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            const focusables = _dialogFocusables(dialog);
+            if (!focusables.length) return;
+            const currentIndex = focusables.indexOf(document.activeElement);
+            if (e.shiftKey) {
+                if (currentIndex <= 0) {
+                    e.preventDefault();
+                    focusables[focusables.length - 1].focus();
+                }
+                return;
+            }
+            if (currentIndex === focusables.length - 1) {
+                e.preventDefault();
+                focusables[0].focus();
+            }
+        }
+
+        document.addEventListener('keydown', keyHandler);
+
+        requestAnimationFrame(() => {
+            if (initialFocus instanceof HTMLElement) {
+                initialFocus.focus();
+                return;
+            }
+            const focusables = _dialogFocusables(dialog);
+            const target = focusables[0];
+            if (target && typeof target.focus === 'function') {
+                target.focus();
+            }
+        });
+
+        return { overlay, dialog, close };
+    }
+
+    function showTextDialog(title, text, { maxWidth = '760px' } = {}) {
+        const pre = document.createElement('pre');
+        pre.className = 'event-pre';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.textContent = text;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'btn';
+        closeBtn.textContent = 'Close';
+
+        const view = showDialog(title, pre, {
+            actions: [closeBtn],
+            maxWidth,
+        });
+        closeBtn.addEventListener('click', () => view.close());
     }
 
     function renderPagination(container, { hasPrev, hasNext, onPrev, onNext, info }) {
@@ -703,7 +850,12 @@ window.UI = (() => {
         return { element: actions, statusText };
     }
 
-    function createAgentManagementDropdown(agents, selectedId, onChange, { label = 'Managed bot' } = {}) {
+    function createAgentManagementDropdown(
+        agents,
+        selectedId,
+        onChange,
+        { label = 'Managed bot', allowEmpty = false, emptyLabel = 'Choose a bot' } = {},
+    ) {
         const select = document.createElement('select');
         select.className = 'search-input';
         select.setAttribute('aria-label', label);
@@ -714,17 +866,26 @@ window.UI = (() => {
         });
 
         function update(nextAgents, nextSelectedId) {
-            const options = (nextAgents || []).map((agent) => {
+            const options = [];
+            if (allowEmpty) {
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = emptyLabel;
+                options.push(placeholder);
+            }
+            options.push(...(nextAgents || []).map((agent) => {
                 const option = document.createElement('option');
                 option.value = agent.agent_id || '';
                 option.textContent = visibleLabel(agent.display_name, agent.agent_id) || agent.slug || agent.agent_id || 'Bot';
                 return option;
-            });
+            }));
             reconcileChildren(select, options);
-            select.disabled = options.length <= 1;
+            select.disabled = allowEmpty ? options.length <= 1 : options.length <= 1;
             const targetValue = String(nextSelectedId || '');
             if (targetValue && options.some((option) => option.value === targetValue)) {
                 select.value = targetValue;
+            } else if (allowEmpty) {
+                select.value = '';
             } else if (options.length) {
                 select.value = options[0].value;
             } else {
@@ -825,30 +986,6 @@ window.UI = (() => {
     }
 
     function showConfirm(title, message, onConfirm) {
-        const previousFocus = document.activeElement;
-        const overlay = document.createElement('div');
-        overlay.className = 'confirm-overlay';
-
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.setAttribute('role', 'alertdialog');
-        dialog.setAttribute('aria-modal', 'true');
-
-        const titleId = `confirm-title-${Date.now()}`;
-        dialog.setAttribute('aria-labelledby', titleId);
-
-        const h3 = document.createElement('h3');
-        h3.id = titleId;
-        h3.textContent = title;
-        dialog.appendChild(h3);
-
-        const p = document.createElement('p');
-        p.textContent = message;
-        dialog.appendChild(p);
-
-        const actions = document.createElement('div');
-        actions.className = 'confirm-actions';
-
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
         cancelBtn.className = 'btn';
@@ -859,52 +996,19 @@ window.UI = (() => {
         confirmBtn.className = 'btn btn-primary';
         confirmBtn.textContent = 'Confirm';
 
-        function close() {
-            overlay.remove();
-            document.removeEventListener('keydown', keyHandler);
-            if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
-        }
-
+        const view = showDialog(title, message, {
+            actions: [cancelBtn, confirmBtn],
+            role: 'alertdialog',
+            initialFocus: confirmBtn,
+        });
         cancelBtn.addEventListener('click', close);
         confirmBtn.addEventListener('click', async () => {
-            close();
+            view.close();
             await onConfirm();
         });
-
-        actions.appendChild(cancelBtn);
-        actions.appendChild(confirmBtn);
-        dialog.appendChild(actions);
-        overlay.appendChild(dialog);
-        document.body.appendChild(overlay);
-
-        const focusables = [cancelBtn, confirmBtn];
-        confirmBtn.focus();
-
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) close();
-        });
-
-        function keyHandler(e) {
-            if (e.key === 'Escape') {
-                close();
-                return;
-            }
-            if (e.key !== 'Tab') return;
-            const currentIndex = focusables.indexOf(document.activeElement);
-            if (e.shiftKey) {
-                if (currentIndex <= 0) {
-                    e.preventDefault();
-                    focusables[focusables.length - 1].focus();
-                }
-                return;
-            }
-            if (currentIndex === focusables.length - 1) {
-                e.preventDefault();
-                focusables[0].focus();
-            }
+        function close() {
+            view.close();
         }
-
-        document.addEventListener('keydown', keyHandler);
     }
 
     return {
@@ -928,6 +1032,7 @@ window.UI = (() => {
         renderSettingsRow,
         renderEmptyState,
         renderStatCard,
+        renderMetadataGrid,
         isOpaqueIdentifier,
         visibleLabel,
         renderPagination,
@@ -948,6 +1053,8 @@ window.UI = (() => {
         bindSegmentedControlKeyboard,
         createErrorCard,
         renderError,
+        showDialog,
         showConfirm,
+        showTextDialog,
     };
 })();

@@ -308,8 +308,12 @@ async def edit_catalog_skill_draft(
     skill_name: str,
     *,
     actor_key: str,
-    body: str,
+    body: str | None = None,
+    display_name: str | None = None,
     description: str | None = None,
+    requirements=None,
+    provider_config=None,
+    files=None,
     changelog: str = "",
 ) -> dict[str, object]:
     payload = await _send(
@@ -319,7 +323,11 @@ async def edit_catalog_skill_draft(
             skill_name=skill_name,
             actor_key=actor_key,
             body=body,
-            description=description or "",
+            display_name=display_name,
+            description=description,
+            requirements=requirements,
+            provider_config=provider_config,
+            files=files,
             changelog=changelog,
         ),
     )
@@ -709,6 +717,8 @@ async def preview_provider_guidance(
     role: str,
     active_skills: list[str],
     compact_mode: bool,
+    use_draft: bool,
+    body_override: str,
 ) -> dict[str, object]:
     payload = await _send(
         store,
@@ -718,6 +728,8 @@ async def preview_provider_guidance(
             role=role,
             active_skills=list(active_skills),
             compact_mode=compact_mode,
+            use_draft=use_draft,
+            body_override=body_override,
         ),
     )
     assert isinstance(payload, PreviewProviderGuidanceResult)

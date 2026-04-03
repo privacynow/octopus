@@ -72,14 +72,26 @@ class ProviderGuidancePort(Protocol):
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str: ...
 
-    def effective_guidance_preview(
+    def published_guidance_text(
         self,
         provider_name: str,
         *,
         instance_key: str = "",
+    ) -> str: ...
+
+    def draft_guidance_text(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
     ) -> str: ...
 
     def provider_config(
@@ -125,6 +137,7 @@ class ProviderGuidancePort(Protocol):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext: ...
 
@@ -138,6 +151,7 @@ class ProviderGuidancePort(Protocol):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext: ...
 
     def apply_compact_mode(

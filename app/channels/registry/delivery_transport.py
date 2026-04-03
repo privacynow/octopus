@@ -325,9 +325,9 @@ async def admit_registry_delivery(
             context_lines.append(f"Context: {request['context']}")
         if request.get("constraints"):
             context_lines.append(f"Constraints: {request['constraints']}")
-        if request.get("requested_capabilities"):
+        if request.get("requested_skills"):
             context_lines.append(
-                "Requested capabilities: " + ", ".join(request.get("requested_capabilities", []))
+                "Requested skills: " + ", ".join(request.get("requested_skills", []))
             )
         text = _routed_task_text(request)
         if context_lines:
@@ -662,6 +662,14 @@ class RegistryDeliveryTransport(TransportImplementation):
         del conversation_ref, config, kw
         raise RuntimeError("Registry delivery transport does not build egress directly")
 
+    def _advertised_routing_skills(self) -> tuple[str, ...]:
+        catalog = self._services.workflows.runtime_skills.catalog
+        return tuple(
+            item.name
+            for item in catalog.list_skills()
+            if item.can_activate and item.runtime_available
+        )
+
     async def start(self, *, runtime, stop_event: asyncio.Event) -> None:
         self._delivery_runtime = replace(self._delivery_runtime, submitter=runtime)
         self._stop_requested.clear()
@@ -676,6 +684,7 @@ class RegistryDeliveryTransport(TransportImplementation):
                 runtime_health_provider=CanonicalRuntimeHealthProvider(),
                 provider=self._provider,
                 registry=registry,
+                routing_skills_resolver=self._advertised_routing_skills,
                 channel_capabilities_resolver=self._dispatcher.active_transport_types,
                 management_capabilities_resolver=lambda: self._services.workflows.management_capabilities,
             )

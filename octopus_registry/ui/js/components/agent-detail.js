@@ -168,43 +168,41 @@ function renderAgentDetail(container, params) {
         head.innerHTML = '<strong>Overview</strong>';
         card.appendChild(head);
 
-        const grid = document.createElement('div');
-        grid.className = 'metadata-grid';
-        [
-            ['Agent ID', agent.agent_id || '—'],
-            ['Scope', agent.registry_scope || '—'],
-            ['Version', agent.version || '—'],
-            ['Transport', agent.connectivity_state || 'unknown'],
-            ['Execution', execution.state || 'healthy'],
-            ['Last heartbeat', agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never'],
-            execution.faultedAt ? ['Faulted at', UI.relativeTime(execution.faultedAt)] : null,
-            execution.detail ? ['Last failure', execution.detail] : null,
-        ].filter(Boolean).forEach(([label, value]) => {
-            const fact = document.createElement('div');
-            fact.className = 'metadata-item';
-            fact.innerHTML = `<span>${UI.esc(label)}</span><strong>${UI.esc(value)}</strong>`;
-            grid.appendChild(fact);
-        });
-        card.appendChild(grid);
+        const body = document.createElement('div');
+        body.className = 'list-shell';
+
+        const grid = UI.renderMetadataGrid([
+            { label: 'Agent ID', value: agent.agent_id || '—' },
+            { label: 'Scope', value: agent.registry_scope || '—' },
+            { label: 'Version', value: agent.version || '—' },
+            { label: 'Transport', value: agent.connectivity_state || 'unknown' },
+            { label: 'Execution', value: execution.state || 'healthy' },
+            { label: 'Last heartbeat', value: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : 'never' },
+            execution.faultedAt ? { label: 'Faulted at', value: UI.relativeTime(execution.faultedAt) } : null,
+            execution.detail ? { label: 'Last failure', value: execution.detail } : null,
+        ].filter(Boolean));
+        body.appendChild(grid);
 
         if (resetNotice) {
             const note = document.createElement('div');
             note.className = 'agent-execution-note';
             note.textContent = resetNotice;
-            card.appendChild(note);
+            body.appendChild(note);
         }
 
-        if ((agent.capabilities || []).length) {
+        if ((agent.routing_skills || []).length) {
             const chips = document.createElement('div');
             chips.className = 'chip-row';
-            agent.capabilities.forEach((capability) => {
+            agent.routing_skills.forEach((skillName) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
-                chip.textContent = capability;
+                chip.textContent = skillName;
                 chips.appendChild(chip);
             });
-            card.appendChild(chips);
+            body.appendChild(chips);
         }
+
+        card.appendChild(body);
 
         return card;
     }
@@ -447,7 +445,7 @@ function renderAgentDetail(container, params) {
                     heartbeatLabel: agent.last_heartbeat_at ? UI.relativeTime(agent.last_heartbeat_at) : '',
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),
-                    capabilities: (agent.capabilities || []).map((capability) => String(capability || '')),
+                    routingSkills: (agent.routing_skills || []).map((skillName) => String(skillName || '')),
                 },
                 workers: workers.map((worker) => ({
                     id: String(worker.worker_id || ''),

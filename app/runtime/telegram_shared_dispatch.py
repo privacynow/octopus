@@ -52,12 +52,22 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
     sub = args[0].lower()
     provider_name = args[1]
 
+    if sub == "show":
+        detail = _guidance_flows().provider_guidance.management.detail(provider_name)
+        if detail is None:
+            rendered = telegram_presenters.provider_guidance_not_found_message(provider_name)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        rendered = telegram_presenters.provider_guidance_show_message(provider_name, detail)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
     if sub == "preview":
         preview = _guidance_flows().provider_guidance.preview.preview(
             provider_name,
             role="",
             active_skills=[],
             compact_mode=False,
+            use_draft=True,
         )
         rendered = telegram_presenters.provider_guidance_preview_message(provider_name, preview)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())

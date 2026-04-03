@@ -119,7 +119,7 @@ class RoutedTaskConstraintsRecord(RegistryJsonRecord):
 
 
 class AgentCard(RegistryRecordModel):
-    """Agent identity and capability declaration sent during enrollment/registration."""
+    """Agent identity and routing-skill declaration sent during enrollment/registration."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -128,7 +128,7 @@ class AgentCard(RegistryRecordModel):
     slug: str = ""
     role: str = ""
     registry_scope: str = "full"
-    capabilities: list[str] = Field(default_factory=list)
+    routing_skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     provider: str = ""
@@ -163,7 +163,7 @@ class AgentDiscoveryQuery(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str = ""
-    capabilities: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     free_text: str = ""
     exclude_agent_ids: list[str] = Field(default_factory=list)
@@ -178,7 +178,7 @@ class DiscoveredAgentRef(RegistryRecordModel):
     display_name: str = ""
     slug: str = ""
     role: str = ""
-    capabilities: list[str] = Field(default_factory=list)
+    routing_skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     connectivity_state: str = ""
@@ -219,7 +219,7 @@ class AgentRecord(RegistryRecordModel):
     slug: str = ""
     role: str = ""
     registry_scope: str = ""
-    capabilities: list[str] = Field(default_factory=list)
+    routing_skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = ""
     provider: str = ""
@@ -245,9 +245,9 @@ class AgentRecord(RegistryRecordModel):
     runtime_health_generated_at: str = ""
 
 
-class CapabilityRecord(RegistryRecordModel):
-    capability_name: str = ""
-    declared_by_agents: list[str] = Field(default_factory=list)
+class RoutingSkillRecord(RegistryRecordModel):
+    skill_name: str = ""
+    advertised_by_agents: list[str] = Field(default_factory=list)
     enabled: bool | None = None
 
 
@@ -462,7 +462,7 @@ class RoutedTaskRequest(RegistryRecordModel):
     instructions: str
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
     constraints: RoutedTaskConstraintsRecord = Field(default_factory=RoutedTaskConstraintsRecord)
-    requested_capabilities: list[str] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
     priority: str = "normal"
     created_at: str = Field(default_factory=utcnow_iso, min_length=1)
 
@@ -499,7 +499,7 @@ class RoutedTaskRequest(RegistryRecordModel):
 class TargetSelector(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["agent", "capability", "role"] = "agent"
+    kind: Literal["agent", "skill", "role"] = "agent"
     value: str = Field(..., min_length=1)
     preferred_agent_id: str = ""
 
@@ -519,9 +519,9 @@ def parse_target_selector(raw: str) -> TargetSelector | None:
     body = text[1:].strip()
     if not body:
         return None
-    if body.startswith("cap:"):
-        value = body[4:].strip()
-        return TargetSelector(kind="capability", value=value) if value else None
+    if body.startswith("skill:"):
+        value = body[6:].strip()
+        return TargetSelector(kind="skill", value=value) if value else None
     if body.startswith("role:"):
         value = body[5:].strip()
         return TargetSelector(kind="role", value=value) if value else None
@@ -550,7 +550,7 @@ class DelegationTaskDraft(RegistryRecordModel):
     title: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
     priority: str = "normal"
-    requested_capabilities: list[str] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
 
 
@@ -574,7 +574,7 @@ class DirectAssignmentRequest(RegistryRecordModel):
     authorized_actor_key: str = ""
     message_text: str = ""
     priority: str = "normal"
-    requested_capabilities: list[str] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
 
 

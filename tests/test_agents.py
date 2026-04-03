@@ -81,17 +81,16 @@ def test_derive_agent_slug_normalizes_display_name():
     assert derive_agent_slug("!!!", fallback="fallback-agent") == "fallback-agent"
 
 
-def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(tmp_path: Path):
+def test_requested_card_uses_no_routing_skill_fallback_from_default_skills(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         default_skills=("github-integration",),
-        agent_capabilities=(),
         agent_display_name="Product Bot",
     )
 
     card = AgentRuntime(config).requested_card()
 
-    assert card.capabilities == []
+    assert card.routing_skills == []
 
 
 def test_requested_card_uses_neutral_version_when_no_product_version_is_defined(tmp_path: Path):
@@ -538,7 +537,6 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_display_name="Product Bot",
         agent_slug="product-bot",
         agent_role="product",
-        agent_capabilities=("planning", "delegation"),
         agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config, registry=config.agent_registries[0])
@@ -590,7 +588,6 @@ async def test_agent_runtime_connected_sync_uses_heartbeat_without_re_registerin
         agent_display_name="Product Bot",
         agent_slug="product-bot",
         agent_role="product",
-        agent_capabilities=("planning", "delegation"),
         agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config, registry=config.agent_registries[0])
@@ -1162,7 +1159,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
                 "title": "Review",
                 "instructions": "Review this change.",
                 "origin_agent_id": "origin-1",
-                "requested_capabilities": ["reviewer"],
+                "requested_skills": ["reviewer"],
             },
         },
         submitter=_QueuedRegistrySubmitter(),
@@ -1949,7 +1946,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             slug=slug,
             role="developer",
             registry_scope="full",
-            capabilities=["delegation"],
+            routing_skills=["delegation"],
             tags=["test"],
             description=display_name,
             provider="codex",

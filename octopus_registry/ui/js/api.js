@@ -200,13 +200,13 @@ const API = (() => {
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
 
-        // Capabilities
-        listCapabilities: () =>
-            request('GET', '/v1/capabilities'),
-        enableCapability: (name) =>
-            request('POST', `/v1/capabilities/${encodeURIComponent(name)}/enable`),
-        disableCapability: (name) =>
-            request('POST', `/v1/capabilities/${encodeURIComponent(name)}/disable`),
+        // Routing skills
+        listRoutingSkills: () =>
+            request('GET', '/v1/routing/skills'),
+        enableRoutingSkill: (name) =>
+            request('POST', `/v1/routing/skills/${encodeURIComponent(name)}/enable`),
+        disableRoutingSkill: (name) =>
+            request('POST', `/v1/routing/skills/${encodeURIComponent(name)}/disable`),
 
         // Skills
         listSkills: (agentId, opts = {}) =>
@@ -215,6 +215,20 @@ const API = (() => {
             request('GET', `${_agentPath(agentId)}/catalog/skills/search`, { params: { q: query } }),
         getSkillDetail: (agentId, name) =>
             request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}`),
+        getSkillLifecycle: (agentId, name) =>
+            request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/lifecycle`),
+        saveSkillDraft: (agentId, name, body = {}) =>
+            request('PUT', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/draft`, { body }),
+        submitSkillDraft: (agentId, name, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/submit`, { body }),
+        approveSkillDraft: (agentId, name, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/approve`, { body }),
+        rejectSkillDraft: (agentId, name, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/reject`, { body }),
+        publishSkillDraft: (agentId, name, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/publish`, { body }),
+        archiveSkillDraft: (agentId, name, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/archive`, { body }),
         installSkill: (agentId, name) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/install`),
         uninstallSkill: (agentId, name) =>

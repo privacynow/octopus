@@ -82,9 +82,12 @@ from octopus_sdk.registry.management import (
     conversation_skill_setup_advance_outcome_record,
     conversation_reset_outcome_record,
     conversation_setting_mutation_record,
+    provider_config,
     provider_guidance_lifecycle_detail_record,
     provider_guidance_lifecycle_mutation_record,
     provider_guidance_preview_record,
+    skill_file,
+    skill_requirement,
     runtime_skill_catalog_item_record,
     runtime_skill_detail_record,
     runtime_skill_lifecycle_detail_record,
@@ -302,7 +305,23 @@ async def execute_management_request(
                 payload.skill_name,
                 actor_key=payload.actor_key,
                 body=payload.body,
+                display_name=payload.display_name,
                 description=payload.description or None,
+                requirements=(
+                    tuple(skill_requirement(item) for item in payload.requirements)
+                    if payload.requirements is not None
+                    else None
+                ),
+                provider_config=(
+                    provider_config(payload.provider_config)
+                    if payload.provider_config is not None
+                    else None
+                ),
+                files=(
+                    tuple(skill_file(item) for item in payload.files)
+                    if payload.files is not None
+                    else None
+                ),
                 changelog=payload.changelog,
             )
             return ManagementResult(
@@ -655,6 +674,8 @@ async def execute_management_request(
                 role=payload.role,
                 active_skills=list(payload.active_skills),
                 compact_mode=payload.compact_mode,
+                use_draft=payload.use_draft,
+                body_override=payload.body_override,
             )
             return ManagementResult(
                 request_id=request.request_id,

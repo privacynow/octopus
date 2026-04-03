@@ -6,6 +6,14 @@ import logging
 
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from octopus_sdk.content_store import ContentStorePort
+from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
+from octopus_sdk.skill_packages import (
+    coerce_skill_requirements,
+    coerce_skill_files,
+    publish_ready,
+    skill_runtime_available,
+    validate_skill_package,
+)
 from octopus_sdk.workflows.lifecycle_machine import (
     LifecycleDecision,
     build_lifecycle_snapshot,
@@ -18,7 +26,9 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleMutation,
     RuntimeSkillLifecycleRevision,
+    RuntimeSkillValidationProblem,
 )
+from octopus_sdk.skill_types import skill_source_label
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +52,22 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         return track
 
     def _detail__track(self, track: RuntimeSkillTrackRecord) -> RuntimeSkillLifecycleDetail:
+        validation_problems = tuple(
+            RuntimeSkillValidationProblem(
+                code=item.code,
+                message=item.message,
+                field_path=item.field_path,
+                severity=item.severity,
+            )
+            for item in validate_skill_package(
+                skill_name=track.slug,
+                display_name=track.display_name,
+                body=track.revision.instruction_body,
+                requirements=list(track.revision.requirements),
+                provider_config=track.revision.provider_config,
+                files=track.revision.files,
+            )
+        )
         revisions = tuple(
             RuntimeSkillLifecycleRevision(
                 revision_id=item.revision_id,
@@ -68,12 +94,25 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             name=track.slug,
             display_name=track.display_name,
             description=track.description,
+            source_label=skill_source_label(track.source_kind),
             visibility=track.visibility,
             body=track.revision.instruction_body,
             lifecycle_status=track.revision.status,
             active_revision_id=track.active_revision_id,
             published_revision_id=track.published_revision_id,
-            runtime_available=bool(track.published_revision_id),
+            runtime_available=skill_runtime_available(track),
+            publish_ready=publish_ready(
+                skill_name=track.slug,
+                display_name=track.display_name,
+                body=track.revision.instruction_body,
+                requirements=list(track.revision.requirements),
+                provider_config=track.revision.provider_config,
+                files=track.revision.files,
+            ),
+            requirements=tuple(track.revision.requirements),
+            provider_config=track.revision.provider_config,
+            files=track.revision.files,
+            validation_problems=validation_problems,
             revisions=revisions,
             approvals=approvals,
         )
@@ -119,6 +158,25 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         actor_key: str,
         note: str = "",
     ) -> RuntimeSkillLifecycleMutation:
+        if action in {"submit", "publish"}:
+            validation_problems = validate_skill_package(
+                skill_name=track.slug,
+                display_name=track.display_name,
+                body=track.revision.instruction_body,
+                requirements=list(track.revision.requirements),
+                provider_config=track.revision.provider_config,
+                files=track.revision.files,
+            )
+            if validation_problems:
+                return RuntimeSkillLifecycleMutation(
+                    status="invalid",
+                    ok=False,
+                    message=(
+                        f"Cannot {action} '{track.slug}' until draft validation problems are fixed: "
+                        f"{validation_problems[0].message}"
+                    ),
+                    detail=self._detail__track(track),
+                )
         decision = decide_lifecycle_action(self._lifecycle_snapshot(track), action)
         if not decision.ok:
             return RuntimeSkillLifecycleMutation(
@@ -193,8 +251,12 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         skill_name: str,
         *,
         actor_key: str,
-        body: str,
+        body: str | None = None,
+        display_name: str | None = None,
         description: str | None = None,
+        requirements: tuple | None = None,
+        provider_config: ProviderConfigRecord | None = None,
+        files: tuple | None = None,
         changelog: str = "",
     ) -> RuntimeSkillLifecycleMutation:
         track = self._mutable_track(skill_name)
@@ -204,23 +266,70 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 ok=False,
                 message=f"Custom skill '{skill_name}' not found.",
             )
-        text = body.strip()
-        if not text:
+        text = track.revision.instruction_body if body is None else body.strip()
+        next_display_name = track.display_name if display_name is None else str(display_name).strip()
+        next_description = track.description if description is None else description
+        next_requirements = (
+            tuple(track.revision.requirements)
+            if requirements is None
+            else coerce_skill_requirements(requirements)
+        )
+        next_provider_config = (
+            track.revision.provider_config
+            if provider_config is None
+            else coerce_provider_config(provider_config)
+        )
+        next_files = track.revision.files if files is None else coerce_skill_files(files)
+        validation_problems = validate_skill_package(
+            skill_name=track.slug,
+            display_name=next_display_name,
+            body=text,
+            requirements=list(next_requirements),
+            provider_config=next_provider_config,
+            files=next_files,
+        )
+        if validation_problems:
+            detail = self._detail__track(
+                RuntimeSkillTrackRecord(
+                    slug=track.slug,
+                    display_name=next_display_name,
+                    description=next_description,
+                    source_kind=track.source_kind,
+                    revision=SkillRevisionRecord(
+                        instruction_body=text,
+                        requirements=list(next_requirements),
+                        provider_config=next_provider_config,
+                        files=next_files,
+                        version_label="draft",
+                        changelog=changelog,
+                        created_by=actor_key,
+                        status="draft",
+                    ),
+                    source_uri=track.source_uri,
+                    owner_actor=track.owner_actor,
+                    visibility=track.visibility,
+                    is_mutable=track.is_mutable,
+                    archived=False,
+                    active_revision_id=track.active_revision_id,
+                    published_revision_id=track.published_revision_id,
+                )
+            )
             return RuntimeSkillLifecycleMutation(
                 status="invalid",
                 ok=False,
-                message="Draft body cannot be empty.",
+                message=validation_problems[0].message,
+                detail=detail,
             )
         updated = RuntimeSkillTrackRecord(
             slug=track.slug,
-            display_name=track.display_name,
-            description=track.description if description is None else description,
+            display_name=next_display_name,
+            description=next_description,
             source_kind=track.source_kind,
             revision=SkillRevisionRecord(
                 instruction_body=text,
-                requirements=list(track.revision.requirements),
-                provider_config=dict(track.revision.provider_config),
-                files=track.revision.files,
+                requirements=list(next_requirements),
+                provider_config=next_provider_config,
+                files=next_files,
                 version_label="draft",
                 changelog=changelog,
                 created_by=actor_key,

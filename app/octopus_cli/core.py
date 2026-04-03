@@ -1518,7 +1518,6 @@ class OctopusManager:
             values["BOT_AGENT_DESCRIPTION"] = description
         if skills:
             values["BOT_SKILLS"] = skills
-            values["BOT_AGENT_CAPABILITIES"] = skills
         if mode == "autonomous":
             values["BOT_AUTONOMOUS"] = "1"
             values["BOT_APPROVAL_MODE"] = "off"

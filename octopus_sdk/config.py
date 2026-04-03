@@ -60,7 +60,6 @@ class BotConfigBase:
     agent_role: str
     agent_tags: tuple[str, ...]
     agent_description: str
-    agent_capabilities: tuple[str, ...]
     agent_registries: tuple[RegistryConnectionConfig, ...]
     agent_poll_interval_seconds: float
     runtime_mode: str

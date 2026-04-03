@@ -54,8 +54,6 @@ unset_instance_config_env_overrides() {
     unset BOT_AGENT_ROLE
     unset BOT_AGENT_TAGS
     unset BOT_AGENT_DESCRIPTION
-    unset BOT_AGENT_SKILLS
-    unset BOT_AGENT_CAPABILITIES
     unset BOT_AGENT_REGISTRY_URL
     unset BOT_AGENT_REGISTRY_ENROLL_TOKEN
     unset BOT_AGENT_REGISTRY_SCOPE

@@ -31,7 +31,7 @@ from .auth import (
     validate_settings,
 )
 from .ws import WebSocketManager
-from .capability_service import CapabilityService
+from .routing_skill_service import RoutingSkillService
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
@@ -84,7 +84,7 @@ from .authority import StoreBackedRegistryAuthority
 from .backend import get_registry_authority, get_registry_store
 from .store_base import (
     AbstractRegistryStore,
-    CapabilityDisabledError,
+    RoutingSkillDisabledError,
     RegistryScopeError,
     validated_routed_task_request,
 )
@@ -357,8 +357,8 @@ async def create_routed_task(
         result = authority.submit_routed_task(validated_request)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
-    except CapabilityDisabledError as exc:
-        raise HTTPException(status_code=409, detail="capability_disabled") from exc
+    except RoutingSkillDisabledError as exc:
+        raise HTTPException(status_code=409, detail="routing_skill_disabled") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown conversation: {exc.args[0]}") from exc
     except ValueError as exc:
@@ -971,39 +971,39 @@ def resource_get_task(
     return _json_payload(task)
 
 
-@app.get("/v1/capabilities")
-def resource_list_capabilities(
+@app.get("/v1/routing/skills")
+def resource_list_routing_skills(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> list[dict[str, Any]]:
     return [
         {
-            "capability_name": item.capability_name,
-            "declared_by_agents": list(item.declared_by_agents),
+            "skill_name": item.skill_name,
+            "advertised_by_agents": list(item.advertised_by_agents),
             "enabled": item.enabled,
         }
-        for item in CapabilityService(store).list_capabilities()
+        for item in RoutingSkillService(store).list_routing_skills()
     ]
 
 
-@app.post("/v1/capabilities/{capability_name}/enable")
-def resource_enable_capability(
-    capability_name: str,
+@app.post("/v1/routing/skills/{skill_name}/enable")
+def resource_enable_routing_skill(
+    skill_name: str,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    item = CapabilityService(store).set_enabled(capability_name, enabled=True)
-    return {"capability_name": item.capability_name, "enabled": True}
+    item = RoutingSkillService(store).set_enabled(skill_name, enabled=True)
+    return {"skill_name": item.skill_name, "enabled": True}
 
 
-@app.post("/v1/capabilities/{capability_name}/disable")
-def resource_disable_capability(
-    capability_name: str,
+@app.post("/v1/routing/skills/{skill_name}/disable")
+def resource_disable_routing_skill(
+    skill_name: str,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    item = CapabilityService(store).set_enabled(capability_name, enabled=False)
-    return {"capability_name": item.capability_name, "enabled": False}
+    item = RoutingSkillService(store).set_enabled(skill_name, enabled=False)
+    return {"skill_name": item.skill_name, "enabled": False}
 
 
 @app.get("/v1/usage")
@@ -1115,7 +1115,11 @@ async def api_catalog_skill_edit_draft(
             skill_name,
             actor_key=_operator_actor_key(payload.actor_key),
             body=payload.body,
+            display_name=payload.display_name,
             description=payload.description or None,
+            requirements=payload.requirements,
+            provider_config=payload.provider_config,
+            files=payload.files,
             changelog=payload.changelog,
         )
     except RegistryIngressError as exc:
@@ -1522,6 +1526,8 @@ async def api_provider_guidance_preview(
             role=payload.role,
             active_skills=list(payload.active_skills),
             compact_mode=payload.compact_mode,
+            use_draft=payload.use_draft,
+            body_override=payload.body_override,
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

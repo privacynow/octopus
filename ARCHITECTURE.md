@@ -51,6 +51,7 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 - Conversation storage, event timeline, message/action APIs
 - Routed task lifecycle (create, status, result, recipient projection)
 - Skill catalog and provider guidance management (via management protocol)
+- Skill-derived routing projection and global routing policy
 - Operator dashboard and SPA
 - WebSocket realtime (events, invalidations, progress)
 - Authentication (agent tokens, operator sessions)
@@ -92,16 +93,72 @@ flowchart TB
 | Resource API | Agent token, operator session, or both (varies per endpoint) | Agents, conversations, tasks, events. Usage and summary are operator-only. |
 | Management bridge | Operator session or UI bearer token | Agent-scoped skill/guidance operations via management protocol |
 | Realtime API | Operator session | WebSocket — events, heartbeats, progress, invalidations |
-| Operator SPA | Session cookie | Dashboard, conversations, agents, tasks, approvals, skills, guidance, usage |
+| Operator SPA | Session cookie | Dashboard, conversations, agents, tasks, approvals, skills, routing, guidance, usage |
 
 All management endpoints are agent-scoped: `/v1/agents/{agent_id}/catalog/skills`,
 `/v1/agents/{agent_id}/guidance/{provider}`, etc. No global management endpoints
 that assume a single connected bot.
 
+For skills, the shared user-facing states are:
+
+- `Catalog`
+- `Available on this bot`
+- `Default for new conversations`
+- `Active in this conversation`
+
+With orthogonal dimensions:
+
+- `Source`: `Core | Store | Custom`
+- `Setup`: `Needs setup | Ready`
+- `Lifecycle`: draft/review/publish/archive for mutable custom skills
+
+Cross-bot discovery and delegation do not use a second product object called
+`capabilities`. They use a derived bot-level routing projection over skills:
+
+- `Routing skills`
+
+A routing skill is a skill that is available on the bot, runtime-ready, and
+allowed by registry-owned routing policy. Additional routing filters such as
+region, tier, or compliance may exist as policy dimensions, but they do not
+replace skill-derived routing and are not presented as skills. Conversation
+activation remains session-local and does not by itself change what the bot
+advertises for routing.
+
+```mermaid
+flowchart LR
+    catalog["Catalog"] --> available["Available on this bot"]
+    available --> defaults["Default for new conversations"]
+    available --> active["Active in this conversation"]
+    available --> routing["Routing skills"]
+    defaults --> seeded["New conversation starts"]
+    seeded --> active
+    ready["Ready / Needs setup"] -. gating .-> available
+    policy["Registry routing policy"] -. gating .-> routing
+```
+
+Custom skills now use one package-aware draft model across clients:
+
+- metadata: `name`, `display_name`, `description`
+- instructions: `body`
+- setup requirements: `requirements`
+- provider extensions: `provider_config`
+- supporting artifacts: `files`
+
+The package content is the persisted source of truth. The following fields are
+derived on read or lifecycle transitions:
+
+- `validation_problems`
+- `publish_ready`
+- `runtime_available`
+- `has_unpublished_changes`
+
 ### Management protocol
 
-When the operator manages a bot's skills or guidance from the UI, the request
-crosses the registry connection through a typed protocol:
+When an operator manages a bot's skills or guidance from the registry UI, or a
+chat client invokes the same skill lifecycle through commands, the request must
+land on the same backend operations. The browser is a richer wrapper, not a
+separate source of truth. A typical registry UI request crosses the registry
+connection through a typed protocol:
 
 ```mermaid
 sequenceDiagram
@@ -126,8 +183,30 @@ sequenceDiagram
 ```
 
 Management responses are cached server-side in `ingress.py` with TTL and
-in-flight deduplication. Mutations (install, publish, archive) invalidate
+in-flight deduplication. Mutations (make available, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
+
+Guidance remains a separate product concept from skills:
+
+- skills are selectable capability packages
+- guidance is provider-scoped baseline policy for Claude/Codex behavior
+- published guidance is applied to every run for that provider on that bot
+- guidance is not routed and is not activated per conversation
+- registry and chat both expose the same lifecycle, but registry can present it
+  as `Published`, `Draft`, and `Runtime preview` over the same backend
+  operations
+
+For custom skill authoring, the registry UI and chat clients both target the
+same management operations. The browser can bundle them into a richer editor,
+while chat exposes the same package mutations and lifecycle transitions in
+smaller steps. Validation, lifecycle guards, and file policy stay in the
+shared backend workflow:
+
+- submit and publish always run shared validation
+- attached files use one ingestion/validation path regardless of client
+- only safe relative paths are allowed
+- only `.sh` files may be marked executable
+- package limits are 16 attached files, 64 KB per file, 256 KB total
 
 ### Realtime model
 
@@ -201,7 +280,7 @@ flowchart TB
         sessions["sessions.py<br/>Session state + persistence"]
         identity["identity.py<br/>Actor/conversation key helpers"]
         providers["providers.py<br/>Provider protocol + RunResult"]
-        workflows["workflows/<br/>14 workflow implementations"]
+        workflows["workflows/<br/>Workflow implementations"]
         testing["testing/<br/>Non-durable test fixtures"]
     end
 
@@ -245,7 +324,8 @@ dispatches through `BotRuntime._run_worker_loop()` to SDK-owned workflows.
 
 ### Workflow composition
 
-`WorkflowComposer` assembles 14 workflow implementations from injected ports:
+`WorkflowComposer` assembles the SDK workflow implementations from injected
+ports:
 
 ```python
 workflows = (
@@ -253,10 +333,12 @@ workflows = (
     .with_messages(my_message_templates)
     .with_sessions(my_session_store)
     .with_config(my_config)
-    .with_work_queue(my_work_queue)
-    .with_credential_service(my_credential_svc)
     .with_catalog_service(my_catalog_svc)
+    .with_skill_activation(my_activation_svc)
+    .with_credentials(my_credential_svc)
+    .with_provider_guidance(my_guidance_svc)
     .with_content_store(my_content_store)
+    .with_work_queue(my_work_queue)
     .build()  # production — rejects test implementations
 )
 ```

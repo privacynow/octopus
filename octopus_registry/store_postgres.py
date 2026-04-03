@@ -23,9 +23,9 @@ from octopus_sdk.content_models import (
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .capability_service import (
-    query_capabilities,
-    requested_routed_capabilities,
+from .routing_skill_service import (
+    query_routing_skills,
+    requested_routed_skills,
 )
 from .postgres import get_connection
 from .exact_aliases import matches_exact_alias
@@ -92,7 +92,7 @@ from .store_shared.tasks import (
 from .store_base import (
     AbstractRegistryStore,
     stable_routed_task_id,
-    CapabilityDisabledError,
+    RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
     delegation_event,
     direct_assignment_message_text,
@@ -134,7 +134,7 @@ from octopus_sdk.registry.models import (
     AgentRecord,
     AgentStatusRecord,
     ApprovalRecord,
-    CapabilityRecord,
+    RoutingSkillRecord,
     CoordinationActionEnvelope,
     CoordinationActionResult,
     ConversationRecord,
@@ -346,7 +346,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "slug": row["slug"],
             "role": row["role"],
             "registry_scope": row.get("registry_scope", "full"),
-            "capabilities": decode_json_field(row["skills_json"], []),
+            "routing_skills": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
@@ -500,7 +500,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         slug,
                         card.get("role", ""),
                         validated_registry_scope(card.get("registry_scope")),
-                        _jsonb(card.get("capabilities", [])),
+                        _jsonb(card.get("routing_skills", [])),
                         _jsonb(card.get("tags", [])),
                         card.get("description", ""),
                         card.get("provider", ""),
@@ -574,7 +574,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         card.display_name or row["display_name"],
                         card.role or row["role"],
                         card.registry_scope or row["registry_scope"],
-                        _jsonb(card.capabilities or current_skills),
+                        _jsonb(card.routing_skills or current_skills),
                         _jsonb(card.tags or current_tags),
                         card.description or row["description"],
                         card.provider or row["provider"],
@@ -651,8 +651,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "server_time": now,
             })
 
-    def get_capability_override(self, capability_name: str) -> bool | None:
-        normalized = capability_name.strip().lower()
+    def get_routing_skill_override(self, skill_name: str) -> bool | None:
+        normalized = skill_name.strip().lower()
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -664,8 +664,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return None
         return bool(row["enabled"])
 
-    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
-        normalized = capability_name.strip().lower()
+    def set_routing_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = skill_name.strip().lower()
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
@@ -680,7 +680,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (normalized, 1 if enabled else 0, set_by, datetime.now(timezone.utc).timestamp()),
                 )
 
-    def list_capabilities(self) -> list[CapabilityRecord]:
+    def list_routing_skills(self) -> list[RoutingSkillRecord]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -697,15 +697,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         END != 'disconnected'
                     ),
                     declared AS (
-                        SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
+                        SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
                         FROM live_agents
                         CROSS JOIN LATERAL jsonb_array_elements_text(live_agents.skills_json) AS je(value)
                     )
-                    SELECT capability_key, MIN(capability_name) AS capability_name,
-                           array_agg(DISTINCT slug ORDER BY slug) AS declared_by_agents
+                    SELECT skill_key, MIN(skill_name) AS skill_name,
+                           array_agg(DISTINCT slug ORDER BY slug) AS advertised_by_agents
                     FROM declared
-                    GROUP BY capability_key
-                    ORDER BY capability_key
+                    GROUP BY skill_key
+                    ORDER BY skill_key
                     """,
                     (self._offline_before(),),
                 )
@@ -720,9 +720,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 override_rows = cur.fetchall()
         merged: dict[str, dict[str, object]] = {}
         for row in declared_rows:
-            merged[row["capability_key"]] = {
-                "capability_name": row["capability_name"],
-                "declared_by_agents": row["declared_by_agents"] or [],
+            merged[row["skill_key"]] = {
+                "skill_name": row["skill_name"],
+                "advertised_by_agents": row["advertised_by_agents"] or [],
                 "enabled": None,
             }
         for row in override_rows:
@@ -730,18 +730,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
             item = merged.setdefault(
                 key,
                 {
-                    "capability_name": row["skill_name"],
-                    "declared_by_agents": [],
+                    "skill_name": row["skill_name"],
+                    "advertised_by_agents": [],
                     "enabled": None,
                 },
             )
             item["enabled"] = bool(row["enabled"])
         return _records(
-            CapabilityRecord,
-            sorted(merged.values(), key=lambda item: item["capability_name"].lower()),
+            RoutingSkillRecord,
+            sorted(merged.values(), key=lambda item: item["skill_name"].lower()),
         )
 
-    def _disabled_capabilities(self, conn) -> set[str]:
+    def _disabled_routing_skills(self, conn) -> set[str]:
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT skill_name FROM {_SCHEMA}.skills_override WHERE enabled = 0"
@@ -755,14 +755,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
         )
         role = validated_query.get("role", "").strip().lower()
         required_state = validated_query.get("required_state", "connected")
-        capabilities = query_capabilities(validated_query)
+        skills = query_routing_skills(validated_query)
         tags = {t.lower() for t in validated_query.get("tags", []) if t}
         free_text = validated_query.get("free_text", "").strip()
         exclude = sorted(set(validated_query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_capabilities = self._disabled_capabilities(conn)
-            capabilities = capabilities - disabled_capabilities
-            if (validated_query.get("capabilities") or validated_query.get("skills")) and not capabilities:
+            disabled_skills = self._disabled_routing_skills(conn)
+            skills = skills - disabled_skills
+            if validated_query.get("skills") and not skills:
                 return []
             sql = [
                 f"""
@@ -793,7 +793,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if role:
                 sql.append(" AND role ILIKE %s")
                 params.append(f"%{role}%")
-            for capability in sorted(capabilities):
+            for skill_name in sorted(skills):
                 sql.append(
                     """
                     AND EXISTS (
@@ -803,7 +803,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                     """
                 )
-                params.append(capability)
+                params.append(skill_name)
             for tag in sorted(tags):
                 sql.append(
                     """
@@ -824,7 +824,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         WHERE je.value ILIKE %s
                     )
                 """
-                if disabled_capabilities:
+                if disabled_skills:
                     skill_clause = f"""
                         EXISTS (
                             SELECT 1
@@ -849,8 +849,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """
                 )
                 params.extend([like, like, like, like])
-                if disabled_capabilities:
-                    params.append(sorted(disabled_capabilities))
+                if disabled_skills:
+                    params.append(sorted(disabled_skills))
                 params.append(like)
             sql.append(" ORDER BY lower(display_name)")
             with _cur(conn) as cur:
@@ -995,7 +995,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     display_name=display_name,
                 ):
                     matches.append(row)
-            elif selector.kind == "capability":
+            elif selector.kind == "skill":
                 caps = {
                     str(item).strip().lower()
                     for item in decode_json_field(row["skills_json"], [])
@@ -1055,7 +1055,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "selector_value": task.selector.value,
             "instructions": task.instructions,
             "priority": task.priority,
-            "requested_capabilities": list(task.requested_capabilities),
+            "requested_skills": list(task.requested_skills),
             "context": dict(task.context),
         }
 
@@ -1207,15 +1207,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now: str,
     ) -> dict[str, object]:
         validated_request = validated_routed_task_request(request)
-        disabled_capabilities = self._disabled_capabilities(conn)
+        disabled_skills = self._disabled_routing_skills(conn)
         request_payload = validated_request.model_dump(mode="json")
         request_payload["external_conversation_ref"] = (
             str(request_payload.get("external_conversation_ref", "") or "").strip()
             or routed_task_external_conversation_ref(validated_request.routed_task_id)
         )
-        for capability in requested_routed_capabilities(request_payload):
-            if capability.lower() in disabled_capabilities:
-                raise CapabilityDisabledError(capability)
+        for skill_name in requested_routed_skills(request_payload):
+            if skill_name.lower() in disabled_skills:
+                raise RoutingSkillDisabledError(skill_name)
         recipient_conversation_id = self._ensure_routed_task_recipient_conversation_in_tx(
             conn,
             validated_request,
@@ -1922,7 +1922,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             "title": entry.get("title", ""),
                             "instructions": entry.get("instructions", ""),
                             "priority": entry.get("priority", "normal"),
-                            "requested_capabilities": entry.get("requested_capabilities", []),
+                            "requested_skills": entry.get("requested_skills", []),
                             "context": entry.get("context", {}),
                         }
                     )
@@ -1943,7 +1943,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         "title": draft.title,
                         "instructions": draft.instructions,
                         "context": dict(draft.context),
-                        "requested_capabilities": list(draft.requested_capabilities),
+                        "requested_skills": list(draft.requested_skills),
                         "priority": draft.priority,
                         "created_at": now,
                     }
@@ -2041,7 +2041,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": assignment.title,
                     "instructions": assignment.instructions,
                     "context": dict(assignment.context),
-                    "requested_capabilities": list(assignment.requested_capabilities),
+                    "requested_skills": list(assignment.requested_skills),
                     "priority": assignment.priority,
                     "created_at": now,
                 }
@@ -2070,7 +2070,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             "selector_value": assignment.selector.value,
                             "instructions": assignment.instructions,
                             "priority": assignment.priority,
-                            "requested_capabilities": list(assignment.requested_capabilities),
+                            "requested_skills": list(assignment.requested_skills),
                             "context": dict(assignment.context),
                         }
                     ],

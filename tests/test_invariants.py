@@ -117,7 +117,7 @@ def test_registry_digest_mismatch_leaves_no_residue():
                     result = get_skill_import_service().install_from_registry("tampered-skill", cfg.registry_url)
 
             assert result.ok is False
-            assert result.message == "Could not fetch skill registry. Try again later."
+            assert result.message == "Could not reach the skill store. Try again later."
             assert get_skill_catalog_service().resolve_track("tampered-skill") is None
             assert get_content_store().list_skill_tracks("tampered-skill") == []
             assert {item.slug for item in get_content_store().list_skill_summaries()} == before

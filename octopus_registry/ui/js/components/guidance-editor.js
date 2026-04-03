@@ -1,5 +1,5 @@
 /**
- * Provider guidance editor — compact provider-scoped draft and publish workflow.
+ * Provider guidance editor — provider baseline policy with draft, published, and runtime preview views.
  */
 function renderGuidanceEditor(container) {
     const cleanups = UI.beginCleanupScope();
@@ -13,7 +13,7 @@ function renderGuidanceEditor(container) {
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
-    header.innerHTML = '<h2>Guidance</h2>';
+    header.innerHTML = '<h2>Guidance</h2><p>Baseline provider policy for this bot. Published guidance applies to every run for that provider; drafts stay local until you publish.</p>';
     container.appendChild(header);
 
     const shell = document.createElement('section');
@@ -43,6 +43,7 @@ function renderGuidanceEditor(container) {
     let currentProvider = 'claude';
     let currentAgentId = '';
     let availableAgents = [];
+    let currentPreview = null;
     const providers = [
         ['claude', 'Claude'],
         ['codex', 'Codex'],
@@ -60,6 +61,10 @@ function renderGuidanceEditor(container) {
     );
     const providerBar = providerControl.element;
     providerPanel.appendChild(providerBar);
+
+    function _providerLabel(provider = currentProvider) {
+        return providers.find(([value]) => value === provider)?.[1] || provider;
+    }
 
     function _readAgentId() {
         try {
@@ -118,6 +123,49 @@ function renderGuidanceEditor(container) {
         UI.invalidateCachedData(_guidanceCacheKey(normalizedAgentId, normalizedProvider));
     }
 
+    function _renderPolicyPanel(titleText, bodyText, emptyText, key) {
+        const panel = document.createElement('section');
+        panel.className = 'editor-panel';
+        panel.dataset.key = key;
+
+        const title = document.createElement('div');
+        title.className = 'editor-section-title';
+        title.textContent = titleText;
+        panel.appendChild(title);
+
+        const trimmed = String(bodyText || '').trim();
+        if (!trimmed) {
+            panel.appendChild(UI.renderEmptyState(emptyText, true));
+            return panel;
+        }
+
+        const pre = document.createElement('pre');
+        pre.className = 'event-pre';
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.textContent = trimmed;
+        panel.appendChild(pre);
+        return panel;
+    }
+
+    function _guidanceStatus(currentGuidance) {
+        return String(currentGuidance.status || currentGuidance.lifecycle_status || 'draft').replace(/_/g, ' ');
+    }
+
+    async function _runGuidanceMutation(button, actionLabel, op) {
+        button.disabled = true;
+        try {
+            await op();
+            _invalidateGuidanceCache();
+            currentPreview = null;
+            await loadGuidance({ soft: true });
+        } catch (err) {
+            UI.reportError(`Failed to ${actionLabel.toLowerCase()} the guidance`, err, {
+                context: `Guidance ${actionLabel.toLowerCase()} failed`,
+            });
+            button.disabled = false;
+        }
+    }
+
     async function loadGuidance({ soft = false } = {}) {
         if (!currentAgentId) {
             UI.clearMemoizedRender(contentEl);
@@ -126,11 +174,12 @@ function renderGuidanceEditor(container) {
             ]);
             return;
         }
+        currentPreview = null;
         const hadVisibleState = contentEl.childElementCount > 0;
         const cachedGuidance = UI.peekCachedData(_guidanceCacheKey());
         const hasCachedView = Boolean(cachedGuidance);
         if (cachedGuidance) {
-            renderGuidanceContent(cachedGuidance.guidance || cachedGuidance);
+            renderGuidanceContent(cachedGuidance.guidance || cachedGuidance, currentPreview);
         } else if (!soft) {
             renderLoadingState('Loading guidance…');
         }
@@ -144,7 +193,7 @@ function renderGuidanceEditor(container) {
                     forceRefresh: hasCachedView,
                 },
             );
-            renderGuidanceContent(data.guidance || data);
+            renderGuidanceContent(data.guidance || data, currentPreview);
         } catch (err) {
             if (hasCachedView || hadVisibleState) {
                 UI.reportError('Failed to refresh guidance', err, { context: 'Guidance refresh failed' });
@@ -176,168 +225,202 @@ function renderGuidanceEditor(container) {
         }
     }
 
-    function renderGuidanceContent(guidance) {
+    function renderGuidanceContent(guidance, preview) {
         UI.memoizedRender(contentEl, {
             provider: currentProvider,
             agentId: currentAgentId,
             guidance,
+            preview,
         }, (state) => {
-        const nodes = [];
-        const currentGuidance = state.guidance || {};
+            const nodes = [];
+            const currentGuidance = state.guidance || {};
+            const currentPreviewState = state.preview || null;
+            const statusText = _guidanceStatus(currentGuidance);
 
-        const statusPanel = document.createElement('section');
-        statusPanel.className = 'editor-panel';
-        statusPanel.dataset.key = 'guidance-status';
+            const statusPanel = document.createElement('section');
+            statusPanel.className = 'editor-panel';
+            statusPanel.dataset.key = 'guidance-status';
 
-        const statusHead = document.createElement('div');
-        statusHead.className = 'workspace-header-main';
-        const titleWrap = document.createElement('div');
-        titleWrap.className = 'workspace-title-group';
-        const title = document.createElement('h3');
-        title.className = 'editor-section-title';
-        title.textContent = `${providers.find(([value]) => value === currentProvider)?.[1] || currentProvider} guidance`;
-        titleWrap.appendChild(title);
-        statusHead.appendChild(titleWrap);
-        const badge = document.createElement('span');
-        badge.className = `badge badge-${currentGuidance.status || currentGuidance.lifecycle_status || 'draft'}`;
-        badge.textContent = String(currentGuidance.status || currentGuidance.lifecycle_status || 'draft').replace(/_/g, ' ');
-        statusHead.appendChild(badge);
-        statusPanel.appendChild(statusHead);
-        nodes.push(statusPanel);
+            const statusHead = document.createElement('div');
+            statusHead.className = 'workspace-header-main';
+            const titleWrap = document.createElement('div');
+            titleWrap.className = 'workspace-title-group';
+            const title = document.createElement('h3');
+            title.className = 'editor-section-title';
+            title.textContent = `${_providerLabel(state.provider)} guidance`;
+            titleWrap.appendChild(title);
+            statusHead.appendChild(titleWrap);
+            const badge = document.createElement('span');
+            badge.className = `badge badge-${String(currentGuidance.lifecycle_status || 'draft')}`;
+            badge.textContent = statusText;
+            statusHead.appendChild(badge);
+            statusPanel.appendChild(statusHead);
+            statusPanel.appendChild(UI.renderMetadataGrid([
+                { label: 'Published policy', value: currentGuidance.published_body ? 'Live' : 'Not published' },
+                { label: 'Published revision', value: currentGuidance.published_revision_id || '(none)' },
+                { label: 'Draft revision', value: currentGuidance.active_revision_id || '(none)' },
+                { label: 'Runtime behavior', value: `Applies to every ${_providerLabel(state.provider)} run on this bot` },
+            ]));
+            nodes.push(statusPanel);
 
-        const editorPanel = document.createElement('section');
-        editorPanel.className = 'editor-panel';
-        editorPanel.dataset.key = 'guidance-editor';
+            nodes.push(_renderPolicyPanel(
+                'Published policy',
+                currentGuidance.published_body || '',
+                'Nothing is published for this provider yet.',
+                'guidance-published',
+            ));
 
-        const editorTitle = document.createElement('div');
-        editorTitle.className = 'editor-section-title';
-        editorTitle.textContent = 'System prompt draft';
-        editorPanel.appendChild(editorTitle);
+            const draftPanel = document.createElement('section');
+            draftPanel.className = 'editor-panel';
+            draftPanel.dataset.key = 'guidance-editor';
 
-        const textarea = document.createElement('textarea');
-        textarea.className = 'guidance-textarea';
-        textarea.rows = 14;
-        textarea.value = currentGuidance.draft_body || currentGuidance.instruction_body || currentGuidance.body || '';
-        textarea.setAttribute('aria-label', 'Guidance draft');
-        editorPanel.appendChild(textarea);
+            const draftTitle = document.createElement('div');
+            draftTitle.className = 'editor-section-title';
+            draftTitle.textContent = 'Draft policy';
+            draftPanel.appendChild(draftTitle);
 
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
+            const textarea = document.createElement('textarea');
+            textarea.className = 'guidance-textarea';
+            textarea.rows = 14;
+            textarea.value = currentGuidance.draft_body || '';
+            textarea.setAttribute('aria-label', 'Guidance draft');
+            draftPanel.appendChild(textarea);
 
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'btn btn-primary btn-sm';
-        saveBtn.textContent = 'Save draft';
-        saveBtn.addEventListener('click', async () => {
-            saveBtn.disabled = true;
-            try {
-                await API.updateGuidanceDraft(currentAgentId, currentProvider, { body: textarea.value });
-                _invalidateGuidanceCache();
-                saveBtn.textContent = 'Saved';
-                setTimeout(() => { saveBtn.textContent = 'Save draft'; }, 1600);
-            } catch (err) {
-                UI.reportError('Failed to save the guidance draft', err, { context: 'Guidance save draft failed' });
-            }
-            saveBtn.disabled = false;
-        });
-        actions.appendChild(saveBtn);
+            const actions = document.createElement('div');
+            actions.className = 'editor-actions';
 
-        const previewBtn = document.createElement('button');
-        previewBtn.className = 'btn btn-sm';
-        previewBtn.textContent = 'Preview';
-        previewBtn.addEventListener('click', async () => {
-            previewBtn.disabled = true;
-            try {
-                const result = await API.previewGuidance(currentAgentId, currentProvider);
-                const previewText = result.preview || result.system_prompt || JSON.stringify(result, null, 2);
-                showPreview(previewText);
-            } catch (err) {
-                UI.reportError('Failed to preview the guidance', err, { context: 'Guidance preview failed' });
-            }
-            previewBtn.disabled = false;
-        });
-        actions.appendChild(previewBtn);
-
-        const submitBtn = document.createElement('button');
-        submitBtn.className = 'btn btn-sm';
-        submitBtn.textContent = 'Submit';
-        submitBtn.addEventListener('click', async () => {
-            submitBtn.disabled = true;
-            try {
-                await API.submitGuidance(currentAgentId, currentProvider);
-                _invalidateGuidanceCache();
-                loadGuidance();
-            } catch (err) {
-                UI.reportError('Failed to submit the guidance', err, { context: 'Guidance submit failed' });
-                submitBtn.disabled = false;
-            }
-        });
-        actions.appendChild(submitBtn);
-
-        const publishBtn = document.createElement('button');
-        publishBtn.className = 'btn btn-sm btn-primary';
-        publishBtn.textContent = 'Publish';
-        publishBtn.addEventListener('click', async () => {
-            UI.showConfirm('Publish guidance', 'Publish this guidance to active conversations?', async () => {
-                publishBtn.disabled = true;
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'btn btn-primary btn-sm';
+            saveBtn.textContent = 'Save draft';
+            saveBtn.addEventListener('click', async () => {
+                saveBtn.disabled = true;
                 try {
-                    await API.publishGuidance(currentAgentId, currentProvider);
+                    await API.updateGuidanceDraft(currentAgentId, currentProvider, { body: textarea.value });
                     _invalidateGuidanceCache();
-                    loadGuidance();
+                    currentPreview = null;
+                    saveBtn.textContent = 'Saved';
+                    setTimeout(() => { saveBtn.textContent = 'Save draft'; }, 1600);
                 } catch (err) {
-                    UI.reportError('Failed to publish the guidance', err, { context: 'Guidance publish failed' });
-                    publishBtn.disabled = false;
+                    UI.reportError('Failed to save the guidance draft', err, { context: 'Guidance save draft failed' });
                 }
+                saveBtn.disabled = false;
             });
-        });
-        actions.appendChild(publishBtn);
+            actions.appendChild(saveBtn);
 
-        editorPanel.appendChild(actions);
-        nodes.push(editorPanel);
-        return nodes;
+            const previewBtn = document.createElement('button');
+            previewBtn.className = 'btn btn-sm';
+            previewBtn.textContent = 'Preview';
+            previewBtn.addEventListener('click', async () => {
+                previewBtn.disabled = true;
+                try {
+                    currentPreview = await API.previewGuidance(currentAgentId, currentProvider, {
+                        use_draft: true,
+                        body_override: textarea.value,
+                    });
+                    renderGuidanceContent(currentGuidance, currentPreview);
+                } catch (err) {
+                    UI.reportError('Failed to preview the guidance', err, { context: 'Guidance preview failed' });
+                }
+                previewBtn.disabled = false;
+            });
+            actions.appendChild(previewBtn);
+
+            const submitBtn = document.createElement('button');
+            submitBtn.className = 'btn btn-sm';
+            submitBtn.textContent = 'Submit';
+            submitBtn.addEventListener('click', async () => {
+                await _runGuidanceMutation(submitBtn, 'Submit', () => API.submitGuidance(currentAgentId, currentProvider));
+            });
+            actions.appendChild(submitBtn);
+
+            const approveBtn = document.createElement('button');
+            approveBtn.className = 'btn btn-sm';
+            approveBtn.textContent = 'Approve';
+            approveBtn.addEventListener('click', async () => {
+                await _runGuidanceMutation(approveBtn, 'Approve', () => API.approveGuidance(currentAgentId, currentProvider));
+            });
+            actions.appendChild(approveBtn);
+
+            const rejectBtn = document.createElement('button');
+            rejectBtn.className = 'btn btn-sm';
+            rejectBtn.textContent = 'Reject';
+            rejectBtn.addEventListener('click', async () => {
+                await _runGuidanceMutation(rejectBtn, 'Reject', () => API.rejectGuidance(currentAgentId, currentProvider));
+            });
+            actions.appendChild(rejectBtn);
+
+            const publishBtn = document.createElement('button');
+            publishBtn.className = 'btn btn-sm btn-primary';
+            publishBtn.textContent = 'Publish';
+            publishBtn.addEventListener('click', async () => {
+                UI.showConfirm(
+                    'Publish guidance',
+                    'Publish this provider policy for future runs on this bot?',
+                    async () => {
+                        await _runGuidanceMutation(publishBtn, 'Publish', () => API.publishGuidance(currentAgentId, currentProvider));
+                    },
+                );
+            });
+            actions.appendChild(publishBtn);
+
+            const archiveBtn = document.createElement('button');
+            archiveBtn.className = 'btn btn-sm';
+            archiveBtn.textContent = 'Archive';
+            archiveBtn.addEventListener('click', async () => {
+                await _runGuidanceMutation(archiveBtn, 'Archive', () => API.archiveGuidance(currentAgentId, currentProvider));
+            });
+            actions.appendChild(archiveBtn);
+
+            draftPanel.appendChild(actions);
+            nodes.push(draftPanel);
+
+            const previewPanel = document.createElement('section');
+            previewPanel.className = 'editor-panel';
+            previewPanel.dataset.key = 'guidance-preview';
+
+            const previewTitle = document.createElement('div');
+            previewTitle.className = 'editor-section-title';
+            previewTitle.textContent = 'Runtime preview';
+            previewPanel.appendChild(previewTitle);
+
+            if (currentPreviewState) {
+                previewPanel.appendChild(UI.renderMetadataGrid([
+                    {
+                        label: 'Preview source',
+                        value: currentPreviewState.preview_source === 'draft' ? 'Current draft' : 'Published policy',
+                    },
+                    { label: 'Prompt weight', value: String(currentPreviewState.prompt_weight || 0) },
+                ]));
+                const previewBody = document.createElement('pre');
+                previewBody.className = 'event-pre';
+                previewBody.style.whiteSpace = 'pre-wrap';
+                previewBody.textContent = String(currentPreviewState.composed_prompt || '').trim() || '(empty prompt)';
+                previewPanel.appendChild(previewBody);
+            } else {
+                previewPanel.appendChild(
+                    UI.renderEmptyState(
+                        'Preview the current draft to see the composed provider prompt before publishing.',
+                        true,
+                    ),
+                );
+            }
+            nodes.push(previewPanel);
+            return nodes;
         }, {
             signatureFn(state) {
                 const currentGuidance = state.guidance || {};
+                const currentPreviewState = state.preview || {};
                 return {
                     provider: String(state.provider || ''),
                     agentId: String(state.agentId || ''),
-                    status: String(currentGuidance.status || currentGuidance.lifecycle_status || 'draft'),
-                    draft: String(currentGuidance.draft_body || currentGuidance.instruction_body || currentGuidance.body || ''),
+                    status: String(currentGuidance.lifecycle_status || 'draft'),
+                    draft: String(currentGuidance.draft_body || ''),
+                    published: String(currentGuidance.published_body || ''),
+                    previewSource: String(currentPreviewState.preview_source || ''),
+                    previewPrompt: String(currentPreviewState.composed_prompt || ''),
                 };
             },
         });
-    }
-
-    function showPreview(text) {
-        const overlay = document.createElement('div');
-        overlay.className = 'confirm-overlay';
-
-        const dialog = document.createElement('div');
-        dialog.className = 'confirm-dialog';
-        dialog.style.maxWidth = '720px';
-        dialog.style.maxHeight = '80vh';
-        dialog.style.overflow = 'auto';
-
-        const h3 = document.createElement('h3');
-        h3.textContent = 'Guidance preview';
-        dialog.appendChild(h3);
-
-        const pre = document.createElement('pre');
-        pre.className = 'event-pre';
-        pre.style.whiteSpace = 'pre-wrap';
-        pre.textContent = text;
-        dialog.appendChild(pre);
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'btn';
-        closeBtn.textContent = 'Close';
-        closeBtn.addEventListener('click', () => overlay.remove());
-        dialog.appendChild(closeBtn);
-
-        overlay.appendChild(dialog);
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) overlay.remove();
-        });
-        document.body.appendChild(overlay);
     }
 
     container.__routeReady = loadAgents();

@@ -40,7 +40,7 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         "conversation-detail.js": "function renderConversationDetail(",
         "task-list.js": "function renderTaskList(",
         "approval-list.js": "function renderApprovalList(",
-        "capability-list.js": "function renderCapabilityList(",
+        "routing-policy-list.js": "function renderRoutingPolicyList(",
         "usage-view.js": "function renderUsageView(",
         "skill-catalog.js": "function renderSkillCatalog(",
         "guidance-editor.js": "function renderGuidanceEditor(",
@@ -109,7 +109,7 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
     assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(currentMode === 'catalog' && queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -135,10 +135,74 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
 
     assert "UI.peekCachedData(_skillCacheKey(currentAgentId))" in skill_catalog
     assert "UI.loadCachedData(" in skill_catalog
-    assert "_invalidateSkillCaches();" in skill_catalog
+    assert "function _invalidateSkillCaches(agentId = currentAgentId, skillName = '') {" in skill_catalog
+    assert "_invalidateSkillCaches(currentAgentId, skill.name);" in skill_catalog
     assert "UI.peekCachedData(_guidanceCacheKey())" in guidance_editor
     assert "UI.loadCachedData(" in guidance_editor
     assert "_invalidateGuidanceCache();" in guidance_editor
+
+
+def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    conversation_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+    api_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "api.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Choose a bot to browse the skills available there." in skill_catalog
+    assert "label: 'Bot catalog'" in skill_catalog
+    assert "label: 'Studio'" in skill_catalog
+    assert "'Available on this bot'" in skill_catalog
+    assert "'Skill store'" in skill_catalog
+    assert "'Create custom draft'" in skill_catalog
+    assert "'No custom skills yet for this bot. Create a draft to get started.'" in skill_catalog
+    assert "_renderRegistrySkillRow" in skill_catalog
+    assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
+    assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
+    assert "workspace.className = 'dashboard-board';" in skill_catalog
+    assert "UI.showTextDialog(" in skill_catalog
+    assert "allowEmpty: true" in skill_catalog
+    assert "agentId: currentAgentId" in skill_catalog
+    assert "agentLabel: _currentAgentLabel()" in skill_catalog
+    assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
+    assert "How skills work" not in skill_catalog
+    assert "Open this bot’s conversations" not in skill_catalog
+    assert "activate_skill" in skill_catalog
+    assert "Active in this conversation" in conversation_detail
+    assert "Available on this bot" in conversation_detail
+    assert "getSkillLifecycle: (agentId, name) =>" in api_js
+    assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
+
+
+def test_skills_surface_does_not_reintroduce_skills_only_layout_classes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    for legacy in (
+        "skills-workspace",
+        "skills-explainer-grid",
+        "skills-meta-list",
+        "skills-meta-block",
+        "skills-markdown-preview",
+        "skills-studio-create",
+        "skills-studio-editor",
+        "skills-history-panel",
+        "skills-inline-form",
+        "badge-primary",
+        "list-row-selected",
+    ):
+        assert legacy not in skill_catalog
+        assert legacy not in css
 
 
 def test_conversation_empty_state_avoids_repeating_route_title() -> None:
@@ -456,6 +520,8 @@ def test_conversation_detail_is_split_into_supporting_modules() -> None:
     assert '/ui/js/components/composer-autocomplete.js' in index_html
     assert '/ui/js/components/event-renderers.js' in index_html
     assert '/ui/js/components/task-board.js' in index_html
+    assert 'class="nav-icon"' in index_html
+    assert 'data-icon=' not in index_html
 
     conversation_detail = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
@@ -494,7 +560,7 @@ def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_l
     assert "event-card-lead" not in event_renderers
     assert "content.className = terminalWithOutcome ? 'event-text-block event-text-block-outcome' : 'event-text-block';" in event_renderers
     assert ".event-text-block-outcome {" in css
-    assert "facts.className = 'task-item-facts';" in task_list
+    assert "UI.renderMetadataGrid([" in task_list
     assert ".task-item-facts {" in css
 
 
@@ -508,7 +574,7 @@ def test_components_use_shared_refresh_and_do_not_duplicate_ws_invalidation_plum
     assert "function subscribeWithRefresh(" in helper
 
     for name in [
-        "capability-list.js",
+        "routing-policy-list.js",
         "usage-view.js",
         "skill-catalog.js",
         "guidance-editor.js",

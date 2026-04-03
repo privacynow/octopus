@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class SearchAgentsRequest(BaseModel):
     role: str = ""
-    capabilities: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     free_text: str = ""
     exclude_agent_ids: list[str] = Field(default_factory=list)

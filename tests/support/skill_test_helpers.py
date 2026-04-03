@@ -15,8 +15,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import frontmatter
-import yaml
 from cryptography.fernet import Fernet
 
 from app.credential_service import get_credential_service
@@ -24,7 +22,6 @@ from app.credential_store import derive_credential_encryption_key
 from app.credential_store_sqlite import SQLiteCredentialStore
 from app.credential_validation import validate_credential
 from octopus_sdk.identity import filesystem_component_for_key, parse_actor_key
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from octopus_sdk.providers import (
     CredentialEnvRecord,
@@ -33,70 +30,16 @@ from octopus_sdk.providers import (
     RunContext,
 )
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
+from octopus_sdk.skill_packages import (
+    load_skill_markdown as _runtime_load_skill_markdown,
+    parse_provider_config_text,
+    parse_skill_requirements_text,
+)
 from octopus_sdk.skill_types import SkillMeta, SkillRequirement
 
 
 CATALOG_DIR = BUILTIN_SKILL_CATALOG_DIR
 CUSTOM_DIR = Path.home() / ".config" / "octopus-agent" / "skills" / "custom"
-
-
-class _SkillValidateSpecModel(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    url: str = ""
-    method: str = "GET"
-    header: str = ""
-    expect_status: str = "200"
-
-    @field_validator("url", "method", "header", "expect_status", mode="before")
-    @classmethod
-    def _stringify(cls, value: Any) -> str:
-        return "" if value is None else str(value)
-
-
-class _SkillRequirementModel(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
-    key: str = ""
-    prompt: str = ""
-    help_url: str | None = None
-    validation_spec: _SkillValidateSpecModel | None = Field(default=None, alias="validate")
-
-    @field_validator("key", "prompt", mode="before")
-    @classmethod
-    def _required_strings(cls, value: Any) -> str:
-        return "" if value is None else str(value)
-
-    @field_validator("help_url", mode="before")
-    @classmethod
-    def _optional_string(cls, value: Any) -> str | None:
-        if value in (None, ""):
-            return None
-        return str(value)
-
-
-class _RequiresDocumentModel(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    credentials: list[_SkillRequirementModel] = Field(default_factory=list)
-
-    @field_validator("credentials", mode="before")
-    @classmethod
-    def _normalize_credentials(cls, value: Any) -> list[_SkillRequirementModel]:
-        if not isinstance(value, list):
-            return []
-        parsed: list[_SkillRequirementModel] = []
-        for item in value:
-            try:
-                parsed.append(_SKILL_REQUIREMENT_ADAPTER.validate_python(item))
-            except ValidationError:
-                continue
-        return parsed
-
-
-_SKILL_REQUIREMENT_ADAPTER = TypeAdapter(_SkillRequirementModel)
-_REQUIRES_DOCUMENT_ADAPTER = TypeAdapter(_RequiresDocumentModel)
-_PROVIDER_DOCUMENT_ADAPTER = TypeAdapter(dict[str, Any])
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +86,9 @@ def _load_skill_md(path: Path) -> tuple[dict, str]:
     Raises ValueError on malformed content so callers can skip gracefully.
     """
     try:
-        post = frontmatter.load(str(path))
+        return _runtime_load_skill_markdown(path)
     except Exception as e:
         raise ValueError(f"Failed to parse {path}: {e}") from e
-    return dict(post.metadata), post.content.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -158,29 +100,10 @@ def _parse_requires_yaml(text: str) -> list[SkillRequirement]:
 
     Returns empty list on malformed YAML instead of crashing.
     """
-    if not text.strip():
-        return []
     try:
-        data = yaml.safe_load(text)
-        doc = _REQUIRES_DOCUMENT_ADAPTER.validate_python(data or {})
-    except (yaml.YAMLError, ValidationError):
+        return list(parse_skill_requirements_text(text))
+    except Exception:
         return []
-    requirements: list[SkillRequirement] = []
-    for item in doc.credentials:
-        if not item.key:
-            continue
-        validate = (
-            item.validation_spec.model_dump(mode="python")
-            if item.validation_spec
-            else None
-        )
-        requirements.append(SkillRequirement(
-            key=item.key,
-            prompt=item.prompt,
-            help_url=item.help_url,
-            validate=validate,
-        ))
-    return requirements
 
 
 def get_skill_requirements(name: str) -> list[SkillRequirement]:
@@ -432,9 +355,8 @@ def load_provider_yaml(name: str, provider: str) -> dict:
     if not yaml_file.is_file():
         return {}
     try:
-        data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-        return _PROVIDER_DOCUMENT_ADAPTER.validate_python(data or {})
-    except (yaml.YAMLError, ValidationError):
+        return parse_provider_config_text(yaml_file.read_text(encoding="utf-8"))
+    except Exception:
         return {}
 
 
@@ -582,6 +504,31 @@ def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
 PROMPT_SIZE_WARNING_THRESHOLD = 8000
 
 
+def _provider_semantics_note(provider_name: str) -> str:
+    if provider_name != "codex":
+        return ""
+    return (
+        "## Octopus Skill Semantics\n\n"
+        "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
+        "default-for-new-conversations settings, and per-conversation activation. "
+        "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
+        "other non-Octopus skill system. If a user asks how skills work, describe which skills "
+        "are available on this bot, which are defaults for new conversations, and which are "
+        "active in this conversation. If a user asks who is answering, say the current bot in "
+        "this conversation is answering; do not describe yourself as a main assistant, primary "
+        "assistant, or coordinator."
+    )
+
+
+def _apply_provider_semantics(system_prompt: str, provider_name: str) -> str:
+    note = _provider_semantics_note(provider_name)
+    if not note:
+        return system_prompt
+    if system_prompt:
+        return f"{system_prompt}\n\n{note}"
+    return note
+
+
 def check_prompt_size(role: str, active_skills: list[str]) -> str | None:
     """Check if composed prompt exceeds the warning threshold.
 
@@ -659,7 +606,7 @@ def build_run_context(
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return RunContext(
         extra_dirs=extra_dirs,
-        system_prompt=build_system_prompt(role, active_skills),
+        system_prompt=_apply_provider_semantics(build_system_prompt(role, active_skills), provider_name),
         capability_summary=cap_summary,
         provider_config=provider_config,
         credential_env=cred_env,
@@ -682,7 +629,7 @@ def build_preflight_context(
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
     return PreflightContext(
         extra_dirs=extra_dirs,
-        system_prompt=build_preflight_system_prompt(role, active_skills),
+        system_prompt=_apply_provider_semantics(build_preflight_system_prompt(role, active_skills), provider_name),
         capability_summary=cap_summary,
         working_dir=working_dir,
         file_policy=file_policy,

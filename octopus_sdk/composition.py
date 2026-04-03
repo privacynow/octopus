@@ -285,6 +285,7 @@ class WorkflowComposer:
         catalog = RuntimeSkillCatalogUseCases(
             catalog_service=catalog_service,
             import_service=import_service,
+            default_skills=config.default_skills,
         )
         setup = RuntimeSkillSetupUseCases(
             catalog=catalog,

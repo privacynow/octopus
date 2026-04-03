@@ -19,6 +19,8 @@ function renderConversationDetail(container, params) {
     let hasMoreBefore = false;
     let loadingOlder = false;
     let activeView = _readConversationViewParam();
+    let requestedManagementMode = _readManagementModeParam();
+    let requestedActivationSkill = _readRequestedActivationSkillParam();
     let topObserver = null;
     const conversationLoadKinds = [
         'message.user',
@@ -238,12 +240,12 @@ function renderConversationDetail(container, params) {
 
     async function loadTargetSuggestions() {
         try {
-            const [agentData, capabilityData] = await Promise.all([
+            const [agentData, routingData] = await Promise.all([
                 API.listAgents({ state: 'connected', limit: 100 }),
-                API.listCapabilities().catch(() => []),
+                API.listRoutingSkills().catch(() => []),
             ]);
             const agents = agentData.agents || agentData || [];
-            const capabilities = capabilityData.capabilities || capabilityData || [];
+            const routingSkills = routingData.routing_skills || routingData || [];
             const seen = new Set();
             availableTargets = [];
             function pushTarget(item) {
@@ -269,7 +271,7 @@ function renderConversationDetail(container, params) {
                 const detail = [
                     compactDisplayName && compactDisplayName.toLowerCase() !== slug.toLowerCase() ? slug : '',
                     agent.role || '',
-                    (agent.capabilities || []).slice(0, 2).join(', '),
+                    (agent.routing_skills || []).slice(0, 2).join(', '),
                 ].filter(Boolean).join(' · ');
                 pushTarget({
                     key: agent.agent_id || slug,
@@ -292,16 +294,16 @@ function renderConversationDetail(container, params) {
                     aliases: ['@role:' + role],
                 });
             });
-            capabilities.forEach((capability) => {
-                const value = String(capability.name || capability.capability || capability || '').trim();
+            routingSkills.forEach((routingSkill) => {
+                const value = String(routingSkill.name || routingSkill.skill_name || routingSkill || '').trim();
                 if (!value) return;
                 pushTarget({
                     key: value,
-                    label: '@cap:' + value,
-                    kind: 'capability',
+                    label: '@skill:' + value,
+                    kind: 'skill',
                     display: value,
-                    detail: 'Capability target',
-                    aliases: ['@cap:' + value],
+                    detail: 'Routing skill',
+                    aliases: ['@skill:' + value],
                 });
             });
             if (typeof Fuse === 'function') {
@@ -336,6 +338,13 @@ function renderConversationDetail(container, params) {
 
     function managementAvailable() {
         return Boolean(managementAgentId());
+    }
+
+    function syncManagementQueryParams() {
+        UI.updateQueryParams({
+            manage: managementMode === 'closed' ? '' : managementMode,
+            activate_skill: requestedActivationSkill || '',
+        });
     }
 
     function clearManagementTimers() {
@@ -410,6 +419,8 @@ function renderConversationDetail(container, params) {
     function openManagement(nextMode, { focus = false } = {}) {
         if (!managementAvailable()) return;
         managementMode = nextMode;
+        requestedManagementMode = nextMode;
+        syncManagementQueryParams();
         syncManagementControls();
         scheduleManagementIdleClose();
         if (focus) {
@@ -426,6 +437,9 @@ function renderConversationDetail(container, params) {
     function closeManagement({ clearStatus = true } = {}) {
         clearManagementTimers();
         managementMode = 'closed';
+        requestedManagementMode = 'closed';
+        requestedActivationSkill = '';
+        syncManagementQueryParams();
         if (clearStatus) {
             skillsStatusMessage = '';
             settingsStatusMessage = '';
@@ -562,6 +576,11 @@ function renderConversationDetail(container, params) {
                 nodes.push(status);
             }
 
+            const explainer = document.createElement('p');
+            explainer.className = 'quiet-note';
+            explainer.textContent = 'Use this panel to choose what is active in this conversation. To install, update, or edit skills for this bot, open the Skills page.';
+            nodes.push(explainer);
+
             if (state.pendingSetup) {
                 const foreignSetup = String(state.pendingSetup.ownerActor || '') && state.pendingSetup.ownerActor !== 'reg:registry-ui';
                 const setupBox = document.createElement('div');
@@ -674,7 +693,7 @@ function renderConversationDetail(container, params) {
             activeSection.className = 'conversation-management-section';
             const activeTitle = document.createElement('div');
             activeTitle.className = 'detail-label';
-            activeTitle.textContent = 'Active skills';
+            activeTitle.textContent = 'Active in this conversation';
             activeSection.appendChild(activeTitle);
             const activeSkills = state.skillState.active_skill_details || [];
             if (!activeSkills.length) {
@@ -685,7 +704,12 @@ function renderConversationDetail(container, params) {
                 activeSkills.forEach((skill) => {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
-                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(skill.description || skill.source_kind || '')}</span></div>`;
+                    const summaryBits = [
+                        skill.description || '',
+                        skill.source_label || skill.source_kind || '',
+                        skill.requires_credentials ? 'setup required' : '',
+                    ].filter(Boolean).join(' • ');
+                    row.innerHTML = `<div class="settings-row-main"><strong class="settings-row-label">${UI.esc(skill.display_name || skill.name || 'Skill')}</strong><span class="settings-row-sublabel">${UI.esc(summaryBits || 'Skill active in this conversation')}</span></div>`;
                     const actions = document.createElement('div');
                     actions.className = 'event-card-actions';
                     const deactivate = document.createElement('button');
@@ -719,10 +743,10 @@ function renderConversationDetail(container, params) {
             activateSection.className = 'conversation-management-section';
             const activateTitle = document.createElement('div');
             activateTitle.className = 'detail-label';
-            activateTitle.textContent = 'Activate skill';
+            activateTitle.textContent = 'Available on this bot';
             activateSection.appendChild(activateTitle);
             if (!state.activatable.length) {
-                activateSection.appendChild(UI.renderEmptyState('No additional activatable skills are available.', true));
+                activateSection.appendChild(UI.renderEmptyState('No additional available skills are ready to activate here.', true));
             } else {
                 const controls = document.createElement('div');
                 controls.className = 'conversation-management-form';
@@ -730,14 +754,25 @@ function renderConversationDetail(container, params) {
                 select.className = 'input';
                 const placeholder = document.createElement('option');
                 placeholder.value = '';
-                placeholder.textContent = 'Choose a skill';
+                placeholder.textContent = 'Choose an available skill';
                 select.appendChild(placeholder);
                 state.activatable.forEach((skill) => {
                     const option = document.createElement('option');
                     option.value = skill.name;
-                    option.textContent = skill.display_name || skill.name;
+                    const setupLabel = skill.requires_credentials ? ' · needs setup' : '';
+                    option.textContent = `${skill.display_name || skill.name}${setupLabel}`;
                     select.appendChild(option);
                 });
+                if (requestedActivationSkill) {
+                    if (state.activatable.some((skill) => skill.name === requestedActivationSkill)) {
+                        select.value = requestedActivationSkill;
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
+                    } else if (activeNames.has(requestedActivationSkill)) {
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
+                    }
+                }
                 controls.appendChild(select);
                 const activateBtn = document.createElement('button');
                 activateBtn.className = 'btn btn-sm btn-primary';
@@ -772,6 +807,8 @@ function renderConversationDetail(container, params) {
                                         return;
                                     }
                                     pendingSkillSetup = null;
+                                    requestedActivationSkill = '';
+                                    syncManagementQueryParams();
                                     skillsStatusMessage = confirmed.status === 'activated'
                                         ? `Activated ${skillName}.`
                                         : String(confirmed.status || 'Updated');
@@ -807,6 +844,8 @@ function renderConversationDetail(container, params) {
                             return;
                         }
                         pendingSkillSetup = null;
+                        requestedActivationSkill = '';
+                        syncManagementQueryParams();
                         skillsStatusMessage = result.status === 'activated'
                             ? `Activated ${skillName}.`
                             : String(result.status || 'Updated');
@@ -1360,26 +1399,26 @@ function renderConversationDetail(container, params) {
                 targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(selector)}.`;
                 setComposeHint('Add instructions after the selector to assign work directly.');
             } else if (selectorToken.startsWith('@')) {
-                setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+                setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
             }
             textarea.placeholder = 'Describe the delegated task';
             sendBtn.textContent = 'Assign';
             sendBtn.setAttribute('aria-label', 'Assign task');
             renderTargetSuggestions(selectorToken);
             if (!suggestionMatches.length && selectorToken.startsWith('@') && !exactSuggestionMatch) {
-                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+                setComposeHint('No connected agent, skill, or role matches that selector yet.');
             }
             return;
         }
         if (selectorPrefix) {
             targetPreview.hidden = true;
-            setComposeHint('Choose an agent, capability, or role from the suggestions to route work directly.');
+            setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
             textarea.placeholder = 'Choose a target or keep typing';
             sendBtn.textContent = 'Send';
             sendBtn.setAttribute('aria-label', 'Send message');
             renderTargetSuggestions(selectorToken);
             if (!suggestionMatches.length) {
-                setComposeHint('No connected agent, capability, or role matches that selector yet.');
+                setComposeHint('No connected agent, skill, or role matches that selector yet.');
             }
             return;
         }
@@ -1741,6 +1780,9 @@ function renderConversationDetail(container, params) {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
             syncManagementControls();
+            if (requestedManagementMode === 'skills' || requestedManagementMode === 'settings') {
+                openManagement(requestedManagementMode);
+            }
             void loadConversationSkills({ soft: true });
             void loadConversationSettings({ soft: true });
         } catch (err) {
@@ -1971,5 +2013,24 @@ function _writeConversationViewParam(activeView) {
         history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     } catch {
         // Ignore URL update issues; the toggle still works.
+    }
+}
+
+function _readManagementModeParam() {
+    try {
+        const url = new URL(window.location.href);
+        const value = url.searchParams.get('manage');
+        return value === 'skills' || value === 'settings' ? value : 'closed';
+    } catch {
+        return 'closed';
+    }
+}
+
+function _readRequestedActivationSkillParam() {
+    try {
+        const url = new URL(window.location.href);
+        return String(url.searchParams.get('activate_skill') || '').trim();
+    } catch {
+        return '';
     }
 }

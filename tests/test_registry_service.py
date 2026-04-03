@@ -135,7 +135,7 @@ def _enroll_and_register(
                 "slug": slug,
                 "role": "developer",
                 "registry_scope": registry_scope,
-                "capabilities": ["python", "tests"],
+                "routing_skills": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -160,7 +160,7 @@ def _enroll_and_register(
                 "slug": slug,
                 "role": "developer",
                 "registry_scope": registry_scope,
-                "capabilities": ["python", "tests"],
+                "routing_skills": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -295,7 +295,7 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"role": "developer", "capabilities": ["python"], "required_state": "connected"},
+        json={"role": "developer", "skills": ["python"], "required_state": "connected"},
     )
     assert search.status_code == 200
     agents = search.json()["agents"]
@@ -363,9 +363,12 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     assert "github-integration" in names
     github_summary = next(item for item in listed_payload if item["name"] == "github-integration")
     assert github_summary["source_kind"] == "builtin"
+    assert github_summary["source_label"] == "Core"
     assert github_summary["can_activate"] is True
     assert github_summary["can_update"] is False
     assert github_summary["can_uninstall"] is False
+    assert github_summary["requires_credentials"] is True
+    assert github_summary["runtime_available"] is True
 
     detail = client.get(
         f"/v1/agents/{agent_id}/catalog/skills/github-integration",
@@ -375,6 +378,7 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     payload = detail.json()
     assert payload["name"] == "github-integration"
     assert payload["source_kind"] == "builtin"
+    assert payload["source_label"] == "Core"
     assert "GITHUB_TOKEN" in payload["requirement_keys"]
 
     preview = client.post(
@@ -390,7 +394,7 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     preview_payload = preview.json()
     assert preview_payload["provider"] == "claude"
     assert preview_payload["prompt_weight"] > 0
-    assert "summary first" in preview_payload["system_prompt"].lower()
+    assert "summary first" in preview_payload["composed_prompt"].lower()
 
 
 def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_path: Path):
@@ -421,6 +425,7 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
     detail = client.get(f"/v1/agents/{agent_id}/catalog/skills/release-notes/lifecycle", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["lifecycle_status"] == "draft"
+    assert detail.json()["source_label"] == "Custom"
 
     for path in ("submit", "approve", "publish"):
         response = client.post(
@@ -453,7 +458,7 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
         json={"role": "", "active_skills": [], "compact_mode": False},
     )
     assert preview_before.status_code == 200
-    assert "Registry Guidance" not in preview_before.json()["effective_guidance"]
+    assert "Registry Guidance" not in preview_before.json()["published_guidance"]
 
     for path in ("submit", "approve", "publish"):
         response = client.post(
@@ -473,7 +478,63 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
         json={"role": "", "active_skills": [], "compact_mode": False},
     )
     assert preview_after.status_code == 200
-    assert "Registry Guidance" in preview_after.json()["effective_guidance"]
+    assert "Registry Guidance" in preview_after.json()["published_guidance"]
+    assert "Registry Guidance" in preview_after.json()["composed_prompt"]
+
+
+def test_registry_skill_draft_endpoint_accepts_full_package_updates(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    _install_management_loopback(monkeypatch)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+    agent_id, _token = _enroll_and_register(client, "Package Bot", "package-bot")
+
+    created = client.put(
+        f"/v1/agents/{agent_id}/catalog/skills/pkg-skill/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "display_name": "Package Skill",
+            "body": "Package-aware draft body.",
+            "description": "Registry package test",
+            "requirements": [
+                {
+                    "key": "API_TOKEN",
+                    "prompt": "Enter token",
+                    "help_url": "https://example.test/token",
+                }
+            ],
+            "provider_config": {
+                "claude": {
+                    "allowed_tools": ["bash"],
+                }
+            },
+            "files": [
+                {
+                    "relative_path": "helper.sh",
+                    "content_type": "text/x-shellscript",
+                    "executable": True,
+                    "content_text": "echo package",
+                }
+            ],
+            "changelog": "initial package",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "draft_saved"
+
+    detail = client.get(
+        f"/v1/agents/{agent_id}/catalog/skills/pkg-skill/lifecycle",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["display_name"] == "Package Skill"
+    assert payload["publish_ready"] is True
+    assert payload["requirements"][0]["key"] == "API_TOKEN"
+    assert payload["provider_config"]["claude"]["allowed_tools"] == ["bash"]
+    assert payload["files"][0]["relative_path"] == "helper.sh"
 
 
 def test_provider_guidance_preview_404_hides_raw_validation_text(monkeypatch, tmp_path: Path):
@@ -841,7 +902,7 @@ def test_registry_enroll_requires_explicit_registry_scope(monkeypatch, tmp_path:
                 "display_name": "No Scope Bot",
                 "slug": "no-scope-bot",
                 "role": "developer",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Writes code",
                 "provider": "codex",
@@ -871,7 +932,7 @@ def test_registry_register_requires_agent_card(monkeypatch, tmp_path: Path):
     assert "agent_card" in response.json()["detail"]
 
 
-def test_registry_search_rejects_invalid_capabilities_shape(monkeypatch, tmp_path: Path):
+def test_registry_search_rejects_invalid_skills_shape(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     _agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot-search-invalid")
@@ -879,11 +940,11 @@ def test_registry_search_rejects_invalid_capabilities_shape(monkeypatch, tmp_pat
     response = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"required_state": "connected", "capabilities": "python"},
+        json={"required_state": "connected", "skills": "python"},
     )
 
     assert response.status_code == 422
-    assert "capabilities" in response.json()["detail"]
+    assert "skills" in response.json()["detail"]
 
 
 def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
@@ -929,7 +990,7 @@ def test_registry_enroll_rate_limits_repeated_failed_attempts(monkeypatch, tmp_p
             "slug": "dev-bot",
             "role": "developer",
             "registry_scope": "full",
-            "capabilities": ["python"],
+            "routing_skills": ["python"],
             "provider": "codex",
             "mode": "registry",
         },
@@ -956,7 +1017,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
             "slug": "dev-bot",
             "role": "developer",
             "registry_scope": "full",
-            "capabilities": ["python"],
+            "routing_skills": ["python"],
             "provider": "codex",
             "mode": "registry",
         },
@@ -976,7 +1037,7 @@ def test_registry_enroll_success_clears_failed_attempt_throttle(monkeypatch, tmp
                 "slug": "dev-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "provider": "codex",
                 "mode": "registry",
             },
@@ -1886,7 +1947,7 @@ def test_agent_api_invalid_token_uses_generic_401_detail(monkeypatch, tmp_path: 
                 "display_name": "Bot",
                 "slug": "bot",
                 "role": "developer",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": [],
                 "description": "Writes code",
                 "provider": "codex",
@@ -1931,7 +1992,7 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
             "instructions": "Find missing test coverage.",
             "context": {},
             "constraints": {},
-            "requested_capabilities": ["reviewer", "tests"],
+            "requested_skills": ["reviewer", "tests"],
             "priority": "normal",
             "created_at": "2026-03-15T00:00:00+00:00",
         },
@@ -2056,7 +2117,7 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "slug": "epoch-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Epoch test bot",
                 "provider": "codex",
@@ -2083,7 +2144,7 @@ def test_registry_enroll_and_poll_expose_registry_epoch(monkeypatch, tmp_path: P
                 "slug": "epoch-bot",
                 "role": "developer",
                 "registry_scope": "full",
-                "capabilities": ["python"],
+                "routing_skills": ["python"],
                 "tags": ["backend"],
                 "description": "Epoch test bot",
                 "provider": "codex",

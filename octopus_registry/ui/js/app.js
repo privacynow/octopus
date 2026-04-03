@@ -126,7 +126,7 @@ Router.register('/ui/agents/:id/conversations', renderAgentConversations);
 Router.register('/ui/conversations', renderConversationList);
 Router.register('/ui/conversations/:id', renderConversationDetail);
 Router.register('/ui/tasks', renderTaskList);
-Router.register('/ui/capabilities', renderCapabilityList);
+Router.register('/ui/routing', renderRoutingPolicyList);
 Router.register('/ui/skills', renderSkillCatalog);
 Router.register('/ui/usage', renderUsageView);
 Router.register('/ui/guidance', renderGuidanceEditor);

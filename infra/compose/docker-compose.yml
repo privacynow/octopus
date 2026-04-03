@@ -86,7 +86,7 @@ services:
     environment:
       BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
-      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@postgres:5432/bot}
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     volumes:
       - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
       - bot-home:/home/bot/data
@@ -102,7 +102,7 @@ services:
     profiles:
       - registry
     environment:
-      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@postgres:5432/bot}
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
       REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .deploy/registry/.env}
       REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .deploy/registry/.env}
       REGISTRY_ALLOW_HTTP: ${REGISTRY_ALLOW_HTTP-}

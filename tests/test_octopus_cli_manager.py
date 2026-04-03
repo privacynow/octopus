@@ -159,6 +159,22 @@ def _write_bot_env(tmp_path: Path, slug: str, display_name: str, extra_lines: li
     (env_dir / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def test_compose_runtime_services_use_stack_specific_db_host() -> None:
+    compose_path = Path(__file__).resolve().parents[1] / "infra" / "compose" / "docker-compose.yml"
+    compose_text = compose_path.read_text(encoding="utf-8")
+
+    expected = (
+        "OCTOPUS_DATABASE_URL: "
+        "${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}"
+    )
+
+    assert compose_text.count(expected) >= 5
+    assert (
+        "OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@postgres:5432/bot}"
+        not in compose_text
+    )
+
+
 def test_connect_targets_default_to_all_eligible_registry_bots(tmp_path: Path) -> None:
     _write_registry_bot_env(tmp_path, "m1", "M1")
     _write_registry_bot_env(tmp_path, "m2", "M2")

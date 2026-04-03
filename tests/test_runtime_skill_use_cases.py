@@ -164,7 +164,7 @@ def test_provider_guidance_preview_use_case_returns_effective_prompt(tmp_path: P
         )
         assert preview.provider == "claude"
         assert preview.prompt_weight > 0
-        assert "summary first" in preview.system_prompt.lower()
+        assert "summary first" in preview.composed_prompt.lower()
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

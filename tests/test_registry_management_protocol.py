@@ -366,7 +366,8 @@ async def test_registry_ingress_caches_guidance_detail_reads(
                         provider="codex",
                         scope_kind="system",
                         scope_key="",
-                        body="Be precise.",
+                        draft_body="Be precise.",
+                        published_body="Be precise.",
                         lifecycle_status="draft",
                         active_revision_id="rev-1",
                         published_revision_id="rev-1",
@@ -381,5 +382,7 @@ async def test_registry_ingress_caches_guidance_detail_reads(
     second = await registry_ingress.provider_guidance_detail(store, agent_id, "codex")
 
     assert calls["count"] == 1
-    assert first["body"] == "Be precise."
-    assert second["body"] == "Be precise."
+    assert first["draft_body"] == "Be precise."
+    assert first["published_body"] == "Be precise."
+    assert second["draft_body"] == "Be precise."
+    assert second["published_body"] == "Be precise."

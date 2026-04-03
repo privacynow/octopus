@@ -28,6 +28,10 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
         return self._store.get_provider_guidance(provider_name, scope_kind=scope_kind, scope_key=scope_key)
 
     def _detail__track(self, track: ProviderGuidanceTrackRecord) -> ProviderGuidanceLifecycleDetail:
+        runtime_track = self._store.resolve_provider_guidance(
+            track.provider,
+            instance_key=track.scope_key if track.scope_kind == "instance" else "",
+        )
         revisions = tuple(
             ProviderGuidanceLifecycleRevision(
                 revision_id=item.revision_id,
@@ -60,7 +64,8 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
             provider=track.provider,
             scope_kind=track.scope_kind,
             scope_key=track.scope_key,
-            body=track.revision.content,
+            draft_body=track.revision.content,
+            published_body=runtime_track.revision.content if runtime_track is not None else "",
             lifecycle_status=track.revision.status,
             active_revision_id=track.active_revision_id,
             published_revision_id=track.published_revision_id,

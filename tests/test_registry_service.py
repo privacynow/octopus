@@ -394,7 +394,7 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     preview_payload = preview.json()
     assert preview_payload["provider"] == "claude"
     assert preview_payload["prompt_weight"] > 0
-    assert "summary first" in preview_payload["system_prompt"].lower()
+    assert "summary first" in preview_payload["composed_prompt"].lower()
 
 
 def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_path: Path):
@@ -458,7 +458,7 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
         json={"role": "", "active_skills": [], "compact_mode": False},
     )
     assert preview_before.status_code == 200
-    assert "Registry Guidance" not in preview_before.json()["effective_guidance"]
+    assert "Registry Guidance" not in preview_before.json()["published_guidance"]
 
     for path in ("submit", "approve", "publish"):
         response = client.post(
@@ -478,7 +478,8 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
         json={"role": "", "active_skills": [], "compact_mode": False},
     )
     assert preview_after.status_code == 200
-    assert "Registry Guidance" in preview_after.json()["effective_guidance"]
+    assert "Registry Guidance" in preview_after.json()["published_guidance"]
+    assert "Registry Guidance" in preview_after.json()["composed_prompt"]
 
 
 def test_registry_skill_draft_endpoint_accepts_full_package_updates(monkeypatch, tmp_path: Path):

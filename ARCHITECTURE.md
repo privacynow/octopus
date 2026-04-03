@@ -186,6 +186,16 @@ Management responses are cached server-side in `ingress.py` with TTL and
 in-flight deduplication. Mutations (make available, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
 
+Guidance remains a separate product concept from skills:
+
+- skills are selectable capability packages
+- guidance is provider-scoped baseline policy for Claude/Codex behavior
+- published guidance is applied to every run for that provider on that bot
+- guidance is not routed and is not activated per conversation
+- registry and chat both expose the same lifecycle, but registry can present it
+  as `Published`, `Draft`, and `Runtime preview` over the same backend
+  operations
+
 For custom skill authoring, the registry UI and chat clients both target the
 same management operations. The browser can bundle them into a richer editor,
 while chat exposes the same package mutations and lifecycle transitions in

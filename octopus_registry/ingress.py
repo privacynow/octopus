@@ -717,6 +717,8 @@ async def preview_provider_guidance(
     role: str,
     active_skills: list[str],
     compact_mode: bool,
+    use_draft: bool,
+    body_override: str,
 ) -> dict[str, object]:
     payload = await _send(
         store,
@@ -726,6 +728,8 @@ async def preview_provider_guidance(
             role=role,
             active_skills=list(active_skills),
             compact_mode=compact_mode,
+            use_draft=use_draft,
+            body_override=body_override,
         ),
     )
     assert isinstance(payload, PreviewProviderGuidanceResult)

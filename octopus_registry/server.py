@@ -1526,6 +1526,8 @@ async def api_provider_guidance_preview(
             role=payload.role,
             active_skills=list(payload.active_skills),
             compact_mode=payload.compact_mode,
+            use_draft=payload.use_draft,
+            body_override=payload.body_override,
         )
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

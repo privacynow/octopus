@@ -40,6 +40,8 @@ class ProviderGuidancePreviewRequest(BaseModel):
     role: str = Field(default="", description="Role/persona text to include")
     active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
     compact_mode: bool = Field(default=False, description="Whether compact-mode instructions should be appended")
+    use_draft: bool = Field(default=False, description="Whether to preview the current draft instead of the published policy")
+    body_override: str = Field(default="", description="Optional transient guidance text to preview without saving")
 
 
 class LifecycleActionRequest(BaseModel):

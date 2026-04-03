@@ -317,8 +317,10 @@ class ConversationResetOutcomeRecord(RegistryRecordModel):
 
 class ProviderGuidancePreviewRecord(RegistryRecordModel):
     provider: str = ""
-    effective_guidance: str = ""
-    system_prompt: str = ""
+    published_guidance: str = ""
+    preview_guidance: str = ""
+    preview_source: str = ""
+    composed_prompt: str = ""
     capability_summary: str = ""
     provider_config: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     prompt_weight: int = 0
@@ -344,7 +346,8 @@ class ProviderGuidanceLifecycleDetailRecord(RegistryRecordModel):
     provider: str = ""
     scope_kind: str = ""
     scope_key: str = ""
-    body: str = ""
+    draft_body: str = ""
+    published_body: str = ""
     lifecycle_status: str = ""
     active_revision_id: str = ""
     published_revision_id: str = ""
@@ -679,8 +682,10 @@ def provider_guidance_preview_record(
 ) -> ProviderGuidancePreviewRecord:
     return ProviderGuidancePreviewRecord(
         provider=preview.provider,
-        effective_guidance=preview.effective_guidance,
-        system_prompt=preview.system_prompt,
+        published_guidance=preview.published_guidance,
+        preview_guidance=preview.preview_guidance,
+        preview_source=preview.preview_source,
+        composed_prompt=preview.composed_prompt,
         capability_summary=preview.capability_summary,
         provider_config=RegistryJsonRecord(preview.provider_config.to_dict()),
         prompt_weight=preview.prompt_weight,
@@ -694,7 +699,8 @@ def provider_guidance_lifecycle_detail_record(
         provider=detail.provider,
         scope_kind=detail.scope_kind,
         scope_key=detail.scope_key,
-        body=detail.body,
+        draft_body=detail.draft_body,
+        published_body=detail.published_body,
         lifecycle_status=detail.lifecycle_status,
         active_revision_id=detail.active_revision_id,
         published_revision_id=detail.published_revision_id,
@@ -897,6 +903,8 @@ class PreviewProviderGuidanceRequest(RegistryRecordModel):
     role: str = ""
     active_skills: list[str] = Field(default_factory=list)
     compact_mode: bool = False
+    use_draft: bool = False
+    body_override: str = ""
 
 
 class ProviderGuidanceDetailRequest(RegistryRecordModel):

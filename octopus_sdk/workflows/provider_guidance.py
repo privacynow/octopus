@@ -15,10 +15,22 @@ class ProviderGuidanceServicePort(Protocol):
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str: ...
 
-    def effective_guidance_preview(self, provider_name: str, *, instance_key: str = "") -> str: ...
+    def published_guidance_text(self, provider_name: str, *, instance_key: str = "") -> str: ...
+
+    def draft_guidance_text(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str: ...
 
     def provider_config(
         self,
@@ -63,6 +75,7 @@ class ProviderGuidanceServicePort(Protocol):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext: ...
 
@@ -76,6 +89,7 @@ class ProviderGuidanceServicePort(Protocol):
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext: ...
 
     def apply_compact_mode(self, system_prompt: str, compact: bool) -> str: ...
@@ -91,8 +105,10 @@ class ProviderGuidanceServicePort(Protocol):
 @dataclass(frozen=True)
 class ProviderGuidancePreview:
     provider: str
-    effective_guidance: str
-    system_prompt: str
+    published_guidance: str
+    preview_guidance: str
+    preview_source: str
+    composed_prompt: str
     capability_summary: str
     provider_config: ProviderConfigRecord
     prompt_weight: int
@@ -106,6 +122,10 @@ class ProviderGuidancePort(Protocol):
         role: str,
         active_skills: list[str],
         compact_mode: bool,
+        use_draft: bool = False,
+        body_override: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
     ) -> ProviderGuidancePreview: ...
 
 
@@ -132,7 +152,8 @@ class ProviderGuidanceLifecycleDetail:
     provider: str
     scope_kind: str
     scope_key: str
-    body: str
+    draft_body: str
+    published_body: str
     lifecycle_status: str
     active_revision_id: str
     published_revision_id: str

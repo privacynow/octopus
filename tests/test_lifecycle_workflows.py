@@ -187,7 +187,7 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         preview = flows.provider_guidance.preview
 
         original = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Claude Runtime Guidance" in original.effective_guidance
+        assert "Claude Runtime Guidance" in original.published_guidance
 
         edited = management.edit_draft(
             "claude",
@@ -198,9 +198,11 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         assert edited.detail is not None
         assert edited.detail.lifecycle_status == "draft"
         assert edited.detail.runtime_available is True
+        assert "Edited Guidance" in edited.detail.draft_body
+        assert "Edited Guidance" not in edited.detail.published_body
 
         preview_before_publish = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Edited Guidance" not in preview_before_publish.effective_guidance
+        assert "Edited Guidance" not in preview_before_publish.published_guidance
 
         submitted = management.submit("claude", actor_key="admin:1")
         assert submitted.status == "submitted"
@@ -210,12 +212,13 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         assert published.status == "published"
 
         preview_after_publish = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert "Edited Guidance" in preview_after_publish.effective_guidance
+        assert "Edited Guidance" in preview_after_publish.published_guidance
+        assert "Edited Guidance" in preview_after_publish.composed_prompt
 
         archived = management.archive("claude", actor_key="admin:2")
         assert archived.status == "archived"
         preview_after_archive = preview.preview("claude", role="", active_skills=[], compact_mode=False)
-        assert preview_after_archive.effective_guidance == ""
+        assert preview_after_archive.published_guidance == ""
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

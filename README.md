@@ -264,9 +264,12 @@ Current product behavior:
   conversation
 - routing skills are the subset advertised for discovery and cross-bot
   delegation
-- guidance is provider-level instruction state for Claude/Codex behavior and is
-  managed through Telegram `/guidance ...` commands or the browser
-  **Guidance** page
+- guidance is provider-level baseline policy for Claude/Codex behavior
+- published guidance is applied to every run for that provider on that bot
+- guidance is not a skill, is not routed, and is not conversation-activated
+- guidance is managed through Telegram `/guidance ...` commands or the browser
+  **Guidance** page, which separates published policy, draft policy, and the
+  effective runtime preview of the final composed prompt
 
 Custom skills now use the same shared package model across the registry UI and
 chat clients. A mutable draft can include:

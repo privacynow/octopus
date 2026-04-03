@@ -422,10 +422,28 @@ def provider_guidance_preview_message(
     provider_name: str,
     preview: ProviderGuidancePreview,
 ) -> TelegramRenderedMessage:
+    source_label = "current draft" if preview.preview_source == "draft" else "published policy"
     return TelegramRenderedMessage(
         text=(
-            f"<b>{html.escape(provider_name)}</b>\n"
-            f"<pre>{html.escape(preview.effective_guidance)}</pre>"
+            f"<b>{html.escape(provider_name)} runtime preview</b>\n"
+            f"Preview source: <code>{html.escape(source_label)}</code>\n\n"
+            f"<pre>{html.escape(preview.composed_prompt)}</pre>"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+def provider_guidance_show_message(
+    provider_name: str,
+    detail: ProviderGuidanceLifecycleDetail,
+) -> TelegramRenderedMessage:
+    published = detail.published_body.strip() or "(nothing published)"
+    return TelegramRenderedMessage(
+        text=(
+            f"<b>{html.escape(provider_name)} published policy</b>\n"
+            f"Status: <code>{html.escape(detail.lifecycle_status)}</code>\n"
+            f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>\n\n"
+            f"<pre>{html.escape(published)}</pre>"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -446,6 +464,7 @@ def provider_guidance_history_message(
         f"<b>{html.escape(provider_name)}</b>",
         f"Status: <code>{html.escape(detail.lifecycle_status)}</code>",
         f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>",
+        f"Published policy: {'yes' if detail.published_body else 'no'}",
         "",
         "<b>Revisions</b>",
     ]
@@ -1042,7 +1061,8 @@ HELP_SKILLS = (
     "/skills history &lt;name&gt; — show revision and approval history\n"
     "/skills submit &lt;name&gt; — submit the draft for review\n"
     "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"
-    "/guidance preview &lt;provider&gt; — show effective provider guidance\n"
+    "/guidance show &lt;provider&gt; — show the published provider policy\n"
+    "/guidance preview &lt;provider&gt; — show the composed runtime prompt from the current draft\n"
     "/guidance edit|history|submit|approve|reject|publish|archive &lt;provider&gt; — provider guidance lifecycle"
 )
 
@@ -1398,7 +1418,7 @@ def skills_usage_message() -> TelegramRenderedMessage:
 
 def guidance_usage_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(
-        text="Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
+        text="Usage: /guidance [show|preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
     )
 
 

@@ -674,6 +674,8 @@ async def execute_management_request(
                 role=payload.role,
                 active_skills=list(payload.active_skills),
                 compact_mode=payload.compact_mode,
+                use_draft=payload.use_draft,
+                body_override=payload.body_override,
             )
             return ManagementResult(
                 request_id=request.request_id,

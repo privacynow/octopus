@@ -125,8 +125,10 @@ def test_recovery_notice_markup_renders_expected_buttons():
 def test_provider_guidance_preview_message_renders_expected_html():
     preview = ProviderGuidancePreview(
         provider="claude",
-        effective_guidance="Use careful guidance",
-        system_prompt="",
+        published_guidance="Published guidance",
+        preview_guidance="Use careful guidance",
+        preview_source="draft",
+        composed_prompt="Use careful guidance",
         capability_summary="",
         provider_config=ProviderConfigRecord(),
         prompt_weight=1,
@@ -135,7 +137,7 @@ def test_provider_guidance_preview_message_renders_expected_html():
     rendered = provider_guidance_preview_message("claude", preview)
 
     assert rendered.parse_mode == ParseMode.HTML
-    assert "<b>claude</b>" in rendered.text
+    assert "<b>claude runtime preview</b>" in rendered.text
     assert "<pre>Use careful guidance</pre>" in rendered.text
 
 
@@ -144,7 +146,8 @@ def test_provider_guidance_history_message_renders_revisions_and_approvals():
         provider="claude",
         scope_kind="system",
         scope_key="",
-        body="body",
+        draft_body="draft body",
+        published_body="published body",
         lifecycle_status="published",
         active_revision_id="rev-current",
         published_revision_id="rev-current",

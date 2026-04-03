@@ -53,6 +53,10 @@ class ProviderGuidanceService:
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> str:
         parts: list[str] = []
@@ -64,6 +68,11 @@ class ProviderGuidanceService:
                 parts.append(stripped + "\n")
             else:
                 parts.append(f"You are a {stripped}.\n")
+        guidance_text = (guidance_override or "").strip()
+        if not guidance_text and provider_name:
+            guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
+        if guidance_text:
+            parts.append(guidance_text + "\n")
         for record in self._tracks(active_skills):
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
         if available_agents:
@@ -90,7 +99,15 @@ class ProviderGuidanceService:
         lines.append("")
         return "\n".join(lines)
 
-    def preflight_prompt(self, role: str, active_skills: list[str]) -> str:
+    def preflight_prompt(
+        self,
+        role: str,
+        active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
+    ) -> str:
         parts: list[str] = []
         if role:
             stripped = role.strip()
@@ -100,6 +117,11 @@ class ProviderGuidanceService:
                 parts.append(stripped + "\n")
             else:
                 parts.append(f"You are a {stripped}.\n")
+        guidance_text = (guidance_override or "").strip()
+        if not guidance_text and provider_name:
+            guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
+        if guidance_text:
+            parts.append(guidance_text + "\n")
         tracks = self._tracks(active_skills)
         if tracks:
             labels = ", ".join(record.display_name for record in tracks)
@@ -132,9 +154,22 @@ class ProviderGuidanceService:
         self,
         role: str,
         active_skills: list[str],
+        *,
+        provider_name: str = "",
+        instance_key: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> int:
-        return len(self.system_prompt(role, active_skills, available_agents=available_agents))
+        return len(
+            self.system_prompt(
+                role,
+                active_skills,
+                provider_name=provider_name,
+                instance_key=instance_key,
+                guidance_override=guidance_override,
+                available_agents=available_agents,
+            )
+        )
 
     def provider_config(
         self,
@@ -276,6 +311,7 @@ class ProviderGuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
         available_agents: list[DiscoveredAgentRef] | None = None,
     ) -> RunContext:
         credential_env = credential_env or CredentialEnvRecord()
@@ -284,7 +320,13 @@ class ProviderGuidanceService:
         return RunContext(
             extra_dirs=extra_dirs,
             system_prompt=self._apply_provider_semantics(
-                self.system_prompt(role, active_skills, available_agents=available_agents),
+                self.system_prompt(
+                    role,
+                    active_skills,
+                    provider_name=provider_name,
+                    guidance_override=guidance_override,
+                    available_agents=available_agents,
+                ),
                 provider_name,
             ),
             capability_summary=capability_summary,
@@ -305,12 +347,18 @@ class ProviderGuidanceService:
         working_dir: str = "",
         file_policy: str = "",
         effective_model: str = "",
+        guidance_override: str = "",
     ) -> PreflightContext:
         capability_summary = self.capability_summary(provider_name, active_skills) if provider_name else ""
         return PreflightContext(
             extra_dirs=extra_dirs,
             system_prompt=self._apply_provider_semantics(
-                self.preflight_prompt(role, active_skills),
+                self.preflight_prompt(
+                    role,
+                    active_skills,
+                    provider_name=provider_name,
+                    guidance_override=guidance_override,
+                ),
                 provider_name,
             ),
             capability_summary=capability_summary,
@@ -393,8 +441,24 @@ class ProviderGuidanceService:
 
         return get_content_store().resolve_provider_guidance(provider_name, instance_key=instance_key)
 
-    def effective_guidance_preview(self, provider_name: str, *, instance_key: str = "") -> str:
+    def published_guidance_text(self, provider_name: str, *, instance_key: str = "") -> str:
         track = self.effective_guidance(provider_name, instance_key=instance_key)
+        return track.revision.content if track is not None else ""
+
+    def draft_guidance_text(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        from app.content_store import get_content_store
+
+        track = get_content_store().get_provider_guidance(
+            provider_name,
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+        )
         return track.revision.content if track is not None else ""
 
 

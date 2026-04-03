@@ -24,7 +24,6 @@ from octopus_sdk.sessions import (
 )
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
-    extract_target_selector_message,
 )
 from app.workflows.delegation.telegram import (
     handle_delegation_approve,
@@ -1181,40 +1180,6 @@ async def handle_message(
             execution_runtime=_bound_execution_runtime(runtime),
         ),
     ):
-        return
-
-    direct_assignment = extract_target_selector_message(msg.text)
-    if direct_assignment is not None:
-        selector, instructions = direct_assignment
-        title = summarize_text(instructions) or "Direct assignment"
-        try:
-            result = await submit_direct_assignment(
-                runtime,
-                telegram_session_io.conversation_key(chat_id),
-                message,
-                conversation_ref=msg.conversation_ref,
-                selector=selector,
-                title=title,
-                instructions=instructions,
-                message_text=str(msg.text or ""),
-            )
-        except Exception as exc:
-            await update.effective_message.reply_text(
-                f"Delegation unavailable right now. {exc}"
-            )
-            return
-        task_ref = result.routed_tasks[0] if result.routed_tasks else None
-        target_label = (
-            f"@{selector.value}"
-            if selector.kind == "agent"
-            else f"@{selector.kind}:{selector.value}"
-        )
-        if task_ref is None:
-            await update.effective_message.reply_text(f"Task sent to {target_label}.")
-        else:
-            await update.effective_message.reply_text(
-                f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
-            )
         return
 
     envelope = InboundEnvelope(

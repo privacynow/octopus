@@ -159,6 +159,7 @@ from octopus_sdk.registry.models import (
     TargetSelector,
     TaskRecord,
     UsageSummaryRecord,
+    normalized_requested_skills,
 )
 from octopus_sdk.task_protocol import (
     RoutedTaskSnapshot,
@@ -1926,6 +1927,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             "context": entry.get("context", {}),
                         }
                     )
+                    requested_skills = normalized_requested_skills(
+                        entry.get("requested_skills", []),
+                        selector=draft.selector,
+                    )
                     resolved_target = self._resolve_selector(conn, draft.selector)
                     request = {
                         "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, index),
@@ -1943,7 +1948,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         "title": draft.title,
                         "instructions": draft.instructions,
                         "context": dict(draft.context),
-                        "requested_skills": list(draft.requested_skills),
+                        "requested_skills": requested_skills,
                         "priority": draft.priority,
                         "created_at": now,
                     }
@@ -2008,6 +2013,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 operator_message = direct_assignment_message_text(assignment)
                 routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
                 resolved_target = self._resolve_selector(conn, assignment.selector)
+                requested_skills = normalized_requested_skills(
+                    assignment.requested_skills,
+                    selector=assignment.selector,
+                )
                 inserted_events: list[EventRecord] = []
                 message_event = self._insert_event(
                     conn,
@@ -2041,7 +2050,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": assignment.title,
                     "instructions": assignment.instructions,
                     "context": dict(assignment.context),
-                    "requested_skills": list(assignment.requested_skills),
+                    "requested_skills": requested_skills,
                     "priority": assignment.priority,
                     "created_at": now,
                 }
@@ -2070,7 +2079,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             "selector_value": assignment.selector.value,
                             "instructions": assignment.instructions,
                             "priority": assignment.priority,
-                            "requested_skills": list(assignment.requested_skills),
+                            "requested_skills": requested_skills,
                             "context": dict(assignment.context),
                         }
                     ],

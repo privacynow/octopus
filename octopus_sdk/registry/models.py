@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+import re
 from typing import Literal, NewType
 from uuid import uuid4
 
@@ -20,6 +21,10 @@ ExternalConversationRef = NewType("ExternalConversationRef", str)
 DeliveryId = NewType("DeliveryId", str)
 ConnectivityState = NewType("ConnectivityState", str)
 RegistryJsonValue = JsonValue
+_DIRECT_SKILL_MESSAGE_RE = re.compile(
+    r"^(?:using|use)\s+([a-z0-9][a-z0-9_-]*)\s+skill\s*[,:-]\s*(.+)$",
+    re.IGNORECASE,
+)
 
 
 class RegistryRecordModel(BaseModel):
@@ -528,16 +533,44 @@ def parse_target_selector(raw: str) -> TargetSelector | None:
     return TargetSelector(kind="agent", value=body)
 
 
+def normalized_requested_skills(
+    requested_skills: list[str] | tuple[str, ...] | None = None,
+    *,
+    selector: TargetSelector | None = None,
+) -> list[str]:
+    names: list[str] = []
+    if requested_skills:
+        names.extend(str(item or "").strip() for item in requested_skills)
+    if selector is not None and selector.kind == "skill":
+        names.append(str(selector.value or "").strip())
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for name in names:
+        if not name:
+            continue
+        slug = name.lower()
+        if slug in seen:
+            continue
+        seen.add(slug)
+        normalized.append(slug)
+    return normalized
+
+
 def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | None:
     text = str(raw or "").strip()
-    if not text.startswith("@"):
+    if text.startswith("@"):
+        parts = text.split(None, 1)
+        selector_token = parts[0]
+        selector = parse_target_selector(selector_token)
+        if selector is None:
+            return None
+        instructions = parts[1].strip() if len(parts) > 1 else ""
+        return (selector, instructions) if instructions else None
+    match = _DIRECT_SKILL_MESSAGE_RE.match(text)
+    if not match:
         return None
-    parts = text.split(None, 1)
-    selector_token = parts[0]
-    selector = parse_target_selector(selector_token)
-    if selector is None:
-        return None
-    instructions = parts[1].strip() if len(parts) > 1 else ""
+    selector = TargetSelector(kind="skill", value=match.group(1).strip().lower())
+    instructions = match.group(2).strip()
     return (selector, instructions) if instructions else None
 
 

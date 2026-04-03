@@ -728,6 +728,7 @@ class _ParticipantCoordination(RegistryCoordination):
         origin_transport_ref: str = "",
         authorized_actor_key: str = "",
         message_text: str = "",
+        requested_skills: list[str] | tuple[str, ...] = (),
     ) -> CoordinationActionResult:
         envelope = CoordinationActionEnvelope(
             action_id=uuid4().hex,
@@ -739,6 +740,7 @@ class _ParticipantCoordination(RegistryCoordination):
                 origin_transport_ref=origin_transport_ref,
                 authorized_actor_key=authorized_actor_key,
                 message_text=message_text,
+                requested_skills=list(requested_skills),
             ).model_dump(exclude_unset=True),
         )
         self._require_live_coordination_authority()

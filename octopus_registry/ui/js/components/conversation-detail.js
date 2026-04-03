@@ -1284,12 +1284,7 @@ function renderConversationDetail(container, params) {
         suggestionList.hidden = true;
         try {
             if (directAssignment) {
-                await API.conversationAction(convoId, 'direct_assign', {
-                    selector: directAssignment.selector,
-                    title: directAssignment.instructions.slice(0, 120),
-                    instructions: directAssignment.instructions,
-                    message_text: text,
-                });
+                await API.sendMessage(convoId, text);
             } else if (selectorOnly) {
                 throw new Error('Add instructions after the target selector to route work directly.');
             } else {

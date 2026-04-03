@@ -89,6 +89,7 @@ class RegistryCoordination(Protocol):
         origin_transport_ref: str = "",
         authorized_actor_key: str = "",
         message_text: str = "",
+        requested_skills: list[str] | tuple[str, ...] = (),
     ) -> CoordinationActionResult: ...
 
     async def delegate_tasks(

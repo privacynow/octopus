@@ -548,6 +548,144 @@ async def test_registry_channel_input_respects_approval_mode():
         assert session.get("pending_approval") is not None
 
 
+async def test_registry_channel_input_direct_assignment_routes_through_shared_bot_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, _cfg, prov):
+        captured: dict[str, object] = {}
+
+        async def _direct_assign(
+            conversation_id,
+            *,
+            selector,
+            title,
+            instructions,
+            origin_transport_ref="",
+            authorized_actor_key="",
+            message_text="",
+            requested_skills=(),
+        ):
+            captured.update(
+                {
+                    "conversation_id": str(conversation_id),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "title": title,
+                    "instructions": instructions,
+                    "origin_transport_ref": origin_transport_ref,
+                    "authorized_actor_key": authorized_actor_key,
+                    "message_text": message_text,
+                    "requested_skills": list(requested_skills),
+                }
+            )
+            return CoordinationActionResult(
+                conversation_id=str(conversation_id),
+                action_id="direct-action-1",
+                action="direct_assign",
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-direct-1",
+                        "target_agent_id": "agent-architecture",
+                        "title": title,
+                        "status": "queued",
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(current_runtime().services.registry.coordination, "direct_assign", _direct_assign)
+
+        conversation_ref = _reg_ref("registry-direct-1")
+        conversation_key = _reg_conv(conversation_ref)
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=conversation_key,
+            text="Using architecture skill, give me a system design review",
+            source="registry",
+            transport="registry",
+            conversation_ref=conversation_ref,
+            authority_ref="registry:default",
+        )
+        item = WorkItemRecord(
+            id="registry-item-direct-1",
+            conversation_key=conversation_key,
+            event_id=_event(7002),
+            dispatch_mode="fresh",
+        )
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        session = load_session_disk(data_dir, conversation_key, prov)
+        pending = session.get("pending_delegation")
+        assert len(prov.run_calls) == 0
+        assert captured["selector_kind"] == "skill"
+        assert captured["selector_value"] == "architecture"
+        assert captured["requested_skills"] == ["architecture"]
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["routed_task_id"] == "task-direct-1"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
+async def test_registry_routed_task_requested_skills_activate_target_session():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, _cfg, prov):
+        prov.run_results = [RunResult(text="Architecture answer.")]
+        conversation_key = "delegation:origin-1:coord-1"
+        event = InboundMessage(
+            user=InboundUser(id="reg:agent:origin-1", username="registry"),
+            conversation_key=conversation_key,
+            text="Review the system design.",
+            source="registry",
+            transport="registry",
+            conversation_ref=registry_task_ref("default", "task-activate-1"),
+            external_conversation_ref="routed-task:task-activate-1",
+            routed_task_id="task-activate-1",
+            requested_skills=("architecture",),
+            authority_ref="registry:default",
+            authorized_actor_key=_actor(42),
+        )
+        item = WorkItemRecord(
+            id="registry-item-activate-1",
+            conversation_key=conversation_key,
+            event_id="reg:task-activate-1",
+            dispatch_mode="fresh",
+        )
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        session = load_session_disk(data_dir, conversation_key, prov)
+        assert len(prov.run_calls) == 1
+        assert "architecture" in session.get("active_skills", [])
+
+
 async def test_approve_delegation__registry_delivery(monkeypatch):
     with fresh_env(
         config_overrides={

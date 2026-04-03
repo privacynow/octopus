@@ -135,8 +135,18 @@ class _NoOpCoordination(RegistryCoordination):
         origin_transport_ref: str = "",
         authorized_actor_key: str = "",
         message_text: str = "",
+        requested_skills: list[str] | tuple[str, ...] = (),
     ) -> CoordinationActionResult:
-        del conversation_id, selector, title, instructions, origin_transport_ref, authorized_actor_key, message_text
+        del (
+            conversation_id,
+            selector,
+            title,
+            instructions,
+            origin_transport_ref,
+            authorized_actor_key,
+            message_text,
+            requested_skills,
+        )
         raise RuntimeError("Delegation unavailable: this bot is not enrolled in a coordination-capable registry.")
 
     async def delegate_tasks(

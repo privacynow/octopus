@@ -320,6 +320,16 @@ def test_extract_target_selector_message_requires_instructions():
     assert instructions == "return only the answer"
 
 
+def test_extract_target_selector_message_accepts_leading_skill_phrase():
+    extracted = extract_target_selector_message("Using architecture skill, give me a system design review")
+
+    assert extracted is not None
+    selector, instructions = extracted
+    assert selector.kind == "skill"
+    assert selector.value == "architecture"
+    assert instructions == "give me a system design review"
+
+
 def test_pending_delegation_transition_derives_partial_failure__child_states():
     result = apply_pending_delegation_transition(
         PendingDelegationSnapshot(status="submitted", task_statuses=("completed", "failed")),

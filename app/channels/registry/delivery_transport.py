@@ -146,6 +146,7 @@ def build_registry_message_delivery(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    requested_skills: tuple[str, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> tuple[str, str, str, str]:
@@ -160,6 +161,7 @@ def build_registry_message_delivery(
         skip_approval=skip_approval,
         conversation_key_override=conversation_key_override,
         authorized_actor_key=authorized_actor_key,
+        requested_skills=requested_skills,
         source_transport=source_transport,
         admission_class=admission_class,
     )
@@ -179,6 +181,7 @@ def build_registry_message_envelope(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    requested_skills: tuple[str, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> InboundEnvelope:
@@ -198,6 +201,7 @@ def build_registry_message_envelope(
         conversation_ref=conversation_ref,
         external_conversation_ref=external_conversation_ref,
         routed_task_id=routed_task_id,
+        requested_skills=requested_skills,
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_authority_ref(registry_id),
         skip_approval=skip_approval,
@@ -350,6 +354,7 @@ async def admit_registry_delivery(
             external_conversation_ref=str(request.get("external_conversation_ref", "") or ""),
             routed_task_id=request["routed_task_id"],
             authorized_actor_key=str(request.get("authorized_actor_key", "") or ""),
+            requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             registry_id=registry_id,
         )
         await submitter.admit_message(envelope)

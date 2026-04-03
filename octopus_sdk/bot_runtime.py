@@ -34,7 +34,12 @@ from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUs
 from octopus_sdk.messages import MessageTemplatePort
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
-from octopus_sdk.registry.models import DiscoveredAgentRef, ExecutionStateRecord, RoutedTaskUpdate
+from octopus_sdk.registry.models import (
+    DiscoveredAgentRef,
+    ExecutionStateRecord,
+    RoutedTaskUpdate,
+    extract_target_selector_message,
+)
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import EditableHandle
@@ -1397,27 +1402,97 @@ class BotRuntime:
         if event.action not in {"delegation_approve", "delegation_cancel"}:
             return False
         from octopus_sdk.workflows.delegation import (
-            ParticipantDelegationRuntime,
             approve_participant_delegation,
             cancel_participant_delegation,
         )
+        target_key = item.conversation_key
+        if event.params.get("target_conversation_key"):
+            target_key = str(event.params["target_conversation_key"])
+        if event.action == "delegation_approve":
+            outcome = await approve_participant_delegation(self._participant_delegation_runtime(), target_key)
+        else:
+            outcome = await cancel_participant_delegation(self._participant_delegation_runtime(), target_key)
+        await egress.send_text(outcome.message or "Delegation updated.")
+        return True
 
-        runtime = ParticipantDelegationRuntime(
+    def _participant_delegation_runtime(self):
+        from octopus_sdk.workflows.delegation import ParticipantDelegationRuntime
+
+        return ParticipantDelegationRuntime(
             config=self.config,
             provider_name=self.provider.name,
             provider_state_factory=self.provider.new_provider_state,
             coordination=self.registry.coordination,
             sessions=self.sessions,
         )
-        target_key = item.conversation_key
-        if event.params.get("target_conversation_key"):
-            target_key = str(event.params["target_conversation_key"])
-        if event.action == "delegation_approve":
-            outcome = await approve_participant_delegation(runtime, target_key)
+
+    async def _dispatch_direct_assignment_message(
+        self,
+        event: InboundMessage,
+        item: WorkItemRecord,
+        *,
+        egress: TransportEgress,
+        conversation_ref: str,
+    ) -> bool:
+        from octopus_sdk.workflows.delegation import submit_participant_direct_assignment
+
+        direct_assignment = extract_target_selector_message(event.text)
+        if direct_assignment is None:
+            return False
+
+        selector, instructions = direct_assignment
+        title = summarize_text(instructions) or "Direct assignment"
+        result = await submit_participant_direct_assignment(
+            self._participant_delegation_runtime(),
+            item.conversation_key,
+            conversation_ref=conversation_ref,
+            selector=selector,
+            title=title,
+            instructions=instructions,
+            message_text=event.text,
+            origin_channel=str(getattr(event, "transport", "") or getattr(event, "source", "") or "registry"),
+            external_ref=(
+                str(getattr(event, "external_conversation_ref", "") or "")
+                or conversation_ref
+                or item.conversation_key
+            ),
+            authorized_actor_key=(
+                str(getattr(event, "authorized_actor_key", "") or "")
+                or item.actor_key
+                or str(getattr(event.user, "id", "") or "")
+            ),
+        )
+        task_ref = result.routed_tasks[0] if result.routed_tasks else None
+        target_label = (
+            f"@{selector.value}"
+            if selector.kind == "agent"
+            else f"@{selector.kind}:{selector.value}"
+        )
+        if task_ref is None:
+            await egress.send_text(f"Task sent to {target_label}.")
         else:
-            outcome = await cancel_participant_delegation(runtime, target_key)
-        await egress.send_text(outcome.message or "Delegation updated.")
+            await egress.send_text(
+                f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
+            )
         return True
+
+    def _activate_requested_routing_skills(
+        self,
+        session: SessionState,
+        *,
+        requested_skills: tuple[str, ...],
+    ) -> bool:
+        if not requested_skills:
+            return False
+        activation = self._require_execution_services().skill_activation
+        catalog = self.workflows.runtime_skills.catalog
+        mutated = False
+        for skill_name in requested_skills:
+            detail = catalog.get_skill(skill_name)
+            if detail is None or not detail.can_activate:
+                continue
+            mutated = activation.activate(session, skill_name) or mutated
+        return mutated
 
     async def _dispatch_claimed_message(
         self,
@@ -1506,6 +1581,23 @@ class BotRuntime:
             )
 
         session = self._load_session(item.conversation_key)
+        if not routed_task_id:
+            if await self._dispatch_direct_assignment_message(
+                event,
+                item,
+                egress=egress,
+                conversation_ref=conversation_ref,
+            ):
+                return
+        skill_mutated = self._activate_requested_routing_skills(
+            session,
+            requested_skills=tuple(
+                str(skill).strip()
+                for skill in getattr(event, "requested_skills", ())
+                if str(skill).strip()
+            ),
+        )
+        self._save_session_if_mutated(item.conversation_key, session, mutated=skill_mutated)
         expiration = expire_stale_delegations(
             session.pending_delegation,
             timeout_seconds=self.config.delegation_timeout_seconds,

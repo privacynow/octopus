@@ -1,3 +1,5 @@
+const DIRECT_SKILL_MESSAGE_RE = /^(?:using|use)\s+([a-z0-9][a-z0-9_-]*)\s+skill\s*[,:-]\s*(.+)$/i;
+
 function _parseConversationTargetSelector(raw) {
     const text = String(raw || '').trim();
     if (!text.startsWith('@')) return null;
@@ -24,6 +26,14 @@ function _leadingConversationTargetToken(raw) {
 
 function _extractConversationTargetSelectorMessage(raw) {
     const text = String(raw || '').trim();
+    const directSkill = text.match(DIRECT_SKILL_MESSAGE_RE);
+    if (directSkill) {
+        const value = String(directSkill[1] || '').trim().toLowerCase();
+        const instructions = String(directSkill[2] || '').trim();
+        if (value && instructions) {
+            return { selector: { kind: 'skill', value }, instructions };
+        }
+    }
     const selectorToken = _leadingConversationTargetToken(text);
     if (!selectorToken) return null;
     const selector = _parseConversationTargetSelector(selectorToken);

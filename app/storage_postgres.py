@@ -9,11 +9,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
-from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.time_utils import utc_now_iso
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
-from octopus_sdk.workflows.delegation import apply_routed_result
 
 _SCHEMA_TABLE = "bot_runtime.sessions"
 _DEFERRED_NOTIFICATIONS_TABLE = "bot_runtime.deferred_notifications"
@@ -125,50 +122,6 @@ def save_session(conn, conversation_key: str, session: dict[str, Any]) -> None:
     session["updated_at"] = utc_now_iso()
     _upsert(conn, conversation_key, session)
     conn.commit()
-
-
-def apply_delegation_result_atomically(
-    conn,
-    conversation_key: str,
-    *,
-    routed_task_id: str,
-    authority_ref: str,
-    result: RoutedTaskResult,
-) -> DelegationUpdateOutcome:
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT data FROM {_SCHEMA_TABLE} WHERE conversation_key = %s FOR UPDATE",
-                (conversation_key,),
-            )
-            row = cur.fetchone()
-        raw: dict[str, Any] = {}
-        if row is not None:
-            decoded = row[0]
-            if isinstance(decoded, dict):
-                raw = decoded
-            else:
-                try:
-                    parsed = json.loads(decoded) if decoded else {}
-                    if isinstance(parsed, dict):
-                        raw = parsed
-                except json.JSONDecodeError:
-                    raw = {}
-        session = session_from_dict(raw)
-        applied = apply_routed_result(
-            session.pending_delegation,
-            routed_task_id=routed_task_id,
-            authority_ref=authority_ref,
-            result=result,
-        )
-        if applied.matched:
-            session.pending_delegation = applied.pending
-            _upsert(conn, conversation_key, session_to_dict(session))
-        conn.commit()
-        return applied
-    except Exception:
-        conn.rollback()
-        raise
 
 
 def delete_session(conn, conversation_key: str) -> None:
@@ -356,24 +309,6 @@ class PostgresSessionStore:
     def save_session(self, data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
         with self._conn() as conn:
             save_session(conn, conversation_key, session)
-
-    def apply_delegation_result_atomically(
-        self,
-        data_dir: Path,
-        conversation_key: str,
-        *,
-        routed_task_id: str,
-        authority_ref: str,
-        result: RoutedTaskResult,
-    ) -> DelegationUpdateOutcome:
-        with self._conn() as conn:
-            return apply_delegation_result_atomically(
-                conn,
-                conversation_key,
-                routed_task_id=routed_task_id,
-                authority_ref=authority_ref,
-                result=result,
-            )
 
     def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         with self._conn() as conn:

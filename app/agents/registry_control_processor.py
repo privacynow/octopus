@@ -6,14 +6,14 @@ import json
 import uuid
 from typing import Any, Protocol
 
-from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_id_from_authority_ref,
 )
-from app.exact_aliases import matches_exact_alias
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
+from octopus_sdk.exact_aliases import matches_exact_alias
+from octopus_sdk.registry.client import RegistryClientError
 from app.control_plane.requests import (
     AddConversationMessagePayload,
     PublishHealthRequest,

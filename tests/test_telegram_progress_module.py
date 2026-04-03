@@ -6,10 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.access import get_authorization
 import app.runtime.telegram_progress as telegram_progress
 import app.user_messages as _msg
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from octopus_sdk.agent_directory import NoOpAgentDirectory
@@ -19,7 +17,7 @@ from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeMessage, FakeProvider
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.service_support import build_test_bot_services
 
 
 def _services(*, task_routing=None, config=None) -> BotServices:
@@ -29,17 +27,14 @@ def _services(*, task_routing=None, config=None) -> BotServices:
         create_conversation=AsyncMock(return_value="conv-1"),
         publish_events=AsyncMock(),
     )
-    return BotServices(
+    return build_test_bot_services(
+        config=effective_config,
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
             task_routing=task_routing or NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
             health_publication=NoOpHealthPublication(),
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows_for_config(effective_config),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
 

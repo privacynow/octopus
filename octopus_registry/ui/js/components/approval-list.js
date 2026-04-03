@@ -130,8 +130,8 @@ function renderApprovalList(container) {
             rejectBtn.className = 'btn btn-sm btn-danger';
             rejectBtn.type = 'button';
 
-            let primaryAction = 'approve';
-            let secondaryAction = 'reject';
+            let primaryAction = 'approve_pending';
+            let secondaryAction = 'reject_pending';
             let actionPayload = () => ({ request_id: item.request_id });
             const requestKind = String(item.request_kind || '').trim();
             if (requestKind === 'retry') {

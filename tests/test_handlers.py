@@ -843,7 +843,7 @@ async def test_approve_delegation__registry_delivery(monkeypatch):
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-approve"),
-                    "action": "approve_delegation",
+                    "action": "delegation_approve",
                     "payload": {},
                 },
             },
@@ -856,7 +856,7 @@ async def test_approve_delegation__registry_delivery(monkeypatch):
         assert outcome == "accepted"
         assert len(submitted) == 1
         assert submitted[0][0] == "conv-approve"
-        assert submitted[0][1].action == "approve_delegation"
+        assert submitted[0][1].action == "delegation_approve"
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["status"] == "submitted"
@@ -900,7 +900,7 @@ async def test_cancel_delegation__registry_delivery():
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-cancel"),
-                    "action": "cancel_delegation",
+                    "action": "delegation_cancel",
                     "payload": {},
                 },
             },

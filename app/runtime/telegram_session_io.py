@@ -10,9 +10,8 @@ from octopus_sdk.identity import (
     telegram_event_id,
     telegram_numeric_id,
 )
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.runtime.session_runtime import save_runtime_session
 from octopus_sdk.sessions import SessionState
-from app.skill_activation_service import get_skill_activation_service
 
 
 def conversation_key(chat_id: int | str) -> str:
@@ -42,8 +41,7 @@ def telegram_chat_id(chat_id: int | str) -> int:
 
 def load(runtime: TelegramRuntime, chat_id: int | str) -> SessionState:
     cfg = runtime.config
-    session = load_runtime_session(
-        cfg.data_dir,
+    return runtime.services.sessions.load(
         conversation_key(chat_id),
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
@@ -51,9 +49,6 @@ def load(runtime: TelegramRuntime, chat_id: int | str) -> SessionState:
         default_role=cfg.role,
         default_skills=cfg.default_skills,
     )
-    if get_skill_activation_service().normalize(session):
-        save(runtime, chat_id, session)
-    return session
 
 
 def save(runtime: TelegramRuntime, chat_id: int | str, session: SessionState) -> None:

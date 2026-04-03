@@ -177,7 +177,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         assert len(submitted) == 1
         conversation_id, envelope = submitted[0]
         assert conversation_id == "conversation-1"
-        assert envelope.action == "approve_delegation"
+        assert envelope.action == "delegation_approve"
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["routed_task_id"] == "server-task-1"
@@ -239,7 +239,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
         session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert len(called) == 1
         assert called[0][0] == "conversation-1"
-        assert called[0][1].action == "cancel_delegation"
+        assert called[0][1].action == "delegation_cancel"
         assert session_after.get("pending_delegation") is None
         assert "cancelled" in last_reply(msg).lower()
         assert "sent" in last_reply(msg).lower()

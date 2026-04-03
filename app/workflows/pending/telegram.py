@@ -21,7 +21,6 @@ from app.runtime.telegram_session_io import (
     load as _session_io_load,
     save as _session_io_save,
 )
-from app.runtime import composition
 from octopus_sdk.sessions import SessionState
 from app import work_queue
 
@@ -39,8 +38,8 @@ class TelegramPendingRuntime:
     build_user_prompt: Callable[..., tuple[str, list[str]]]
 
 
-def _flows():
-    return composition.workflows()
+def _flows(runtime: TelegramPendingRuntime):
+    return runtime.state.services.workflows
 
 
 
@@ -77,7 +76,7 @@ async def approve_pending(
         )
         await message.reply_text(rendered.text, **rendered.kwargs())
         return
-    outcome = _flows().pending.requests.approve(
+    outcome = _flows(runtime).pending.requests.approve(
         session,
         cfg=runtime.state.config,
         provider_name=runtime.state.provider.name,
@@ -116,7 +115,7 @@ async def reject_pending(
         )
         await message.reply_text(rendered.text, **rendered.kwargs())
         return
-    outcome = _flows().pending.requests.reject(session)
+    outcome = _flows(runtime).pending.requests.reject(session)
     if outcome.mutated:
         _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
@@ -137,7 +136,7 @@ async def retry_skip_pending(
         )
         await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         return
-    outcome = _flows().pending.requests.retry_skip(session)
+    outcome = _flows(runtime).pending.requests.retry_skip(session)
     if outcome.mutated:
         _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
@@ -159,7 +158,7 @@ async def retry_allow_pending(
         )
         await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         return
-    outcome = _flows().pending.requests.retry_allow(
+    outcome = _flows(runtime).pending.requests.retry_allow(
         session,
         cfg=runtime.state.config,
         provider_name=runtime.state.provider.name,
@@ -284,7 +283,7 @@ async def handle_recovery_action(
 
     cfg = runtime.state.config
     data_dir = cfg.data_dir
-    outcome = _flows().recovery.replay.prepare_action(
+    outcome = _flows(runtime).recovery.replay.prepare_action(
         data_dir=data_dir,
         conversation_key=_conversation_key(chat_id),
         event_id=_event_key(recovery_id),
@@ -337,7 +336,7 @@ async def handle_recovery_action(
                     trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )
-        _flows().recovery.replay.complete_replay(
+        _flows(runtime).recovery.replay.complete_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,
         )
@@ -345,7 +344,7 @@ async def handle_recovery_action(
         log.warning("Replay interrupted for chat %s; item stays claimed for re-recovery", chat_id)
     except Exception:
         log.exception("Replay failed for chat %s", chat_id)
-        _flows().recovery.replay.fail_replay(
+        _flows(runtime).recovery.replay.fail_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,
         )

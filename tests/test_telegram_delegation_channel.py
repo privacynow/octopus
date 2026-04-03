@@ -297,7 +297,7 @@ async def test_propose_delegation_plan_autonomous_registry_origin_uses_bound_ext
     )
 
     assert outcome.status == "delegation_submitted"
-    assert [envelope.action for _, envelope in submitted] == ["delegate_tasks", "approve_delegation"]
+    assert [envelope.action for _, envelope in submitted] == ["delegate_tasks", "delegation_approve"]
     assert submitted[0][0] == submitted[1][0]
     assert session.pending_delegation is not None
     assert session.pending_delegation.status == "submitted"

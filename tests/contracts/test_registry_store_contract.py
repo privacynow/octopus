@@ -1114,7 +1114,7 @@ def test_delegation_approval_prefers_explicit_origin_transport_ref_from_proposal
         conversation.conversation_id,
         CoordinationActionEnvelope(
             action_id="approve-origin-transport-ref",
-            action="approve_delegation",
+            action="delegation_approve",
             payload=ApproveDelegationActionPayload(proposal_id=proposed.proposal_id),
         ),
     )
@@ -1293,7 +1293,7 @@ def test_list_approvals_returns_only_pending_requests(store):
         decided.conversation_id,
         CoordinationActionEnvelope(
             action_id="approval-action-1",
-            action="approve",
+            action="approve_pending",
             payload=ApproveRejectActionPayload(request_id="approval-decided-event"),
         ),
     )

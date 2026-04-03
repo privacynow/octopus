@@ -19,6 +19,7 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
+from octopus_sdk.exact_aliases import matches_exact_alias
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -28,7 +29,6 @@ from .routing_skill_service import (
     requested_routed_skills,
 )
 from .postgres import get_connection
-from .exact_aliases import matches_exact_alias
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
     get_agent_runtime_health as shared_get_agent_runtime_health,
@@ -1764,7 +1764,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "created_at": row["created_at"],
                 })
 
-            if validated_envelope.action in {"approve", "reject", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
+            if validated_envelope.action in {"approve_pending", "reject_pending", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
                 self._create_delivery(
                     conn,
                     target_agent_id=conversation["target_agent_id"],
@@ -1813,9 +1813,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         metadata={
                             "action": validated_envelope.action,
                             "decided_by": "operator",
-                            "decision": (
-                                "rejected"
-                                if validated_envelope.action in {"reject", "retry_skip", "recovery_discard"}
+                                "decision": (
+                                    "rejected"
+                                if validated_envelope.action in {"reject_pending", "retry_skip", "recovery_discard"}
                                 else "approved"
                             ),
                         },
@@ -1883,7 +1883,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     event=inserted_event,
                 )
 
-            if validated_envelope.action == "approve_delegation":
+            if validated_envelope.action == "delegation_approve":
                 proposal_id = action_payload.proposal_id
                 with _cur(conn) as cur:
                     cur.execute(
@@ -2086,8 +2086,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     event=inserted_event,
                 )
 
-            if validated_envelope.action in {"cancel_task", "retry_task", "cancel_delegation"}:
-                if validated_envelope.action == "cancel_delegation":
+            if validated_envelope.action in {"cancel_task", "retry_task", "delegation_cancel"}:
+                if validated_envelope.action == "delegation_cancel":
                     inserted_event = self._insert_event(
                         conn,
                         event_id=validated_envelope.action_id,

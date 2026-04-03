@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.access import get_authorization
 from app.channels.registry.channel import (
     RegistryConversationChannel,
     RegistryTaskChannel,
@@ -19,14 +18,13 @@ from app.runtime.services import (
     BotServices,
     ControlPlaneServices,
 )
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.config_support import make_config, make_registry_connection
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.service_support import build_test_bot_services
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.transport import TransportBindingRecord
 
@@ -61,17 +59,14 @@ def _services(config, recorder: _ProjectionRecorder) -> BotServices:
         agent_directory=NoOpAgentDirectory(),
         health_publication=NoOpHealthPublication(),
     )
-    return BotServices(
+    return build_test_bot_services(
+        config=config,
         control_plane=ControlPlaneServices(
             conversation_projection=recorder,
             task_routing=noop.task_routing,
             agent_directory=noop.agent_directory,
             health_publication=noop.health_publication,
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows_for_config(config),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
 

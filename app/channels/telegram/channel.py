@@ -152,6 +152,7 @@ class TelegramTransport(TransportImplementation):
         return TelegramChannelEgress(
             bot,
             chat_id,
+            runtime=self._bootstrap.runtime,
             config=config,
             conversation_ref=conversation_ref,
             services=self._services,

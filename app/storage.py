@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
-from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import filesystem_component_for_key
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
@@ -98,24 +96,6 @@ def load_session(
 def save_session(data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
     from app import runtime_backend
     runtime_backend.session_store().save_session(data_dir, conversation_key, session)
-
-
-def apply_delegation_result_atomically(
-    data_dir: Path,
-    conversation_key: str,
-    *,
-    routed_task_id: str,
-    authority_ref: str,
-    result: RoutedTaskResult,
-) -> DelegationUpdateOutcome:
-    from app import runtime_backend
-    return runtime_backend.session_store().apply_delegation_result_atomically(
-        data_dir,
-        conversation_key,
-        routed_task_id=routed_task_id,
-        authority_ref=authority_ref,
-        result=result,
-    )
 
 
 def delete_session(data_dir: Path, conversation_key: str) -> None:

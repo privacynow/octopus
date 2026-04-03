@@ -1,12 +1,12 @@
 """Agent/registry foundation for multi-channel, multi-bot runtime."""
 
-from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import (
     RegistryConnectionState,
     load_registry_connection_state,
     save_registry_connection_state,
 )
 from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.client import RegistryClient, RegistryClientError
 from octopus_sdk.registry.models import (
     AgentCard,
     AgentDiscoveryQuery,
@@ -18,7 +18,7 @@ from octopus_sdk.registry.models import (
 __all__ = [
     "AgentCard",
     "AgentDiscoveryQuery",
-    "AgentRegistryClient",
+    "RegistryClient",
     "RegistryClientError",
     "RegistryConnectionConfig",
     "RegistryConnectionState",

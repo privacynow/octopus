@@ -1689,7 +1689,7 @@ def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path:
     decision = client.post(
         f"/v1/conversations/{decided['conversation_id']}/actions",
         headers={"X-CSRF-Token": csrf},
-        json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "evt-approval-decided"}},
+        json={"action_id": "approval-action-1", "action": "approve_pending", "payload": {"request_id": "evt-approval-decided"}},
     )
     assert decision.status_code == 200
 
@@ -1888,6 +1888,31 @@ def test_agent_resource_endpoints_round_trip(monkeypatch, tmp_path: Path):
     )
     assert task_detail.status_code == 200
     assert task_detail.json()["routed_task_id"] == "endpoint-task-1"
+
+
+def test_conversation_message_endpoint_rejects_selector_only_direct_assignment(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Selector Bot", "selector-bot")
+    conv = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "conv-selector-only",
+        title="Selector only conversation",
+    )
+
+    _login_ui(client)
+    csrf_token = _ui_csrf_token(client)
+    response = client.post(
+        f"/v1/conversations/{conv['conversation_id']}/messages",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"text": "@m2"},
+    )
+
+    assert response.status_code == 422
+    assert "Add instructions after the target selector" in response.json()["detail"]
 
 
 def test_management_result_endpoint_and_ui_logout(monkeypatch, tmp_path: Path):

@@ -1273,16 +1273,11 @@ function renderConversationDetail(container, params) {
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
-        const selectorOnly = !_extractConversationTargetSelectorMessage(text)
-            && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
         sendBtn.disabled = true;
         textarea.disabled = true;
         clearSuggestions();
         suggestionList.hidden = true;
         try {
-            if (selectorOnly) {
-                throw new Error('Add instructions after the target selector to route work directly.');
-            }
             await API.sendMessage(convoId, text);
             textarea.value = '';
             updateComposerAssist();
@@ -1341,12 +1336,12 @@ function renderConversationDetail(container, params) {
 
     function selectorMatchesAvailableTarget(selectorToken) {
         const token = String(selectorToken || '').trim().toLowerCase();
-        if (!token) return false;
-        return availableTargets.some((item) => {
+        if (!token) return null;
+        return availableTargets.find((item) => {
             if (String(item.label || '').trim().toLowerCase() === token) return true;
             return Array.isArray(item.aliases)
                 && item.aliases.some((alias) => String(alias || '').trim().toLowerCase() === token);
-        });
+        }) || null;
     }
 
     function clearSuggestions() {
@@ -1367,36 +1362,24 @@ function renderConversationDetail(container, params) {
 
     function updateComposerAssist() {
         const text = textarea.value.trim();
-        const directAssignment = _extractConversationTargetSelectorMessage(text);
         const selectorToken = _leadingConversationTargetToken(text);
-        const selector = selectorToken ? _parseConversationTargetSelector(selectorToken) : null;
         const selectorPrefix = selectorToken.startsWith('@');
         const exactSuggestionMatch = selectorMatchesAvailableTarget(selectorToken);
-        if (directAssignment) {
+        const instructions = selectorToken && text.startsWith(selectorToken)
+            ? text.slice(selectorToken.length).trim()
+            : '';
+        if (exactSuggestionMatch) {
             targetPreview.hidden = false;
-            targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(directAssignment.selector)}.`;
-            setComposeHint('Direct assignment will create a routed task immediately.');
+            targetPreview.textContent = `Routing directly to ${exactSuggestionMatch.label}.`;
+            setComposeHint(
+                instructions
+                    ? 'Direct assignment will create a routed task immediately.'
+                    : 'Add instructions after the selector to route work directly.'
+            );
             textarea.placeholder = 'Describe the delegated task';
-            sendBtn.textContent = 'Assign';
-            sendBtn.setAttribute('aria-label', 'Assign task');
-            renderTargetSuggestions('');
-            return;
-        }
-        if (selector) {
-            targetPreview.hidden = !exactSuggestionMatch;
-            if (exactSuggestionMatch) {
-                targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(selector)}.`;
-                setComposeHint('Add instructions after the selector to assign work directly.');
-            } else if (selectorToken.startsWith('@')) {
-                setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
-            }
-            textarea.placeholder = 'Describe the delegated task';
-            sendBtn.textContent = 'Assign';
-            sendBtn.setAttribute('aria-label', 'Assign task');
+            sendBtn.textContent = instructions ? 'Assign' : 'Send';
+            sendBtn.setAttribute('aria-label', instructions ? 'Assign task' : 'Send message');
             renderTargetSuggestions(selectorToken);
-            if (!suggestionMatches.length && selectorToken.startsWith('@') && !exactSuggestionMatch) {
-                setComposeHint('No connected agent, skill, or role matches that selector yet.');
-            }
             return;
         }
         if (selectorPrefix) {

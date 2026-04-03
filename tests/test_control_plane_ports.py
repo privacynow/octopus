@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.access import get_authorization
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.events import ConversationEvent
 from octopus_sdk.registry.models import (
@@ -33,7 +31,7 @@ from octopus_sdk.task_routing import (
 )
 from app.runtime.services import BotServices, ControlPlaneServices
 from tests.support.config_support import make_config
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.service_support import build_test_bot_services
 
 
 async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> None:
@@ -156,17 +154,14 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
     summary = health.connection_summary()
     config = make_config()
     runtime_backend.init(config)
-    services = BotServices(
+    services = build_test_bot_services(
+        config=config,
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
             task_routing=routing,
             agent_directory=directory,
             health_publication=health,
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows_for_config(config),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
     assert isinstance(summary, ConnectionSummary)

@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from app import runtime_backend
-from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
@@ -34,9 +33,11 @@ from app.runtime.services import BotServices, build_bus_bot_services
 from app.storage import ensure_data_dirs
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.execution import RequestExecutionOutcome
+from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.registry.models import HealthSummary, RoutedTaskResult, RoutedTaskUpdate, TaskRecord
 from octopus_sdk.workflows.execution_finalization import FinalizationContext, finalize_execution
 from tests.support.config_support import make_config, make_registry_connection
+from tests.support.service_support import build_test_bot_services
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
 
 
@@ -256,10 +257,6 @@ def _init_backend(config: BotConfig) -> None:
 
 
 def _services_for_config(config: BotConfig) -> BotServices:
-    directory = build_control_plane_directory(
-        registry_authority_capabilities(config.agent_registries)
-    )
-
     def _agent_id_for_authority(authority_ref: str) -> str:
         from app.agents.state import load_registry_connection_state
 
@@ -269,8 +266,8 @@ def _services_for_config(config: BotConfig) -> BotServices:
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
-    return build_bus_bot_services(
-        ControlPlaneBus(config.data_dir), directory, config=config,
+    return build_test_bot_services(
+        config=config,
         agent_id_for_authority=_agent_id_for_authority,
     )
 

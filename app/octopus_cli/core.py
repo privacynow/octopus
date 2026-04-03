@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.provider_auth import ensure_auth_layout, has_auth_artifacts, shared_auth_root
 from app.provider_health import health_detail
 from app.octopus_cli.envfiles import (
@@ -44,6 +43,7 @@ from app.octopus_cli.models import (
     TargetKind,
     Workspace,
 )
+from octopus_sdk.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.subprocess_env import build_subprocess_env
 
 

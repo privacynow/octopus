@@ -26,11 +26,9 @@ from app.channels.telegram.bootstrap import build_application
 from app.channels.registry.channel import register_registry_channels
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
-from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.session_runtime import LocalSessionRuntime
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
-from octopus_sdk.bot_runtime import BotRuntime, ExecutionServices
+from octopus_sdk.bot_runtime import BotRuntime
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunResult
 from octopus_sdk.sessions import PendingApproval, PendingRetry
 from octopus_sdk.transport_dispatcher import TransportDispatcher
@@ -654,12 +652,20 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
+    workflow_holder: dict[str, object] = {}
+    sessions = LocalSessionRuntime(
+        config,
+        catalog=lambda: workflow_holder["workflows"].runtime_skills.catalog,  # type: ignore[index,union-attr]
+        activation=get_skill_activation_service(),
+    )
     services = build_bus_bot_services(
         ControlPlaneBus(config.data_dir),
         directory,
         config=config,
         agent_id_for_authority=_agent_id_for_authority,
+        sessions=sessions,
     )
+    workflow_holder["workflows"] = services.workflows
     _TEST_RUNTIME = build_telegram_runtime(
         config,
         provider,
@@ -688,33 +694,24 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             services=services,
         )
     _TEST_RUNTIME.transport_dispatcher = dispatcher
-    sessions = LocalSessionRuntime(
-        config,
-        catalog=lambda: services.workflows.runtime_skills.catalog,
-    )
     _TEST_RUNTIME.submitter = BotRuntime(
         config=config,
         transport=dispatcher,
         registry=services.registry,
         provider=provider,
-        sessions=sessions,
+        sessions=services.sessions,
         workflows=services.workflows,
         authorization=services.authorization,
         work_queue=services.work_queue,
         control_plane=services.control_plane,
-        execution_services=ExecutionServices(
-            guidance=get_provider_guidance_service(),
-            skill_activation=get_skill_activation_service(),
-            runtime_skill_setup=services.workflows.runtime_skills.setup,
-            sessions=sessions,
-            artifacts=RuntimeArtifactStore(config),
-            agent_directory=services.control_plane.agent_directory,
-            conversation_projection=services.control_plane.conversation_projection,
-        ),
+        execution_services=services.execution_services,
         boot_id=boot_id,
         cancellations=_TEST_RUNTIME.cancellation_registry,
     )
-    _TEST_APPLICATION = build_application(_TEST_RUNTIME)
+    _TEST_APPLICATION = build_application(
+        _TEST_RUNTIME,
+        execution_runtime=_telegram_execution.build_execution_runtime(_TEST_RUNTIME),
+    )
     _TEST_RUNTIME.bot_instance = test_bot
 
 

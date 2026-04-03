@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
@@ -10,6 +9,7 @@ from app.agents.registry_capabilities import (
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.client import RegistryClientError
 from app.control_plane.models import ControlCommand
 from app.control_plane.requests import (
     PublishHealthRequest,

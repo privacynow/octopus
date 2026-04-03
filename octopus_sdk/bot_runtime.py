@@ -7,7 +7,7 @@ import html
 import re
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Awaitable
 from typing import Callable
@@ -1490,6 +1490,21 @@ class BotRuntime:
             )
         return True
 
+    def _effective_message_text(self, event: InboundMessage) -> str:
+        text = str(event.text or "").strip()
+        sections = []
+        context_text = str(getattr(event, "context_text", "") or "").strip()
+        constraints_text = str(getattr(event, "constraints_text", "") or "").strip()
+        if context_text:
+            sections.append(f"Context:\n{context_text}")
+        if constraints_text:
+            sections.append(f"Constraints:\n{constraints_text}")
+        if not sections:
+            return text
+        if not text:
+            return "\n\n".join(sections)
+        return text + "\n\n" + "\n\n".join(sections)
+
     def _activate_requested_routing_skills(
         self,
         session: SessionState,
@@ -1620,8 +1635,9 @@ class BotRuntime:
             session.pending_delegation = expiration.pending
             self.sessions.save(item.conversation_key, session)
 
+        execution_event = replace(event, text=self._effective_message_text(event))
         outcome = await self._execute_message_request(
-            event=event,
+            event=execution_event,
             item=item,
             egress=egress,
             conversation_ref=conversation_ref,

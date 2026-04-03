@@ -10,8 +10,10 @@ from octopus_sdk.registry.models import (
     AckResult,
     AgentCard,
     AgentDiscoveryQuery,
+    AgentHeartbeatRequest,
     AgentId,
     AgentRecord,
+    AgentRegisterRequest,
     AuthorityId,
     ConversationCreate,
     ConversationId,
@@ -20,6 +22,7 @@ from octopus_sdk.registry.models import (
     CoordinationActionResult,
     DeliveryId,
     DeliveryRecord,
+    DeliveryPollResult,
     EnrollmentResult,
     EventRecord,
     ExternalConversationRef,
@@ -33,8 +36,10 @@ from octopus_sdk.registry.models import (
     TargetSelector,
     TaskRecord,
     TransportActorKey,
+    parse_target_selector,
     utcnow_iso,
 )
+from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry_authority import (
     RegistryAuthorityConversationStore,
     RegistryAuthorityDelivery,
@@ -45,7 +50,12 @@ from octopus_sdk.registry_authority import (
     RegistryAuthorityTaskRouter,
 )
 
-from .store_base import AbstractRegistryStore
+from .store_base import (
+    AbstractRegistryStore,
+    validated_heartbeat_payload,
+    validated_register_payload,
+    validated_routed_task_request,
+)
 
 
 def _local_authority_ref() -> AuthorityId:
@@ -123,7 +133,11 @@ class StoreBackedRegistryAuthority(
         actor: TransportActorKey,
     ) -> MessageRecord:
         del actor
-        return self.store.add_conversation_message(str(conversation_id), text)
+        normalized = str(text or "").strip()
+        parts = normalized.split(None, 1)
+        if parts and parse_target_selector(parts[0]) is not None and len(parts) == 1:
+            raise ValueError("Add instructions after the target selector to route work directly.")
+        return self.store.add_conversation_message(str(conversation_id), normalized)
 
     def submit_action(
         self,
@@ -337,6 +351,162 @@ class StoreBackedRegistryAuthority(
     def disconnect_agent(self, agent_id: AgentId) -> AgentRecord:
         token = self._token_for_agent(agent_id)
         return self.store.deregister(token)
+
+    def register_agent(
+        self,
+        agent_token: str,
+        payload: AgentRegisterRequest | dict,
+    ) -> HealthSummary:
+        request = (
+            payload
+            if isinstance(payload, AgentRegisterRequest)
+            else validated_register_payload(payload)
+        )
+        agent = self.store.register(agent_token, request)
+        agent_id = str(agent.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        return HealthSummary(
+            agent=agent,
+            collections_changed=True,
+            server_time=utcnow_iso(),
+        )
+
+    def heartbeat_agent(
+        self,
+        agent_token: str,
+        payload: AgentHeartbeatRequest | dict,
+    ) -> HealthSummary:
+        request = (
+            payload
+            if isinstance(payload, AgentHeartbeatRequest)
+            else validated_heartbeat_payload(payload)
+        )
+        result = self.store.heartbeat(agent_token, request)
+        agent_id = str(result.agent.agent_id or "") if result.agent is not None else ""
+        self.remember_agent_token(agent_id, agent_token)
+        return result
+
+    def search_agents_for_agent(
+        self,
+        agent_token: str,
+        query: AgentDiscoveryQuery | dict,
+    ) -> list[AgentRecord]:
+        typed_query = (
+            query
+            if isinstance(query, AgentDiscoveryQuery)
+            else AgentDiscoveryQuery.model_validate(query)
+        )
+        self.store.assert_agent_scope(agent_token, {"coordination", "full"})
+        self.store.heartbeat(agent_token, {"connectivity_state": "connected"})
+        return self.search_agents(typed_query)
+
+    def submit_routed_task_for_agent(
+        self,
+        agent_token: str,
+        task: RoutedTaskRequest | dict,
+    ) -> TaskRecord:
+        self.store.assert_agent_scope(agent_token, {"coordination", "full"})
+        self.store.heartbeat(agent_token, {"connectivity_state": "connected"})
+        typed_task = (
+            task
+            if isinstance(task, RoutedTaskRequest)
+            else validated_routed_task_request(task)
+        )
+        return self.submit_routed_task(typed_task)
+
+    def update_routed_task_for_agent(
+        self,
+        agent_token: str,
+        update: RoutedTaskUpdate | dict,
+    ) -> TaskRecord:
+        agent_row = self.store.resolve_agent_for_token(agent_token)
+        if agent_row is None:
+            raise PermissionError("unknown agent token")
+        agent_id = str(agent_row.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        typed_update = (
+            update
+            if isinstance(update, RoutedTaskUpdate)
+            else RoutedTaskUpdate.model_validate(update)
+        )
+        return self.update_routed_task(typed_update)
+
+    def report_routed_result_for_agent(
+        self,
+        agent_token: str,
+        result: RoutedTaskResult | dict,
+    ) -> TaskRecord:
+        agent_row = self.store.resolve_agent_for_token(agent_token)
+        if agent_row is None:
+            raise PermissionError("unknown agent token")
+        agent_id = str(agent_row.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        typed_result = (
+            result
+            if isinstance(result, RoutedTaskResult)
+            else RoutedTaskResult.model_validate(result)
+        )
+        return self.report_routed_result(typed_result)
+
+    def poll_for_agent(
+        self,
+        agent_token: str,
+        *,
+        cursor: int,
+        limit: int,
+    ) -> DeliveryPollResult:
+        agent_row = self.store.resolve_agent_for_token(agent_token)
+        if agent_row is None:
+            raise PermissionError("unknown agent token")
+        agent_id = str(agent_row.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        result = self.store.poll(agent_token, cursor=cursor, limit=limit)
+        for delivery in result.deliveries:
+            self._delivery_targets[str(delivery.delivery_id)] = agent_id
+        return result
+
+    def ack_for_agent(
+        self,
+        agent_token: str,
+        *,
+        delivery_ids: list[str],
+        classification: str | None,
+    ) -> AckResult:
+        agent_row = self.store.resolve_agent_for_token(agent_token)
+        if agent_row is None:
+            raise PermissionError("unknown agent token")
+        agent_id = str(agent_row.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        result = AckResult.model_validate(
+            self.store.ack(
+                agent_token,
+                delivery_ids=delivery_ids,
+                classification=str(classification or "accepted"),
+            )
+        )
+        for delivery_id in delivery_ids:
+            self._delivery_targets.pop(str(delivery_id), None)
+        return result
+
+    def report_management_result_for_agent(
+        self,
+        agent_token: str,
+        request_id: str,
+        payload: ManagementResult,
+    ) -> ManagementResult:
+        agent_row = self.store.resolve_agent_for_token(agent_token)
+        if agent_row is None:
+            raise PermissionError("unknown agent token")
+        agent_id = str(agent_row.agent_id or "")
+        self.remember_agent_token(agent_id, agent_token)
+        return self.store.report_management_result(agent_token, request_id, payload)
+
+    def disconnect_agent_token(self, agent_token: str) -> AgentRecord:
+        result = self.store.deregister(agent_token)
+        agent_id = str(result.agent_id or "")
+        if agent_id:
+            self._agent_tokens.pop(agent_id, None)
+        return result
 
     def poll_deliveries(self, agent_id: AgentId, cursor: int) -> list[DeliveryRecord]:
         token = self._token_for_agent(agent_id)

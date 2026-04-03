@@ -6,20 +6,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from octopus_sdk.registry.models import RoutedTaskResult
 from app.config import BotConfig
-from octopus_sdk.bot_runtime import SessionRuntimePort
+from octopus_sdk.bot_runtime import SessionRuntimePort, SkillActivationPort
 from octopus_sdk.execution_context import ResolvedExecutionContext, resolve_execution_context
 from octopus_sdk.sessions import SessionState, session_from_dict, session_to_dict
 from app.storage import (
-    apply_delegation_result_atomically,
     default_session,
     list_sessions,
     load_session,
     save_session,
     session_exists,
 )
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 from octopus_sdk.workflows.skills import RuntimeSkillCatalogPort
 
 
@@ -30,6 +27,7 @@ CatalogResolver = RuntimeSkillCatalogPort | Callable[[], RuntimeSkillCatalogPort
 class LocalSessionRuntime(SessionRuntimePort):
     config: BotConfig
     catalog: CatalogResolver | None = None
+    activation: SkillActivationPort | None = None
 
     def _catalog(self) -> RuntimeSkillCatalogPort:
         catalog = self.catalog
@@ -38,6 +36,9 @@ class LocalSessionRuntime(SessionRuntimePort):
         if catalog is None:
             raise RuntimeError("LocalSessionRuntime requires a runtime-skill catalog")
         return catalog
+
+    def _activation(self) -> SkillActivationPort | None:
+        return self.activation
 
     def load(
         self,
@@ -49,7 +50,7 @@ class LocalSessionRuntime(SessionRuntimePort):
         default_role: str = "",
         default_skills: tuple[str, ...] = (),
     ) -> SessionState:
-        return load_runtime_session(
+        session = load_runtime_session(
             self.config.data_dir,
             conversation_key,
             provider_name=provider_name,
@@ -58,6 +59,10 @@ class LocalSessionRuntime(SessionRuntimePort):
             default_role=default_role,
             default_skills=default_skills,
         )
+        activation = self._activation()
+        if activation is not None and activation.normalize(session):
+            save_runtime_session(self.config.data_dir, conversation_key, session)
+        return session
 
     def save(
         self,
@@ -96,7 +101,7 @@ class LocalSessionRuntime(SessionRuntimePort):
     ) -> SessionState | None:
         if not session_exists(self.config.data_dir, conversation_key):
             return None
-        return load_runtime_session(
+        session = load_runtime_session(
             self.config.data_dir,
             conversation_key,
             provider_name=provider_name,
@@ -105,6 +110,10 @@ class LocalSessionRuntime(SessionRuntimePort):
             default_role=default_role,
             default_skills=default_skills,
         )
+        activation = self._activation()
+        if activation is not None and activation.normalize(session):
+            save_runtime_session(self.config.data_dir, conversation_key, session)
+        return session
 
     def resolve_context(
         self,
@@ -168,24 +177,6 @@ def save_runtime_session(
     session: SessionState,
 ) -> None:
     save_session(data_dir, conversation_key, session_to_dict(session))
-
-
-def apply_runtime_delegation_result(
-    data_dir: Path,
-    conversation_key: str,
-    *,
-    routed_task_id: str,
-    authority_ref: str,
-    result: RoutedTaskResult,
-) -> DelegationUpdateOutcome:
-    return apply_delegation_result_atomically(
-        data_dir,
-        conversation_key,
-        routed_task_id=routed_task_id,
-        authority_ref=authority_ref,
-        result=result,
-    )
-
 
 def default_runtime_session(
     *,

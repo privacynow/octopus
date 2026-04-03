@@ -56,7 +56,7 @@ async def handle_unknown_command(update, context, *, runtime: TelegramRuntime | 
     await message.reply_text(rendered.text, **rendered.kwargs())
 
 
-def build_application(runtime: TelegramRuntime) -> Application:
+def build_application(runtime: TelegramRuntime, *, execution_runtime: ExecutionRuntime) -> Application:
     from app.content_store import init_content_store_for_config
     from app.credential_store import init_credential_store_for_config
 
@@ -75,7 +75,6 @@ def build_application(runtime: TelegramRuntime) -> Application:
     runtime.bot_instance = app.bot
     app.bot_data["telegram_boot_id"] = runtime.boot_id
     app.bot_data["telegram_runtime"] = runtime
-    execution_runtime = _execution_runtime(runtime)
     shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(
         runtime=runtime,
         chat_lock=ingress._chat_lock,
@@ -204,7 +203,11 @@ def build_bootstrap(
         transport_dispatcher=dispatcher,
     )
     execution_runtime = _execution_runtime(runtime)
-    application = build_application(runtime) if config.telegram_token else None
+    application = (
+        build_application(runtime, execution_runtime=execution_runtime)
+        if config.telegram_token
+        else None
+    )
     return TelegramBootstrap(
         application=application,
         runtime=runtime,

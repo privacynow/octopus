@@ -84,6 +84,8 @@ class InboundMessage:
     conversation_ref: str = ""
     external_conversation_ref: str = ""
     routed_task_id: str = ""
+    context_text: str = ""
+    constraints_text: str = ""
     requested_skills: tuple[str, ...] = ()
     authority_ref: str = ""
     authorized_actor_key: str = ""
@@ -211,6 +213,8 @@ def serialize_inbound(
                 "conversation_ref": event.conversation_ref,
                 "external_conversation_ref": event.external_conversation_ref,
                 "routed_task_id": event.routed_task_id,
+                "context_text": event.context_text,
+                "constraints_text": event.constraints_text,
                 "requested_skills": list(event.requested_skills),
                 "authority_ref": event.authority_ref,
                 "authorized_actor_key": event.authorized_actor_key,
@@ -322,6 +326,8 @@ def deserialize_inbound(
             conversation_ref=conversation_ref,
             external_conversation_ref=external_conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
+            context_text=str(data.get("context_text", "") or ""),
+            constraints_text=str(data.get("constraints_text", "") or ""),
             requested_skills=tuple(str(item).strip() for item in (data.get("requested_skills", []) or []) if str(item).strip()),
             authority_ref=authority_ref,
             authorized_actor_key=str(data.get("authorized_actor_key", "") or ""),

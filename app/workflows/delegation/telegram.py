@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.runtime.session_runtime import LocalSessionRuntime
 from app.formatting import summarize_text
 from octopus_sdk.identity import telegram_actor_key, telegram_numeric_id
 from app.presentation import telegram as telegram_presenters
@@ -40,10 +39,7 @@ def _participant_runtime(runtime: TelegramRuntime):
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
         coordination=runtime.services.registry.coordination,
-        sessions=LocalSessionRuntime(
-            runtime.config,
-            catalog=lambda: runtime.services.workflows.runtime_skills.catalog,
-        ),
+        sessions=runtime.services.sessions,
     )
 
 

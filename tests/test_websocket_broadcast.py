@@ -348,14 +348,14 @@ def test_add_action_broadcasts_approval_decided_event(
         resp = client.post(
             f"/v1/conversations/{conv_id}/actions",
             headers={"X-CSRF-Token": csrf},
-            json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "approval-1"}},
+            json={"action_id": "approval-action-1", "action": "approve_pending", "payload": {"request_id": "approval-1"}},
         )
 
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
         assert _ws_recorder[0]["event_data"]["kind"] == "approval.decided"
         assert _ws_recorder[0]["event_data"]["metadata"] == {
-            "action": "approve",
+            "action": "approve_pending",
             "decided_by": "operator",
             "decision": "approved",
         }

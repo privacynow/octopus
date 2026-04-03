@@ -120,16 +120,6 @@ function renderSkillCatalog(container) {
         });
     }
 
-    function _managementAgents(capability) {
-        return availableAgents.filter((agent) => {
-            const connectivity = String(agent.connectivity_state || '').trim();
-            const capabilities = Array.isArray(agent.management_capabilities)
-                ? agent.management_capabilities
-                : [];
-            return ['connected', 'degraded'].includes(connectivity) && capabilities.includes(capability);
-        });
-    }
-
     function _currentAgent() {
         return availableAgents.find((agent) => agent.agent_id === currentAgentId) || null;
     }
@@ -142,7 +132,7 @@ function renderSkillCatalog(container) {
 
     function _eligibleAgents() {
         const needed = currentMode === 'studio' ? 'skill_lifecycle' : 'skill_catalog';
-        return _managementAgents(needed);
+        return UI.filterManagedAgents(availableAgents, needed);
     }
 
     function _renderAgentOptions() {

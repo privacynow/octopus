@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
-from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
 from app.agents.registry_capabilities import registry_id_from_authority_ref
 from app.agents.state import (
@@ -30,6 +29,8 @@ from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.identity import bot_identity
 from octopus_sdk.agent_directory import AgentSearchResult, AuthorityResolution
 from octopus_sdk.events import ConversationEvent
+from octopus_sdk.registry.client import RegistryClient
+from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     AgentCard,
@@ -165,8 +166,8 @@ class AgentRuntime:
             return ()
         return self._routing_skills_resolver()
 
-    def _client(self) -> AgentRegistryClient:
-        return AgentRegistryClient(
+    def _client(self) -> RegistryClient:
+        return RegistryClient(
             self._configured_registry_url(),
             agent_token=self._state.agent_token,
         )
@@ -246,9 +247,9 @@ class AgentRuntime:
                             detail="Registry enrollment token not configured.",
                         )
                         return "degraded"
-                    enroll = await AgentRegistryClient(self._configured_registry_url()).enroll(
-                        self.requested_card(),
+                    enroll = await RegistryClient(self._configured_registry_url()).enroll(
                         enroll_token,
+                        self.requested_card(),
                     )
                     self._apply_enrollment(EnrollmentResult.model_validate(enroll))
 
@@ -781,7 +782,7 @@ class _ParticipantCoordination(RegistryCoordination):
     ) -> CoordinationActionResult:
         envelope = CoordinationActionEnvelope(
             action_id=uuid4().hex,
-            action="approve_delegation",
+            action="delegation_approve",
             payload=ApproveDelegationActionPayload(proposal_id=proposal_id).model_dump(),
         )
         self._require_live_coordination_authority()
@@ -798,7 +799,7 @@ class _ParticipantCoordination(RegistryCoordination):
     ) -> CoordinationActionResult:
         envelope = CoordinationActionEnvelope(
             action_id=uuid4().hex,
-            action="cancel_delegation",
+            action="delegation_cancel",
             payload=CancelDelegationActionPayload(proposal_id=proposal_id).model_dump(),
         )
         self._require_live_coordination_authority()

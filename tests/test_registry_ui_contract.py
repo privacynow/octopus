@@ -570,7 +570,8 @@ def test_conversation_detail_is_split_into_supporting_modules() -> None:
     assert "function _parseConversationTargetSelector(" not in conversation_detail
     assert "function _createConversationEventElement(" in event_renderers
     assert "function _createConversationTaskCard(" in task_board
-    assert "function _parseConversationTargetSelector(" in autocomplete
+    assert "function _parseConversationTargetSelector(" not in autocomplete
+    assert "function _extractConversationTargetSelectorMessage(" not in autocomplete
 
 
 def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_leads() -> None:

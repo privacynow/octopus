@@ -88,18 +88,8 @@ function renderGuidanceEditor(container) {
         }
     }
 
-    function _managementAgents(capability) {
-        return availableAgents.filter((agent) => {
-            const connectivity = String(agent.connectivity_state || '').trim();
-            const capabilities = Array.isArray(agent.management_capabilities)
-                ? agent.management_capabilities
-                : [];
-            return ['connected', 'degraded'].includes(connectivity) && capabilities.includes(capability);
-        });
-    }
-
     function _renderAgentOptions() {
-        const agents = _managementAgents('provider_guidance');
+        const agents = UI.filterManagedAgents(availableAgents, 'provider_guidance');
         if (!agents.length) {
             currentAgentId = '';
             agentDropdown.update([], '');

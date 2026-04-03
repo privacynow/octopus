@@ -10,9 +10,10 @@ from octopus_sdk.event_sink import RegistryEventSink
 from octopus_sdk.execution import TransportIdentity
 from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
 from octopus_sdk.registry.authority_client import RegistryAuthorityClient
-from app.agents.client import AgentRegistryClient
+from octopus_sdk.registry.client import RegistryClient as AgentRegistryClient
 from octopus_sdk.registry.models import (
     ConversationRecord,
+    ConversationProgressUpdate,
     DeliveryPollResult,
     EnrollmentResult,
     HealthSummary,
@@ -284,10 +285,10 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
         asyncio.run(
             client.publish_progress(
                 "conv-1",
-                {
-                    "content": "Working on it",
-                    "created_at": "2026-03-24T00:00:00+00:00",
-                },
+                ConversationProgressUpdate(
+                    content="Working on it",
+                    created_at="2026-03-24T00:00:00+00:00",
+                ),
             )
         )
 

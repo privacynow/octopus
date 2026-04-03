@@ -175,6 +175,61 @@ class AgentDiscoveryQuery(RegistryRecordModel):
     required_state: str = "connected"
 
 
+_DISCOVERY_ALLOWED_STATES = frozenset({"connected", "degraded", "standalone", "disconnected"})
+
+
+def parse_agent_discovery_query(
+    raw: tuple[str, ...] | list[str],
+    *,
+    exclude_agent_id: str = "",
+) -> AgentDiscoveryQuery | None:
+    role = ""
+    skills: list[str] = []
+    tags: list[str] = []
+    required_state = "connected"
+    free_text_parts: list[str] = []
+    for token in raw:
+        piece = str(token or "").strip()
+        if not piece:
+            continue
+        key = ""
+        value = ""
+        if ":" in piece:
+            key, value = piece.split(":", 1)
+        elif "=" in piece:
+            key, value = piece.split("=", 1)
+        else:
+            free_text_parts.append(piece)
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            free_text_parts.append(piece)
+            continue
+        if key == "role":
+            role = value
+        elif key in {"skill", "skills"}:
+            skills.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"tag", "tags"}:
+            tags.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key == "state":
+            required_state = value.lower()
+        else:
+            free_text_parts.append(piece)
+    if required_state not in _DISCOVERY_ALLOWED_STATES:
+        return None
+    if not role and not skills and not tags and not free_text_parts:
+        return None
+    return AgentDiscoveryQuery(
+        role=role,
+        skills=skills,
+        tags=tags,
+        free_text=" ".join(free_text_parts).strip(),
+        exclude_agent_ids=[exclude_agent_id] if exclude_agent_id else [],
+        required_state=required_state,
+    )
+
+
 class DiscoveredAgentRef(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -684,8 +739,8 @@ class CoordinationActionEnvelope(RegistryRecordModel):
 
     action_id: str = Field(..., min_length=1)
     action: Literal[
-        "approve",
-        "reject",
+        "approve_pending",
+        "reject_pending",
         "cancel_conversation",
         "retry_allow",
         "retry_skip",
@@ -693,8 +748,8 @@ class CoordinationActionEnvelope(RegistryRecordModel):
         "recovery_replay",
         "direct_assign",
         "delegate_tasks",
-        "approve_delegation",
-        "cancel_delegation",
+        "delegation_approve",
+        "delegation_cancel",
         "cancel_task",
         "retry_task",
     ]

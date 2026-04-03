@@ -25,7 +25,6 @@ from app.runtime.telegram_session_io import (
     save as _session_io_save,
 )
 from octopus_sdk.identity import telegram_numeric_id
-from app.runtime import composition
 from app.runtime.session_runtime import resolve_session_context
 from octopus_sdk.sessions import SessionState
 from app import work_queue
@@ -48,8 +47,8 @@ class TelegramRuntimeSkillsRuntime:
     check_prompt_size_cross_chat: Callable[[Path, str], list[str]]
 
 
-def _flows():
-    return composition.workflows()
+def _flows(runtime: TelegramRuntimeSkillsRuntime):
+    return runtime.state.services.workflows
 
 
 def _numeric_id(actor_key: str) -> int | None:
@@ -68,7 +67,7 @@ def _resolve_context(
         config=runtime.state.config,
         provider_name=runtime.state.provider.name,
         trust_tier=trust_tier,
-        catalog=_flows().runtime_skills.catalog,
+        catalog=_flows(runtime).runtime_skills.catalog,
     )
 
 
@@ -101,11 +100,11 @@ def _check_prompt_size_cross_chat(
 
 
 async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    catalog_items = _flows().runtime_skills.catalog.list_skills()
+    catalog_items = _flows(runtime).runtime_skills.catalog.list_skills()
     catalog = {item.name: item for item in catalog_items}
     session = _session_io_load(runtime.state, event.chat_id)
     resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
-    active = _flows().runtime_skills.activation.list_conversation_skills(
+    active = _flows(runtime).runtime_skills.activation.list_conversation_skills(
         list(resolved.active_skills)
     ).active_skills
     rendered = telegram_presenters.runtime_skill_active_summary_message(
@@ -169,15 +168,15 @@ async def handle_skills_command(event, update: Update, *, runtime: TelegramRunti
 
 
 async def skills_list(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    catalog = _flows().runtime_skills.catalog.list_skills()
+    catalog = _flows(runtime).runtime_skills.catalog.list_skills()
     session = _session_io_load(runtime.state, event.chat_id)
     resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
     active = set(
-        _flows().runtime_skills.activation.list_conversation_skills(
+        _flows(runtime).runtime_skills.activation.list_conversation_skills(
             list(resolved.active_skills)
         ).active_skills
     )
-    user_creds = _flows().credentials.management.load_credentials(
+    user_creds = _flows(runtime).credentials.management.load_credentials(
         _actor_key(event.user.id)
     )
     status_by_name: dict[str, str] = {}
@@ -188,7 +187,7 @@ async def skills_list(event, update: Update, *, runtime: TelegramRuntimeSkillsRu
         else:
             if item.requirement_keys:
                 skill_creds = user_creds.get(name, {})
-                missing = _flows().runtime_skills.catalog.missing_requirements(name, skill_creds)
+                missing = _flows(runtime).runtime_skills.catalog.missing_requirements(name, skill_creds)
                 status_by_name[name] = " [needs setup]" if missing else " [ready]"
             else:
                 status_by_name[name] = ""
@@ -197,8 +196,8 @@ async def skills_list(event, update: Update, *, runtime: TelegramRuntimeSkillsRu
 
 
 async def skills_add(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    lifecycle = _flows().runtime_skills.activation
-    if not _flows().runtime_skills.catalog.has_skill(name):
+    lifecycle = _flows(runtime).runtime_skills.activation
+    if not _flows(runtime).runtime_skills.catalog.has_skill(name):
         rendered = telegram_presenters.runtime_skill_unknown_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
@@ -239,7 +238,7 @@ async def skills_add(event, update: Update, name: str, *, runtime: TelegramRunti
 
 
 async def skills_remove(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    lifecycle = _flows().runtime_skills.activation
+    lifecycle = _flows(runtime).runtime_skills.activation
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
         session = _session_io_load(runtime.state, chat_id)
@@ -260,8 +259,8 @@ async def skills_remove(event, update: Update, name: str, *, runtime: TelegramRu
 
 
 async def skills_setup(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    lifecycle = _flows().runtime_skills.activation
-    if not _flows().runtime_skills.catalog.has_skill(name):
+    lifecycle = _flows(runtime).runtime_skills.activation
+    if not _flows(runtime).runtime_skills.catalog.has_skill(name):
         rendered = telegram_presenters.runtime_skill_unknown_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
@@ -295,7 +294,7 @@ async def skills_setup(event, update: Update, name: str, *, runtime: TelegramRun
 
 
 async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    lifecycle = _flows().runtime_skills.activation
+    lifecycle = _flows(runtime).runtime_skills.activation
     chat_id = event.chat_id
     async with runtime.chat_lock(chat_id, message=update.effective_message) as _:
         session = _session_io_load(runtime.state, chat_id)
@@ -313,8 +312,7 @@ async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsR
 
 
 async def skills_create(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    result = _flows().runtime_skills.authoring.create_draft(
+    result = _flows(runtime).runtime_skills.authoring.create_draft(
         name,
         owner_actor=str(event.user.id),
     )
@@ -327,8 +325,7 @@ async def skills_create(event, update: Update, name: str, *, runtime: TelegramRu
 
 
 async def skills_edit(event, update: Update, name: str, body: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    result = _flows().runtime_skills.authoring.edit_draft(
+    result = _flows(runtime).runtime_skills.authoring.edit_draft(
         name,
         actor_key=str(event.user.id),
         body=body,
@@ -368,8 +365,7 @@ def _draft_package_payload(detail) -> dict[str, object]:
 
 
 async def skills_package(event, update: Update, name: str, raw_json: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    detail = _flows().runtime_skills.authoring.detail(name)
+    detail = _flows(runtime).runtime_skills.authoring.detail(name)
     if detail is None:
         rendered = telegram_presenters.runtime_skill_history_not_found_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -392,7 +388,7 @@ async def skills_package(event, update: Update, name: str, raw_json: str, *, run
         )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.authoring.edit_draft(
+    result = _flows(runtime).runtime_skills.authoring.edit_draft(
         name,
         actor_key=str(event.user.id),
         display_name=package.get("display_name"),
@@ -408,8 +404,7 @@ async def skills_package(event, update: Update, name: str, raw_json: str, *, run
 
 
 async def skills_history(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    detail = _flows().runtime_skills.authoring.detail(name)
+    detail = _flows(runtime).runtime_skills.authoring.detail(name)
     if detail is None:
         rendered = telegram_presenters.runtime_skill_history_not_found_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -419,8 +414,7 @@ async def skills_history(event, update: Update, name: str, *, runtime: TelegramR
 
 
 async def skills_submit(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    result = _flows().runtime_skills.authoring.submit(name, actor_key=str(event.user.id))
+    result = _flows(runtime).runtime_skills.authoring.submit(name, actor_key=str(event.user.id))
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -430,7 +424,7 @@ async def skills_approve(event, update: Update, name: str, *, runtime: TelegramR
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can approve skill drafts.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.approval.approve(name, actor_key=str(event.user.id))
+    result = _flows(runtime).runtime_skills.approval.approve(name, actor_key=str(event.user.id))
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -440,7 +434,7 @@ async def skills_reject(event, update: Update, name: str, *, runtime: TelegramRu
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can reject skill drafts.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.approval.reject(name, actor_key=str(event.user.id))
+    result = _flows(runtime).runtime_skills.approval.reject(name, actor_key=str(event.user.id))
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -450,7 +444,7 @@ async def skills_publish(event, update: Update, name: str, *, runtime: TelegramR
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can publish skill drafts.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.authoring.publish(name, actor_key=str(event.user.id))
+    result = _flows(runtime).runtime_skills.authoring.publish(name, actor_key=str(event.user.id))
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
@@ -460,14 +454,14 @@ async def skills_archive(event, update: Update, name: str, *, runtime: TelegramR
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can archive skill drafts.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.authoring.archive(name, actor_key=str(event.user.id))
+    result = _flows(runtime).runtime_skills.authoring.archive(name, actor_key=str(event.user.id))
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def skills_search(event, update: Update, query: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
     results = await asyncio.to_thread(
-        _flows().runtime_skills.imports.search,
+        _flows(runtime).runtime_skills.imports.search,
         query,
         registry_url=runtime.state.config.registry_url,
     )
@@ -476,8 +470,7 @@ async def skills_search(event, update: Update, query: str, *, runtime: TelegramR
 
 
 async def skills_info(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    result = _flows().runtime_skills.catalog.get_skill(name)
+    result = _flows(runtime).runtime_skills.catalog.get_skill(name)
     if not result:
         rendered = telegram_presenters.runtime_skill_info_not_found_message(name)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -498,7 +491,7 @@ async def skills_install(event, update: Update, name: str, *, runtime: TelegramR
         return
     try:
         result = await asyncio.to_thread(
-            _flows().runtime_skills.imports.install_from_registry,
+            _flows(runtime).runtime_skills.imports.install_from_registry,
             name,
             registry_url,
         )
@@ -526,27 +519,25 @@ async def skills_uninstall(event, update: Update, name: str, *, runtime: Telegra
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can uninstall imported skills.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    result = _flows().runtime_skills.imports.uninstall(name, default_skills=runtime.state.config.default_skills)
+    result = _flows(runtime).runtime_skills.imports.uninstall(name, default_skills=runtime.state.config.default_skills)
     rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def skills_updates(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    updates = await asyncio.to_thread(_flows().runtime_skills.imports.list_updates)
+    updates = await asyncio.to_thread(_flows(runtime).runtime_skills.imports.list_updates)
     rendered = telegram_presenters.runtime_skill_updates_message(updates)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def skills_diff(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    del runtime
-    diff_text = (await asyncio.to_thread(_flows().runtime_skills.imports.diff, name)).message
+    diff_text = (await asyncio.to_thread(_flows(runtime).runtime_skills.imports.diff, name)).message
     rendered = telegram_presenters.runtime_skill_diff_message(diff_text)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def skills_update(event, update: Update, target: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
-    imports = _flows().runtime_skills.imports
+    imports = _flows(runtime).runtime_skills.imports
     if not _is_admin(runtime, event.user):
         rendered = telegram_presenters.runtime_skill_admin_only_message("Only admins can update imported skills.")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -578,7 +569,7 @@ async def cmd_clear_credentials(event, update: Update, context, *, runtime: Tele
     args = event.args
     skill_name = args[0] if args else None
 
-    stored = list(_flows().credentials.management.list_stored_skills(_actor_key(user_id)))
+    stored = list(_flows(runtime).credentials.management.list_stored_skills(_actor_key(user_id)))
 
     if skill_name:
         if skill_name not in stored:
@@ -617,7 +608,7 @@ async def _execute_clear_credentials(
         if not already_answered:
             await query.answer()
         session = _session_io_load(runtime.state, chat_id)
-        outcome = _flows().credentials.management.clear_credentials(
+        outcome = _flows(runtime).credentials.management.clear_credentials(
             session,
             actor_key=_actor_key(user_id),
             skill_name=skill_name,
@@ -679,7 +670,7 @@ async def handle_skill_add_callback(event, query, *, runtime: TelegramRuntimeSki
             if not already_answered:
                 await query.answer()
             session = _session_io_load(runtime.state, chat_id)
-            if _flows().runtime_skills.activation.confirm_activate(session, name).mutated:
+            if _flows(runtime).runtime_skills.activation.confirm_activate(session, name).mutated:
                 _session_io_save(runtime.state, chat_id, session)
         await query.edit_message_reply_markup(reply_markup=None)
         rendered = telegram_presenters.runtime_skill_activated_message(name)
@@ -702,7 +693,7 @@ async def handle_skill_update_callback(event, query, *, runtime: TelegramRuntime
     if event.data.startswith("skill_update_confirm:"):
         name = event.data.split(":", 1)[1]
         result = await asyncio.to_thread(
-            _flows().runtime_skills.imports.update,
+            _flows(runtime).runtime_skills.imports.update,
             name,
         )
         msg = result.message
@@ -716,7 +707,7 @@ async def handle_skill_update_callback(event, query, *, runtime: TelegramRuntime
 
     if event.data == "skill_update_all_confirm":
         results = await asyncio.to_thread(
-            _flows().runtime_skills.imports.update_all,
+            _flows(runtime).runtime_skills.imports.update_all,
         )
         all_size_warnings: list[str] = []
         for result in results:
@@ -762,7 +753,7 @@ async def maybe_handle_setup_message(
             rendered = telegram_presenters.runtime_skill_enter_credential_value_message()
             await message.reply_text(rendered.text, **rendered.kwargs())
             return True
-        outcome = await _flows().runtime_skills.setup.submit_credential_value(
+        outcome = await _flows(runtime).runtime_skills.setup.submit_credential_value(
             session,
             actor_key=_actor_key(user_id),
             raw_value=raw_value,

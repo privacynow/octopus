@@ -38,6 +38,7 @@ from octopus_sdk.registry.models import (
     DiscoveredAgentRef,
     ExecutionStateRecord,
     RoutedTaskUpdate,
+    extract_leading_requested_skills,
     extract_target_selector_message,
 )
 from octopus_sdk.sessions import SessionState
@@ -1441,14 +1442,20 @@ class BotRuntime:
             return False
 
         selector, instructions = direct_assignment
-        title = summarize_text(instructions) or "Direct assignment"
+        requested_skills: tuple[str, ...] = ()
+        effective_instructions = instructions
+        if selector.kind != "skill":
+            requested_skills, stripped_instructions = extract_leading_requested_skills(instructions)
+            if requested_skills and stripped_instructions:
+                effective_instructions = stripped_instructions
+        title = summarize_text(effective_instructions) or "Direct assignment"
         result = await submit_participant_direct_assignment(
             self._participant_delegation_runtime(),
             item.conversation_key,
             conversation_ref=conversation_ref,
             selector=selector,
             title=title,
-            instructions=instructions,
+            instructions=effective_instructions,
             message_text=event.text,
             origin_channel=str(getattr(event, "transport", "") or getattr(event, "source", "") or "registry"),
             external_ref=(
@@ -1461,6 +1468,7 @@ class BotRuntime:
                 or item.actor_key
                 or str(getattr(event.user, "id", "") or "")
             ),
+            requested_skills=requested_skills,
         )
         task_ref = result.routed_tasks[0] if result.routed_tasks else None
         target_label = (

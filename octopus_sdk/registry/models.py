@@ -556,6 +556,18 @@ def normalized_requested_skills(
     return normalized
 
 
+def extract_leading_requested_skills(raw: str) -> tuple[tuple[str, ...], str]:
+    text = str(raw or "").strip()
+    match = _DIRECT_SKILL_MESSAGE_RE.match(text)
+    if not match:
+        return (), text
+    skill_name = str(match.group(1) or "").strip().lower()
+    instructions = str(match.group(2) or "").strip()
+    if not skill_name or not instructions:
+        return (), text
+    return (skill_name,), instructions
+
+
 def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | None:
     text = str(raw or "").strip()
     if text.startswith("@"):
@@ -566,11 +578,10 @@ def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | No
             return None
         instructions = parts[1].strip() if len(parts) > 1 else ""
         return (selector, instructions) if instructions else None
-    match = _DIRECT_SKILL_MESSAGE_RE.match(text)
-    if not match:
+    requested_skills, instructions = extract_leading_requested_skills(text)
+    if not requested_skills:
         return None
-    selector = TargetSelector(kind="skill", value=match.group(1).strip().lower())
-    instructions = match.group(2).strip()
+    selector = TargetSelector(kind="skill", value=requested_skills[0])
     return (selector, instructions) if instructions else None
 
 

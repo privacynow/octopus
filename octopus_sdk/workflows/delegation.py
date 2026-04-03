@@ -811,6 +811,7 @@ async def submit_participant_direct_assignment(
     origin_channel: str,
     external_ref: str,
     authorized_actor_key: str = "",
+    requested_skills: list[str] | tuple[str, ...] = (),
 ) -> CoordinationActionResult:
     validated_origin_transport_ref = validate_qualified_transport_ref(
         conversation_ref,
@@ -827,7 +828,7 @@ async def submit_participant_direct_assignment(
         external_ref=coordination_external_ref,
         title=f"{origin_channel.title()} {external_ref}",
     )
-    requested_skills = normalized_requested_skills(selector=selector)
+    requested_skills = normalized_requested_skills(requested_skills, selector=selector)
     result = await runtime.coordination.direct_assign(
         conversation_id,
         selector=selector,

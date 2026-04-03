@@ -641,6 +641,95 @@ async def test_registry_channel_input_direct_assignment_routes_through_shared_bo
         assert pending["tasks"][0]["status"] == "submitted"
 
 
+async def test_registry_delivery_channel_input_direct_assignment_preserves_registry_parent_ref_and_nested_requested_skill(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        captured: dict[str, object] = {}
+
+        async def _direct_assign(
+            conversation_id,
+            *,
+            selector,
+            title,
+            instructions,
+            origin_transport_ref="",
+            authorized_actor_key="",
+            message_text="",
+            requested_skills=(),
+        ):
+            captured.update(
+                {
+                    "conversation_id": str(conversation_id),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "title": title,
+                    "instructions": instructions,
+                    "origin_transport_ref": origin_transport_ref,
+                    "authorized_actor_key": authorized_actor_key,
+                    "message_text": message_text,
+                    "requested_skills": list(requested_skills),
+                }
+            )
+            return CoordinationActionResult(
+                conversation_id=str(conversation_id),
+                action_id="direct-action-delivery-1",
+                action="direct_assign",
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-delivery-1",
+                        "target_agent_id": "agent-m1",
+                        "title": title,
+                        "status": "queued",
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(current_runtime().services.registry.coordination, "direct_assign", _direct_assign)
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "registry-channel-input-direct-1",
+                "registry_id": "default",
+                "kind": "channel_input",
+                "payload": {
+                    "conversation_id": "conv-parent-direct-1",
+                    "title": "Conversation with M2",
+                    "text": "@m1 Using architecture skill, give me a system design review",
+                    "origin_channel": "registry",
+                    "external_conversation_ref": "ui-parent-direct-1",
+                    "stable_event_id": "stable-parent-direct-1",
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        session = load_session_disk(data_dir, _reg_conv(_reg_ref("conv-parent-direct-1")), prov)
+        pending = session.get("pending_delegation")
+        assert len(prov.run_calls) == 0
+        assert captured["selector_kind"] == "agent"
+        assert captured["selector_value"] == "m1"
+        assert captured["instructions"] == "give me a system design review"
+        assert captured["requested_skills"] == ["architecture"]
+        assert captured["origin_transport_ref"] == _reg_ref("conv-parent-direct-1")
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["routed_task_id"] == "task-delivery-1"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
 async def test_registry_routed_task_requested_skills_activate_target_session():
     with fresh_env(
         config_overrides={
@@ -1342,6 +1431,74 @@ async def test_registry_routed_result_registry_parent_continues_without_admissio
         assert outcome == "accepted"
         assert len(prov.run_calls) == 1
         assert await drain_one_worker_item(data_dir) is False
+
+
+async def test_registry_routed_result_registry_parent_prefers_qualified_conversation_ref_over_ui_external_id(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        from app.channels.registry.egress import RegistryChannelEgress
+
+        published: list[tuple[str, str, str]] = []
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
+
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+
+        conversation_ref = _reg_ref("conv-parent-ui")
+        session = default_session(prov.name, prov.new_provider_state("reg:test"), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-ui",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, _reg_conv(conversation_ref), session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-ui",
+                    "parent_conversation_id": "conv-parent-ui",
+                    "parent_transport_ref": "ui-parent-ui",
+                    "parent_external_conversation_ref": "ui-parent-ui",
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "child-task-ui-complete",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert await drain_one_worker_item(data_dir) is False
+        assert any(
+            kind == "message.bot" and "Final parent answer." in body
+            for kind, _title, body in published
+        )
 
 
 async def test_delegation_completion_sends_final_message_partial_failed():

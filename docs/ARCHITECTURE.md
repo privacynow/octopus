@@ -409,6 +409,18 @@ explicitly through the round-trip.
 
 All metadata models use `extra="forbid"` — unknown fields are rejected.
 
+`provider.request` metadata now carries a bounded `skill_manifest` alongside
+the human-readable prompt content. Skill-factual questions must resolve from
+that manifest plus runtime/session/catalog inspection, not from prompt
+fragments or model memory. Canonical skill terms are:
+
+- available on this bot
+- active in this conversation
+- advertised for routing
+- requested for run
+- composed for run
+- invoked for run
+
 ### Task protocol
 
 Routed tasks follow a formal lifecycle enforced by `python-statemachine`:

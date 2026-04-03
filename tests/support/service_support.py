@@ -7,6 +7,7 @@ from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.composition import compose_workflows
 from app.runtime.session_runtime import LocalSessionRuntime
+from app.skill_inspection_service import SkillInspectionService
 from app.skill_activation_service import get_skill_activation_service
 from tests.support.config_support import make_config
 from app.agents.registry_capabilities import registry_authority_capabilities
@@ -21,6 +22,7 @@ from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
 from octopus_sdk.bot_runtime import ExecutionServices
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.registry_participant_support import build_noop_registry_participant
 
@@ -30,6 +32,7 @@ def _noop_control_plane_services() -> ControlPlaneServices:
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
 
@@ -59,6 +62,12 @@ def _build_local_bot_services(
             runtime_skill_setup=workflows.runtime_skills.setup,
             sessions=sessions,
             artifacts=RuntimeArtifactStore(config),
+            skill_inspection=SkillInspectionService(
+                config=config,
+                workflows=workflows,
+                agent_directory=control_plane.agent_directory,
+                registry_inspection=control_plane.registry_inspection,
+            ),
             execution_faults=LocalExecutionFaultState(config.data_dir),
             agent_directory=control_plane.agent_directory,
             conversation_projection=control_plane.conversation_projection,

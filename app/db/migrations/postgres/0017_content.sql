@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS bot_content.skill_revisions (
     track_id TEXT NOT NULL REFERENCES bot_content.skill_tracks(track_id) ON DELETE CASCADE,
     version_label TEXT NOT NULL DEFAULT '',
     digest TEXT NOT NULL,
+    skill_kind TEXT NOT NULL DEFAULT 'prompt',
     instruction_body TEXT NOT NULL DEFAULT '',
     requirements_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     provider_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,

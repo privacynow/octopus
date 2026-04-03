@@ -17,12 +17,14 @@ from app.execution_faults import LocalExecutionFaultState
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.composition import compose_workflows
+from app.skill_inspection_service import SkillInspectionService
 from app.skill_activation_service import get_skill_activation_service
 from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.authorization import AuthorizationPort
 from octopus_sdk.bot_runtime import ExecutionServices, SessionRuntimePort, WorkflowComposition
 from octopus_sdk.conversation_projection import ConversationProjectionPort
 from octopus_sdk.health_publication import HealthPublicationPort
+from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.work_queue import WorkQueuePort
@@ -35,6 +37,7 @@ class ControlPlaneServices:
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
+    registry_inspection: RegistryInspectionPort
     health_publication: HealthPublicationPort
 
 
@@ -60,6 +63,7 @@ def build_bus_control_plane_services(
         BusAgentDirectory,
         BusConversationProjection,
         BusHealthPublication,
+        BusRegistryInspection,
         BusTaskRouting,
     )
 
@@ -89,6 +93,7 @@ def build_bus_control_plane_services(
         ),
         task_routing=BusTaskRouting(bus, directory),
         agent_directory=BusAgentDirectory(bus, directory),
+        registry_inspection=BusRegistryInspection(bus, directory),
         health_publication=BusHealthPublication(
             bus,
             directory,
@@ -125,6 +130,12 @@ def build_bus_bot_services(
         runtime_skill_setup=workflow_graph.runtime_skills.setup,
         sessions=sessions,
         artifacts=RuntimeArtifactStore(config),
+        skill_inspection=SkillInspectionService(
+            config=config,
+            workflows=workflow_graph,
+            agent_directory=control_plane.agent_directory,
+            registry_inspection=control_plane.registry_inspection,
+        ),
         execution_faults=LocalExecutionFaultState(config.data_dir),
         agent_directory=control_plane.agent_directory,
         conversation_projection=control_plane.conversation_projection,

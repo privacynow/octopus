@@ -97,6 +97,7 @@ class _CatalogService:
             display_name="Skill",
             description="",
             body="",
+            skill_kind="prompt",
             source_kind="builtin",
             source_label="Core",
             providers=(),

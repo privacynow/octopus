@@ -16,6 +16,9 @@ from octopus_sdk.exact_aliases import matches_exact_alias
 from octopus_sdk.registry.client import RegistryClientError
 from app.control_plane.requests import (
     AddConversationMessagePayload,
+    GetConversationRequest,
+    GetTaskRequest,
+    ListConversationEventsRequest,
     PublishHealthRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
@@ -78,6 +81,8 @@ class RegistryControlProcessor(ControlProcessor):
                 return await self._process_agent_directory(command, client, registry_id)
             if command.capability == "health_publication":
                 return await self._process_health_publication(command, client)
+            if command.capability == "registry_inspection":
+                return await self._process_registry_inspection(command, client)
             return ControlReply(
                 command_id=command.command_id,
                 status="failed",
@@ -312,3 +317,40 @@ class RegistryControlProcessor(ControlProcessor):
             runtime_health=runtime_health,
         )
         return ControlReply(command_id=command.command_id, status="completed")
+
+    async def _process_registry_inspection(self, command: ControlCommand, client) -> ControlReply:
+        if command.operation == "get_conversation":
+            request = GetConversationRequest.model_validate_json(command.payload_json)
+            record = await client.get_conversation(request.conversation_id)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        if command.operation == "get_task":
+            request = GetTaskRequest.model_validate_json(command.payload_json)
+            record = await client.get_task(request.routed_task_id)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        if command.operation == "list_events":
+            request = ListConversationEventsRequest.model_validate_json(command.payload_json)
+            record = await client.list_events(
+                request.conversation_id,
+                kind=request.kind,
+                before_seq=request.before_seq,
+                after_seq=request.after_seq,
+                limit=request.limit,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        return ControlReply(
+            command_id=command.command_id,
+            status="failed",
+            error=f"unsupported registry_inspection operation {command.operation!r}",
+        )

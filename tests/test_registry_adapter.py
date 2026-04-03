@@ -22,6 +22,7 @@ import app.runtime_backend as runtime_backend
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.config_support import make_config, make_registry_connection
 from tests.support.service_support import build_test_bot_services
@@ -57,6 +58,7 @@ def _services(config, recorder: _ProjectionRecorder) -> BotServices:
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
     return build_test_bot_services(
@@ -65,6 +67,7 @@ def _services(config, recorder: _ProjectionRecorder) -> BotServices:
             conversation_projection=recorder,
             task_routing=noop.task_routing,
             agent_directory=noop.agent_directory,
+            registry_inspection=noop.registry_inspection,
             health_publication=noop.health_publication,
         ),
     )

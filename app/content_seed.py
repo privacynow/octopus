@@ -19,6 +19,7 @@ from octopus_sdk.skill_packages import (
     load_skill_files,
     load_skill_markdown,
     load_skill_requirements,
+    normalize_skill_kind,
 )
 
 _DEFAULT_PROVIDER_GUIDANCE = {
@@ -50,6 +51,9 @@ def track_from_skill_dir(
     slug = path.name
     revision = SkillRevisionRecord(
         instruction_body=body,
+        skill_kind=normalize_skill_kind(
+            str(meta.get("skill_kind") or meta.get("kind") or "prompt")
+        ),
         requirements=load_skill_requirements(path / "requires.yaml"),
         provider_config={
             provider: config

@@ -1289,7 +1289,27 @@ function renderConversationDetail(container, params) {
         textarea.focus();
     }
 
+    function currentComposerRoutingState() {
+        const text = textarea.value.trim();
+        const selectorToken = _leadingConversationTargetToken(text);
+        return {
+            text,
+            selectorToken,
+            selectorPrefix: selectorToken.startsWith('@'),
+            exactSuggestionMatch: selectorMatchesAvailableTarget(selectorToken),
+            instructions: selectorToken && text.startsWith(selectorToken)
+                ? text.slice(selectorToken.length).trim()
+                : '',
+        };
+    }
+
     function handleComposerKeydown(e) {
+        const routingState = currentComposerRoutingState();
+        if (e.key === 'Enter' && !e.shiftKey && routingState.exactSuggestionMatch && routingState.instructions) {
+            e.preventDefault();
+            sendMessage();
+            return;
+        }
         if (!suggestionList.hidden && suggestionMatches.length) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -1361,13 +1381,12 @@ function renderConversationDetail(container, params) {
     }
 
     function updateComposerAssist() {
-        const text = textarea.value.trim();
-        const selectorToken = _leadingConversationTargetToken(text);
-        const selectorPrefix = selectorToken.startsWith('@');
-        const exactSuggestionMatch = selectorMatchesAvailableTarget(selectorToken);
-        const instructions = selectorToken && text.startsWith(selectorToken)
-            ? text.slice(selectorToken.length).trim()
-            : '';
+        const {
+            selectorToken,
+            selectorPrefix,
+            exactSuggestionMatch,
+            instructions,
+        } = currentComposerRoutingState();
         if (exactSuggestionMatch) {
             targetPreview.hidden = false;
             targetPreview.textContent = `Routing directly to ${exactSuggestionMatch.label}.`;

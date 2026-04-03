@@ -11,6 +11,7 @@ import yaml
 
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillFileRecord
 from octopus_sdk.providers import JsonValue, ProviderConfigRecord, coerce_provider_config
+from octopus_sdk.runtime.skills import normalize_skill_kind
 from octopus_sdk.skill_types import SkillRequirement, coerce_validation_spec
 
 SKILL_MARKDOWN_FILE = "skill.md"
@@ -223,6 +224,7 @@ def build_skill_virtual_files(track: RuntimeSkillTrackRecord) -> dict[str, str]:
         f"name: {track.slug}\n"
         f"display_name: {track.display_name}\n"
         f"description: {track.description}\n"
+        f"skill_kind: {normalize_skill_kind(track.revision.skill_kind)}\n"
         "---\n\n"
         f"{track.revision.instruction_body.rstrip()}\n"
     )

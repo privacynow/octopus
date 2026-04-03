@@ -31,6 +31,7 @@ class RuntimeSkillCatalogItem:
     name: str
     display_name: str
     description: str
+    skill_kind: str
     source_kind: str
     source_label: str
     providers: tuple[str, ...]
@@ -54,6 +55,7 @@ class RuntimeSkillDetail:
     display_name: str
     description: str
     body: str
+    skill_kind: str
     source_kind: str
     source_label: str
     providers: tuple[str, ...]
@@ -87,6 +89,7 @@ class RuntimeSkillInfoRecord:
     display_name: str
     description: str
     body: str
+    skill_kind: str
     source_kind: str
     source_label: str
     providers: tuple[str, ...]
@@ -185,6 +188,7 @@ class ConversationSkillItem:
     name: str
     display_name: str
     description: str
+    skill_kind: str
     source_kind: str
     source_label: str
     has_custom_override: bool

@@ -359,6 +359,7 @@ class StubCatalogService(SkillCatalogServicePort):
             display_name="Docs",
             description="Docs skill",
             body="Use docs",
+            skill_kind="prompt",
             source_kind="builtin",
             source_label="Core",
             providers=("stub",),

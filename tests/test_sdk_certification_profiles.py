@@ -18,6 +18,7 @@ from app.runtime.services import ControlPlaneServices
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import (
@@ -47,6 +48,7 @@ def _noop_control_plane_services() -> ControlPlaneServices:
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
 

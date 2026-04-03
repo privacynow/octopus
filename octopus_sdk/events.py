@@ -49,6 +49,22 @@ class ProviderResponseMetadata(BaseModel):
     provider: str = Field(..., min_length=1)
 
 
+class ProviderRequestSkillManifestMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = Field(default=1, ge=1)
+    routed_task_id: str = ""
+    conversation_key: str = ""
+    bot_slug: str = ""
+    requested_skills: list[str] = Field(default_factory=list)
+    active_skills: list[str] = Field(default_factory=list)
+    composed_skill_slugs: list[str] = Field(default_factory=list)
+    composed_track_revision_ids: list[str] = Field(default_factory=list)
+    invoked_skill_slugs: list[str] = Field(default_factory=list)
+    skill_kind_map: dict[str, Literal["prompt", "executable"]] = Field(default_factory=dict)
+    prompt_manifest_hash: str = ""
+
+
 class ProviderRequestMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -59,6 +75,7 @@ class ProviderRequestMetadata(BaseModel):
     file_policy: str = Field(..., min_length=1)
     image_count: int = Field(..., ge=0)
     prompt_char_count: int = Field(..., ge=0)
+    skill_manifest: ProviderRequestSkillManifestMetadata | None = None
 
 
 class FileChangeSummary(BaseModel):

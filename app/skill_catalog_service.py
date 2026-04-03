@@ -72,6 +72,7 @@ class SkillCatalogService:
             display_name=record.display_name,
             description=record.description,
             body=record.revision.instruction_body,
+            skill_kind=record.revision.skill_kind,
             source_kind=record.source_kind,
             source_label=skill_source_label(record.source_kind),
             providers=skill_provider_names(record.revision.provider_config),

@@ -10,6 +10,7 @@ from tests.support.config_support import make_config, make_registry_connection
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.registry.models import AgentDiscoveryQuery, ConversationId, TargetSelector
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import ControlPlaneServices
@@ -20,6 +21,7 @@ def _noop_control_plane_services() -> ControlPlaneServices:
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
 

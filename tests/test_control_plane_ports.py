@@ -23,6 +23,7 @@ from octopus_sdk.health_publication import (
     HealthReport,
     NoOpHealthPublication,
 )
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import (
     NoOpTaskRouting,
     TaskResultReport,
@@ -140,6 +141,7 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
     projection = NoOpConversationProjection()
     routing = NoOpTaskRouting()
     directory = NoOpAgentDirectory()
+    registry_inspection = NoOpRegistryInspection()
     health = NoOpHealthPublication()
 
     assert isinstance(health, HealthPublicationPort)
@@ -160,6 +162,7 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
             conversation_projection=projection,
             task_routing=routing,
             agent_directory=directory,
+            registry_inspection=registry_inspection,
             health_publication=health,
         ),
     )
@@ -169,4 +172,5 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
     assert services.control_plane.conversation_projection is projection
     assert services.control_plane.task_routing is routing
     assert services.control_plane.agent_directory is directory
+    assert services.control_plane.registry_inspection is registry_inspection
     assert services.control_plane.health_publication is health

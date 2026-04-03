@@ -341,6 +341,17 @@ def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
     assert "routingSkill.selector" in detail
 
 
+def test_conversation_composer_enter_submits_exact_direct_assignments() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function currentComposerRoutingState()" in detail
+    assert "routingState.exactSuggestionMatch && routingState.instructions" in detail
+    assert "sendMessage();" in detail.split("function handleComposerKeydown(e) {", 1)[1].split("if (!suggestionList.hidden && suggestionMatches.length) {", 1)[0]
+
+
 def test_conversation_route_owns_scroll_on_wide_viewports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     css = (

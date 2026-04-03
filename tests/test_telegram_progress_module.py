@@ -12,6 +12,7 @@ import app.runtime_backend as runtime_backend
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
@@ -33,6 +34,7 @@ def _services(*, task_routing=None, config=None) -> BotServices:
             conversation_projection=projection,
             task_routing=task_routing or NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
+            registry_inspection=NoOpRegistryInspection(),
             health_publication=NoOpHealthPublication(),
         ),
     )

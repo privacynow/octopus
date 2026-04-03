@@ -184,11 +184,12 @@ class PostgresContentStore(AbstractContentStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.skill_revisions (
-                        revision_id, track_id, version_label, digest, instruction_body,
+                        revision_id, track_id, version_label, digest, skill_kind, instruction_body,
                         requirements_json, provider_config_json, changelog, created_by, created_at, status
-                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::timestamptz, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::timestamptz, %s)
                     ON CONFLICT(revision_id) DO UPDATE SET
                         version_label = EXCLUDED.version_label,
+                        skill_kind = EXCLUDED.skill_kind,
                         instruction_body = EXCLUDED.instruction_body,
                         requirements_json = EXCLUDED.requirements_json,
                         provider_config_json = EXCLUDED.provider_config_json,
@@ -201,6 +202,7 @@ class PostgresContentStore(AbstractContentStore):
                         track_id,
                         record.revision.version_label,
                         record.revision.digest,
+                        record.revision.skill_kind,
                         record.revision.instruction_body,
                         json.dumps(_json_ready(record.revision.requirements), sort_keys=True),
                         json.dumps(_json_ready(record.revision.provider_config), sort_keys=True),
@@ -293,6 +295,7 @@ class PostgresContentStore(AbstractContentStore):
                         rev.revision_id,
                         rev.version_label,
                         rev.digest,
+                        rev.skill_kind,
                         rev.instruction_body,
                         rev.requirements_json,
                         rev.provider_config_json,
@@ -337,6 +340,7 @@ class PostgresContentStore(AbstractContentStore):
     def _record__row(self, row) -> RuntimeSkillTrackRecord:
         revision = SkillRevisionRecord(
             instruction_body=row["instruction_body"],
+            skill_kind=row["skill_kind"],
             requirements=_parse_json(row["requirements_json"], []),
             provider_config=_parse_json(row["provider_config_json"], {}),
             files=self._files_for_revision(row["revision_id"]),
@@ -391,6 +395,7 @@ class PostgresContentStore(AbstractContentStore):
                     slug=record.slug,
                     display_name=record.display_name,
                     description=record.description,
+                    skill_kind=record.revision.skill_kind,
                     source_kind=record.source_kind,
                     source_uri=record.source_uri,
                     visibility=record.visibility,
@@ -434,7 +439,7 @@ class PostgresContentStore(AbstractContentStore):
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
-                    SELECT revision_id, version_label, instruction_body, requirements_json, provider_config_json,
+                    SELECT revision_id, version_label, skill_kind, instruction_body, requirements_json, provider_config_json,
                            changelog, created_by, created_at, status
                     FROM {_SCHEMA}.skill_revisions
                     WHERE track_id = %s
@@ -446,6 +451,7 @@ class PostgresContentStore(AbstractContentStore):
         return [
             SkillRevisionRecord(
                 instruction_body=row["instruction_body"],
+                skill_kind=row["skill_kind"],
                 requirements=_parse_json(row["requirements_json"], []),
                 provider_config=_parse_json(row["provider_config_json"], {}),
                 files=self._files_for_revision(row["revision_id"]),

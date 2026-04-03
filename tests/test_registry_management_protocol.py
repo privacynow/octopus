@@ -9,7 +9,7 @@ import pytest
 
 from octopus_registry.management_client import ManagementClientError, RegistryManagementClient
 import octopus_registry.ingress as registry_ingress
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 from octopus_sdk.registry.management import (
     ConversationSkillListingRecord,
     ConversationSkillStateResult,
@@ -33,7 +33,7 @@ _FULL_MANAGEMENT_CAPABILITIES = [
 
 
 def _register_agent(
-    store: RegistrySQLiteStore,
+    store: RegistryPostgresStore,
     *,
     slug: str = "bot-under-test",
     connectivity_state: str = "connected",
@@ -84,8 +84,8 @@ def _register_agent(
     return enroll.agent_id, enroll.agent_token
 
 
-def test_management_request_round_trip_polls_delivery_and_persists_result(tmp_path: Path) -> None:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+def test_management_request_round_trip_polls_delivery_and_persists_result(postgres_db_url: str) -> None:
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, agent_token = _register_agent(store)
 
     request = store.create_management_request(
@@ -144,8 +144,8 @@ def test_management_request_round_trip_polls_delivery_and_persists_result(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_registry_management_client_requires_connected_agent(tmp_path: Path) -> None:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+async def test_registry_management_client_requires_connected_agent(postgres_db_url: str) -> None:
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store, connectivity_state="disconnected")
 
     client = RegistryManagementClient(store)
@@ -160,8 +160,8 @@ async def test_registry_management_client_requires_connected_agent(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_registry_management_client_requires_advertised_capability(tmp_path: Path) -> None:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+async def test_registry_management_client_requires_advertised_capability(postgres_db_url: str) -> None:
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store, management_capabilities=["provider_guidance"])
 
     client = RegistryManagementClient(store)
@@ -176,8 +176,8 @@ async def test_registry_management_client_requires_advertised_capability(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_registry_management_client_times_out_without_result(tmp_path: Path) -> None:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+async def test_registry_management_client_times_out_without_result(postgres_db_url: str) -> None:
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store)
 
     client = RegistryManagementClient(store)
@@ -195,9 +195,11 @@ async def test_registry_management_client_times_out_without_result(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_registry_ingress_conversation_skill_state_uses_origin_transport_key(
     tmp_path: Path,
+    postgres_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    del tmp_path
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store)
     conversation = store.create_conversation(
         target_agent_id=agent_id,
@@ -241,10 +243,12 @@ async def test_registry_ingress_conversation_skill_state_uses_origin_transport_k
 @pytest.mark.asyncio
 async def test_registry_ingress_caches_management_reads_and_dedupes_inflight(
     tmp_path: Path,
+    postgres_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_ingress.reset_for_test()
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    del tmp_path
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store)
     calls = {"count": 0}
     release = asyncio.Event()
@@ -295,10 +299,12 @@ async def test_registry_ingress_caches_management_reads_and_dedupes_inflight(
 @pytest.mark.asyncio
 async def test_registry_ingress_invalidates_skill_cache_after_mutation(
     tmp_path: Path,
+    postgres_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_ingress.reset_for_test()
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    del tmp_path
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store)
     calls: list[str] = []
 
@@ -347,10 +353,12 @@ async def test_registry_ingress_invalidates_skill_cache_after_mutation(
 @pytest.mark.asyncio
 async def test_registry_ingress_caches_guidance_detail_reads(
     tmp_path: Path,
+    postgres_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_ingress.reset_for_test()
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    del tmp_path
+    store = RegistryPostgresStore(postgres_db_url)
     agent_id, _agent_token = _register_agent(store)
     calls = {"count": 0}
 

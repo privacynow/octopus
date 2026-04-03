@@ -72,9 +72,8 @@ def compose_workflows(
     )
 
 
-@lru_cache(maxsize=1)
-def workflows() -> WorkflowComposition:
-    config = load_config()
+def workflows_for_config(config: BotConfig) -> WorkflowComposition:
+    runtime_backend.init(config)
     holder: dict[str, WorkflowComposition] = {}
     sessions = LocalSessionRuntime(
         config,
@@ -82,6 +81,11 @@ def workflows() -> WorkflowComposition:
     )
     holder["workflows"] = compose_workflows(config=config, sessions=sessions)
     return holder["workflows"]
+
+
+@lru_cache(maxsize=1)
+def workflows() -> WorkflowComposition:
+    return workflows_for_config(load_config())
 
 
 def reset_for_test() -> None:

@@ -17,7 +17,7 @@ unset_instance_config_env_overrides() {
     unset BOT_ALLOW_OPEN
     unset BOT_ALLOWED_USERS
     unset BOT_PROVIDER
-    unset BOT_DATABASE_URL
+    unset OCTOPUS_DATABASE_URL
     unset BOT_DB_POOL_MIN_SIZE
     unset BOT_DB_POOL_MAX_SIZE
     unset BOT_DB_CONNECT_TIMEOUT

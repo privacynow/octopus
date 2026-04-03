@@ -21,14 +21,11 @@ from octopus_sdk.sessions import default_session  # re-export for callers
 # Pure directory / path helpers (no backend)
 # ---------------------------------------------------------------------------
 
-def ensure_data_dirs(data_dir: Path, *, database_url: str = "") -> None:
-    """Create data_dir and subdirs. When database_url is set, skip SQLite init (backend uses Postgres)."""
+def ensure_data_dirs(data_dir: Path) -> None:
+    """Create runtime directories used regardless of the persistence backend."""
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
     (data_dir / "credentials").mkdir(parents=True, exist_ok=True)
-    if database_url:
-        return
-    # First use of session/transport store will create SQLite DBs on demand
 
 
 def sanitize_filename(name: str) -> str:
@@ -133,11 +130,15 @@ def list_sessions(data_dir: Path) -> list[dict[str, Any]]:
 
 def close_db(data_dir: Path) -> None:
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().close_db(data_dir)
 
 
 def close_all_db() -> None:
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().close_all_db()
 
 
@@ -183,4 +184,6 @@ def debug_session_connection(data_dir: Path):
 def reset_db_for_test(data_dir: Path) -> None:
     """Tests only: close and reset the session store for this data dir."""
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().reset_db_for_test(data_dir)

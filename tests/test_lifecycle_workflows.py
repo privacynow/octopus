@@ -1,10 +1,11 @@
 """Lifecycle workflow tests for custom skills and provider guidance."""
 
 from pathlib import Path
-import sqlite3
 
 import pytest
 import app.content_store as content_store_mod
+import app.runtime_backend as runtime_backend
+from psycopg.errors import NotNullViolation
 from app.content_store import get_content_store, init_content_store_for_config
 from app.content_store_postgres import PostgresContentStore
 from app.credential_store import init_credential_store_for_config
@@ -21,8 +22,10 @@ from tests.support.config_support import make_config
 def _init_runtime_content(tmp_path: Path):
     data_dir = tmp_path / "data"
     ensure_data_dirs(data_dir)
+    runtime_backend.reset_for_test()
     content_store_mod.reset_for_test()
     cfg = make_config(data_dir=data_dir, registry_url="https://registry.example.test/index.json")
+    runtime_backend.init(cfg)
     init_content_store_for_config(cfg)
     init_credential_store_for_config(cfg)
     composition.workflows.cache_clear()
@@ -98,6 +101,7 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         assert unavailable_again.status == "not_published"
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
@@ -121,6 +125,7 @@ def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: P
         assert second_duplicate.message == "Skill 'existing-skill' already exists."
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
@@ -176,6 +181,7 @@ def test_runtime_skill_draft_package_roundtrip_and_validation(tmp_path: Path):
         assert edited.detail.files[0].relative_path == "helper.sh"
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
@@ -221,6 +227,7 @@ def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_pa
         assert preview_after_archive.published_guidance == ""
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
@@ -277,6 +284,7 @@ def test_runtime_skill_lifecycle_replay_and_repair_paths(tmp_path: Path):
         assert sum(1 for item in archived_again.detail.approvals if item.action == "archived") == 1
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
@@ -315,10 +323,11 @@ def test_provider_guidance_lifecycle_replay_and_repair_paths(tmp_path: Path):
         assert sum(1 for item in repaired_publish.detail.approvals if item.action == "published") == 1
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 
-def test_sqlite_atomic_skill_transition_rolls_back_when_insert_fails(tmp_path: Path):
+def test_skill_transition_rolls_back_when_approval_insert_fails(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(7)
@@ -330,7 +339,7 @@ def test_sqlite_atomic_skill_transition_rolls_back_when_insert_fails(tmp_path: P
         detail = authoring.detail("atomic-skill")
         assert detail is not None
 
-        with pytest.raises((sqlite3.IntegrityError, TypeError)):
+        with pytest.raises(NotNullViolation):
             store.apply_skill_lifecycle_transition(
                 "atomic-skill",
                 detail.active_revision_id,
@@ -345,6 +354,7 @@ def test_sqlite_atomic_skill_transition_rolls_back_when_insert_fails(tmp_path: P
         assert after.approvals == ()
     finally:
         close_db(data_dir)
+        runtime_backend.reset_for_test()
         content_store_mod.reset_for_test()
 
 

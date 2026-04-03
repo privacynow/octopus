@@ -4,7 +4,6 @@ import inspect
 from collections.abc import Mapping
 from typing import Any, get_args, get_origin, get_type_hints
 
-from octopus_registry.store import RegistrySQLiteStore
 from octopus_registry.store_base import AbstractRegistryStore
 from octopus_registry.store_postgres import RegistryPostgresStore
 
@@ -45,18 +44,17 @@ def test_abstract_registry_store_public_methods_use_typed_sdk_boundaries() -> No
 
 
 def test_registry_store_implementations_match_typed_public_contract() -> None:
-    for store_cls in (RegistrySQLiteStore, RegistryPostgresStore):
-        for method_name in _public_protocol_methods():
-            method = getattr(store_cls, method_name, None)
-            assert method is not None, f"{store_cls.__name__}.{method_name} missing"
-            hints = get_type_hints(method)
-            assert hints, f"missing type hints on {store_cls.__name__}.{method_name}"
-            offenders = [
-                name
-                for name, annotation in hints.items()
-                if _contains_forbidden_boundary(annotation)
-            ]
-            assert not offenders, (
-                f"{store_cls.__name__}.{method_name} still exposes forbidden "
-                f"boundary types in {', '.join(offenders)}"
-            )
+    for method_name in _public_protocol_methods():
+        method = getattr(RegistryPostgresStore, method_name, None)
+        assert method is not None, f"{RegistryPostgresStore.__name__}.{method_name} missing"
+        hints = get_type_hints(method)
+        assert hints, f"missing type hints on {RegistryPostgresStore.__name__}.{method_name}"
+        offenders = [
+            name
+            for name, annotation in hints.items()
+            if _contains_forbidden_boundary(annotation)
+        ]
+        assert not offenders, (
+            f"{RegistryPostgresStore.__name__}.{method_name} still exposes forbidden "
+            f"boundary types in {', '.join(offenders)}"
+        )

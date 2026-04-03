@@ -23,7 +23,7 @@ from app.agents.state import (
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import build_telegram_runtime
 from app.config import BotConfig
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.control_plane.processor_runner import ProcessorRunner
@@ -43,7 +43,7 @@ from tests.support.handler_support import FakeProvider, MinimalFakeBot
 @dataclass(frozen=True)
 class _SeededRegistry:
     registry: RegistryConnectionConfig
-    store: RegistrySQLiteStore
+    store: RegistryPostgresStore
     local_agent_id: str
     local_agent_token: str
     origin_agent_id: str = ""
@@ -51,7 +51,7 @@ class _SeededRegistry:
 
 
 class _StoreBackedRegistryClient:
-    stores_by_url: dict[str, RegistrySQLiteStore] = {}
+    stores_by_url: dict[str, RegistryPostgresStore] = {}
     failing_ops_by_url: dict[str, set[str]] = {}
 
     def __init__(
@@ -66,7 +66,7 @@ class _StoreBackedRegistryClient:
         self.base_url = base_url.rstrip("/")
         self.agent_token = agent_token
 
-    def _store(self) -> RegistrySQLiteStore:
+    def _store(self) -> RegistryPostgresStore:
         return type(self).stores_by_url[self.base_url]
 
     def _maybe_fail(self, operation: str) -> None:
@@ -186,7 +186,7 @@ def _agent_card(*, name: str, slug: str, registry_scope: str) -> dict[str, objec
 
 
 def _register_agent(
-    store: RegistrySQLiteStore,
+    store: RegistryPostgresStore,
     *,
     name: str,
     slug: str,
@@ -210,10 +210,10 @@ def _seed_registry(
     *,
     data_dir: Path,
     registry: RegistryConnectionConfig,
-    stores_dir: Path,
+    postgres_db_url: str,
     with_origin_agent: bool = False,
 ) -> _SeededRegistry:
-    store = RegistrySQLiteStore(stores_dir / f"{registry.registry_id}.sqlite3")
+    store = RegistryPostgresStore(postgres_db_url)
     local_agent_id, local_agent_token = _register_agent(
         store,
         name=f"{registry.registry_id}-local",
@@ -353,7 +353,9 @@ def _build_telegram_runtime_with_dispatcher(
 async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_store(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    postgres_db_url: str,
 ) -> None:
+    del monkeypatch
     registry = make_registry_connection(
         registry_id="default",
         url="http://registry.default",
@@ -367,12 +369,10 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
         process_role="worker",
     )
     _init_backend(config)
-    stores_dir = tmp_path / "registry-stores"
-    stores_dir.mkdir()
     seeded = _seed_registry(
         data_dir=tmp_path,
         registry=registry,
-        stores_dir=stores_dir,
+        postgres_db_url=postgres_db_url,
         with_origin_agent=True,
     )
     _install_store_backed_clients([seeded])
@@ -425,7 +425,9 @@ async def test_shared_worker_reports_routed_task_result_through_bus_to_registry_
 async def test_routed_task_status_update_persists_timeline_events_and_progress(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    postgres_db_url: str,
 ) -> None:
+    del monkeypatch
     registry = make_registry_connection(
         registry_id="status",
         url="http://registry.status",
@@ -437,12 +439,10 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
         agent_registries=(registry,),
     )
     _init_backend(config)
-    stores_dir = tmp_path / "registry-stores"
-    stores_dir.mkdir()
     seeded = _seed_registry(
         data_dir=tmp_path,
         registry=registry,
-        stores_dir=stores_dir,
+        postgres_db_url=postgres_db_url,
         with_origin_agent=True,
     )
     _install_store_backed_clients([seeded])
@@ -517,6 +517,7 @@ async def test_routed_task_status_update_persists_timeline_events_and_progress(
 async def test_routed_task_report_failure_persists_partialfailed_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    postgres_db_url: str,
 ) -> None:
     registry = make_registry_connection(
         registry_id="fallback",
@@ -529,12 +530,10 @@ async def test_routed_task_report_failure_persists_partialfailed_status(
         agent_registries=(registry,),
     )
     _init_backend(config)
-    stores_dir = tmp_path / "registry-stores"
-    stores_dir.mkdir()
     seeded = _seed_registry(
         data_dir=tmp_path,
         registry=registry,
-        stores_dir=stores_dir,
+        postgres_db_url=postgres_db_url,
         with_origin_agent=True,
     )
     _install_store_backed_clients([seeded])

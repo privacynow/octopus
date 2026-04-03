@@ -92,12 +92,12 @@ def test_redact_sensitive_startup_text_masks_configured_secret_values(monkeypatc
 
 
 def test_redact_sensitive_startup_text_masks_database_password_fragment(monkeypatch):
-    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://bot:supersecret@db.example.com/bot")
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", "postgresql://bot:supersecret@db.example.com/bot")
 
     redacted = redact_sensitive_startup_text("driver surfaced password supersecret without DSN context")
 
     assert "supersecret" not in redacted
-    assert "<redacted-bot-database-url>-password" in redacted
+    assert "<redacted-octopus-database-url>-password" in redacted
 
 
 def test_redact_sensitive_startup_text_masks_bot_side_secret_values(monkeypatch):
@@ -159,7 +159,7 @@ def test_startup_log_redaction_filter_drops_noisy_http_request_lines():
 
 
 def test_startup_log_redaction_filter_sanitizes_traceback_text(monkeypatch):
-    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://bot:secret@example.com/bot")
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", "postgresql://bot:secret@example.com/bot")
     record = logging.LogRecord(
         name="app.runtime_health",
         level=logging.ERROR,

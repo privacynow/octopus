@@ -15,10 +15,10 @@ from app.startup_diagnostics import (
 
 
 def _get_url() -> str:
-    url = os.environ.get("BOT_DATABASE_URL", "").strip()
+    url = os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
     if not url:
         print(
-            "BOT_DATABASE_URL is not set. For Docker: Compose sets it for the container. "
+            "OCTOPUS_DATABASE_URL is not set. For Docker: Compose sets it for the container. "
             "For host-run: set it in the bot env file (for example postgresql://bot:bot@localhost:5432/bot).",
             file=sys.stderr,
         )

@@ -10,6 +10,7 @@ filesystem parsing of built-in/custom skill fixtures.
 
 import hashlib
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -19,7 +20,7 @@ from cryptography.fernet import Fernet
 
 from app.credential_service import get_credential_service
 from app.credential_store import derive_credential_encryption_key
-from app.credential_store_sqlite import SQLiteCredentialStore
+from app.credential_store_postgres import PostgresCredentialStore
 from app.credential_validation import validate_credential
 from octopus_sdk.identity import filesystem_component_for_key, parse_actor_key
 
@@ -154,10 +155,18 @@ def _credential_file(data_dir: Path, actor_key: str) -> Path:
     return data_dir / "credentials" / f"{filesystem_component_for_key(normalized)}.json"
 
 
+def _credential_store(key: bytes) -> PostgresCredentialStore:
+    database_url = os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("OCTOPUS_DATABASE_URL must be set for credential compatibility helpers")
+    return PostgresCredentialStore(database_url, encryption_key=key)
+
+
 def list_user_credential_skills(data_dir: Path, actor_key: str) -> list[str]:
     """Return skill names that have stored credentials (no decryption)."""
+    del data_dir
     sentinel_key = derive_credential_encryption_key("legacy-credential-list")
-    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=sentinel_key).list_skill_names(
+    return _credential_store(sentinel_key).list_skill_names(
         parse_actor_key(actor_key)
     )
 
@@ -167,7 +176,8 @@ def load_user_credentials(data_dir: Path, actor_key: str, key: bytes) -> dict[st
 
     Returns ``{skill_name: {cred_key: value, ...}, ...}``.
     """
-    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).load(parse_actor_key(actor_key))
+    del data_dir
+    return _credential_store(key).load(parse_actor_key(actor_key))
 
 
 def save_user_credential(
@@ -179,7 +189,8 @@ def save_user_credential(
     key: bytes,
 ) -> None:
     """Encrypt and save a single credential for a user."""
-    SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).save(
+    del data_dir
+    _credential_store(key).save(
         parse_actor_key(actor_key),
         skill_name,
         cred_key,
@@ -199,7 +210,8 @@ def delete_user_credentials(
     Otherwise delete all credentials.
     Returns list of skill names whose credentials were removed.
     """
-    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).delete(
+    del data_dir
+    return _credential_store(key).delete(
         parse_actor_key(actor_key),
         skill_name,
     )

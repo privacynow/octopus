@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.support.config_support import make_config
 from app.agents.registry_capabilities import registry_authority_capabilities
 from app.agents.registry_capabilities import registry_id_from_authority_ref
 from app.agents.state import load_registry_connection_state
@@ -28,6 +29,8 @@ def _noop_control_plane_services() -> ControlPlaneServices:
 
 
 def build_test_bot_services(*, config=None) -> BotServices:
+    effective_config = config or make_config()
+    runtime_backend.init(effective_config)
     if config is not None:
         authority_capabilities = registry_authority_capabilities(config.agent_registries)
         directory = build_control_plane_directory(authority_capabilities)
@@ -48,7 +51,7 @@ def build_test_bot_services(*, config=None) -> BotServices:
     return BotServices(
         control_plane=_noop_control_plane_services(),
         registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
+        workflows=composition.workflows_for_config(effective_config),
         authorization=get_authorization(),
         work_queue=runtime_backend.transport_store(),
     )

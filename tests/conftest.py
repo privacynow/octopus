@@ -15,6 +15,14 @@ import pytest
 
 # Env var used by postgres_support.get_run_id(); value is path to run-unique file.
 _POSTGRES_RUN_ID_FILE_ENV = "TELEGRAM_BOT_TEST_RUN_ID_FILE"
+_RUNTIME_ENV_PREFIXES = (
+    "BOT_",
+    "TELEGRAM_",
+    "OCTOPUS_",
+    "REGISTRY_",
+    "CLAUDE_",
+    "CODEX_",
+)
 
 
 
@@ -47,16 +55,49 @@ def pytest_unconfigure(config):
 
 
 @pytest.fixture(autouse=True)
-def reset_handler_runtime():
+def reset_handler_runtime(postgres_db_url):
     """Reset handler globals and DB caches before and after each test (Priority 4)."""
+    from app.db.postgres import get_connection
     from tests.support.handler_support import reset_handler_test_runtime
+    from tests.support.postgres_support import (
+        truncate_content_tables,
+        truncate_credential_tables,
+        truncate_registry_tables,
+        truncate_runtime_tables,
+    )
     from octopus_registry.backend import reset_for_test as reset_registry_store
 
+    with get_connection(postgres_db_url) as conn:
+        truncate_runtime_tables(conn)
+        truncate_registry_tables(conn)
+        truncate_content_tables(conn)
+        truncate_credential_tables(conn)
     reset_registry_store()
     reset_handler_test_runtime()
     yield
     reset_handler_test_runtime()
     reset_registry_store()
+
+
+@pytest.fixture(autouse=True)
+def restore_runtime_env():
+    """Restore runtime-related env vars after each test to prevent cross-test leaks."""
+    before = {
+        key: value
+        for key, value in os.environ.items()
+        if key.startswith(_RUNTIME_ENV_PREFIXES)
+    }
+    yield
+    current_keys = [
+        key
+        for key in os.environ
+        if key.startswith(_RUNTIME_ENV_PREFIXES)
+    ]
+    for key in current_keys:
+        if key not in before:
+            os.environ.pop(key, None)
+    for key, value in before.items():
+        os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +150,20 @@ def postgres_db_url(postgres_base_url, request):
         if errors:
             raise RuntimeError(f"Postgres bootstrap failed: {errors}")
     yield url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def default_postgres_env(postgres_db_url):
+    """Expose the harness-owned Postgres URL as the default runtime DB for tests."""
+    previous = os.environ.get("OCTOPUS_DATABASE_URL")
+    os.environ["OCTOPUS_DATABASE_URL"] = postgres_db_url
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("OCTOPUS_DATABASE_URL", None)
+        else:
+            os.environ["OCTOPUS_DATABASE_URL"] = previous
 
 
 @pytest.fixture

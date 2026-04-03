@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # First-time schema bootstrap for an existing Postgres database.
-# Requires BOT_DATABASE_URL. See README.md.
+# Requires OCTOPUS_DATABASE_URL. See README.md.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"

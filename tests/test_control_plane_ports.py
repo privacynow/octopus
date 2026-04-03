@@ -32,6 +32,7 @@ from octopus_sdk.task_routing import (
     TaskSubmissionResult,
 )
 from app.runtime.services import BotServices, ControlPlaneServices
+from tests.support.config_support import make_config
 from tests.support.registry_participant_support import build_noop_registry_participant
 
 
@@ -153,6 +154,8 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
         )
     )
     summary = health.connection_summary()
+    config = make_config()
+    runtime_backend.init(config)
     services = BotServices(
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
@@ -161,7 +164,7 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
             health_publication=health,
         ),
         registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
+        workflows=composition.workflows_for_config(config),
         authorization=get_authorization(),
         work_queue=runtime_backend.transport_store(),
     )

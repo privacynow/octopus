@@ -654,7 +654,6 @@ async def cmd_doctor(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    import sqlite3
     from app.runtime_health import (
         SessionHealthContext,
         collect_runtime_health_report,
@@ -662,7 +661,7 @@ async def cmd_doctor(
     )
     try:
         session = telegram_session_io.load(runtime, event.chat_id)
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
+    except RuntimeError:
         session = None
     cfg = runtime.config
     session_context = None

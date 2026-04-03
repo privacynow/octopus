@@ -48,7 +48,7 @@ _SANITIZED_TOKEN: Final[str] = "<redacted-telegram-token>"
 _SANITIZED_BEARER: Final[str] = "Bearer <redacted-bearer-token>"
 _SECRET_ENV_NAMES: Final[tuple[str, ...]] = (
     "TELEGRAM_BOT_TOKEN",
-    "BOT_DATABASE_URL",
+    "OCTOPUS_DATABASE_URL",
     "BOT_WEBHOOK_SECRET",
     "BOT_AGENT_REGISTRY_ENROLL_TOKEN",
     "REGISTRY_UI_TOKEN",
@@ -56,25 +56,12 @@ _SECRET_ENV_NAMES: Final[tuple[str, ...]] = (
     "REGISTRY_SESSION_SECRET",
     "BOT_CREDENTIAL_KEY",
 )
+_REDACTED_PLACEHOLDER_RE: Final[re.Pattern[str]] = re.compile(r"<redacted-[^>]+>")
 
 
 def _redacted_env_placeholder(env_name: str) -> str:
     label = env_name.lower().replace("_", "-")
     return f"<redacted-{label}>"
-
-
-def _derived_secret_values(env_name: str, value: str) -> tuple[tuple[str, str], ...]:
-    derived: list[tuple[str, str]] = []
-    if env_name == "BOT_DATABASE_URL":
-        parsed = urlparse(value)
-        if parsed.password:
-            derived.append(
-                (
-                    parsed.password,
-                    f"{_redacted_env_placeholder(env_name)}-password",
-                )
-            )
-    return tuple(derived)
 
 
 def _configured_secret_values() -> tuple[tuple[str, str], ...]:
@@ -83,10 +70,29 @@ def _configured_secret_values() -> tuple[tuple[str, str], ...]:
         value = os.environ.get(env_name, "").strip()
         if not value:
             continue
-        values.append((value, _redacted_env_placeholder(env_name)))
-        values.extend(_derived_secret_values(env_name, value))
+        placeholder = _redacted_env_placeholder(env_name)
+        values.append((value, placeholder))
+        if env_name == "OCTOPUS_DATABASE_URL":
+            password = urlparse(value).password or ""
+            # Only redact leaked password fragments when they are specific enough
+            # to avoid clobbering common words like "bot" in unrelated text.
+            if len(password) >= 8:
+                values.append((password, f"{placeholder}-password"))
     values.sort(key=lambda item: len(item[0]), reverse=True)
     return tuple(values)
+
+
+def _replace_outside_redacted_placeholders(text: str, raw: str, replacement: str) -> str:
+    if not raw:
+        return text
+    parts: list[str] = []
+    last = 0
+    for match in _REDACTED_PLACEHOLDER_RE.finditer(text):
+        parts.append(text[last:match.start()].replace(raw, replacement))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(text[last:].replace(raw, replacement))
+    return "".join(parts)
 
 
 def sanitize_url_for_logging(raw: str) -> str:
@@ -135,7 +141,7 @@ def redact_sensitive_startup_text(text: str) -> str:
     )
     redacted = _BEARER_TOKEN_RE.sub(_SANITIZED_BEARER, redacted)
     for value, replacement in _configured_secret_values():
-        redacted = redacted.replace(value, replacement)
+        redacted = _replace_outside_redacted_placeholders(redacted, value, replacement)
     return redacted
 
 
@@ -288,9 +294,9 @@ def format_database_startup_exception(exc: BaseException) -> list[str]:
     ):
         return [
             "Database startup check failed: the bot could not connect to the configured database.",
-            "Check BOT_DATABASE_URL, database credentials, network reachability, and whether Postgres is running.",
+            "Check OCTOPUS_DATABASE_URL, database credentials, network reachability, and whether Postgres is running.",
         ]
     return [
         "Database startup check failed before the bot could start.",
-        "Check BOT_DATABASE_URL, database credentials, and whether the schema/bootstrap steps completed successfully.",
+        "Check OCTOPUS_DATABASE_URL, database credentials, and whether the schema/bootstrap steps completed successfully.",
     ]

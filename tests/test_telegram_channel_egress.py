@@ -13,10 +13,13 @@ from app.runtime.services import BotServices, ControlPlaneServices
 from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from tests.support.handler_support import MinimalFakeBot
+from tests.support.config_support import make_config
 from tests.support.registry_participant_support import build_noop_registry_participant
 
 
-def _services(*, publish=None) -> BotServices:
+def _services(*, publish=None, config=None) -> BotServices:
+    effective_config = config or make_config()
+    runtime_backend.init(effective_config)
     projection = SimpleNamespace(
         create_conversation=AsyncMock(return_value="conv-1"),
         publish_events=publish or AsyncMock(),
@@ -29,7 +32,7 @@ def _services(*, publish=None) -> BotServices:
             health_publication=NoOpHealthPublication(),
         ),
         registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
+        workflows=composition.workflows_for_config(effective_config),
         authorization=get_authorization(),
         work_queue=runtime_backend.transport_store(),
     )

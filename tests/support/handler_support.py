@@ -185,8 +185,8 @@ def reset_handler_test_runtime() -> None:
 def fresh_data_dir():
     """TemporaryDirectory + ensure_data_dirs + close both DBs on exit.
 
-    Closes session and transport SQLite connections BEFORE the temp dir is
-    deleted, preventing WAL checkpoint hangs on deleted files.
+    Closes session and transport handles before the temp dir is deleted so
+    test state never leaks across cases.
     """
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -194,8 +194,14 @@ def fresh_data_dir():
         try:
             yield data_dir
         finally:
-            close_db(data_dir)
-            _work_queue.close_transport_db(data_dir)
+            try:
+                close_db(data_dir)
+            except RuntimeError:
+                pass
+            try:
+                _work_queue.close_transport_db(data_dir)
+            except RuntimeError:
+                pass
 
 
 def public_user_config_overrides(**extra):
@@ -605,11 +611,13 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     ControlPlaneBus.default_timeout_seconds = 0.1
     BusConversationProjection.bus_timeout_seconds = 0.1
     global _TEST_RUNTIME, _TEST_APPLICATION
+    import app.runtime_backend as _runtime_backend
     import app.content_store as _cs
     import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
     from tests.support import skill_test_helpers as _skills_mod
 
+    _runtime_backend.init(config)
     _cs.init_content_store_for_config(config)
     _creds.init_credential_store_for_config(config)
     custom_dir = getattr(_skills_mod, "CUSTOM_DIR", None)

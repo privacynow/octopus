@@ -26,7 +26,7 @@ from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext,
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.inbound_types import InboundMessage, InboundUser
 from octopus_sdk.work_queue import WorkItemRecord
-from app.storage import debug_session_connection, default_session, save_session
+from app.storage import default_session, save_session
 from app import work_queue
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
@@ -2534,7 +2534,7 @@ async def test_doctor_missing_data_dir():
     """collect_runtime_health_report should not crash when data_dir doesn't exist yet.
 
     Reproduces: operator runs --doctor before first bot startup, data_dir
-    doesn't exist.  Previously crashed in scan_stale_sessions -> SQLite open.
+    doesn't exist. Previously crashed in stale-session scanning.
     """
     import tempfile
     from app.runtime_health import collect_runtime_health_report
@@ -2558,110 +2558,76 @@ async def test_doctor_missing_data_dir():
         assert len(stale_msgs) == 0
 
 
-async def test_doctor_corrupt_session_db():
-    """collect_runtime_health_report should report corrupt DB, not crash.
-
-    Reproduces: operator's sessions.db gets corrupted (disk error, partial
-    write, manual edit).  Previously raised DatabaseError: file is not a
-    database, crashing the health command instead of reporting the problem.
-    """
-    import tempfile
+async def test_doctor_session_store_failure_is_reported(monkeypatch):
+    """collect_runtime_health_report should report session-store failures, not crash."""
     from app.runtime_health import collect_runtime_health_report
-    from app.storage import close_db
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        # Create a corrupt sessions.db -- junk bytes, not a valid SQLite file
-        db_path = data_dir / "sessions.db"
-        db_path.write_bytes(b"this is not a valid sqlite database file at all")
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
+        monkeypatch.setattr(
+            "app.runtime_health.scan_stale_sessions",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt or unreadable")),
+        )
 
-        try:
-            report = await collect_runtime_health_report(cfg, prov)
-            assert report is not None
-            # Should have caught the corruption and reported it as an error
-            corruption_errors = [
-                item.message
-                for item in report.diagnostics
-                if item.level == "error"
-                and ("corrupt" in item.message.lower() or "database" in item.message.lower())
-            ]
-            assert len(corruption_errors) >= 1
-            # Should NOT have stale session warnings (scan couldn't run)
-            stale_msgs = [
-                item.message for item in report.diagnostics
-                if item.level == "warning" and "stale" in item.message.lower()
-            ]
-            assert len(stale_msgs) == 0
-        finally:
-            close_db(data_dir)
+        report = await collect_runtime_health_report(cfg, prov)
+        assert report is not None
+        corruption_errors = [
+            item.message
+            for item in report.diagnostics
+            if item.level == "error"
+            and ("corrupt" in item.message.lower() or "database" in item.message.lower())
+        ]
+        assert len(corruption_errors) >= 1
+        stale_msgs = [
+            item.message for item in report.diagnostics
+            if item.level == "warning" and "stale" in item.message.lower()
+        ]
+        assert len(stale_msgs) == 0
 
 
-async def test_cmd_doctor_corrupt_db_telegram():
-    """/doctor via Telegram should reply with an error, not crash, on corrupt DB.
-
-    This exercises the real user-facing path: user sends /doctor in chat,
-    cmd_doctor calls _load() which hits SQLite, DB is corrupt.  Previously
-    the handler raised DatabaseError unhandled and the user saw nothing.
-    """
-    import tempfile
-    from app.storage import close_db
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        # Bootstrap a real DB first so the config/dirs are valid
-        from app.storage import ensure_data_dirs
-        ensure_data_dirs(data_dir)
-        close_db(data_dir)
-
-        # Now corrupt the DB file
-        db_path = data_dir / "sessions.db"
-        db_path.write_bytes(b"this is not a valid sqlite database file at all")
-
+async def test_cmd_doctor_session_store_failure_telegram(monkeypatch):
+    """/doctor via Telegram should reply with a session-store error, not crash."""
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
+        monkeypatch.setattr(
+            "app.runtime_health.scan_stale_sessions",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt or unreadable")),
+        )
 
         import app.runtime.telegram_ingress as th
         chat = FakeChat(1)
         user = FakeUser(42)
 
-        try:
-            msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
-            reply = last_reply(msg)
-            # Handler should reply (not crash silently)
-            assert len(reply) > 0
-            # Reply should mention the DB problem
-            assert "corrupt" in reply.lower() or "database" in reply.lower()
-        finally:
-            close_db(data_dir)
+        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        reply = last_reply(msg)
+        assert len(reply) > 0
+        assert "corrupt" in reply.lower() or "database" in reply.lower()
 
 
 async def test_doctor_schema_mismatch_cli():
-    """collect_runtime_health_report should report a newer session DB schema, not crash.
-
-    Reproduces: operator downgrades the bot, sessions.db has schema_version=99.
-    Session store raises RuntimeError which was not caught by the stale session
-    scan handler (only sqlite3 exceptions were caught).
-    """
-    import tempfile
+    """collect_runtime_health_report should report a newer session-store schema, not crash."""
     from app.runtime_health import collect_runtime_health_report
-    from app.storage import close_db, ensure_data_dirs
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        conn = debug_session_connection(data_dir)
-        conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
-        conn.commit()
-        close_db(data_dir)
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
+        from app.runtime_health import scan_stale_sessions as original_scan_stale_sessions
 
-        report = await collect_runtime_health_report(cfg, prov)
+        def _schema_error(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("schema is newer than this bot build")
+
+        import app.runtime_health as runtime_health
+
+        runtime_health.scan_stale_sessions = _schema_error
+        try:
+            report = await collect_runtime_health_report(cfg, prov)
+        finally:
+            runtime_health.scan_stale_sessions = original_scan_stale_sessions
+
         assert report is not None
         schema_errors = [
             item.message
@@ -2676,28 +2642,29 @@ async def test_doctor_schema_mismatch_telegram():
     """/doctor via Telegram should reply with schema error, not crash.
 
     Same scenario as CLI but through the real handler path: cmd_doctor calls
-    _load() which hits the session store and raises RuntimeError for schema mismatch.
+    the session-store scan path and raises RuntimeError for schema mismatch.
     """
-    import tempfile
-    from app.storage import close_db, ensure_data_dirs
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        conn = debug_session_connection(data_dir)
-        conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
-        conn.commit()
-        close_db(data_dir)
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
+        from app.runtime_health import scan_stale_sessions as original_scan_stale_sessions
+
+        def _schema_error(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("schema is newer than this bot build")
+
+        import app.runtime_health as runtime_health
+
+        runtime_health.scan_stale_sessions = _schema_error
 
         import app.runtime.telegram_ingress as th
         chat = FakeChat(1)
         user = FakeUser(42)
-
-        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        try:
+            msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        finally:
+            runtime_health.scan_stale_sessions = original_scan_stale_sessions
         reply = last_reply(msg)
         assert len(reply) > 0
         assert "schema" in reply.lower() or "newer" in reply.lower()

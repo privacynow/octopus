@@ -288,8 +288,8 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
 
 
 def test_cli_doctor_exits_when_no_database_url(monkeypatch):
-    """db doctor must exit with error when BOT_DATABASE_URL is not set."""
-    monkeypatch.delenv("BOT_DATABASE_URL", raising=False)
+    """db doctor must exit with error when OCTOPUS_DATABASE_URL is not set."""
+    monkeypatch.delenv("OCTOPUS_DATABASE_URL", raising=False)
     import sys
     old_argv = sys.argv
     try:
@@ -325,8 +325,8 @@ def test_run_update_fails_with_bootstrap_first_message_on_empty_db(postgres_base
 
 
 def test_cli_doctor_requires_url(monkeypatch):
-    """Running doctor without BOT_DATABASE_URL prints error and exits 1."""
-    monkeypatch.delenv("BOT_DATABASE_URL", raising=False)
+    """Running doctor without OCTOPUS_DATABASE_URL prints error and exits 1."""
+    monkeypatch.delenv("OCTOPUS_DATABASE_URL", raising=False)
     import sys
     from io import StringIO
     old_argv = sys.argv
@@ -338,14 +338,14 @@ def test_cli_doctor_requires_url(monkeypatch):
         with pytest.raises(SystemExit) as exc_info:
             _cmd_doctor()
         assert exc_info.value.code == 1
-        assert "BOT_DATABASE_URL" in sys.stderr.getvalue()
+        assert "OCTOPUS_DATABASE_URL" in sys.stderr.getvalue()
     finally:
         sys.argv = old_argv
         sys.stderr = old_stderr
 
 
 def test_db_cli_sanitizes_connection_errors(monkeypatch):
-    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://localhost:5432/bot")
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", "postgresql://localhost:5432/bot")
 
     class OperationalError(RuntimeError):
         pass

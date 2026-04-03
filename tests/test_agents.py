@@ -1929,8 +1929,9 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
 
 async def test_direct_assign_round_trip_from_registry_store_resumes_parent_telegram_chat(
     tmp_path: Path,
+    postgres_db_url: str,
 ):
-    from octopus_registry.store import RegistrySQLiteStore
+    from octopus_registry.store_postgres import RegistryPostgresStore
     from octopus_sdk.registry.models import (
         AgentCard,
         AgentRegisterRequest,
@@ -1940,7 +1941,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
         TargetSelector,
     )
 
-    def _enroll_registered(store: RegistrySQLiteStore, slug: str, display_name: str) -> tuple[str, str]:
+    def _enroll_registered(store: RegistryPostgresStore, slug: str, display_name: str) -> tuple[str, str]:
         card = AgentCard(
             display_name=display_name,
             slug=slug,
@@ -1973,7 +1974,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+        store = RegistryPostgresStore(postgres_db_url)
         origin_id, origin_token = _enroll_registered(store, "origin-bot", "Origin Bot")
         target_id, target_token = _enroll_registered(store, "m2-bot", "M2 Bot")
         parent_ref = telegram_conversation_ref(cfg, 12345)

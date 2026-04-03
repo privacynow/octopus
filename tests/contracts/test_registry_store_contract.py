@@ -1,18 +1,17 @@
-"""Registry store contract: backend-neutral behavior for SQLite and Postgres."""
+"""Registry store contract: Postgres-backed registry behavior."""
 
 from datetime import datetime, timezone
-from pathlib import Path
 import re
 
 import pytest
 from pydantic import ValidationError
 
-from octopus_registry.store import RegistrySQLiteStore
 from octopus_registry.store_base import RoutingSkillDisabledError
 from octopus_registry.store_base import PROTECTED_ROUTED_TASK_STATUSES
 from octopus_registry.store_base import RegistryScopeError
 from octopus_registry.store_base import conversation_status_for_event
 from octopus_registry.store_base import hash_agent_token
+from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -161,16 +160,6 @@ def _runtime_health_payload(
 
 
 def _stored_agent_token(store, agent_id: str) -> str:
-    if isinstance(store, RegistrySQLiteStore):
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT agent_token FROM agents WHERE agent_id = ?",
-                (agent_id,),
-            ).fetchone()
-        assert row is not None
-        return str(row["agent_token"])
-
-    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -189,16 +178,6 @@ def _stored_agent_token(store, agent_id: str) -> str:
 
 
 def _routed_task_row(store, routed_task_id: str):
-    if isinstance(store, RegistrySQLiteStore):
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
-                (routed_task_id,),
-            ).fetchone()
-        assert row is not None
-        return row
-
-    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -267,16 +246,9 @@ def _start_routed_task(store, target_token: str, routed_task_id: str) -> None:
     )
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def store(request, tmp_path: Path):
-    if request.param == "sqlite":
-        yield RegistrySQLiteStore(tmp_path / "registry.sqlite3")
-        return
-
-    postgres_url = request.getfixturevalue("postgres_registry_truncated")
-    from octopus_registry.store_postgres import RegistryPostgresStore
-
-    yield RegistryPostgresStore(postgres_url)
+@pytest.fixture()
+def store(postgres_registry_truncated: str):
+    yield RegistryPostgresStore(postgres_registry_truncated)
 
 
 def test_enroll_and_register_returns_agent_id(store):

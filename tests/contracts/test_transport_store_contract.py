@@ -1,4 +1,4 @@
-"""Transport store contract: backend-neutral behavior. Runs against SQLite and Postgres via work_queue facade."""
+"""Transport store contract against the Postgres runtime transport store."""
 
 import json
 import tempfile
@@ -63,25 +63,16 @@ def _event(value: int) -> str:
     return telegram_event_id(value)
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def backend_and_data_dir(request):
-    """Provide (backend_name, data_dir) for contract tests."""
+@pytest.fixture()
+def backend_and_data_dir(postgres_truncated):
+    """Provide the Postgres transport contract target as (backend_name, data_dir)."""
     from app import runtime_backend
     from tests.support.config_support import make_config
 
-    if request.param == "sqlite":
-        runtime_backend.reset_for_test()
-        with tempfile.TemporaryDirectory() as tmp:
-            data_dir = Path(tmp)
-            ensure_data_dirs(data_dir)
-            yield "sqlite", data_dir
-        return
-
-    postgres_url = request.getfixturevalue("postgres_truncated")
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
-        ensure_data_dirs(data_dir, database_url=postgres_url)
-        cfg = make_config(data_dir=data_dir, database_url=postgres_url)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir=data_dir, database_url=postgres_truncated)
         runtime_backend.init(cfg)
         try:
             yield "postgres", data_dir
@@ -89,8 +80,13 @@ def backend_and_data_dir(request):
             runtime_backend.reset_for_test()
 
 
-def test_record_update_idempotent(backend_and_data_dir):
+@pytest.fixture()
+def data_dir(backend_and_data_dir):
     _backend, data_dir = backend_and_data_dir
+    return data_dir
+
+
+def test_record_update_idempotent(data_dir):
     assert record_update(
         data_dir, _event(1001), conversation_key=_conv(1), actor_key=_actor(42), kind="message"
     ) is True
@@ -99,8 +95,7 @@ def test_record_update_idempotent(backend_and_data_dir):
     ) is False
 
 
-def test_record_update_stores_payload(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_record_update_stores_payload(data_dir):
     record_update(
         data_dir,
         _event(2001),
@@ -114,13 +109,11 @@ def test_record_update_stores_payload(backend_and_data_dir):
     assert json.loads(raw) == {"text": "hello"}
 
 
-def test_get_update_payload_missing(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_get_update_payload_missing(data_dir):
     assert get_update_payload(data_dir, _event(9999)) is None
 
 
-def test_update_payload(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_update_payload(data_dir):
     record_update(
         data_dir,
         _event(3001),
@@ -135,30 +128,26 @@ def test_update_payload(backend_and_data_dir):
     assert json.loads(raw) == {"edited": True}
 
 
-def test_record_and_enqueue_returns_true_and_item_id(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_record_and_enqueue_returns_true_and_item_id(data_dir):
     is_new, item_id = record_and_enqueue(data_dir, _event(100), _conv(1), _actor(42), "message")
     assert is_new is True
     assert item_id is not None
 
 
-def test_record_and_enqueue_idempotent_duplicate_update(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_record_and_enqueue_idempotent_duplicate_update(data_dir):
     record_and_enqueue(data_dir, _event(101), _conv(1), _actor(42), "message")
     is_new2, item_id2 = record_and_enqueue(data_dir, _event(101), _conv(1), _actor(42), "message")
     assert is_new2 is False
     assert item_id2 is None
 
 
-def test_enqueue_work_item_returns_id(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_enqueue_work_item_returns_id(data_dir):
     record_update(data_dir, _event(102), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(102))
     assert item_id is not None
 
 
-def test_claim_for_update_and_complete(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_claim_for_update_and_complete(data_dir):
     record_and_enqueue(data_dir, _event(200), _conv(1), _actor(42), "message", payload='{"text":"hi"}')
     item = claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(200), worker_id="w1")
     assert item is not None
@@ -167,8 +156,7 @@ def test_claim_for_update_and_complete(backend_and_data_dir):
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
 
 
-def test_claim_next_returns_queued_item(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_claim_next_returns_queued_item(data_dir):
     record_update(data_dir, _event(201), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(201))
     item = claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
@@ -177,13 +165,11 @@ def test_claim_next_returns_queued_item(backend_and_data_dir):
     assert item.state == "claimed"
 
 
-def test_claim_next_none_when_nothing_queued(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_claim_next_none_when_nothing_queued(data_dir):
     assert claim_next(data_dir, conversation_key=_conv(1), worker_id="w1") is None
 
 
-def test_claim_next_any_returns_any_chat_item(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_claim_next_any_returns_any_chat_item(data_dir):
     record_update(data_dir, _event(301), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     record_update(data_dir, _event(302), conversation_key=_conv(2), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(301))
@@ -193,8 +179,7 @@ def test_claim_next_any_returns_any_chat_item(backend_and_data_dir):
     assert item.event_id in (_event(301), _event(302))
 
 
-def test_queue_exposes_durable_restart_recovery_surface(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_queue_exposes_durable_restart_recovery_surface(data_dir):
     record_update(data_dir, _event(305), conversation_key=_conv(9), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(9), event_id=_event(305))
     claimed = claim_next_any(data_dir, worker_id="w1")
@@ -213,8 +198,7 @@ def test_queue_exposes_durable_restart_recovery_surface(backend_and_data_dir):
     assert refreshed[item_id].dispatch_mode == "recovery"
 
 
-def test_only_one_claimed_per_chat(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_only_one_claimed_per_chat(data_dir):
     record_update(data_dir, _event(401), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     record_update(data_dir, _event(402), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(401))
@@ -229,8 +213,7 @@ def test_only_one_claimed_per_chat(backend_and_data_dir):
     assert second.event_id == _event(402)
 
 
-def test_complete_work_item(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_complete_work_item(data_dir):
     record_update(data_dir, _event(501), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     item_id = enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(501))
     claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
@@ -238,8 +221,7 @@ def test_complete_work_item(backend_and_data_dir):
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
 
 
-def test_fail_work_item(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_fail_work_item(data_dir):
     record_update(data_dir, _event(502), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     _, item_id = record_and_enqueue(data_dir, _event(502), _conv(1), _actor(42), "message")
     claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(502), worker_id="w1")
@@ -247,8 +229,7 @@ def test_fail_work_item(backend_and_data_dir):
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
 
 
-def test_request_cancel_sets_flag_on_claimed_item(backend_and_data_dir):
-    _backend, data_dir = backend_and_data_dir
+def test_request_cancel_sets_flag_on_claimed_item(data_dir):
     _, item_id = record_and_enqueue(data_dir, _event(550), _conv(1), _actor(42), "message")
     claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(550), worker_id="w1")
     result = request_cancel(

@@ -21,19 +21,18 @@ def build_content_store(
     pool_max: int = 10,
     connect_timeout: int = 10,
 ) -> AbstractContentStore:
-    if database_url:
-        from app.content_store_postgres import PostgresContentStore
+    del data_dir
+    configured_url = database_url.strip() or os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
+    if not configured_url:
+        raise RuntimeError("OCTOPUS_DATABASE_URL must be set before building the content store")
+    from app.content_store_postgres import PostgresContentStore
 
-        return PostgresContentStore(
-            database_url,
-            pool_min=pool_min,
-            pool_max=pool_max,
-            connect_timeout=connect_timeout,
-        )
-
-    from app.content_store_sqlite import SQLiteContentStore
-
-    return SQLiteContentStore(data_dir / "content.db")
+    return PostgresContentStore(
+        configured_url,
+        pool_min=pool_min,
+        pool_max=pool_max,
+        connect_timeout=connect_timeout,
+    )
 
 
 def init_content_store(
@@ -46,11 +45,12 @@ def init_content_store(
 ) -> AbstractContentStore:
     """Initialize and seed the shared content store for the current runtime."""
     global _store, _store_key
-    key = (str(data_dir), database_url, pool_min, pool_max, connect_timeout)
+    configured_url = database_url.strip() or os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
+    key = (str(data_dir), configured_url, pool_min, pool_max, connect_timeout)
     if _store is None or _store_key != key:
         _store = build_content_store(
             data_dir=data_dir,
-            database_url=database_url,
+            database_url=configured_url,
             pool_min=pool_min,
             pool_max=pool_max,
             connect_timeout=connect_timeout,
@@ -77,7 +77,7 @@ def get_content_store() -> AbstractContentStore:
     if _store is not None:
         return _store
     data_dir = Path(os.environ.get("BOT_DATA_DIR", "/tmp/telegram-agent-content")).expanduser()
-    database_url = os.environ.get("BOT_DATABASE_URL", "").strip()
+    database_url = os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
     pool_min = int(os.environ.get("BOT_DB_POOL_MIN_SIZE", "1") or "1")
     pool_max = int(os.environ.get("BOT_DB_POOL_MAX_SIZE", "10") or "10")
     connect_timeout = int(os.environ.get("BOT_DB_CONNECT_TIMEOUT_SECONDS", "10") or "10")

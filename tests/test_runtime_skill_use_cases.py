@@ -14,6 +14,7 @@ from octopus_sdk.workflows.runtime_skill_setup import RuntimeSkillSetupUseCases
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skill_catalog_service import get_skill_catalog_service
 from app.runtime import composition
+import app.runtime_backend as runtime_backend
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_import_service import get_skill_import_service
 from app.credential_service import get_credential_service
@@ -36,12 +37,13 @@ def _init_runtime_content(tmp_path: Path, *, default_skills: tuple[str, ...] = (
     cfg = make_config(data_dir=data_dir, registry_url=REGISTRY_URL, default_skills=default_skills)
     init_content_store_for_config(cfg)
     init_credential_store_for_config(cfg)
+    runtime_backend.init(cfg)
     composition.workflows.cache_clear()
     return cfg, data_dir
 
 
-def _flows():
-    return composition.workflows()
+def _flows(cfg):
+    return composition.workflows_for_config(cfg)
 
 
 def test_catalog_use_cases_expose_clean_local_actions(monkeypatch, tmp_path: Path):
@@ -51,8 +53,8 @@ def test_catalog_use_cases_expose_clean_local_actions(monkeypatch, tmp_path: Pat
         registry.add_skill("helper", body="registry helper", version="1.0.0")
         registry.patch(monkeypatch)
 
-        catalog = _flows().runtime_skills.catalog
-        imports = _flows().runtime_skills.imports
+        catalog = _flows(cfg).runtime_skills.catalog
+        imports = _flows(cfg).runtime_skills.imports
 
         builtin = catalog.get_skill("code-review")
         assert builtin is not None
@@ -96,12 +98,12 @@ def test_catalog_use_cases_mark_defaults_for_new_conversations(tmp_path: Path):
 
 
 def test_activation_use_cases_list_and_activate_skill(tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         )
-        activation = _flows().runtime_skills.activation
+        activation = _flows(cfg).runtime_skills.activation
 
         outcome = activation.begin_activate(
             session,
@@ -126,7 +128,7 @@ def test_import_search_use_case_returns_registry_hits(monkeypatch, tmp_path: Pat
         registry.add_skill("helper", body="registry helper", version="1.0.0", description="use-case test")
         registry.patch(monkeypatch)
 
-        results = _flows().runtime_skills.imports.search("helper", registry_url=cfg.registry_url)
+        results = _flows(cfg).runtime_skills.imports.search("helper", registry_url=cfg.registry_url)
 
         assert any(item.name == "helper" for item in results.registry)
         assert results.registry[0].can_import is True
@@ -144,7 +146,7 @@ def test_import_search_use_case_hides_registry_exception(monkeypatch, tmp_path: 
             lambda registry_url: (_ for _ in ()).throw(RuntimeError("internal registry URL with secret")),
         )
 
-        results = _flows().runtime_skills.imports.search("helper", registry_url=cfg.registry_url)
+        results = _flows(cfg).runtime_skills.imports.search("helper", registry_url=cfg.registry_url)
 
         assert results.registry == ()
         assert results.registry_error == "Registry search unavailable. Try again later."
@@ -156,7 +158,7 @@ def test_import_search_use_case_hides_registry_exception(monkeypatch, tmp_path: 
 def test_provider_guidance_preview_use_case_returns_effective_prompt(tmp_path: Path):
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:
-        preview = _flows().provider_guidance.preview.preview(
+        preview = _flows(cfg).provider_guidance.preview.preview(
             "claude",
             role="Senior engineer",
             active_skills=["code-review"],
@@ -226,8 +228,8 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        activation = _flows().runtime_skills.activation
-        setup = _flows().runtime_skills.setup
+        activation = _flows(cfg).runtime_skills.activation
+        setup = _flows(cfg).runtime_skills.setup
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         )
@@ -259,11 +261,11 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
 
 
 async def test_setup_use_case_logs_validation_host_with_skill_name(monkeypatch, caplog, tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        activation = _flows().runtime_skills.activation
-        setup = _flows().runtime_skills.setup
+        activation = _flows(cfg).runtime_skills.activation
+        setup = _flows(cfg).runtime_skills.setup
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         )
@@ -304,8 +306,8 @@ def test_setup_use_case_cancel_and_clear_credential_effects(tmp_path: Path):
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        activation = _flows().runtime_skills.activation
-        setup = _flows().runtime_skills.setup
+        activation = _flows(cfg).runtime_skills.activation
+        setup = _flows(cfg).runtime_skills.setup
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         )
@@ -340,7 +342,7 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         actor_key = telegram_actor_key(42)
-        setup = _flows().runtime_skills.setup
+        setup = _flows(cfg).runtime_skills.setup
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         )
@@ -364,7 +366,7 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
 
 
 def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypatch, tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
@@ -384,11 +386,11 @@ def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypa
                 return list(requirements)
 
         outcome = RuntimeSkillActivationUseCases(
-            catalog=_flows().runtime_skills.catalog,
+            catalog=_flows(cfg).runtime_skills.catalog,
             activation=get_skill_activation_service(),
             credentials=FakeCredentials(),
             guidance=get_provider_guidance_service(),
-            setup=_flows().runtime_skills.setup,
+            setup=_flows(cfg).runtime_skills.setup,
             prompt_size_warning_threshold=0,
         ).begin_activate(
             session,
@@ -404,7 +406,7 @@ def test_activation_use_case_loads_credentials_only_for_requested_skill(monkeypa
 
 
 def test_setup_use_case_checks_credentials_only_for_active_skills(monkeypatch, tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
         session = session_from_dict(
             default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
@@ -429,7 +431,7 @@ def test_setup_use_case_checks_credentials_only_for_active_skills(monkeypatch, t
                 return {}
 
         outcome = RuntimeSkillSetupUseCases(
-            catalog=_flows().runtime_skills.catalog,
+            catalog=_flows(cfg).runtime_skills.catalog,
             credentials=FakeCredentials(),
             activation=get_skill_activation_service(),
             default_validator=validate_credential,
@@ -447,9 +449,9 @@ def test_setup_use_case_checks_credentials_only_for_active_skills(monkeypatch, t
 
 
 def test_setup_use_case_detects_foreign_setup_without_skill_filter(tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
-        setup = _flows().runtime_skills.setup
+        setup = _flows(cfg).runtime_skills.setup
         raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),
@@ -470,9 +472,9 @@ def test_setup_use_case_detects_foreign_setup_without_skill_filter(tmp_path: Pat
 
 
 def test_activation_use_case_blocks_active_foreign_setup_until_stale(tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
-        activation = _flows().runtime_skills.activation
+        activation = _flows(cfg).runtime_skills.activation
         raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),
@@ -497,9 +499,9 @@ def test_activation_use_case_blocks_active_foreign_setup_until_stale(tmp_path: P
 
 
 def test_activation_use_case_replaces_stale_foreign_setup(tmp_path: Path):
-    _, data_dir = _init_runtime_content(tmp_path)
+    cfg, data_dir = _init_runtime_content(tmp_path)
     try:
-        activation = _flows().runtime_skills.activation
+        activation = _flows(cfg).runtime_skills.activation
         raw = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
         raw["awaiting_skill_setup"] = {
             "actor_key": telegram_actor_key(7),

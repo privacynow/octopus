@@ -13,12 +13,12 @@ def _reset_credential_store_state():
     credential_store.reset_for_test()
 
 
-def test_init_credential_store_for_config_prefers_bot_credential_key(tmp_path: Path):
+def test_init_credential_store_for_config_prefers_bot_credential_key(tmp_path: Path, postgres_db_url: str):
     cfg = make_config(
         data_dir=tmp_path,
         telegram_token="telegram-token-a",
         credential_key="credential-key-a",
-        database_url="",
+        database_url=postgres_db_url,
     )
 
     store = credential_store.init_credential_store_for_config(cfg)
@@ -30,7 +30,7 @@ def test_init_credential_store_for_config_prefers_bot_credential_key(tmp_path: P
         data_dir=tmp_path,
         telegram_token="telegram-token-b",
         credential_key="credential-key-a",
-        database_url="",
+        database_url=postgres_db_url,
     )
     rotated_store = credential_store.init_credential_store_for_config(rotated_cfg)
 
@@ -40,12 +40,13 @@ def test_init_credential_store_for_config_prefers_bot_credential_key(tmp_path: P
 def test_init_credential_store_for_config_with_explicit_key_emits_no_fallback_error(
     tmp_path: Path,
     caplog,
+    postgres_db_url: str,
 ):
     cfg = make_config(
         data_dir=tmp_path,
         telegram_token="telegram-token-a",
         credential_key="credential-key-a",
-        database_url="",
+        database_url=postgres_db_url,
     )
 
     with caplog.at_level("ERROR"):
@@ -60,12 +61,13 @@ def test_init_credential_store_for_config_with_explicit_key_emits_no_fallback_er
 def test_init_credential_store_for_config_falls_back_to_telegram_token_and_logs_error_guidance(
     tmp_path: Path,
     caplog,
+    postgres_db_url: str,
 ):
     cfg = make_config(
         data_dir=tmp_path,
         telegram_token="telegram-token-a",
         credential_key="",
-        database_url="",
+        database_url=postgres_db_url,
     )
 
     with caplog.at_level("ERROR"):
@@ -99,19 +101,22 @@ def test_get_credential_store_requires_credential_key_or_telegram_token(monkeypa
     assert "BOT_CREDENTIAL_KEY or TELEGRAM_BOT_TOKEN is required" in str(exc.value)
 
 
-def test_sqlite_credential_store_logs_recovery_hint_on_decrypt_failure(
+def test_credential_store_logs_recovery_hint_on_decrypt_failure(
     tmp_path: Path,
     caplog,
+    postgres_db_url: str,
 ):
     original = credential_store.build_credential_store(
         data_dir=tmp_path,
         secret_material="credential-key-a",
+        database_url=postgres_db_url,
     )
     original.save("tg:42", "alpha", "API_TOKEN", "secret-value")
 
     rotated = credential_store.build_credential_store(
         data_dir=tmp_path,
         secret_material="credential-key-b",
+        database_url=postgres_db_url,
     )
 
     with caplog.at_level("ERROR"):

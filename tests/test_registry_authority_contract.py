@@ -17,11 +17,11 @@ from octopus_sdk.registry.models import (
 )
 
 from octopus_registry.authority import StoreBackedRegistryAuthority
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 
 
-def _authority(tmp_path: Path) -> StoreBackedRegistryAuthority:
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+def _authority(postgres_db_url: str) -> StoreBackedRegistryAuthority:
+    store = RegistryPostgresStore(postgres_db_url)
     return StoreBackedRegistryAuthority(store)
 
 
@@ -35,8 +35,8 @@ def _card(*, slug: str, display_name: str) -> AgentCard:
     )
 
 
-def test_store_backed_authority_passes_core_authority_profile(tmp_path: Path) -> None:
-    authority = _authority(tmp_path)
+def test_store_backed_authority_passes_core_authority_profile(postgres_db_url: str) -> None:
+    authority = _authority(postgres_db_url)
     enrollment = authority.enroll_agent(_card(slug="m1", display_name="M1"))
 
     renewed = authority.renew_enrollment(

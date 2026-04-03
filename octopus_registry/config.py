@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 _KNOWN_DEFAULT_TOKENS = {"dev-enroll-token", "dev-ui-token", "changeme"}
@@ -13,7 +12,6 @@ _KNOWN_DEFAULT_TOKENS = {"dev-enroll-token", "dev-ui-token", "changeme"}
 
 @dataclass(frozen=True)
 class RegistryConfig:
-    db_path: Path
     database_url: str
     enroll_token: str
     ui_token: str
@@ -30,8 +28,7 @@ def registry_allows_http() -> bool:
 
 def load_registry_config() -> RegistryConfig:
     return RegistryConfig(
-        db_path=Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/octopus-registry/registry.sqlite3")),
-        database_url=os.environ.get("REGISTRY_DATABASE_URL", "").strip(),
+        database_url=os.environ.get("OCTOPUS_DATABASE_URL", "").strip(),
         enroll_token=os.environ.get("REGISTRY_ENROLL_TOKEN", "").strip(),
         ui_token=os.environ.get("REGISTRY_UI_TOKEN", "").strip(),
         display_name=os.environ.get("REGISTRY_DISPLAY_NAME", "").strip(),
@@ -43,6 +40,8 @@ def load_registry_config() -> RegistryConfig:
 
 def validate_registry_config(config: RegistryConfig | None = None) -> RegistryConfig:
     current = config or load_registry_config()
+    if not current.database_url:
+        raise RuntimeError("OCTOPUS_DATABASE_URL must be set before the registry can start.")
     if not current.enroll_token:
         raise RuntimeError("REGISTRY_ENROLL_TOKEN must be set before the registry can start.")
     if not current.ui_token:

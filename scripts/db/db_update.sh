@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Apply pending schema versions to an existing DB. Run before app restart after schema changes.
-# Requires BOT_DATABASE_URL. See README.md.
+# Requires OCTOPUS_DATABASE_URL. See README.md.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"

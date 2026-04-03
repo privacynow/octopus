@@ -15,6 +15,21 @@ The main entrypoint is:
 reconnects the local registry stack, and handles normal operator lifecycle
 work.
 
+## Database Model
+
+The shipped runtime is Postgres-only.
+
+- set one `OCTOPUS_DATABASE_URL` for the deployment
+- run schema bootstrap or update before starting services
+- bots and the registry share that same logical database
+- runtime state is separated by schemas:
+  - `bot_runtime`
+  - `agent_registry`
+  - `bot_content`
+  - `bot_credentials`
+
+There is no supported SQLite runtime path in this repo.
+
 ## Quick Start
 
 1. Create a Telegram bot with `@BotFather` and copy the token.

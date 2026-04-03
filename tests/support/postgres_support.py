@@ -225,6 +225,7 @@ def truncate_runtime_tables(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE bot_runtime.control_plane_commands RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
+        cur.execute("TRUNCATE TABLE bot_runtime.worker_heartbeats CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.sessions CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.usage_log RESTART IDENTITY CASCADE")
@@ -248,14 +249,21 @@ def truncate_registry_tables(conn) -> None:
 def truncate_content_tables(conn) -> None:
     """Reset the dedicated content schema in the test database."""
     with conn.cursor() as cur:
-        cur.execute("DROP SCHEMA IF EXISTS bot_content CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.skill_files CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.skill_approval_records CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_approval_records CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.skill_revisions CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_revisions CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.skill_tracks CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.provider_guidance_tracks CASCADE")
+        cur.execute("TRUNCATE TABLE bot_content.skill_namespaces CASCADE")
     conn.commit()
 
 
 def truncate_credential_tables(conn) -> None:
     """Reset the dedicated credential schema in the test database."""
     with conn.cursor() as cur:
-        cur.execute("DROP SCHEMA IF EXISTS bot_credentials CASCADE")
+        cur.execute("TRUNCATE TABLE bot_credentials.credentials CASCADE")
     conn.commit()
 
 

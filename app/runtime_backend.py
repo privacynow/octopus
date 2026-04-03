@@ -20,12 +20,49 @@ log = logging.getLogger(__name__)
 class _Backend:
     """Holds session, transport, and control-plane stores for one runtime."""
 
-    __slots__ = ("session_store", "transport_store", "control_plane_store")
+    __slots__ = (
+        "session_store",
+        "transport_store",
+        "control_plane_store",
+        "database_url",
+        "pool_min",
+        "pool_max",
+        "connect_timeout",
+    )
 
-    def __init__(self, session_store: Any, transport_store: Any, control_plane_store: Any) -> None:
+    def __init__(
+        self,
+        session_store: Any,
+        transport_store: Any,
+        control_plane_store: Any,
+        *,
+        database_url: str,
+        pool_min: int,
+        pool_max: int,
+        connect_timeout: int,
+    ) -> None:
         self.session_store = session_store
         self.transport_store = transport_store
         self.control_plane_store = control_plane_store
+        self.database_url = database_url
+        self.pool_min = pool_min
+        self.pool_max = pool_max
+        self.connect_timeout = connect_timeout
+
+
+def is_initialized() -> bool:
+    """Return whether the runtime backend has been initialized."""
+    return _backend is not None
+
+
+def _matches_config(config: BotConfig) -> bool:
+    return (
+        _backend is not None
+        and _backend.database_url == config.database_url
+        and _backend.pool_min == config.db_pool_min_size
+        and _backend.pool_max == config.db_pool_max_size
+        and _backend.connect_timeout == config.db_connect_timeout_seconds
+    )
 
 
 def session_store():
@@ -52,39 +89,44 @@ def control_plane_store():
 def init(config: BotConfig) -> None:
     """Select and initialize the session and transport backend config. Call once at startup."""
     global _backend
-    if config.database_url:
-        from app.control_plane.postgres_impl import PostgresControlPlaneStore
-        from app.storage_postgres import PostgresSessionStore
-        from app.work_queue_postgres_impl import PostgresTransportStore
-        _backend = _Backend(
-            PostgresSessionStore(
-                config.database_url,
-                pool_min=config.db_pool_min_size,
-                pool_max=config.db_pool_max_size,
-                connect_timeout=config.db_connect_timeout_seconds,
-            ),
-            PostgresTransportStore(
-                config.database_url,
-                pool_min=config.db_pool_min_size,
-                pool_max=config.db_pool_max_size,
-                connect_timeout=config.db_connect_timeout_seconds,
-            ),
-            PostgresControlPlaneStore(
-                config.database_url,
-                pool_min=config.db_pool_min_size,
-                pool_max=config.db_pool_max_size,
-                connect_timeout=config.db_connect_timeout_seconds,
-            ),
-        )
-    else:
-        from app.control_plane.sqlite_impl import SQLiteControlPlaneStore
-        from app.storage_sqlite import SQLiteSessionStore
-        from app.work_queue_sqlite_impl import SQLiteTransportStore
-        _backend = _Backend(SQLiteSessionStore(), SQLiteTransportStore(), SQLiteControlPlaneStore())
+    if not config.database_url:
+        raise RuntimeError("OCTOPUS_DATABASE_URL must be set before runtime_backend.init(config)")
+    if _matches_config(config):
+        return
+    if _backend is not None:
+        reset_for_test()
+    from app.control_plane.postgres_impl import PostgresControlPlaneStore
+    from app.storage_postgres import PostgresSessionStore
+    from app.work_queue_postgres_impl import PostgresTransportStore
+
+    _backend = _Backend(
+        PostgresSessionStore(
+            config.database_url,
+            pool_min=config.db_pool_min_size,
+            pool_max=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        ),
+        PostgresTransportStore(
+            config.database_url,
+            pool_min=config.db_pool_min_size,
+            pool_max=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        ),
+        PostgresControlPlaneStore(
+            config.database_url,
+            pool_min=config.db_pool_min_size,
+            pool_max=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        ),
+        database_url=config.database_url,
+        pool_min=config.db_pool_min_size,
+        pool_max=config.db_pool_max_size,
+        connect_timeout=config.db_connect_timeout_seconds,
+    )
 
 
 def reset_for_test() -> None:
-    """Clear current backend and install a fresh SQLite backend. For test isolation only."""
+    """Clear current backend and close Postgres pools. For test isolation only."""
     global _backend
     if _backend is not None:
         try:
@@ -99,7 +141,10 @@ def reset_for_test() -> None:
             _backend.control_plane_store.close_all_control_plane_db()
         except Exception:
             log.debug("Control-plane store close failed during reset", exc_info=True)
-    from app.control_plane.sqlite_impl import SQLiteControlPlaneStore
-    from app.storage_sqlite import SQLiteSessionStore
-    from app.work_queue_sqlite_impl import SQLiteTransportStore
-    _backend = _Backend(SQLiteSessionStore(), SQLiteTransportStore(), SQLiteControlPlaneStore())
+    _backend = None
+    try:
+        from app.db.postgres import close_pools
+
+        close_pools()
+    except Exception:
+        log.debug("Postgres pool close failed during reset", exc_info=True)

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Optional: start Postgres, run DB bootstrap/update and doctor. Use when you set BOT_DATABASE_URL.
-# For default Local Runtime (SQLite) you do not need this script.
+# Start Postgres, run DB bootstrap/update and doctor for the standard runtime.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -42,5 +41,5 @@ else
   exit 1
 fi
 
-echo "Postgres stack ready. Set BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot in the bot env file to use it."
+echo "Postgres stack ready. Set OCTOPUS_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot in the bot env file."
 echo "To run the bot: ./octopus"

@@ -308,6 +308,7 @@ class DockerRunner:
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
             "OCTOPUS_DB_HOST": database_host,
+            "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": provider_auth_dir,
             "BOT_ENV_FILE": str(env_file.relative_to(self.repo_dir)),
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),

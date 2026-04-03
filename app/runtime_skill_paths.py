@@ -3,4 +3,4 @@
 from pathlib import Path
 
 
-BUILTIN_SKILL_CATALOG_DIR = Path(__file__).resolve().parent.parent / "skills" / "catalog"
+BUILTIN_SKILL_CATALOG_DIR = Path(__file__).resolve().parent / "builtin_skills"

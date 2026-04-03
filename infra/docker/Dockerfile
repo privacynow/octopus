@@ -10,7 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application and schema (migrations live in app/db/migrations/postgres)
 COPY app ./app
 COPY octopus_sdk ./octopus_sdk
-COPY skills ./skills
 COPY scripts ./scripts
 
 # Default: run the bot (overridden by compose for one-shot db commands)

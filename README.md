@@ -152,7 +152,7 @@ fault state.
   Core, store, and custom skills
 - [docs/sdk-bot-development.md](/Users/tinker/output/bots/telegram-agent-bot/docs/sdk-bot-development.md)
   SDK-oriented bot development guide
-- [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md)
+- [docs/ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/docs/ARCHITECTURE.md)
   System architecture and runtime boundaries
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

@@ -2,26 +2,43 @@
 
 Skills use one shared backend model across the registry UI, Telegram, and any
 future clients. Different clients may bundle actions differently, but they must
-call the same capability graph and arrive at the same state transitions.
+call the same backend operations and arrive at the same state transitions.
 
 ## Core Layers
 
-Every skill surface should describe the same three layers:
+Every skill surface should describe the same bot/session states:
 
 1. `Catalog`
    What skills exist for this product, tenant, or bot context.
-2. `Installed on bot`
+2. `Available on this bot`
    Which skills are available on one specific agent.
-3. `Active in conversation`
-   Which installed skills are turned on for one conversation right now.
+3. `Default for new conversations`
+   Which available skills seed newly created conversations for that bot.
+4. `Active in this conversation`
+   Which available skills are turned on for one conversation right now.
 
-These layers are distinct. Installing a skill on a bot does not activate it in
-every conversation. Activating a skill in one conversation does not install it
-globally.
+These states are distinct. Making a skill available on a bot does not activate
+it in every conversation. Setting a default seeds new conversations only.
+Activating a skill in one conversation does not change bot-wide availability.
+
+## Routing Is Skill-Derived
+
+Cross-bot discovery and delegation use `routing skills`, which are derived from
+the normal skill state rather than managed as a second product object.
+
+A routing skill is:
+
+- available on the bot
+- runtime-ready
+- allowed by registry-owned routing policy
+
+Routing uses that bot-level projection. Conversation activation stays
+session-local. Additional filters such as region, tier, or compliance may
+exist as routing policy dimensions, but they are not a second skill system.
 
 ## Orthogonal Dimensions
 
-Skills also carry dimensions that are independent from the three core layers:
+Skills also carry dimensions that are independent from the core states:
 
 - `Source`
   - `Core`: built into the runtime image
@@ -38,7 +55,7 @@ Skills also carry dimensions that are independent from the three core layers:
   - `Published`
   - `Archived`
 
-## Capability Graph
+## Shared Operations
 
 The shared backend operations are:
 
@@ -55,7 +72,7 @@ reimplement their rules or invent extra state machines.
 Examples:
 
 - Registry UI `Add to conversation`
-  - inspect installed state
+  - inspect bot availability
   - activate
   - if setup is needed, prompt for credentials
 - Telegram `/skills add <name>`
@@ -66,7 +83,7 @@ Both flows still use the same activation and setup operations.
 
 ## Peer Clients
 
-Registry UI and chat clients are peers in capability terms:
+Registry UI and chat clients are peers in product terms:
 
 - same backend operations
 - same validation
@@ -77,7 +94,7 @@ Registry UI and chat clients are peers in capability terms:
 The registry UI is allowed to be a richer wrapper because it can present
 multi-step flows, detail panels, and lifecycle history more comfortably than a
 chat surface. That richer UX must still be built on the shared backend
-capability graph.
+operations.
 
 ## Draft Package Model
 
@@ -192,7 +209,7 @@ Registry and chat are peers here:
   steps
 - neither client is allowed to invent a separate lifecycle or draft format
 
-Current client exposure over the same backend capability graph:
+Current client exposure over the same backend operations:
 
 - registry `Skills -> Studio`
   - package-aware draft editing
@@ -204,11 +221,11 @@ Current client exposure over the same backend capability graph:
   - replace the full draft package
 
 The registry is the richer wrapper, not the authority. Chat remains a peer
-capability client.
+client.
 
 ## Product Rules
 
-- Store listings feed the same `Catalog -> Installed on bot` flow. The store is
+- Store listings feed the same `Catalog -> Available on this bot` flow. The store is
   a source, not a separate product concept.
 - Custom skills use the same install and activation model after they are
   published.
@@ -216,10 +233,13 @@ capability client.
   ingestion paths differ (disk seed, store import, in-product draft authoring).
 - User-facing copy should prefer:
   - `Catalog`
-  - `Installed on bot`
-  - `Active in conversation`
+  - `Available on this bot`
+  - `Default for new conversations`
+  - `Active in this conversation`
+  - `Routing skills`
   - `Needs setup`
   - `Ready`
   - `Core / Store / Custom`
 
-Avoid surfacing internal-only terms such as `builtin` as the primary UX label.
+Avoid surfacing internal-only terms such as `builtin` or a competing end-user
+`capabilities` concept as the primary UX label.

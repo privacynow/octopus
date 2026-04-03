@@ -233,11 +233,16 @@ workspace with `/project <name>`.
 Skills and guidance share one backend lifecycle across the registry UI and chat
 clients.
 
-The user-facing skill model has three layers:
+The user-facing skill model has four bot/session states:
 
 - `Catalog`
-- `Installed on bot`
-- `Active in conversation`
+- `Available on this bot`
+- `Default for new conversations`
+- `Active in this conversation`
+
+Cross-bot discovery and delegation use a derived bot-level projection:
+
+- `Routing skills`
 
 And these orthogonal labels:
 
@@ -251,10 +256,14 @@ Current product behavior:
   `BOT_SKILLS`
 - `Store` skills come from the remote skill store and can be installed on a bot
   from the browser **Skills** page or chat `/skills install ...`
-- the browser **Skills** page manages what is installed on a bot and the custom
+- the browser **Skills** page manages what is available on a bot and the custom
   skill lifecycle
 - conversation activation is separate and happens in a conversation’s
   **Skills** panel or via chat `/skills add ...`
+- defaults seed new sessions only; they do not activate every existing
+  conversation
+- routing skills are the subset advertised for discovery and cross-bot
+  delegation
 - guidance is provider-level instruction state for Claude/Codex behavior and is
   managed through Telegram `/guidance ...` commands or the browser
   **Guidance** page
@@ -270,7 +279,7 @@ chat clients. A mutable draft can include:
 
 The registry **Skills** page is the richest wrapper over those shared
 operations, but it is not a different system. Telegram exposes the same draft
-capability graph through `/skills ...` commands, including:
+operations through `/skills ...` commands, including:
 
 - `/skills package <name>` to inspect the full draft package as JSON
 - `/skills package <name> <json>` to replace the full draft package

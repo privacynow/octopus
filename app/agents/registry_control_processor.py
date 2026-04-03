@@ -11,6 +11,7 @@ from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_id_from_authority_ref,
 )
+from app.exact_aliases import matches_exact_alias
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
 from app.control_plane.requests import (
@@ -300,7 +301,12 @@ class RegistryControlProcessor(ControlProcessor):
             )
             rows = await client.search(query)
             for row in rows:
-                if row.agent_id == request.target_agent_id:
+                if matches_exact_alias(
+                    request.target_agent_id,
+                    identifier=row.agent_id,
+                    slug=row.slug,
+                    display_name=row.display_name,
+                ):
                     return ControlReply(
                         command_id=command.command_id,
                         status="completed",

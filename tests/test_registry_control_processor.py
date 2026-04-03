@@ -349,6 +349,50 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
 
 
 @pytest.mark.asyncio
+async def test_registry_control_processor_resolves_target_authority_by_slug_alias() -> None:
+    registry = RegistryConnectionConfig(
+        registry_id="alpha",
+        url="http://alpha",
+        enroll_token="enroll-alpha",
+        registry_scope="full",
+    )
+    client = _FakeRegistryClient(
+        search_rows=[
+            {
+                "agent_id": "agent-target-1",
+                "display_name": "M1",
+                "slug": "m1",
+                "role": "advisor",
+                "routing_skills": ["wisdom"],
+                "tags": [],
+                "description": "Advice bot",
+                "connectivity_state": "connected",
+                "current_capacity": 1,
+                "max_capacity": 2,
+            }
+        ]
+    )
+    runtime = _FakeRegistryAccess((registry,), {"alpha": client}, origin_ids={"alpha": "agent-self"})
+    processor = RegistryControlProcessor(runtime)
+
+    reply = await processor.process(
+        _command(
+            "cmd-resolve-slug",
+            capability="agent_directory",
+            operation="resolve_target_authority",
+            authority_ref="registry:alpha",
+            payload_json=ResolveTargetAuthorityRequest(target_agent_id="m1").model_dump_json(),
+        )
+    )
+
+    resolution = AuthorityResolution.model_validate_json(reply.result_json or "{}")
+    assert reply.status == "completed"
+    assert resolution.status == "resolved"
+    assert resolution.authority_ref == "registry:alpha"
+    assert client.last_search.exclude_agent_ids == ["agent-self"]
+
+
+@pytest.mark.asyncio
 async def test_registry_control_processor_returns_failed_reply_without_blocking_other_authorities() -> None:
     alpha = RegistryConnectionConfig(
         registry_id="alpha",

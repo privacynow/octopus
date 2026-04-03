@@ -168,6 +168,9 @@ function renderAgentDetail(container, params) {
         head.innerHTML = '<strong>Overview</strong>';
         card.appendChild(head);
 
+        const body = document.createElement('div');
+        body.className = 'list-shell';
+
         const grid = UI.renderMetadataGrid([
             { label: 'Agent ID', value: agent.agent_id || '—' },
             { label: 'Scope', value: agent.registry_scope || '—' },
@@ -178,13 +181,13 @@ function renderAgentDetail(container, params) {
             execution.faultedAt ? { label: 'Faulted at', value: UI.relativeTime(execution.faultedAt) } : null,
             execution.detail ? { label: 'Last failure', value: execution.detail } : null,
         ].filter(Boolean));
-        card.appendChild(grid);
+        body.appendChild(grid);
 
         if (resetNotice) {
             const note = document.createElement('div');
             note.className = 'agent-execution-note';
             note.textContent = resetNotice;
-            card.appendChild(note);
+            body.appendChild(note);
         }
 
         if ((agent.routing_skills || []).length) {
@@ -196,8 +199,10 @@ function renderAgentDetail(container, params) {
                 chip.textContent = skillName;
                 chips.appendChild(chip);
             });
-            card.appendChild(chips);
+            body.appendChild(chips);
         }
+
+        card.appendChild(body);
 
         return card;
     }

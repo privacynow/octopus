@@ -216,6 +216,7 @@ def test_codex_context_uses_octopus_skill_semantics(tmp_path: Path):
             assert "Do not answer in terms of Codex-native skills" in prompt
             assert "available on this bot" in prompt
             assert "active in this conversation" in prompt
+            assert "current bot in this conversation is answering" in prompt
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

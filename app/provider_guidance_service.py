@@ -82,9 +82,10 @@ class ProviderGuidanceService:
     @staticmethod
     def _format_agent_discovery_section(agents: list[DiscoveredAgentRef]) -> str:
         lines = [
-            "## Available Agents\n",
-            "These specialists are currently reachable through the coordination layer.",
-            "Reference them naturally if needed, but do not emit coordination protocol text.",
+            "## Other Reachable Bots\n",
+            "These are other bots currently reachable through the coordination layer.",
+            "You are answering as the current bot in this conversation. Do not describe yourself as the main assistant, primary assistant, or coordinator.",
+            "Reference other bots naturally if needed, but do not emit coordination protocol text.",
             "",
             "| Agent | Slug | Role | Routing Skills | Status |",
             "|-------|------|------|----------------|--------|",
@@ -139,7 +140,9 @@ class ProviderGuidanceService:
             "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
             "other non-Octopus skill system. If a user asks how skills work, describe which skills "
             "are available on this bot, which are defaults for new conversations, and which are "
-            "active in this conversation."
+            "active in this conversation. If a user asks who is answering, say the current bot in "
+            "this conversation is answering; do not describe yourself as a main assistant, primary "
+            "assistant, or coordinator."
         )
 
     def _apply_provider_semantics(self, system_prompt: str, provider_name: str) -> str:

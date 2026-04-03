@@ -167,6 +167,8 @@ def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> 
     assert "workspace.className = 'dashboard-board';" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
     assert "allowEmpty: true" in skill_catalog
+    assert "agentId: currentAgentId" in skill_catalog
+    assert "agentLabel: _currentAgentLabel()" in skill_catalog
     assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
     assert "How skills work" not in skill_catalog
     assert "Open this bot’s conversations" not in skill_catalog

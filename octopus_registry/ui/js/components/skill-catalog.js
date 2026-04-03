@@ -64,6 +64,8 @@ function renderSkillCatalog(container) {
 
     const agentDropdown = UI.createAgentManagementDropdown([], '', (nextAgentId) => {
         currentAgentId = nextAgentId;
+        selectedLocalDetail = null;
+        selectedLifecycle = null;
         _writeState();
         void loadSkills({ forceCatalog: true });
     }, {
@@ -654,6 +656,8 @@ function renderSkillCatalog(container) {
     function renderLocalDetail(summary, detail, lifecycle) {
         UI.memoizedRender(detailEl, {
             mode: currentMode,
+            agentId: currentAgentId,
+            agentLabel: _currentAgentLabel(),
             summary,
             detail,
             lifecycle,
@@ -661,7 +665,7 @@ function renderSkillCatalog(container) {
             const nodes = [];
             nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
             if (state.mode === 'catalog') {
-                nodes.push(_buildCatalogHelpPanel(state.summary, state.detail));
+                nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
             }
             if (String(state.summary.source_kind || '') === 'custom' || state.mode === 'studio') {
                 nodes.push(_buildStudioPanel(state.summary, state.detail, state.lifecycle));
@@ -671,6 +675,8 @@ function renderSkillCatalog(container) {
             signatureFn(state) {
                 return {
                     mode: String(state.mode || ''),
+                    agentId: String(state.agentId || ''),
+                    agentLabel: String(state.agentLabel || ''),
                     name: String((state.summary && state.summary.name) || ''),
                     lifecycle: String((state.detail && state.detail.lifecycle_status) || ''),
                     runtimeAvailable: Boolean(state.detail && state.detail.runtime_available),
@@ -870,7 +876,7 @@ function renderSkillCatalog(container) {
         return panel;
     }
 
-    function _buildCatalogHelpPanel(summary, detail) {
+    function _buildCatalogHelpPanel(summary, detail, agentLabel) {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
         panel.dataset.key = `skill-help:${detail.name || summary.name || ''}`;
@@ -880,26 +886,27 @@ function renderSkillCatalog(container) {
         panel.appendChild(heading);
         const copy = document.createElement('p');
         copy.className = 'quiet-note';
+        const label = agentLabel || _currentAgentLabel();
         copy.textContent = detail.runtime_available
-            ? `This skill is available on ${_currentAgentLabel()}. Open a conversation with that bot and use its Skills panel to activate it there.`
-            : `This skill is available on ${_currentAgentLabel()}, but it must be published before it can be activated in a conversation.`;
+            ? `This skill is available on ${label}. Open a conversation with that bot and use its Skills panel to activate it there.`
+            : `This skill is available on ${label}, but it must be published before it can be activated in a conversation.`;
         panel.appendChild(copy);
         if (detail.default_for_new_conversations) {
             const defaultsNote = document.createElement('p');
             defaultsNote.className = 'quiet-note';
-            defaultsNote.textContent = `This skill is also a default for new conversations on ${_currentAgentLabel()}. Existing conversations still require activation here.`;
+            defaultsNote.textContent = `This skill is also a default for new conversations on ${label}. Existing conversations still require activation here.`;
             panel.appendChild(defaultsNote);
         }
         if (detail.runtime_available) {
             const openBtn = document.createElement('button');
             openBtn.type = 'button';
             openBtn.className = 'btn btn-sm';
-            openBtn.textContent = `Open a conversation with ${_currentAgentLabel()}`;
+            openBtn.textContent = `Open a conversation with ${label}`;
             openBtn.addEventListener('click', async () => {
                 openBtn.disabled = true;
                 try {
                     const conversation = await API.openConversationForAgent(currentAgentId, {
-                        title: `Conversation with ${_currentAgentLabel()}`,
+                        title: `Conversation with ${label}`,
                     });
                     Router.navigate(
                         `/ui/conversations/${encodeURIComponent(conversation.conversation_id)}?manage=skills&activate_skill=${encodeURIComponent(detail.name || summary.name || '')}`,

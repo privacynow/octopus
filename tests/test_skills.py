@@ -954,6 +954,7 @@ def test_codex_context_builders_apply_octopus_skill_semantics():
         assert "Octopus Skill Semantics" in prompt
         assert "Do not answer in terms of Codex-native skills" in prompt
         assert "available on this bot" in prompt
+        assert "current bot in this conversation is answering" in prompt
 
 
 # =====================================================================

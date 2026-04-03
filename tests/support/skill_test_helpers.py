@@ -514,7 +514,9 @@ def _provider_semantics_note(provider_name: str) -> str:
         "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
         "other non-Octopus skill system. If a user asks how skills work, describe which skills "
         "are available on this bot, which are defaults for new conversations, and which are "
-        "active in this conversation."
+        "active in this conversation. If a user asks who is answering, say the current bot in "
+        "this conversation is answering; do not describe yourself as a main assistant, primary "
+        "assistant, or coordinator."
     )
 
 

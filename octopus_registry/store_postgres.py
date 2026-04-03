@@ -95,7 +95,6 @@ from .store_base import (
     RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
     delegation_event,
-    direct_assignment_message_text,
     routed_task_created_event,
     routed_task_external_conversation_ref,
     validated_action_payload,
@@ -2010,7 +2009,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
             if validated_envelope.action == "direct_assign":
                 assignment = action_payload
-                operator_message = direct_assignment_message_text(assignment)
                 routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
                 resolved_target = self._resolve_selector(conn, assignment.selector)
                 requested_skills = normalized_requested_skills(
@@ -2018,24 +2016,27 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     selector=assignment.selector,
                 )
                 inserted_events: list[EventRecord] = []
-                message_event = self._insert_event(
-                    conn,
-                    event_id=f"message.user:{validated_envelope.action_id}",
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind="message.user",
-                    actor="operator",
-                    content=operator_message,
-                    metadata={
-                        "source_action": "direct_assign",
-                        "selector_kind": assignment.selector.kind,
-                        "selector_value": assignment.selector.value,
-                        "routed_task_id": routed_task_id,
-                    },
-                    created_at=now,
-                )
-                if message_event is not None:
-                    inserted_events.append(message_event)
+                parent_event_id = str(assignment.parent_event_id or "").strip()
+                message_metadata = {
+                    "source_action": "direct_assign",
+                    "action_id": validated_envelope.action_id,
+                    "selector_kind": assignment.selector.kind,
+                    "selector_value": assignment.selector.value,
+                    "routed_task_id": routed_task_id,
+                    "requested_skills": requested_skills,
+                }
+                if parent_event_id:
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.events
+                            SET metadata_json = COALESCE(metadata_json, '{{}}'::jsonb) || %s
+                            WHERE conversation_id = %s
+                              AND event_id = %s
+                              AND kind = 'message.user'
+                            """,
+                            (_jsonb(message_metadata), conversation_id, parent_event_id),
+                        )
                 request = {
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": conversation_id,
@@ -2055,8 +2056,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "created_at": now,
                 }
                 created = self._create_routed_task_in_tx(conn, request, now=now)
-                if created.get("event") is not None:
-                    inserted_events.append(created["event"])
+                inserted_event = created.get("event")
+                if inserted_event is not None:
+                    inserted_events.append(inserted_event)
                 routed_tasks.append({
                     "routed_task_id": request["routed_task_id"],
                     "target_agent_id": resolved_target["agent_id"],
@@ -2064,51 +2066,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": assignment.title,
                     "status": "queued",
                 })
-                submitted_event = delegation_event(
-                    kind="delegation.submitted",
-                    proposal_id=validated_envelope.action_id,
-                    conversation_id=conversation_id,
-                    tasks=[
-                        {
-                            "draft_id": validated_envelope.action_id,
-                            "title": assignment.title,
-                            "target": resolved_target["agent_id"],
-                            "status": "submitted",
-                            "routed_task_id": request["routed_task_id"],
-                            "selector_kind": assignment.selector.kind,
-                            "selector_value": assignment.selector.value,
-                            "instructions": assignment.instructions,
-                            "priority": assignment.priority,
-                            "requested_skills": requested_skills,
-                            "context": dict(assignment.context),
-                        }
-                    ],
-                    created_at=now,
-                    content="Direct assignment submitted",
-                    origin_transport_ref=str(assignment.origin_transport_ref or ""),
-                    authorized_actor_key=str(assignment.authorized_actor_key or ""),
-                )
-                inserted_event = self._insert_event(
-                    conn,
-                    event_id=f"delegation.submitted:{validated_envelope.action_id}",
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind=submitted_event["kind"],
-                    actor="operator",
-                    content=submitted_event["content"],
-                    metadata=submitted_event["metadata"],
-                    created_at=submitted_event["created_at"],
-                )
                 with _cur(conn) as cur:
                     cur.execute(
                         f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                         (now, conversation_id),
                     )
-                duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event__row(f"delegation.submitted:{validated_envelope.action_id}")
-                elif inserted_event is not None:
-                    inserted_events.append(inserted_event)
+                    inserted_event = _event__row(f"routed-task:{routed_task_id}:queued")
+                duplicate = created.get("event") is None
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,

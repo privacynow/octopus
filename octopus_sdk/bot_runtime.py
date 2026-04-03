@@ -1448,6 +1448,11 @@ class BotRuntime:
             requested_skills, stripped_instructions = extract_leading_requested_skills(instructions)
             if requested_skills and stripped_instructions:
                 effective_instructions = stripped_instructions
+        parent_event_id = ""
+        if conversation_ref.startswith("registry:"):
+            parent_event_id = str(item.event_id or "").strip()
+            if parent_event_id.startswith("reg:"):
+                parent_event_id = parent_event_id.split(":", 1)[1]
         title = summarize_text(effective_instructions) or "Direct assignment"
         result = await submit_participant_direct_assignment(
             self._participant_delegation_runtime(),
@@ -1456,6 +1461,7 @@ class BotRuntime:
             selector=selector,
             title=title,
             instructions=effective_instructions,
+            parent_event_id=parent_event_id,
             message_text=event.text,
             origin_channel=str(getattr(event, "transport", "") or getattr(event, "source", "") or "registry"),
             external_ref=(

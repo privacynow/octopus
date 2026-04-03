@@ -614,6 +614,7 @@ class DirectAssignmentRequest(RegistryRecordModel):
     selector: TargetSelector
     title: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
+    parent_event_id: str = ""
     origin_transport_ref: str = ""
     authorized_actor_key: str = ""
     message_text: str = ""

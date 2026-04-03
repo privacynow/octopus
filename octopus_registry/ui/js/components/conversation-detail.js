@@ -26,10 +26,7 @@ function renderConversationDetail(container, params) {
         'message.user',
         'message.bot',
         'approval.requested',
-        'delegation.submitted',
-        'delegation.completed',
         'error',
-        'task.status',
     ];
     let relatedTasks = [];
     let tasksLoaded = false;
@@ -1276,20 +1273,17 @@ function renderConversationDetail(container, params) {
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
-        const directAssignment = _extractConversationTargetSelectorMessage(text);
-        const selectorOnly = !directAssignment && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
+        const selectorOnly = !_extractConversationTargetSelectorMessage(text)
+            && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
         sendBtn.disabled = true;
         textarea.disabled = true;
         clearSuggestions();
         suggestionList.hidden = true;
         try {
-            if (directAssignment) {
-                await API.sendMessage(convoId, text);
-            } else if (selectorOnly) {
+            if (selectorOnly) {
                 throw new Error('Add instructions after the target selector to route work directly.');
-            } else {
-                await API.sendMessage(convoId, text);
             }
+            await API.sendMessage(convoId, text);
             textarea.value = '';
             updateComposerAssist();
         } catch (err) {
@@ -1481,12 +1475,7 @@ function renderConversationDetail(container, params) {
     }
 
     function shouldRenderConversationEvent(event) {
-        const kind = event.kind || '';
-        if (kind === 'task.status') {
-            const status = String((event.metadata && event.metadata.status) || '');
-            return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
-        }
-        return ['message.user', 'message.bot', 'approval.requested', 'delegation.submitted', 'delegation.completed', 'error'].includes(kind);
+        return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');
     }
 
     function visibleTimelineEvents(events) {
@@ -1509,9 +1498,11 @@ function renderConversationDetail(container, params) {
             target: String(conversationWith || ''),
             assignedTo: String(assignedTo || ''),
             origin: String(data.origin_channel || 'registry'),
+            type: String(data.conversation_type || 'conversation'),
             updatedLabel: data.updated_at ? UI.relativeTime(data.updated_at) : '',
         }, () => {
         const title = data.title || convoId;
+        const isTaskThread = String(data.conversation_type || 'conversation') === 'task_thread';
         const titleRow = document.createElement('div');
         titleRow.className = 'workspace-header-main';
         titleRow.dataset.key = 'meta-title-row';
@@ -1535,7 +1526,11 @@ function renderConversationDetail(container, params) {
         statements.className = 'meta-inline meta-inline-quiet';
 
         const metaParts = [];
-        if (conversationWith) {
+        if (isTaskThread && conversationWith) {
+            metaParts.push(`Operational task thread for ${conversationWith}`);
+        } else if (isTaskThread) {
+            metaParts.push('Operational task thread');
+        } else if (conversationWith) {
             metaParts.push(`With ${conversationWith}`);
         }
         if (assignedTo) {
@@ -1922,20 +1917,23 @@ function renderConversationDetail(container, params) {
             }
             return;
         }
-        if (activeView === 'conversation' && !shouldRenderConversationEvent(event)) return;
         const seq = Number(event.seq || 0);
         if (seq && latestSeq && seq <= latestSeq) return;
+        if (meta) {
+            meta.event_count = Number(meta.event_count || 0) + 1;
+            meta.updated_at = event.created_at || meta.updated_at;
+            renderMetaCard(meta);
+        }
+        if (activeView === 'conversation' && !shouldRenderConversationEvent(event)) {
+            if (seq) latestSeq = Math.max(latestSeq, seq);
+            return;
+        }
         const shouldStick = isNearBottom();
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
-        if (meta) {
-            meta.event_count = Number(meta.event_count || 0) + 1;
-            meta.updated_at = event.created_at || meta.updated_at;
-            renderMetaCard(meta);
-        }
         if (
             event.kind === 'message.user'
             || event.kind === 'message.bot'

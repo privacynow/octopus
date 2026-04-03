@@ -568,6 +568,7 @@ async def test_registry_channel_input_direct_assignment_routes_through_shared_bo
             selector,
             title,
             instructions,
+            parent_event_id="",
             origin_transport_ref="",
             authorized_actor_key="",
             message_text="",
@@ -580,6 +581,7 @@ async def test_registry_channel_input_direct_assignment_routes_through_shared_bo
                     "selector_value": selector.value,
                     "title": title,
                     "instructions": instructions,
+                    "parent_event_id": parent_event_id,
                     "origin_transport_ref": origin_transport_ref,
                     "authorized_actor_key": authorized_actor_key,
                     "message_text": message_text,
@@ -635,6 +637,7 @@ async def test_registry_channel_input_direct_assignment_routes_through_shared_bo
         assert captured["selector_kind"] == "skill"
         assert captured["selector_value"] == "architecture"
         assert captured["requested_skills"] == ["architecture"]
+        assert captured["parent_event_id"] == _event(7002)
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["routed_task_id"] == "task-direct-1"
@@ -661,6 +664,7 @@ async def test_registry_delivery_channel_input_direct_assignment_preserves_regis
             selector,
             title,
             instructions,
+            parent_event_id="",
             origin_transport_ref="",
             authorized_actor_key="",
             message_text="",
@@ -673,6 +677,7 @@ async def test_registry_delivery_channel_input_direct_assignment_preserves_regis
                     "selector_value": selector.value,
                     "title": title,
                     "instructions": instructions,
+                    "parent_event_id": parent_event_id,
                     "origin_transport_ref": origin_transport_ref,
                     "authorized_actor_key": authorized_actor_key,
                     "message_text": message_text,
@@ -723,6 +728,7 @@ async def test_registry_delivery_channel_input_direct_assignment_preserves_regis
         assert captured["selector_value"] == "m1"
         assert captured["instructions"] == "give me a system design review"
         assert captured["requested_skills"] == ["architecture"]
+        assert captured["parent_event_id"] == "stable-parent-direct-1"
         assert captured["origin_transport_ref"] == _reg_ref("conv-parent-direct-1")
         assert pending is not None
         assert pending["status"] == "submitted"

@@ -251,7 +251,7 @@ function renderConversationList(container) {
             const parts = [];
             const targetLabel = UI.visibleLabel(item.target_display_name, item.target_agent_id);
             if (targetLabel) parts.push(targetLabel);
-            if (item.conversation_type === 'task_thread') parts.push('task thread');
+            if (item.conversation_type === 'task_thread') parts.push('operational task thread');
             if (item.origin_channel) parts.push(item.origin_channel);
             if (item.updated_at || item.created_at) parts.push(UI.relativeTime(item.updated_at || item.created_at));
             sub.textContent = parts.join(' · ');

@@ -94,19 +94,6 @@ def routed_task_external_conversation_ref(routed_task_id: str) -> str:
     return f"routed-task:{str(routed_task_id or '').strip()}"
 
 
-def direct_assignment_message_text(payload: DirectAssignActionPayload) -> str:
-    raw = str(payload.message_text or "").strip()
-    if raw:
-        return raw
-    if payload.selector.kind == "agent":
-        selector = f"@{payload.selector.value}"
-    elif payload.selector.kind == "skill":
-        selector = f"@skill:{payload.selector.value}"
-    else:
-        selector = f"@role:{payload.selector.value}"
-    return f"{selector} {payload.instructions}".strip()
-
-
 class RoutingSkillDisabledError(RuntimeError):
     """Raised when routing requests a routing skill that has been globally disabled."""
 
@@ -456,7 +443,7 @@ def routed_task_created_event(request: RoutedTaskRequest) -> EventRecord:
     routed_task_id = str(request.routed_task_id)
     title = str(request.title or routed_task_id)
     return EventRecord(
-        event_id=f"routed-task:{routed_task_id}:queued:{created_at}",
+        event_id=f"routed-task:{routed_task_id}:queued",
         conversation_id=str(request.parent_conversation_id),
         kind="task.status",
         content=title,

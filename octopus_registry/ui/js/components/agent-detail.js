@@ -327,7 +327,7 @@ function renderAgentDetail(container, params) {
             });
             const sub = document.createElement('span');
             sub.textContent = [
-                item.conversation_type === 'task_thread' ? 'task thread' : '',
+                item.conversation_type === 'task_thread' ? 'operational task thread' : '',
                 item.origin_channel || 'registry',
                 UI.relativeTime(item.updated_at || item.created_at),
             ].filter(Boolean).join(' · ');

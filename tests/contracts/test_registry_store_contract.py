@@ -1015,7 +1015,7 @@ def test_direct_assign_accepts_unique_display_name_alias(store):
     assert result.routed_tasks[0].target_agent_id == target_id
 
 
-def test_direct_assign_persists_visible_operator_message(store):
+def test_direct_assign_reuses_existing_operator_message_as_the_parent_narrative(store):
     origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
     target_id, target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
     conversation = store.create_conversation(
@@ -1023,6 +1023,10 @@ def test_direct_assign_persists_visible_operator_message(store):
         title="Registry direct assignment history",
         origin_channel="registry",
         external_conversation_ref="direct-assign-history",
+    )
+    message = store.add_conversation_message(
+        conversation.conversation_id,
+        "@m2 add 2 and 2",
     )
 
     result = store.add_conversation_action(
@@ -1034,6 +1038,7 @@ def test_direct_assign_persists_visible_operator_message(store):
                 selector=TargetSelector(kind="agent", value="m2"),
                 title="Add numbers",
                 instructions="Add 2 and 2 and return the result only.",
+                parent_event_id=message.event.event_id if message.event is not None else "",
                 message_text="@m2 add 2 and 2",
             ),
         ),
@@ -1059,11 +1064,13 @@ def test_direct_assign_persists_visible_operator_message(store):
     assert events[0].kind == "message.user"
     assert events[0].content == "@m2 add 2 and 2"
     assert events[0].metadata["source_action"] == "direct_assign"
-    assert any(
-        event.kind == "delegation.submitted"
-        and event.metadata["tasks"][0]["routed_task_id"] == routed_task_id
-        for event in events
-    )
+    assert events[0].metadata["action_id"] == "direct-assign-history"
+    assert events[0].metadata["selector_kind"] == "agent"
+    assert events[0].metadata["selector_value"] == "m2"
+    assert events[0].metadata["routed_task_id"] == routed_task_id
+    assert events[0].metadata["requested_skills"] == []
+    assert len([event for event in events if event.kind == "message.user"]) == 1
+    assert not any(event.kind == "delegation.submitted" for event in events)
     assert any(
         event.kind == "task.status"
         and event.metadata["status"] == "completed"

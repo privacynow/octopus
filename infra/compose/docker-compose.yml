@@ -34,8 +34,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - tools
 
   db-update:
     build:
@@ -47,8 +45,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - tools
 
   db-doctor:
     build:
@@ -60,8 +56,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - tools
 
   # Provider-only checks (no runtime DB access): used by provider_status.sh and provider_login.sh.
   bot-provider:

@@ -194,7 +194,10 @@ def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path) -> None:
     manager.start_bot("example-bot")
 
     assert calls == ["image:codex"]
-    assert docker.commands == [("example-bot", "up", "-d", "bot")]
+    assert docker.commands == [
+        ("example-bot", "run", "--rm", "db-bootstrap"),
+        ("example-bot", "up", "-d", "bot"),
+    ]
 
 
 def test_run_bot_doctor_rebuilds_provider_image_before_doctor(tmp_path: Path) -> None:

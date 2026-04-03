@@ -1160,6 +1160,7 @@ class OctopusManager:
             values = parse_env_file(self.registry_env_file())
         values = self._validated_registry_deploy_values(deploy, existing=values, creating=created)
         write_env_file(self.registry_env_file(), values)
+        self.docker.registry_compose("run", "--rm", "db-bootstrap", capture_output=False)
         self.docker.registry_compose("up", "-d", "--remove-orphans", "service", capture_output=False)
         state = self.inspect_state().registry
         if created:
@@ -1183,6 +1184,7 @@ class OctopusManager:
             return
         values = self._validated_registry_deploy_values(deploy, existing=parse_env_file(self.registry_env_file()), creating=False)
         write_env_file(self.registry_env_file(), values)
+        self.docker.registry_compose("run", "--rm", "db-bootstrap", capture_output=False)
         args = ["up", "-d", "--remove-orphans"]
         if force_recreate:
             args.append("--force-recreate")
@@ -1200,6 +1202,7 @@ class OctopusManager:
         provider = self.bot_values(slug).get("BOT_PROVIDER", "claude")
         self.ensure_provider_image_ready(provider, force=force_rebuild)
         self.reconcile_bot_registry_connections(slug)
+        self.docker.bot_compose(slug, "run", "--rm", "db-bootstrap", capture_output=False)
         args = ["up", "-d"]
         if force_recreate:
             args.append("--force-recreate")

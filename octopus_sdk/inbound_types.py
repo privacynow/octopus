@@ -79,6 +79,7 @@ class InboundMessage:
     user: InboundUser
     conversation_key: str
     text: str
+    title_text: str = ""
     attachments: tuple[InboundAttachment, ...] = ()
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
@@ -208,6 +209,7 @@ def serialize_inbound(
                 "username": event.user.username,
                 "conversation_key": event.conversation_key,
                 "text": event.text,
+                "title_text": event.title_text,
                 "source": event.source,
                 "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
@@ -320,6 +322,7 @@ def deserialize_inbound(
             user=user,
             conversation_key=conversation_key,
             text=data.get("text", ""),
+            title_text=str(data.get("title_text", "") or ""),
             attachments=attachments,
             source=source,
             transport=transport,

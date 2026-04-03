@@ -353,6 +353,9 @@ def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_
     filtered = client.get("/v1/agents?q=review&state=connected")
     assert filtered.status_code == 200
     assert [item["slug"] for item in filtered.json()["agents"]] == ["alpha-reviewer"]
+    assert filtered.json()["agents"][0]["selector"] == "@alpha-reviewer"
+    assert filtered.json()["agents"][0]["selector_aliases"] == ["@alpha-reviewer"]
+    assert filtered.json()["agents"][0]["role_selector"] == "@role:developer"
 
     disconnected = client.get("/v1/agents?state=disconnected")
     assert disconnected.status_code == 200

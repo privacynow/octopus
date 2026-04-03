@@ -183,6 +183,19 @@ Management responses are cached server-side in `ingress.py` with TTL and
 in-flight deduplication. Mutations (make available, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
 
+`ingress.py` and `management_client.py` have different jobs:
+
+- `ingress.py` is the operator-facing HTTP bridge. It validates browser/API
+  requests, manages cache/invalidation, and translates them into typed
+  management operations.
+- `management_client.py` is the registry-internal delivery relay. It pushes a
+  typed management request onto a connected agent's delivery queue and waits
+  for the corresponding typed result.
+
+They both touch management traffic, but they are not duplicate surfaces.
+`ingress.py` owns operator request semantics; `management_client.py` owns the
+server-side request/result relay to connected bots.
+
 Guidance remains a separate product concept from skills:
 
 - skills are selectable capability packages
@@ -458,6 +471,13 @@ flowchart TD
     main --> launch
     runtime_build -.-> launch
 ```
+
+`app/runtime/composition.py` is the only place that should wire the
+process-wide provider-guidance singleton into the workflow graph.
+`app/runtime/bot_services.py` then injects that already-owned guidance service
+into `ExecutionServices`. Runtime handlers should consume injected
+`BotServices` / `ExecutionServices` ports and must not call
+`get_provider_guidance_service()` directly.
 
 1. `services.py` calls `bot_services.py` which internally uses
    `composition.py` to wire the `WorkflowComposer` with app-side port

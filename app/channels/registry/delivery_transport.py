@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
@@ -136,6 +137,7 @@ def build_registry_message_delivery(
     *,
     conversation_ref: str,
     text: str,
+    title_text: str = "",
     actor_ref: str,
     delivery_id: str,
     external_conversation_ref: str = "",
@@ -153,6 +155,7 @@ def build_registry_message_delivery(
     envelope = build_registry_message_envelope(
         conversation_ref=conversation_ref,
         text=text,
+        title_text=title_text,
         actor_ref=actor_ref,
         delivery_id=delivery_id,
         external_conversation_ref=external_conversation_ref,
@@ -175,6 +178,7 @@ def build_registry_message_envelope(
     *,
     conversation_ref: str,
     text: str,
+    title_text: str = "",
     actor_ref: str,
     delivery_id: str,
     external_conversation_ref: str = "",
@@ -199,6 +203,7 @@ def build_registry_message_envelope(
         user=InboundUser(id=actor_key, username="registry"),
         conversation_key=conversation_key,
         text=text,
+        title_text=title_text,
         attachments=(),
         source=source_transport,
         transport=source_transport,
@@ -268,13 +273,12 @@ def build_registry_action_envelope(
         conversation_ref=conversation_ref,
     )
 
-
-def _routed_task_text(request: dict[str, Any]) -> str:
-    title = str(request.get("title", "")).strip()
-    instructions = str(request.get("instructions", "")).strip()
-    if title and instructions and title != instructions:
-        return f"{title}\n\n{instructions}".strip()
-    return instructions or title
+def _coerce_registry_message_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, sort_keys=True)
+    return str(value or "").strip()
 
 
 async def admit_registry_delivery(
@@ -330,7 +334,8 @@ async def admit_registry_delivery(
         if not registry_id:
             return "rejected"
         request = payload
-        text = _routed_task_text(request)
+        title_text = _coerce_registry_message_text(request.get("title", ""))
+        text = _coerce_registry_message_text(request.get("instructions", "")) or title_text
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
         origin_agent_id = request.get("origin_agent_id", "")
         parent_conversation_id = request.get("parent_conversation_id", "")
@@ -344,13 +349,14 @@ async def admit_registry_delivery(
             conversation_ref=conversation_ref,
             conversation_key_override=shared_key,
             text=text,
+            title_text=title_text,
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
             delivery_id=delivery_id,
             external_conversation_ref=str(request.get("external_conversation_ref", "") or ""),
             routed_task_id=request["routed_task_id"],
             authorized_actor_key=str(request.get("authorized_actor_key", "") or ""),
-            context_text=str(request.get("context", "") or ""),
-            constraints_text=str(request.get("constraints", "") or ""),
+            context_text=_coerce_registry_message_text(request.get("context", "")),
+            constraints_text=_coerce_registry_message_text(request.get("constraints", "")),
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             registry_id=registry_id,
         )

@@ -21,14 +21,7 @@ class BusAgentDirectory:
         authorities = sorted(self._directory.authorities_for_capability("agent_directory"))
         if not authorities:
             return AgentSearchResult(status="unavailable")
-        request = SearchAgentsRequest(
-            role=query.role,
-            skills=list(query.skills),
-            tags=list(query.tags),
-            free_text=query.free_text,
-            exclude_agent_ids=list(query.exclude_agent_ids),
-            required_state=query.required_state,
-        )
+        request = SearchAgentsRequest.model_validate(query.model_dump(mode="json"))
 
         aggregated = AgentSearchResult(status="complete")
         for authority_ref in authorities:

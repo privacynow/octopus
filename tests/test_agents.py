@@ -1288,6 +1288,7 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
     class _CapturingSubmitter:
         async def admit_message(self, envelope):
             captured["text"] = envelope.event.text
+            captured["title_text"] = envelope.event.title_text
             captured["context_text"] = envelope.event.context_text
             captured["constraints_text"] = envelope.event.constraints_text
             return InboundSubmissionResult(status="queued", item_id="queued-item")
@@ -1319,8 +1320,54 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
 
     assert outcome == "accepted"
     assert captured["text"] == "what is 2 + 3"
+    assert captured["title_text"] == "what is 2 + 3"
     assert captured["context_text"] == "This came from the finance queue."
     assert captured["constraints_text"] == "Answer briefly."
+
+
+async def test_admit_registry_delivery_routed_task_keeps_title_structured_and_body_instruction_only(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["text"] = envelope.event.text
+            captured["title_text"] = envelope.event.title_text
+            captured["context_text"] = envelope.event.context_text
+            captured["constraints_text"] = envelope.event.constraints_text
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-structured-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-structured-1",
+                "title": "Database investigation",
+                "instructions": "Check the replication lag on the follower.",
+                "origin_agent_id": "origin-1",
+                "context": {"ticket": 42, "service": "registry"},
+                "constraints": {"mode": "readonly"},
+            },
+        },
+        submitter=_CapturingSubmitter(),
+        dispatcher=None,
+    )
+
+    assert outcome == "accepted"
+    assert captured["title_text"] == "Database investigation"
+    assert captured["text"] == "Check the replication lag on the follower."
+    assert captured["context_text"] == '{\n  "service": "registry",\n  "ticket": 42\n}'
+    assert captured["constraints_text"] == '{\n  "mode": "readonly"\n}'
 
 
 async def test_admit_registry_delivery_routed_task_preserves_external_conversation_ref(

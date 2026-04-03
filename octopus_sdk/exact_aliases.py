@@ -10,6 +10,29 @@ def normalize_exact_alias(value: str) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
+def direct_selector_aliases(
+    *,
+    slug: str = "",
+    display_name: str = "",
+) -> tuple[str, ...]:
+    values: list[str] = []
+    compact_display_name = str(display_name or "").strip()
+    normalized_slug = str(slug or "").strip()
+    if compact_display_name and " " not in compact_display_name:
+        values.append(f"@{compact_display_name}")
+    if normalized_slug:
+        values.append(f"@{normalized_slug}")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(value)
+    return tuple(deduped)
+
+
 def collect_exact_aliases(
     *,
     identifier: str = "",

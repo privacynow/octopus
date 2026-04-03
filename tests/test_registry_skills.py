@@ -150,6 +150,7 @@ def test_ui_routing_skill_endpoints_toggle_override_and_affect_search(
     assert listed.json() == [
         {
             "skill_name": "web_search",
+            "selector": "@skill:web_search",
             "advertised_by_agents": ["alpha-bot"],
             "enabled": None,
         }

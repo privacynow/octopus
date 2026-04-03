@@ -258,15 +258,13 @@ function renderConversationDetail(container, params) {
                 const slug = (agent.slug || agent.agent_id || '').trim();
                 if (!slug) return;
                 const displayName = String(agent.display_name || '').trim();
-                const compactDisplayName = displayName && !/\s/.test(displayName) ? displayName : '';
-                const preferredLabel = '@' + (compactDisplayName || slug);
-                const aliases = Array.from(new Set([
-                    preferredLabel,
-                    '@' + slug,
-                    compactDisplayName ? '@' + compactDisplayName : '',
-                ].filter(Boolean)));
+                const preferredLabel = String(agent.selector || '').trim();
+                const aliases = Array.from(new Set(
+                    (agent.selector_aliases || []).map((value) => String(value || '').trim()).filter(Boolean)
+                ));
+                if (!preferredLabel || !aliases.length) return;
                 const detail = [
-                    compactDisplayName && compactDisplayName.toLowerCase() !== slug.toLowerCase() ? slug : '',
+                    displayName && preferredLabel.toLowerCase() !== '@' + slug.toLowerCase() ? slug : '',
                     agent.role || '',
                     (agent.routing_skills || []).slice(0, 2).join(', '),
                 ].filter(Boolean).join(' · ');
@@ -281,26 +279,28 @@ function renderConversationDetail(container, params) {
             });
             agents.forEach((agent) => {
                 const role = String(agent.role || '').trim();
-                if (!role) return;
+                const roleSelector = String(agent.role_selector || '').trim();
+                if (!role || !roleSelector) return;
                 pushTarget({
                     key: role,
-                    label: '@role:' + role,
+                    label: roleSelector,
                     kind: 'role',
                     display: role,
                     detail: 'Role target',
-                    aliases: ['@role:' + role],
+                    aliases: [roleSelector],
                 });
             });
             routingSkills.forEach((routingSkill) => {
                 const value = String(routingSkill.name || routingSkill.skill_name || routingSkill || '').trim();
-                if (!value) return;
+                const selector = String(routingSkill.selector || '').trim();
+                if (!value || !selector) return;
                 pushTarget({
                     key: value,
-                    label: '@skill:' + value,
+                    label: selector,
                     kind: 'skill',
                     display: value,
                     detail: 'Routing skill',
-                    aliases: ['@skill:' + value],
+                    aliases: [selector],
                 });
             });
             if (typeof Fuse === 'function') {

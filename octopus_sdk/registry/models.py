@@ -230,6 +230,19 @@ def parse_agent_discovery_query(
     )
 
 
+def format_target_selector(kind: Literal["agent", "skill", "role"], value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if kind == "agent":
+        return normalized if normalized.startswith("@") else f"@{normalized}"
+    if kind == "skill":
+        return f"@skill:{normalized}"
+    if kind == "role":
+        return f"@role:{normalized}"
+    raise ValueError(f"Unsupported target selector kind: {kind!r}")
+
+
 class DiscoveredAgentRef(RegistryRecordModel):
     model_config = ConfigDict(extra="forbid")
 

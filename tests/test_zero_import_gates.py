@@ -79,6 +79,17 @@ DELETED_MODULE_PATHS = (
     "app/work_queue_postgres.py",
 )
 
+ALLOWED_GUIDANCE_SINGLETON_CALLERS = {
+    "app/provider_guidance_service.py",
+    "app/runtime/bot_services.py",
+    "app/runtime/composition.py",
+}
+
+ALLOWED_FAULT_STATE_CONSTRUCTORS = {
+    "app/execution_faults.py",
+    "app/runtime/bot_services.py",
+}
+
 
 def test_deleted_legacy_module_references_are_gone__app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -94,6 +105,68 @@ def test_deleted_dead_modules_are_absent() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     for relative_path in DELETED_MODULE_PATHS:
         assert not (repo_root / relative_path).exists(), f"{relative_path} should stay deleted"
+
+
+def test_production_code_does_not_reintroduce_global_workflow_accessors() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app", repo_root / "octopus_registry")
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        assert "composition.workflows(" not in text, f"composition.workflows() reintroduced in {path}"
+
+
+def test_production_code_keeps_guidance_singleton_calls_at_composition_boundaries() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app", repo_root / "octopus_registry")
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        relative = path.relative_to(repo_root).as_posix()
+        if relative in ALLOWED_GUIDANCE_SINGLETON_CALLERS:
+            continue
+        text = path.read_text()
+        assert "get_provider_guidance_service(" not in text, f"guidance singleton access reintroduced in {path}"
+
+
+def test_production_code_keeps_fault_state_construction_single_sited() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app", repo_root / "octopus_registry")
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        relative = path.relative_to(repo_root).as_posix()
+        if relative in ALLOWED_FAULT_STATE_CONSTRUCTORS:
+            continue
+        text = path.read_text()
+        assert "LocalExecutionFaultState(" not in text, f"fault state construction reintroduced in {path}"
+
+
+def test_production_code_does_not_reintroduce_fake_runtime_namespaces() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path
+        for root in (repo_root / "app", repo_root / "octopus_registry", repo_root / "octopus_sdk")
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        assert "SimpleNamespace(" not in text, f"SimpleNamespace runtime fabrication reintroduced in {path}"
 
 
 def test_deleted_telegram_singleton_helpers_are_gone__app_code() -> None:

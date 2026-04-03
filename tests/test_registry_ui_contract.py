@@ -335,6 +335,10 @@ def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
     assert "'delegation.completed'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "'task.status'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
     assert "return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');" in detail
+    assert "@role:' + role" not in detail
+    assert "@skill:' + value" not in detail
+    assert "agent.role_selector" in detail
+    assert "routingSkill.selector" in detail
 
 
 def test_conversation_route_owns_scroll_on_wide_viewports() -> None:

@@ -1543,7 +1543,7 @@ class BotRuntime:
         if not allowed:
             return
 
-        title = summarize_text(event.text) or "Conversation"
+        title = str(getattr(event, "title_text", "") or "").strip() or summarize_text(event.text) or "Conversation"
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
         authority_ref = str(getattr(event, "authority_ref", "") or "")
 

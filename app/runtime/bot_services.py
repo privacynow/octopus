@@ -16,7 +16,7 @@ from app.config import BotConfig
 from app.execution_faults import LocalExecutionFaultState
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime.artifacts import RuntimeArtifactStore
-from app.runtime.composition import compose_workflows, workflows, workflows_for_config
+from app.runtime.composition import compose_workflows
 from app.skill_activation_service import get_skill_activation_service
 from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.authorization import AuthorizationPort

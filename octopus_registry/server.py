@@ -32,6 +32,7 @@ from .auth import (
 )
 from .ws import WebSocketManager
 from .routing_skill_service import RoutingSkillService
+from octopus_sdk.exact_aliases import direct_selector_aliases
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
@@ -40,6 +41,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     RoutedTaskResult,
     RoutedTaskUpdate,
+    format_target_selector,
     utcnow_iso,
 )
 from octopus_sdk.registry.management import ManagementResult
@@ -546,7 +548,19 @@ def resource_list_agents(
         q=q,
         connectivity_state=state,
     )
-    return _json_payload(_paginated_response("agents", agents, cursor, limit))
+    agent_rows: list[dict[str, Any]] = []
+    for agent in agents:
+        row = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
+        selector_aliases = direct_selector_aliases(
+            slug=str(row.get("slug", "") or ""),
+            display_name=str(row.get("display_name", "") or ""),
+        )
+        role = str(row.get("role", "") or "").strip()
+        row["selector"] = selector_aliases[0] if selector_aliases else ""
+        row["selector_aliases"] = list(selector_aliases)
+        row["role_selector"] = format_target_selector("role", role) if role else ""
+        agent_rows.append(row)
+    return _json_payload(_paginated_response("agents", agent_rows, cursor, limit))
 
 
 @app.get("/v1/agents/{agent_id}/status")
@@ -952,6 +966,7 @@ def resource_list_routing_skills(
     return [
         {
             "skill_name": item.skill_name,
+            "selector": format_target_selector("skill", item.skill_name),
             "advertised_by_agents": list(item.advertised_by_agents),
             "enabled": item.enabled,
         }

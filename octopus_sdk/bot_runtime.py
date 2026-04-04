@@ -1564,6 +1564,12 @@ class BotRuntime:
         reply = render_skill_inspection_response(response).strip()
         if not reply:
             return None
+        follow_up_subject = response.follow_up_subject
+        if follow_up_subject is not None:
+            session = self._load_session(item.conversation_key)
+            if session.last_skill_subject != follow_up_subject:
+                session.last_skill_subject = follow_up_subject
+                self.sessions.save(item.conversation_key, session)
         transport_identity = self._build_transport_identity(
             event=event,
             conversation_ref=conversation_ref,

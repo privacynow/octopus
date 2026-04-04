@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.agents.registry_capabilities import registry_authority_ref
@@ -13,6 +14,8 @@ from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
 from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.runtime.skills import (
     ReachableSkillRecord,
+    SkillExecutionManifestRecord,
+    SkillFollowUpSubject,
     SkillInspectionPort,
     SkillInspectionResponse,
     SkillQuestionIntent,
@@ -21,6 +24,8 @@ from octopus_sdk.runtime.skills import (
     parse_skill_question,
 )
 from octopus_sdk.workflows.skills import RuntimeSkillCatalogItem
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,12 +46,6 @@ class SkillInspectionService(SkillInspectionPort):
         provider_state_factory,
     ) -> SkillInspectionResponse | None:
         del actor_key
-        intent = parse_skill_question(text)
-        if intent is None:
-            return None
-        catalog = self.workflows.runtime_skills.catalog
-        items = tuple(catalog.list_skills())
-        item_by_name = {item.name: item for item in items}
         session = self.workflows.sessions.load(
             conversation_key,
             provider_name=provider_name,
@@ -55,29 +54,38 @@ class SkillInspectionService(SkillInspectionPort):
             default_role=self.config.role,
             default_skills=self.config.default_skills,
         )
+        catalog = self.workflows.runtime_skills.catalog
+        items = tuple(catalog.list_skills())
+        item_by_name = {item.name: item for item in items}
+        intent = parse_skill_question(
+            text,
+            subject=session.last_skill_subject,
+            known_skill_names=tuple(item.name for item in items),
+        )
+        if intent is None:
+            return None
+        if intent.kind != "skill_list" and not intent.skill_name:
+            return self._ambiguous_skill_response(intent, session.last_skill_subject)
         resolved = self.workflows.sessions.resolve_context(
             session,
             config=self.config,
             provider_name=provider_name,
             trust_tier="trusted",
         )
-        reachable_agents = await self._search_reachable_agents()
         if intent.kind == "skill_list":
             return self._skill_list_response(intent, items, resolved.active_skills)
         if intent.kind == "routing_agents":
-            return self._routing_agents_response(intent, reachable_agents)
+            return await self._routing_agents_response(intent)
         if intent.kind == "skill_status":
             return await self._skill_status_response(
                 intent,
                 item_by_name=item_by_name,
                 active_skill_names=tuple(resolved.active_skills),
-                reachable_agents=reachable_agents,
             )
         if intent.kind == "skill_usage":
             return await self._skill_usage_response(
                 intent,
                 conversation_ref=conversation_ref,
-                reachable_agents=reachable_agents,
             )
         return None
 
@@ -99,11 +107,13 @@ class SkillInspectionService(SkillInspectionPort):
             active_skill_names=tuple(active_skill_names),
         )
 
-    def _routing_agents_response(
+    async def _routing_agents_response(
         self,
         intent: SkillQuestionIntent,
-        reachable_agents: tuple[DiscoveredAgentRef, ...],
     ) -> SkillInspectionResponse:
+        reachable_agents = await self._search_reachable_agents(
+            query=AgentDiscoveryQuery(skills=[intent.skill_name]),
+        )
         records = tuple(
             ReachableSkillRecord(
                 agent_id=agent.agent_id,
@@ -125,6 +135,7 @@ class SkillInspectionService(SkillInspectionPort):
             current_bot_display_name=self.config.agent_display_name,
             skill_name=intent.skill_name,
             reachable_bots=records,
+            follow_up_subject=SkillFollowUpSubject(skill_name=intent.skill_name),
         )
 
     async def _skill_status_response(
@@ -133,11 +144,10 @@ class SkillInspectionService(SkillInspectionPort):
         *,
         item_by_name: dict[str, RuntimeSkillCatalogItem],
         active_skill_names: tuple[str, ...],
-        reachable_agents: tuple[DiscoveredAgentRef, ...],
     ) -> SkillInspectionResponse:
         target_agent = str(intent.target_agent or "").strip()
         if target_agent and not self._is_current_bot_target(target_agent):
-            target = self._resolve_target_agent(target_agent, reachable_agents)
+            target = await self._find_agent(target_agent)
             if target is None:
                 return SkillInspectionResponse(
                     status="missing",
@@ -152,6 +162,10 @@ class SkillInspectionService(SkillInspectionPort):
                 for skill in (target.routing_skills or [])
                 if str(skill).strip()
             }
+            note = (
+                "This reflects registry routing advertisement on that reachable bot, "
+                "not its current conversation state."
+            )
             return SkillInspectionResponse(
                 status="ok",
                 intent=intent,
@@ -159,13 +173,18 @@ class SkillInspectionService(SkillInspectionPort):
                 skill_name=intent.skill_name,
                 remote_target_label=target.slug or target.display_name or target.agent_id,
                 remote_advertised_for_routing=advertised,
-                note=(
-                    "This reflects registry routing advertisement on that reachable bot, "
-                    "not its current conversation state."
+                note=note,
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id,
+                    routed_task_id=intent.subject_routed_task_id,
                 ),
             )
 
         local = item_by_name.get(intent.skill_name)
+        current_agent = await self._find_current_agent()
+        routing_query = AgentDiscoveryQuery(skills=[intent.skill_name])
+        routed_agents = await self._search_reachable_agents(query=routing_query)
         reachable = tuple(
             ReachableSkillRecord(
                 agent_id=agent.agent_id,
@@ -173,12 +192,21 @@ class SkillInspectionService(SkillInspectionPort):
                 display_name=agent.display_name,
                 advertised_for_routing=True,
             )
-            for agent in reachable_agents
+            for agent in routed_agents
             if intent.skill_name in {
                 str(skill).strip().lower()
                 for skill in (agent.routing_skills or [])
                 if str(skill).strip()
             }
+        )
+        current_advertised = (
+            intent.skill_name in {
+                str(skill).strip().lower()
+                for skill in (current_agent.routing_skills or [])
+                if str(skill).strip()
+            }
+            if current_agent is not None
+            else None
         )
         return SkillInspectionResponse(
             status="ok",
@@ -191,10 +219,9 @@ class SkillInspectionService(SkillInspectionPort):
             runtime_available_on_current_bot=(local.runtime_available if local is not None else False),
             default_for_new_conversations=(local.default_for_new_conversations if local is not None else False),
             active_in_current_conversation=(intent.skill_name in active_skill_names),
-            advertised_for_routing_on_current_bot=(
-                (local.can_activate and local.runtime_available) if local is not None else False
-            ),
+            advertised_for_routing_on_current_bot=current_advertised,
             reachable_bots=reachable,
+            follow_up_subject=SkillFollowUpSubject(skill_name=intent.skill_name),
         )
 
     async def _skill_usage_response(
@@ -202,13 +229,12 @@ class SkillInspectionService(SkillInspectionPort):
         intent: SkillQuestionIntent,
         *,
         conversation_ref: str,
-        reachable_agents: tuple[DiscoveredAgentRef, ...],
     ) -> SkillInspectionResponse:
         target_label = str(intent.target_agent or "").strip()
         inspect_current_bot = not target_label or self._is_current_bot_target(target_label)
         target = None
         if not inspect_current_bot:
-            target = self._resolve_target_agent(target_label, reachable_agents)
+            target = await self._find_agent(target_label)
             if target is None:
                 return SkillInspectionResponse(
                     status="missing",
@@ -242,6 +268,11 @@ class SkillInspectionService(SkillInspectionPort):
                 target_agent_label=self._usage_target_label(target),
                 evidence_status="missing",
                 note="Registry execution evidence is unavailable on this bot.",
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id if target is not None else "",
+                    routed_task_id=intent.subject_routed_task_id,
+                ),
             )
         parsed_ref = parse_registry_ref(conversation_ref)
         if parsed_ref is None:
@@ -252,10 +283,15 @@ class SkillInspectionService(SkillInspectionPort):
                 target_agent_label=self._usage_target_label(target),
                 evidence_status="missing",
                 note="This conversation does not have registry-backed execution evidence.",
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id if target is not None else "",
+                    routed_task_id=intent.subject_routed_task_id,
+                ),
             )
+        authority_ref = registry_authority_ref(parsed_ref[0])
+        task_record = None
         try:
-            authority_ref = registry_authority_ref(parsed_ref[0])
-            task_record = None
             if inspect_current_bot:
                 recipient_conversation_id = await self._current_registry_conversation_id(
                     parsed_ref,
@@ -271,6 +307,11 @@ class SkillInspectionService(SkillInspectionPort):
                         target_agent_label=self._usage_target_label(target),
                         evidence_status="missing",
                         note="No matching routed task was found for that bot in this conversation.",
+                        follow_up_subject=SkillFollowUpSubject(
+                            skill_name=intent.skill_name,
+                            target_agent=target.slug or target.agent_id if target is not None else "",
+                            routed_task_id=intent.subject_routed_task_id,
+                        ),
                     )
                 recipient_conversation_id = str(task_record.recipient_conversation_id or "").strip()
             if not recipient_conversation_id:
@@ -281,6 +322,11 @@ class SkillInspectionService(SkillInspectionPort):
                     target_agent_label=self._usage_target_label(target) if not inspect_current_bot else self._usage_target_label(None),
                     evidence_status="missing",
                     note="No registry conversation with execution evidence is available to inspect.",
+                    follow_up_subject=SkillFollowUpSubject(
+                        skill_name=intent.skill_name,
+                        target_agent=target.slug or target.agent_id if target is not None else "",
+                        routed_task_id=intent.subject_routed_task_id,
+                    ),
                 )
             events = await self.registry_inspection.list_events(
                 authority_ref,
@@ -288,7 +334,7 @@ class SkillInspectionService(SkillInspectionPort):
                 kind="provider.request",
                 limit=100,
             )
-        except Exception:
+        except (RuntimeError, ValueError):
             return SkillInspectionResponse(
                 status="missing",
                 intent=intent,
@@ -296,12 +342,45 @@ class SkillInspectionService(SkillInspectionPort):
                 target_agent_label=self._usage_target_label(target) if not inspect_current_bot else self._usage_target_label(None),
                 evidence_status="missing",
                 note="Registry execution evidence could not be loaded.",
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id if target is not None else "",
+                    routed_task_id=intent.subject_routed_task_id,
+                ),
             )
-        event = max(events.events, key=lambda item: int(item.seq or 0), default=None)
-        manifest = parse_skill_execution_manifest(
-            (event.metadata if event is not None else {}).get("skill_manifest")
-            if event is not None
-            else None
+        except Exception:
+            log.exception(
+                "skill inspection: unexpected registry inspection failure",
+                extra={
+                    "authority_ref": authority_ref,
+                    "conversation_ref": conversation_ref,
+                    "skill_name": intent.skill_name,
+                },
+            )
+            return SkillInspectionResponse(
+                status="missing",
+                intent=intent,
+                skill_name=intent.skill_name,
+                target_agent_label=self._usage_target_label(target) if not inspect_current_bot else self._usage_target_label(None),
+                evidence_status="missing",
+                note="Registry execution evidence could not be loaded.",
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id if target is not None else "",
+                    routed_task_id=intent.subject_routed_task_id,
+                ),
+            )
+        _selected_event, manifest = self._select_manifest_event(
+            events.events,
+            routed_task_id=(
+                str(task_record.routed_task_id or "")
+                if task_record is not None
+                else (
+                    parsed_ref[2]
+                    if inspect_current_bot and parsed_ref[1] == "task"
+                    else str(intent.subject_routed_task_id or "")
+                )
+            ),
         )
         if manifest is None:
             return SkillInspectionResponse(
@@ -316,6 +395,15 @@ class SkillInspectionService(SkillInspectionPort):
                 routed_task_id=str(task_record.routed_task_id or "") if task_record is not None else "",
                 evidence_status="missing",
                 note="No structured skill execution manifest was recorded for the matching run.",
+                follow_up_subject=SkillFollowUpSubject(
+                    skill_name=intent.skill_name,
+                    target_agent=target.slug or target.agent_id if target is not None else "",
+                    routed_task_id=(
+                        str(task_record.routed_task_id or "")
+                        if task_record is not None
+                        else str(intent.subject_routed_task_id or "")
+                    ),
+                ),
             )
         skill_kind = normalize_skill_kind(manifest.skill_kind_map.get(intent.skill_name, "prompt"))
         return SkillInspectionResponse(
@@ -343,6 +431,11 @@ class SkillInspectionService(SkillInspectionPort):
                 "Behavioral adherence cannot be proven exactly from runtime telemetry."
                 if skill_kind == "prompt"
                 else ""
+            ),
+            follow_up_subject=SkillFollowUpSubject(
+                skill_name=intent.skill_name,
+                target_agent=target.slug or target.agent_id if target is not None else "",
+                routed_task_id=str(manifest.routed_task_id or ""),
             ),
         )
 
@@ -382,20 +475,50 @@ class SkillInspectionService(SkillInspectionPort):
         task = await self.registry_inspection.get_task(authority_ref, external_id)
         return str(task.recipient_conversation_id or "").strip()
 
-    async def _search_reachable_agents(self) -> tuple[DiscoveredAgentRef, ...]:
+    async def _search_reachable_agents(
+        self,
+        *,
+        query: AgentDiscoveryQuery,
+        include_self: bool = False,
+    ) -> tuple[DiscoveredAgentRef, ...]:
         agent_directory = self.agent_directory
         if agent_directory is None or not hasattr(agent_directory, "search_agents"):
             return ()
         try:
-            result = await agent_directory.search_agents(query=AgentDiscoveryQuery())
+            result = await agent_directory.search_agents(query=query)
+        except (RuntimeError, ValueError):
+            log.warning("skill inspection: agent search failed")
+            return ()
         except Exception:
+            log.warning("skill inspection: agent search failed", exc_info=True)
             return ()
         agents = []
         for agent in result.agents:
-            if str(agent.slug or "").strip() == str(self.config.agent_slug or "").strip():
+            if (
+                not include_self
+                and str(agent.slug or "").strip() == str(self.config.agent_slug or "").strip()
+            ):
                 continue
             agents.append(agent)
         return tuple(agents)
+
+    async def _find_current_agent(self) -> DiscoveredAgentRef | None:
+        for candidate in filter(None, (self.config.agent_slug, self.config.agent_display_name)):
+            agents = await self._search_reachable_agents(
+                query=AgentDiscoveryQuery(free_text=str(candidate)),
+                include_self=True,
+            )
+            resolved = self._resolve_target_agent(str(candidate), agents)
+            if resolved is not None:
+                return resolved
+        return None
+
+    async def _find_agent(self, target: str) -> DiscoveredAgentRef | None:
+        agents = await self._search_reachable_agents(
+            query=AgentDiscoveryQuery(free_text=target),
+            include_self=True,
+        )
+        return self._resolve_target_agent(target, agents)
 
     def _resolve_target_agent(
         self,
@@ -419,6 +542,44 @@ class SkillInspectionService(SkillInspectionPort):
             slug=self.config.agent_slug,
             display_name=self.config.agent_display_name,
         )
+
+    def _ambiguous_skill_response(
+        self,
+        intent: SkillQuestionIntent,
+        subject: SkillFollowUpSubject | None,
+    ) -> SkillInspectionResponse:
+        return SkillInspectionResponse(
+            status="ambiguous",
+            intent=intent,
+            skill_name=str(subject.skill_name or "") if subject is not None else "",
+            note="Which skill do you mean?",
+        )
+
+    def _select_manifest_event(
+        self,
+        events,
+        *,
+        routed_task_id: str = "",
+    ) -> tuple[object | None, SkillExecutionManifestRecord | None]:
+        manifests: list[tuple[object, SkillExecutionManifestRecord]] = []
+        for event in events:
+            manifest = parse_skill_execution_manifest(
+                (getattr(event, "metadata", {}) or {}).get("skill_manifest")
+            )
+            if manifest is None:
+                continue
+            manifests.append((event, manifest))
+        if routed_task_id:
+            matching = [
+                item
+                for item in manifests
+                if str(item[1].routed_task_id or "").strip() == str(routed_task_id or "").strip()
+            ]
+            if matching:
+                return max(matching, key=lambda item: int(getattr(item[0], "seq", 0) or 0))
+        if manifests:
+            return max(manifests, key=lambda item: int(getattr(item[0], "seq", 0) or 0))
+        return (max(events, key=lambda item: int(getattr(item, "seq", 0) or 0), default=None), None)
 
     def _usage_target_label(
         self,

@@ -24,6 +24,7 @@ from octopus_sdk.providers import (
     coerce_denial_records,
     coerce_provider_state,
 )
+from octopus_sdk.runtime.skills import SkillFollowUpSubject
 from octopus_sdk.skill_types import SkillRequirement
 from octopus_sdk.time_utils import utc_now_iso
 
@@ -222,6 +223,7 @@ class SessionState:
     model_profile: str = ""  # "fast", "balanced", "best", or "" (use config default)
     created_at: str = ""
     updated_at: str = ""
+    last_skill_subject: SkillFollowUpSubject | None = None
 
     def __post_init__(self) -> None:
         self.provider_state = coerce_provider_state(self.provider_state)
@@ -322,6 +324,7 @@ def session_from_dict(d: Mapping[str, object]) -> SessionState:
         model_profile=d.get("model_profile") or "",
         created_at=d.get("created_at", ""),
         updated_at=d.get("updated_at", ""),
+        last_skill_subject=_make_optional(SkillFollowUpSubject, d.get("last_skill_subject")),
     )
 
 
@@ -354,4 +357,5 @@ def default_session(
         "pending_delegation": None,
         "created_at": now,
         "updated_at": now,
+        "last_skill_subject": None,
     }

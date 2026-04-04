@@ -14,6 +14,7 @@ SkillStatusScope = Literal["current_bot", "reachable_bot"]
 
 _SKILL_TOKEN = r"(?P<skill>[a-z0-9][a-z0-9_-]*)"
 _AGENT_TOKEN = r"(?P<agent>@?[a-z0-9][a-z0-9_-]*)"
+_PRONOUN_SKILL_TOKENS = frozenset({"it", "this", "that", "these", "those", "they", "them"})
 _USE_SKILL_RE = re.compile(
     rf"^\s*did\s+(?P<target>you|this bot|the current bot|{_AGENT_TOKEN})\s+use\s+{_SKILL_TOKEN}(?:\s+skill)?(?:\b.*)?$",
     re.IGNORECASE,
@@ -114,36 +115,63 @@ def skill_execution_manifest_hash(
 
 
 @dataclass(frozen=True)
+class SkillFollowUpSubject:
+    skill_name: str = ""
+    target_agent: str = ""
+    routed_task_id: str = ""
+
+
+@dataclass(frozen=True)
 class SkillQuestionIntent:
     kind: SkillQuestionKind
     skill_name: str = ""
     target_agent: str = ""
     status_focus: str = ""
+    used_follow_up_subject: bool = False
+    subject_routed_task_id: str = ""
 
 
-def parse_skill_question(text: str) -> SkillQuestionIntent | None:
-    raw = str(text or "").strip()
+def parse_skill_question(
+    text: str,
+    *,
+    subject: SkillFollowUpSubject | None = None,
+    known_skill_names: tuple[str, ...] = (),
+) -> SkillQuestionIntent | None:
+    raw = _normalize_skill_question_text(text)
     if not raw:
         return None
     if (match := _USE_SKILL_RE.match(raw)):
+        skill_name, used_follow_up = _resolved_skill_name(str(match.group("skill") or ""), subject=subject)
         target = _normalized_target_agent(str(match.group("target") or ""))
+        if used_follow_up and not target and subject is not None:
+            target = _normalized_target_agent(subject.target_agent)
         return SkillQuestionIntent(
             kind="skill_usage",
             target_agent=target,
-            skill_name=str(match.group("skill") or "").strip().lower(),
+            skill_name=skill_name,
+            used_follow_up_subject=used_follow_up,
+            subject_routed_task_id=str(subject.routed_task_id or "") if used_follow_up and subject is not None else "",
         )
     if (match := _AVAILABLE_SKILL_RE.match(raw)):
+        skill_name, used_follow_up = _resolved_skill_name(str(match.group("skill") or ""), subject=subject)
         target = _normalized_target_agent(str(match.group("target") or ""))
+        if used_follow_up and not target and subject is not None:
+            target = _normalized_target_agent(subject.target_agent)
         return SkillQuestionIntent(
             kind="skill_status",
-            skill_name=str(match.group("skill") or "").strip().lower(),
+            skill_name=skill_name,
             target_agent=target,
             status_focus=str(match.group("focus") or "").strip().lower(),
+            used_follow_up_subject=used_follow_up,
+            subject_routed_task_id=str(subject.routed_task_id or "") if used_follow_up and subject is not None else "",
         )
     if (match := _ROUTING_SKILL_RE.match(raw)):
+        skill_name, used_follow_up = _resolved_skill_name(str(match.group("skill") or ""), subject=subject)
         return SkillQuestionIntent(
             kind="routing_agents",
-            skill_name=str(match.group("skill") or "").strip().lower(),
+            skill_name=skill_name,
+            used_follow_up_subject=used_follow_up,
+            subject_routed_task_id=str(subject.routed_task_id or "") if used_follow_up and subject is not None else "",
         )
     if _ACTIVE_LIST_RE.match(raw):
         return SkillQuestionIntent(kind="skill_list", status_focus="active")
@@ -151,7 +179,7 @@ def parse_skill_question(text: str) -> SkillQuestionIntent | None:
         return SkillQuestionIntent(kind="skill_list", status_focus="available")
     if _DEFAULT_LIST_RE.match(raw):
         return SkillQuestionIntent(kind="skill_list", status_focus="default")
-    return None
+    return _fallback_skill_question(raw, subject=subject, known_skill_names=known_skill_names)
 
 
 @dataclass(frozen=True)
@@ -194,9 +222,12 @@ class SkillInspectionResponse:
     composed_for_run: bool | None = None
     invoked_for_run: bool | None = None
     note: str = ""
+    follow_up_subject: SkillFollowUpSubject | None = None
 
 
 def render_skill_inspection_response(response: SkillInspectionResponse) -> str:
+    if response.status == "ambiguous":
+        return response.note.strip() or "Which skill do you mean?"
     intent = response.intent
     if intent.kind == "skill_list":
         if response.intent.status_focus == "active":
@@ -268,13 +299,111 @@ def _yn(value: bool | None) -> str:
 
 
 def _normalized_target_agent(value: str) -> str:
-    text = str(value or "").strip()
+    text = _normalize_skill_question_text(value)
     lower = text.lower()
     if lower in {"", "you", "this bot", "the current bot", "this conversation"}:
         return ""
     if text.startswith("@"):
         return text[1:]
     return text
+
+
+def _normalize_skill_question_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    return normalized.rstrip("?.!,;: ")
+
+
+def _resolved_skill_name(
+    token: str,
+    *,
+    subject: SkillFollowUpSubject | None,
+) -> tuple[str, bool]:
+    skill_name = _normalize_skill_question_text(token).lower()
+    if skill_name in _PRONOUN_SKILL_TOKENS:
+        inherited = str(subject.skill_name or "").strip().lower() if subject is not None else ""
+        return inherited, bool(inherited)
+    return skill_name, False
+
+
+def _fallback_skill_question(
+    raw: str,
+    *,
+    subject: SkillFollowUpSubject | None,
+    known_skill_names: tuple[str, ...],
+) -> SkillQuestionIntent | None:
+    lower = raw.lower()
+    if not lower.startswith(
+        (
+            "is ",
+            "was ",
+            "are ",
+            "do ",
+            "does ",
+            "did ",
+            "can ",
+            "could ",
+            "what ",
+            "which ",
+            "who ",
+        )
+    ):
+        return None
+    kind: SkillQuestionKind | None = None
+    if " use " in f" {lower} ":
+        kind = "skill_usage"
+    elif any(token in lower for token in (" available", " active")):
+        kind = "skill_status"
+    elif any(token in lower for token in ("advertise", "routing")):
+        kind = "routing_agents"
+    if kind is None:
+        return None
+    skill_name, used_follow_up = _fallback_skill_name(
+        lower,
+        subject=subject,
+        known_skill_names=known_skill_names,
+    )
+    target = _fallback_target_agent(lower)
+    if used_follow_up and not target and subject is not None:
+        target = _normalized_target_agent(subject.target_agent)
+    return SkillQuestionIntent(
+        kind=kind,
+        skill_name=skill_name,
+        target_agent=target,
+        status_focus=("active" if " active" in lower else "available") if kind == "skill_status" else "",
+        used_follow_up_subject=used_follow_up,
+        subject_routed_task_id=str(subject.routed_task_id or "") if used_follow_up and subject is not None else "",
+    )
+
+
+def _fallback_skill_name(
+    raw: str,
+    *,
+    subject: SkillFollowUpSubject | None,
+    known_skill_names: tuple[str, ...],
+) -> tuple[str, bool]:
+    ordered_skills = sorted(
+        {str(name).strip().lower() for name in known_skill_names if str(name).strip()},
+        key=len,
+        reverse=True,
+    )
+    for skill_name in ordered_skills:
+        pattern = rf"(?<![a-z0-9_-]){re.escape(skill_name)}(?![a-z0-9_-])"
+        if re.search(pattern, raw):
+            return skill_name, False
+    for token in re.findall(r"[a-z0-9_-]+", raw):
+        if token in _PRONOUN_SKILL_TOKENS:
+            inherited = str(subject.skill_name or "").strip().lower() if subject is not None else ""
+            return inherited, bool(inherited)
+    return "", False
+
+
+def _fallback_target_agent(raw: str) -> str:
+    if "this bot" in raw or "current bot" in raw or "this conversation" in raw:
+        return ""
+    match = re.search(r"@([a-z0-9][a-z0-9_-]*)", raw)
+    if match is not None:
+        return _normalized_target_agent(match.group(1))
+    return ""
 
 
 def parse_skill_execution_manifest(value: object) -> SkillExecutionManifestRecord | None:

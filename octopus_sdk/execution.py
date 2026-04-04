@@ -474,6 +474,11 @@ async def _execute_request_locked(
         for skill in (transport.requested_skills or ())
         if str(skill).strip()
     )
+    active_skill_slugs = tuple(
+        str(skill).strip().lower()
+        for skill in session.active_skills
+        if str(skill).strip()
+    )
     composed_skill_slugs = tuple(
         str(skill).strip().lower()
         for skill in resolved.active_skills
@@ -494,7 +499,7 @@ async def _execute_request_locked(
         "conversation_key": conversation_key,
         "bot_slug": str(cfg.agent_slug or cfg.instance or ""),
         "requested_skills": list(requested_skills),
-        "active_skills": list(composed_skill_slugs),
+        "active_skills": list(active_skill_slugs),
         "composed_skill_slugs": list(composed_skill_slugs),
         "composed_track_revision_ids": list(composed_track_revision_ids),
         "invoked_skill_slugs": [],
@@ -504,7 +509,7 @@ async def _execute_request_locked(
             conversation_key=conversation_key,
             bot_slug=str(cfg.agent_slug or cfg.instance or ""),
             requested_skills=requested_skills,
-            active_skills=composed_skill_slugs,
+            active_skills=active_skill_slugs,
             composed_skill_slugs=composed_skill_slugs,
             composed_track_revision_ids=composed_track_revision_ids,
             invoked_skill_slugs=(),

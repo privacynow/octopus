@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
+from octopus_sdk.providers import coerce_provider_state
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.time_utils import utc_now_iso
 
@@ -52,20 +54,20 @@ def load_session(
     raw = row[0]
     try:
         saved = raw if isinstance(raw, dict) else json.loads(raw)
-        for key in (
-            "active_skills", "role", "pending_approval", "pending_retry",
-            "awaiting_skill_setup", "pending_delegation",
-            "compact_mode", "project_id", "file_policy",
-            "model_profile", "created_at", "updated_at",
-        ):
-            if key in saved:
-                session[key] = saved[key]
-        if saved.get("approval_mode_explicit"):
-            session["approval_mode"] = saved["approval_mode"]
+        normalized_input = dict(saved)
+        if not isinstance(normalized_input.get("provider_state"), Mapping):
+            normalized_input["provider_state"] = {}
+        normalized_saved = session_to_dict(session_from_dict(normalized_input))
+        for key, value in normalized_saved.items():
+            if key in {"provider", "provider_state", "approval_mode"}:
+                continue
+            session[key] = value
+        if normalized_saved.get("approval_mode_explicit"):
+            session["approval_mode"] = normalized_saved["approval_mode"]
             session["approval_mode_explicit"] = True
-        if saved.get("provider") == provider_name:
-            fresh_state = provider_state_factory(conversation_key)
-            fresh_state.update(saved.get("provider_state", {}))
+        if normalized_saved.get("provider") == provider_name:
+            fresh_state = coerce_provider_state(provider_state_factory(conversation_key)).to_dict()
+            fresh_state.update(normalized_saved.get("provider_state", {}))
             session["provider_state"] = fresh_state
     except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         pass

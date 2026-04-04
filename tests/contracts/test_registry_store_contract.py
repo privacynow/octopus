@@ -1,18 +1,17 @@
-"""Registry store contract: backend-neutral behavior for SQLite and Postgres."""
+"""Registry store contract: Postgres-backed registry behavior."""
 
 from datetime import datetime, timezone
-from pathlib import Path
 import re
 
 import pytest
 from pydantic import ValidationError
 
-from octopus_registry.store import RegistrySQLiteStore
 from octopus_registry.store_base import RoutingSkillDisabledError
 from octopus_registry.store_base import PROTECTED_ROUTED_TASK_STATUSES
 from octopus_registry.store_base import RegistryScopeError
 from octopus_registry.store_base import conversation_status_for_event
 from octopus_registry.store_base import hash_agent_token
+from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -161,16 +160,6 @@ def _runtime_health_payload(
 
 
 def _stored_agent_token(store, agent_id: str) -> str:
-    if isinstance(store, RegistrySQLiteStore):
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT agent_token FROM agents WHERE agent_id = ?",
-                (agent_id,),
-            ).fetchone()
-        assert row is not None
-        return str(row["agent_token"])
-
-    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -189,16 +178,6 @@ def _stored_agent_token(store, agent_id: str) -> str:
 
 
 def _routed_task_row(store, routed_task_id: str):
-    if isinstance(store, RegistrySQLiteStore):
-        with store._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
-                (routed_task_id,),
-            ).fetchone()
-        assert row is not None
-        return row
-
-    from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
     from psycopg.rows import dict_row
 
     assert isinstance(store, RegistryPostgresStore)
@@ -267,16 +246,9 @@ def _start_routed_task(store, target_token: str, routed_task_id: str) -> None:
     )
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def store(request, tmp_path: Path):
-    if request.param == "sqlite":
-        yield RegistrySQLiteStore(tmp_path / "registry.sqlite3")
-        return
-
-    postgres_url = request.getfixturevalue("postgres_registry_truncated")
-    from octopus_registry.store_postgres import RegistryPostgresStore
-
-    yield RegistryPostgresStore(postgres_url)
+@pytest.fixture()
+def store(postgres_registry_truncated: str):
+    yield RegistryPostgresStore(postgres_registry_truncated)
 
 
 def test_enroll_and_register_returns_agent_id(store):
@@ -1043,7 +1015,7 @@ def test_direct_assign_accepts_unique_display_name_alias(store):
     assert result.routed_tasks[0].target_agent_id == target_id
 
 
-def test_direct_assign_persists_visible_operator_message(store):
+def test_direct_assign_reuses_existing_operator_message_as_the_parent_narrative(store):
     origin_id, _origin_token = _enroll(store, "origin-bot", display_name="Origin")
     target_id, target_token = _enroll(store, "lift-and-shift-m2-bot", display_name="M2")
     conversation = store.create_conversation(
@@ -1051,6 +1023,10 @@ def test_direct_assign_persists_visible_operator_message(store):
         title="Registry direct assignment history",
         origin_channel="registry",
         external_conversation_ref="direct-assign-history",
+    )
+    message = store.add_conversation_message(
+        conversation.conversation_id,
+        "@m2 add 2 and 2",
     )
 
     result = store.add_conversation_action(
@@ -1062,6 +1038,7 @@ def test_direct_assign_persists_visible_operator_message(store):
                 selector=TargetSelector(kind="agent", value="m2"),
                 title="Add numbers",
                 instructions="Add 2 and 2 and return the result only.",
+                parent_event_id=message.event.event_id if message.event is not None else "",
                 message_text="@m2 add 2 and 2",
             ),
         ),
@@ -1087,11 +1064,13 @@ def test_direct_assign_persists_visible_operator_message(store):
     assert events[0].kind == "message.user"
     assert events[0].content == "@m2 add 2 and 2"
     assert events[0].metadata["source_action"] == "direct_assign"
-    assert any(
-        event.kind == "delegation.submitted"
-        and event.metadata["tasks"][0]["routed_task_id"] == routed_task_id
-        for event in events
-    )
+    assert events[0].metadata["action_id"] == "direct-assign-history"
+    assert events[0].metadata["selector_kind"] == "agent"
+    assert events[0].metadata["selector_value"] == "m2"
+    assert events[0].metadata["routed_task_id"] == routed_task_id
+    assert events[0].metadata["requested_skills"] == []
+    assert len([event for event in events if event.kind == "message.user"]) == 1
+    assert not any(event.kind == "delegation.submitted" for event in events)
     assert any(
         event.kind == "task.status"
         and event.metadata["status"] == "completed"
@@ -1135,7 +1114,7 @@ def test_delegation_approval_prefers_explicit_origin_transport_ref_from_proposal
         conversation.conversation_id,
         CoordinationActionEnvelope(
             action_id="approve-origin-transport-ref",
-            action="approve_delegation",
+            action="delegation_approve",
             payload=ApproveDelegationActionPayload(proposal_id=proposed.proposal_id),
         ),
     )
@@ -1314,7 +1293,7 @@ def test_list_approvals_returns_only_pending_requests(store):
         decided.conversation_id,
         CoordinationActionEnvelope(
             action_id="approval-action-1",
-            action="approve",
+            action="approve_pending",
             payload=ApproveRejectActionPayload(request_id="approval-decided-event"),
         ),
     )

@@ -2286,7 +2286,7 @@ async def test_claude_cli_bogus_resume_no_classifiable_error():
 
 # Work-item claim serialization, mid-flight mutation, preflight model parity,
 # and callback update_id threading are tested in test_workitem_integration.py
-# as real integration tests (real SQLite, real asyncio, real lock contention).
+# as real integration tests (real Postgres, real asyncio, real lock contention).
 
 # Work-item claiming serialization and callback update_id threading are
 # covered by real integration tests in tests/test_workitem_integration.py:

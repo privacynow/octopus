@@ -195,13 +195,6 @@ Shared package policy:
 - invalid drafts can be saved only if they still satisfy package policy;
   submit/publish remain blocked until validation passes
 
-Backward-compatible defaults for older body-centric drafts:
-
-- missing `display_name` defaults from the skill slug
-- `requirements` default empty
-- `provider_config` default empty
-- `files` default empty
-
 Registry and chat are peers here:
 
 - registry can show inline panels, lists, and guided flows

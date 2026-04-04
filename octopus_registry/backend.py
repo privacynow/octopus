@@ -6,7 +6,6 @@ import logging
 
 from .authority import StoreBackedRegistryAuthority
 from .config import load_registry_config
-from .store import RegistrySQLiteStore
 from .store_base import AbstractRegistryStore
 from .store_postgres import RegistryPostgresStore
 
@@ -20,10 +19,9 @@ def get_registry_store() -> AbstractRegistryStore:
     global _store
     if _store is None:
         config = load_registry_config()
-        if config.database_url:
-            _store = RegistryPostgresStore(config.database_url)
-        else:
-            _store = RegistrySQLiteStore(config.db_path)
+        if not config.database_url:
+            raise RuntimeError("OCTOPUS_DATABASE_URL must be set before the registry can start.")
+        _store = RegistryPostgresStore(config.database_url)
     return _store
 
 

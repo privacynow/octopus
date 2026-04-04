@@ -17,8 +17,6 @@ from app.runtime.telegram_session_io import (
     load as _session_io_load,
     save as _session_io_save,
 )
-from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime import composition
 from app.runtime.session_runtime import resolve_session_context
 from octopus_sdk.sessions import SessionState
 
@@ -37,8 +35,8 @@ class TelegramConversationRuntime:
     edit_or_reply_text: Callable[..., Awaitable[None]]
 
 
-def _flows():
-    return composition.workflows()
+def _flows(runtime: TelegramConversationRuntime):
+    return runtime.state.services.workflows
 
 
 def _approval_mode_source(session: SessionState) -> str:
@@ -87,7 +85,7 @@ def _resolve_context(
         config=runtime.state.config,
         provider_name=runtime.state.provider.name,
         trust_tier=trust_tier,
-        catalog=_flows().runtime_skills.catalog,
+        catalog=_flows(runtime).runtime_skills.catalog,
     )
 
 
@@ -97,7 +95,7 @@ def _settings_model_profile_state(
     trust_tier: str,
     effective_model: str,
 ) -> tuple[list[str], str]:
-    state = _flows().conversation.settings.model_profile_state(
+    state = _flows(runtime).conversation.settings.model_profile_state(
         session,
         runtime.state.config,
         trust_tier,
@@ -113,7 +111,7 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
     provider = runtime.state.provider
     async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = _session_io_load(runtime.state, chat_id)
-        outcome = _flows().conversation.control.reset_session(
+        outcome = _flows(runtime).conversation.control.reset_session(
             old_session,
             conversation_key=_conversation_key(chat_id),
             actor_key=_actor_key(event.user.id),
@@ -131,7 +129,7 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
             return
         _session_io_save(runtime.state, chat_id, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            get_provider_guidance_service().cleanup_codex_scripts(
+            runtime.state.services.execution_services.guidance.cleanup_codex_scripts(
                 cfg.data_dir,
                 _conversation_key(chat_id),
             )
@@ -162,7 +160,7 @@ async def cancel_chat_operation(
 
     async with runtime.chat_lock(chat_id, message=message, update_id=update_id):
         session = _session_io_load(runtime.state, chat_id)
-        outcome = _flows().conversation.control.cancel_conversation(
+        outcome = _flows(runtime).conversation.control.cancel_conversation(
             session,
             data_dir=runtime.state.config.data_dir,
             conversation_key=_conversation_key(chat_id),
@@ -185,7 +183,7 @@ def request_cancel_fast_path(
     allow_override: bool = False,
 ):
     session = _session_io_load(runtime.state, chat_id)
-    outcome = _flows().conversation.control.cancel_conversation(
+    outcome = _flows(runtime).conversation.control.cancel_conversation(
         session,
         data_dir=runtime.state.config.data_dir,
         conversation_key=_conversation_key(chat_id),
@@ -229,7 +227,7 @@ async def cmd_approval(event, update: Update, context, *, runtime: TelegramConve
             rendered = telegram_presenters.approval_mode_status(mode, source)
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
-        outcome = _flows().conversation.settings.set_approval_mode(session, arg)
+        outcome = _flows(runtime).conversation.settings.set_approval_mode(session, arg)
         if outcome.mutated:
             _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
@@ -260,7 +258,7 @@ async def cmd_compact(event, update: Update, context, *, runtime: TelegramConver
 
     async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _session_io_load(runtime.state, chat_id)
-        outcome = _flows().conversation.settings.set_compact_mode(session, mode == "on")
+        outcome = _flows(runtime).conversation.settings.set_compact_mode(session, mode == "on")
         if outcome.mutated:
             _session_io_save(runtime.state, chat_id, session)
     rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
@@ -287,7 +285,7 @@ async def cmd_role(event, update: Update, context, *, runtime: TelegramConversat
     value = "" if args[0].lower() == "clear" else " ".join(args)
     async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _session_io_load(runtime.state, chat_id)
-        outcome = _flows().conversation.settings.set_role(
+        outcome = _flows(runtime).conversation.settings.set_role(
             session,
             value,
             default_role=runtime.state.config.role,
@@ -307,7 +305,7 @@ async def cmd_model(event, update: Update, context, *, runtime: TelegramConversa
     cfg = runtime.state.config
     msg = update.effective_message
     chat_id = event.chat_id
-    settings = _flows().conversation.settings
+    settings = _flows(runtime).conversation.settings
     trust = _trust_tier(runtime, event.user)
     arg = event.args[0].lower() if event.args else ""
 
@@ -400,7 +398,7 @@ async def cmd_project(event, update: Update, context, *, runtime: TelegramConver
     if value is not None:
         async with runtime.chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _session_io_load(runtime.state, event.chat_id)
-            outcome = _flows().conversation.settings.set_project(
+            outcome = _flows(runtime).conversation.settings.set_project(
                 session,
                 value,
                 cfg=cfg,
@@ -481,7 +479,7 @@ async def cmd_policy(event, update: Update, context, *, runtime: TelegramConvers
     if value is not None:
         async with runtime.chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _session_io_load(runtime.state, event.chat_id)
-            outcome = _flows().conversation.settings.set_file_policy(
+            outcome = _flows(runtime).conversation.settings.set_file_policy(
                 session,
                 value,
                 cfg=runtime.state.config,
@@ -533,7 +531,7 @@ async def handle_settings_callback(
         if not already_answered:
             await query.answer()
         session = _session_io_load(runtime.state, chat_id)
-        settings = _flows().conversation.settings
+        settings = _flows(runtime).conversation.settings
 
         if setting == "model":
             outcome = settings.set_model_profile(
@@ -628,13 +626,13 @@ async def handle_worker_conversation_action(
 ) -> bool:
     action = event.action
     params = dict(event.params)
-    settings = _flows().conversation.settings
+    settings = _flows(runtime).conversation.settings
 
     if action == "session_new":
         cfg = runtime.state.config
         provider = runtime.state.provider
         old_session = _session_io_load(runtime.state, runtime_chat)
-        outcome = _flows().conversation.control.reset_session(
+        outcome = _flows(runtime).conversation.control.reset_session(
             old_session,
             conversation_key=_conversation_key(runtime_chat),
             actor_key=_actor_key(event.user.id),
@@ -652,7 +650,7 @@ async def handle_worker_conversation_action(
             return True
         _session_io_save(runtime.state, runtime_chat, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            get_provider_guidance_service().cleanup_codex_scripts(
+            runtime.state.services.execution_services.guidance.cleanup_codex_scripts(
                 cfg.data_dir,
                 _conversation_key(runtime_chat),
             )
@@ -673,7 +671,7 @@ async def handle_worker_conversation_action(
             await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         session = _session_io_load(runtime.state, runtime_chat)
-        outcome = _flows().conversation.control.cancel_conversation(
+        outcome = _flows(runtime).conversation.control.cancel_conversation(
             session,
             data_dir=runtime.state.config.data_dir,
             conversation_key=_conversation_key(runtime_chat),

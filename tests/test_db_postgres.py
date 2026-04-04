@@ -1,35 +1,25 @@
-"""Tests for Phase 12 Postgres DB tooling: migrate, doctor, CLI."""
+"""Tests for Postgres DB init, doctor, and CLI."""
 
-import os
-from pathlib import Path
 from io import StringIO
 
 import pytest
 
-from app.db.postgres_migrate import current_schema_version, run_bootstrap, run_update
 from app.db.postgres_doctor import run_doctor
+from app.db.postgres_init import run_init
 
 
-def test_current_schema_version():
-    """Repo has at least 0001_runtime.sql so current version >= 1."""
-    assert current_schema_version() >= 1
-
-
-def test_run_update_applies_all_migrations(postgres_base_url, request):
-    """Postgres update applies all migration files without errors."""
+def test_run_init_applies_current_schema(postgres_base_url, request):
+    """DB init applies the full current schema to an empty database."""
     from app.db.postgres import get_connection
     from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
 
     worker_id = get_worker_id(request.config)
-    db_name = f"test_bot_registry_update_{worker_id}".replace("-", "_")
+    db_name = f"test_bot_registry_init_{worker_id}".replace("-", "_")
     db_url = _replace_db_in_url(postgres_base_url, db_name)
     create_test_database(postgres_base_url, db_name)
 
     with get_connection(db_url) as conn:
-        errors = run_bootstrap(conn)
-        assert errors == []
-
-        errors = run_update(conn)
+        errors = run_init(conn)
         assert errors == []
 
         with conn.cursor() as cur:
@@ -47,27 +37,29 @@ def test_run_update_applies_all_migrations(postgres_base_url, request):
     assert "channel_capabilities_json" in agent_columns
     assert "registry_scope" in agent_columns
     assert "runtime_health_json" in agent_columns
+    assert "bot_key" in agent_columns
 
 
-def test_doctor_passes_after_bootstrap(postgres_truncated):
-    """With Postgres harness: bootstrap then doctor returns no errors."""
+def test_doctor_passes_after_init(postgres_truncated):
+    """With Postgres harness: current-schema init then doctor returns no errors."""
     from app.db.postgres import get_connection
+
     with get_connection(postgres_truncated) as conn:
         errors = run_doctor(conn)
     assert errors == []
 
 
-def test_run_bootstrap_is_idempotent_on_bootstrapped_db(postgres_truncated):
-    """run_bootstrap() on an already bootstrapped DB should be a no-op, not replay old SQL."""
+def test_run_init_is_noop_on_current_db(postgres_truncated):
+    """run_init() on an already-current DB should be a no-op."""
     from app.db.postgres import get_connection
 
     with get_connection(postgres_truncated) as conn:
-        errors = run_bootstrap(conn)
+        errors = run_init(conn)
     assert errors == []
 
 
-def test_registry_bootstrap_schema_matches_current_store_contract(postgres_truncated):
-    """Fresh Postgres bootstrap exposes the current registry tables/columns/defaults."""
+def test_registry_init_schema_matches_current_store_contract(postgres_truncated):
+    """Fresh Postgres init exposes the current registry tables/columns/defaults."""
     from app.db.postgres import get_connection
 
     expected_columns = {
@@ -245,17 +237,6 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
             "created_at",
             "updated_at",
         },
-        "events": {
-            "seq",
-            "event_id",
-            "conversation_id",
-            "agent_id",
-            "kind",
-            "actor",
-            "content",
-            "metadata_json",
-            "created_at",
-        },
         "skills_override": {"skill_name", "enabled", "set_by", "set_at"},
         "meta": {"key", "value"},
     }
@@ -287,65 +268,67 @@ def test_registry_bootstrap_schema_matches_current_store_contract(postgres_trunc
     assert "jsonb" in defaults[("events", "metadata_json")]
 
 
+def test_run_init_rejects_non_current_existing_schema(postgres_base_url, request):
+    """Init refuses older or partial schema states instead of migrating them."""
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
+
+    worker_id = get_worker_id(request.config)
+    db_name = f"test_bot_legacy_{worker_id}".replace("-", "_")
+    db_url = _replace_db_in_url(postgres_base_url, db_name)
+    create_test_database(postgres_base_url, db_name)
+
+    with get_connection(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE SCHEMA bot_runtime")
+            cur.execute("CREATE TABLE bot_runtime.sessions (chat_id BIGINT PRIMARY KEY)")
+        conn.commit()
+        errors = run_init(conn)
+
+    assert errors
+    assert "do not match the current build" in errors[0]
+
+
 def test_cli_doctor_exits_when_no_database_url(monkeypatch):
-    """db doctor must exit with error when BOT_DATABASE_URL is not set."""
-    monkeypatch.delenv("BOT_DATABASE_URL", raising=False)
+    """db doctor must exit with error when OCTOPUS_DATABASE_URL is not set."""
+    monkeypatch.delenv("OCTOPUS_DATABASE_URL", raising=False)
     import sys
+
     old_argv = sys.argv
     try:
         sys.argv = ["app.db.cli", "doctor"]
         with pytest.raises(SystemExit) as exc_info:
             from app.db.cli import main
+
             main()
         assert exc_info.value.code == 1
     finally:
         sys.argv = old_argv
 
 
-def test_run_update_fails_with_bootstrap_first_message_on_empty_db(postgres_base_url, request):
-    """run_update() on empty/missing schema returns 'run DB bootstrap first' instead of bootstrapping.
-
-    Pins the bootstrap/update split: update must not silently bootstrap a fresh DB.
-    """
-    from app.db.postgres import get_connection
-    from tests.support.postgres_support import (
-        _replace_db_in_url,
-        create_test_database,
-        get_worker_id,
-    )
-
-    worker_id = get_worker_id(request.config)
-    db_name = f"test_bot_empty_{worker_id}".replace("-", "_")
-    empty_url = _replace_db_in_url(postgres_base_url, db_name)
-    create_test_database(postgres_base_url, db_name)
-    with get_connection(empty_url) as conn:
-        errors = run_update(conn)
-    assert len(errors) >= 1
-    assert any("Run DB bootstrap first" in e or "run DB bootstrap first" in e for e in errors)
-
-
 def test_cli_doctor_requires_url(monkeypatch):
-    """Running doctor without BOT_DATABASE_URL prints error and exits 1."""
-    monkeypatch.delenv("BOT_DATABASE_URL", raising=False)
+    """Running doctor without OCTOPUS_DATABASE_URL prints error and exits 1."""
+    monkeypatch.delenv("OCTOPUS_DATABASE_URL", raising=False)
     import sys
-    from io import StringIO
+
     old_argv = sys.argv
     old_stderr = sys.stderr
     try:
         sys.argv = ["app.db.cli", "doctor"]
         sys.stderr = StringIO()
         from app.db.cli import _cmd_doctor
+
         with pytest.raises(SystemExit) as exc_info:
             _cmd_doctor()
         assert exc_info.value.code == 1
-        assert "BOT_DATABASE_URL" in sys.stderr.getvalue()
+        assert "OCTOPUS_DATABASE_URL" in sys.stderr.getvalue()
     finally:
         sys.argv = old_argv
         sys.stderr = old_stderr
 
 
 def test_db_cli_sanitizes_connection_errors(monkeypatch):
-    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://localhost:5432/bot")
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", "postgresql://localhost:5432/bot")
 
     class OperationalError(RuntimeError):
         pass
@@ -357,11 +340,13 @@ def test_db_cli_sanitizes_connection_errors(monkeypatch):
     monkeypatch.setattr("app.db.cli.get_connection", fake_get_connection)
 
     import sys
+
     old_stderr = sys.stderr
     try:
         sys.stderr = StringIO()
         with pytest.raises(SystemExit) as exc_info:
             from app.db.cli import _cmd_doctor
+
             _cmd_doctor()
         assert exc_info.value.code == 1
         output = sys.stderr.getvalue()

@@ -244,7 +244,15 @@ def resolve_delegation_parent_identity(
     for candidate in (
         parent_transport_ref,
         parent_external_conversation_ref,
+    ):
+        conversation_ref = str(candidate or "").strip()
+        if not conversation_ref or not is_qualified_transport_ref(conversation_ref):
+            continue
+        return conversation_ref, conversation_key_for_ref(conversation_ref)
+    for candidate in (
         parent_conversation_id,
+        parent_transport_ref,
+        parent_external_conversation_ref,
     ):
         conversation_ref = str(candidate or "").strip()
         if not conversation_ref:

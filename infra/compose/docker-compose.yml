@@ -1,5 +1,4 @@
-# Phase 13: Local Runtime default — bot uses SQLite (no Postgres). Optional: postgres + db-* for BOT_DATABASE_URL.
-# bot-home volume: BOT_DATA_DIR (sessions + transport SQLite). Provider auth is a shared bind mount.
+# Postgres-backed runtime and registry. Provider auth is a shared bind mount.
 
 volumes:
   bot-home:
@@ -17,55 +16,37 @@ services:
       POSTGRES_USER: bot
       POSTGRES_PASSWORD: bot
       POSTGRES_DB: bot
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bot -d bot"]
       interval: 2s
       timeout: 5s
       retries: 10
+    networks:
+      default:
+        aliases:
+          - ${OCTOPUS_DB_HOST:-postgres}
 
-  db-bootstrap:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
-    command: ["python", "-m", "app.db.cli", "bootstrap"]
+  db-init:
+    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
+    command: ["python", "-m", "app.db.cli", "init"]
     environment:
-      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - tools
-
-  db-update:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
-    command: ["python", "-m", "app.db.cli", "update"]
-    environment:
-      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
-    depends_on:
-      postgres:
-        condition: service_healthy
-    profiles:
-      - tools
 
   db-doctor:
-    build:
-      context: .
-      dockerfile: infra/docker/Dockerfile
+    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
     command: ["python", "-m", "app.db.cli", "doctor"]
     environment:
-      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - tools
 
-  # Provider-only checks (no Postgres): used by provider_status.sh and provider_login.sh.
-  # Same image and bot-home as bot; no depends_on so Compose does not start postgres.
+  # Provider-only checks (no runtime DB access): used by provider_status.sh and provider_login.sh.
   bot-provider:
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
@@ -80,10 +61,7 @@ services:
       - bot-home:/home/bot/data
     command: ["python", "-m", "app.main", "--provider-health"]
 
-  # Bot service (Local Runtime default: SQLite in BOT_DATA_DIR, no Postgres).
-  # Build: ./scripts/provider/build_bot_image.sh.
-  # Start via: ./octopus
-  # Optional Postgres: set BOT_DATABASE_URL in the bot env file and start postgres first.
+  # Bot service backed by Postgres. Build via ./scripts/provider/build_bot_image.sh and start via ./octopus.
   bot:
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
@@ -93,9 +71,13 @@ services:
     environment:
       BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     volumes:
       - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
       - bot-home:/home/bot/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: ["python", "-m", "app.main"]
 
   service:
@@ -105,18 +87,19 @@ services:
     profiles:
       - registry
     environment:
-      REGISTRY_DB_PATH: /data/registry.sqlite3
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
       REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .deploy/registry/.env}
       REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .deploy/registry/.env}
       REGISTRY_ALLOW_HTTP: ${REGISTRY_ALLOW_HTTP-}
-    volumes:
-      - data:/data
     ports:
       - "${REGISTRY_BIND_HOST:-127.0.0.1}:${REGISTRY_PORT:-8787}:8787"
     networks:
       default:
         aliases:
           - registry
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: ["python", "-m", "octopus_registry.main"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
@@ -127,7 +110,7 @@ services:
     profiles:
       - stub
     environment:
-      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:
       postgres:
         condition: service_healthy

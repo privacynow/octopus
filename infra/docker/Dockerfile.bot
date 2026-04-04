@@ -8,7 +8,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY octopus_sdk ./octopus_sdk
-COPY skills ./skills
 COPY scripts ./scripts
 
 ARG BOT_PROVIDER=claude

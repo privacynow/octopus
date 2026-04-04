@@ -10,9 +10,10 @@ from octopus_sdk.event_sink import RegistryEventSink
 from octopus_sdk.execution import TransportIdentity
 from octopus_sdk.events import ConversationEvent, validate_event_metadata, EVENT_METADATA_SCHEMAS
 from octopus_sdk.registry.authority_client import RegistryAuthorityClient
-from app.agents.client import AgentRegistryClient
+from octopus_sdk.registry.client import RegistryClient as AgentRegistryClient
 from octopus_sdk.registry.models import (
     ConversationRecord,
+    ConversationProgressUpdate,
     DeliveryPollResult,
     EnrollmentResult,
     HealthSummary,
@@ -74,6 +75,19 @@ def test_validate_event_metadata_accepts_all_sdk_kinds():
             "file_policy": "edit",
             "image_count": 0,
             "prompt_char_count": 42,
+            "skill_manifest": {
+                "schema_version": 1,
+                "routed_task_id": "task-1",
+                "conversation_key": "registry:conversation:conv-1",
+                "bot_slug": "m1",
+                "requested_skills": ["wisdom"],
+                "active_skills": ["wisdom"],
+                "composed_skill_slugs": ["wisdom"],
+                "composed_track_revision_ids": ["rev-1"],
+                "invoked_skill_slugs": [],
+                "skill_kind_map": {"wisdom": "prompt"},
+                "prompt_manifest_hash": "hash-1",
+            },
         },
         "provider.response": {
             "prompt_tokens": 10,
@@ -284,10 +298,10 @@ def test_sdk_client_publish_progress_uses_progress_endpoint():
         asyncio.run(
             client.publish_progress(
                 "conv-1",
-                {
-                    "content": "Working on it",
-                    "created_at": "2026-03-24T00:00:00+00:00",
-                },
+                ConversationProgressUpdate(
+                    content="Working on it",
+                    created_at="2026-03-24T00:00:00+00:00",
+                ),
             )
         )
 
@@ -318,6 +332,16 @@ def test_extract_target_selector_message_requires_instructions():
     assert selector.kind == "agent"
     assert selector.value == "m2"
     assert instructions == "return only the answer"
+
+
+def test_extract_target_selector_message_accepts_leading_skill_phrase():
+    extracted = extract_target_selector_message("Using architecture skill, give me a system design review")
+
+    assert extracted is not None
+    selector, instructions = extracted
+    assert selector.kind == "skill"
+    assert selector.value == "architecture"
+    assert instructions == "give me a system design review"
 
 
 def test_pending_delegation_transition_derives_partial_failure__child_states():

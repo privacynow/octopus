@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from psycopg import connect
 
 from app import runtime_backend
 from app.control_plane.bus import ControlPlaneBus
@@ -136,14 +137,15 @@ def _command(
 
 
 @pytest.fixture
-def sqlite_bus_and_data_dir():
+def bus_and_data_dir(postgres_truncated):
     runtime_backend.reset_for_test()
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
+        runtime_backend.init(make_config(data_dir=data_dir, database_url=postgres_truncated))
         bus = ControlPlaneBus(data_dir)
         bus.reset_for_test()
-        yield bus, data_dir
+        yield bus, data_dir, postgres_truncated
     runtime_backend.reset_for_test()
 
 
@@ -159,23 +161,13 @@ async def _wait_for_reply(bus: ControlPlaneBus, data_dir: Path, command_id: str,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_name", ["sqlite", "postgres"])
-async def test_processor_runner_claims_and_dispatches_by_authority_pair(backend_name, request):
-    if backend_name == "sqlite":
-        runtime_backend.reset_for_test()
-        tmpdir = tempfile.TemporaryDirectory()
-        data_dir = Path(tmpdir.name)
-        ensure_data_dirs(data_dir)
-        bus = ControlPlaneBus(data_dir)
-        bus.reset_for_test()
-    else:
-        postgres_url = request.getfixturevalue("postgres_truncated")
-        tmpdir = tempfile.TemporaryDirectory()
-        data_dir = Path(tmpdir.name)
-        ensure_data_dirs(data_dir, database_url=postgres_url)
-        runtime_backend.init(make_config(data_dir=data_dir, database_url=postgres_url))
-        bus = ControlPlaneBus(data_dir)
-
+async def test_processor_runner_claims_and_dispatches_by_authority_pair(postgres_truncated):
+    runtime_backend.reset_for_test()
+    tmpdir = tempfile.TemporaryDirectory()
+    data_dir = Path(tmpdir.name)
+    ensure_data_dirs(data_dir)
+    runtime_backend.init(make_config(data_dir=data_dir, database_url=postgres_truncated))
+    bus = ControlPlaneBus(data_dir)
     try:
         runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
         projection = _RecordingProcessor(
@@ -213,8 +205,8 @@ async def test_processor_runner_claims_and_dispatches_by_authority_pair(backend_
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_retries_transient_failure_then_completes(sqlite_bus_and_data_dir, monkeypatch):
-    bus, data_dir = sqlite_bus_and_data_dir
+async def test_processor_runner_retries_transient_failure_then_completes(bus_and_data_dir, monkeypatch):
+    bus, data_dir, _postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
     attempts = 0
 
@@ -230,7 +222,7 @@ async def test_processor_runner_retries_transient_failure_then_completes(sqlite_
         side_effect=flaky,
     )
     runner.register(processor)
-    monkeypatch.setattr("app.control_plane.sqlite_impl.retry_backoff_seconds", lambda _retry_count: 0)
+    monkeypatch.setattr("app.control_plane.postgres_impl.retry_backoff_seconds", lambda _retry_count: 0)
 
     await bus.submit(_command("cmd-retry"))
 
@@ -246,8 +238,8 @@ async def test_processor_runner_retries_transient_failure_then_completes(sqlite_
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_dead_letters_after_retry_exhaustion(sqlite_bus_and_data_dir):
-    bus, data_dir = sqlite_bus_and_data_dir
+async def test_processor_runner_dead_letters_after_retry_exhaustion(bus_and_data_dir):
+    bus, data_dir, _postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
 
     async def always_fail(command: ControlCommand) -> ControlReply:
@@ -274,8 +266,8 @@ async def test_processor_runner_dead_letters_after_retry_exhaustion(sqlite_bus_a
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_reclaims_expired_commands_before_dispatch(sqlite_bus_and_data_dir):
-    bus, data_dir = sqlite_bus_and_data_dir
+async def test_processor_runner_reclaims_expired_commands_before_dispatch(bus_and_data_dir, monkeypatch):
+    bus, data_dir, postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus, poll_interval_seconds=0.01, reclaim_interval_seconds=0.01)
     processor = _RecordingProcessor(
         authority_capabilities={"registry:alpha": {"conversation_projection"}},
@@ -286,38 +278,33 @@ async def test_processor_runner_reclaims_expired_commands_before_dispatch(sqlite
     claimed = await bus.poll_commands(allowed_pairs={("registry:alpha", "conversation_projection")})
     assert [item.command_id for item in claimed] == ["cmd-expired"]
 
-    conn = runtime_backend.control_plane_store().debug_connection(data_dir)
-    conn.execute(
+    with connect(postgres_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
         """
-        UPDATE control_plane_commands
+        UPDATE bot_runtime.control_plane_commands
         SET lease_expires_at = '2000-01-01T00:00:00+00:00'
-        WHERE command_id = ?
+        WHERE command_id = %s
         """,
-        ("cmd-expired",),
-    )
-    conn.commit()
-    from app.control_plane import sqlite_impl
+                ("cmd-expired",),
+            )
+        conn.commit()
+    monkeypatch.setattr("app.control_plane.postgres_impl.retry_backoff_seconds", lambda _retry_count: 0)
 
-    original_backoff = sqlite_impl.retry_backoff_seconds
-    sqlite_impl.retry_backoff_seconds = lambda _retry_count: 0
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(runner.run(stop_event=stop_event))
 
-    try:
-        stop_event = asyncio.Event()
-        task = asyncio.create_task(runner.run(stop_event=stop_event))
+    reply = await _wait_for_reply(bus, data_dir, "cmd-expired")
+    stop_event.set()
+    await task
 
-        reply = await _wait_for_reply(bus, data_dir, "cmd-expired")
-        stop_event.set()
-        await task
-
-        assert reply.status == "completed"
-        assert [command.command_id for command in processor.seen] == ["cmd-expired"]
-    finally:
-        sqlite_impl.retry_backoff_seconds = original_backoff
+    assert reply.status == "completed"
+    assert [command.command_id for command in processor.seen] == ["cmd-expired"]
 
 
 @pytest.mark.asyncio
-async def test_processor_runner_clean_shutdown_stops_claiming_and_waits_for_inflight(sqlite_bus_and_data_dir):
-    bus, data_dir = sqlite_bus_and_data_dir
+async def test_processor_runner_clean_shutdown_stops_claiming_and_waits_for_inflight(bus_and_data_dir):
+    bus, data_dir, _postgres_url = bus_and_data_dir
     gate = asyncio.Event()
     started = asyncio.Event()
 
@@ -490,8 +477,8 @@ async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owne
     assert "Dead-lettering control-plane command cmd-dead-letter" in caplog.text
 
 
-def test_processor_runner_rejects_duplicate_pair_ownership(sqlite_bus_and_data_dir) -> None:
-    bus, _data_dir = sqlite_bus_and_data_dir
+def test_processor_runner_rejects_duplicate_pair_ownership(bus_and_data_dir) -> None:
+    bus, _data_dir, _postgres_url = bus_and_data_dir
     runner = ProcessorRunner(bus)
     runner.register(_RecordingProcessor(authority_capabilities={"registry:alpha": {"conversation_projection"}}))
 

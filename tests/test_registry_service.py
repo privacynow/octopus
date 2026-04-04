@@ -1,5 +1,6 @@
 """Tests for the FastAPI registry control-plane service."""
 
+import contextlib
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 from octopus_registry import auth as registry_auth
 from octopus_registry.server import app
 from octopus_registry import ingress
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.backend import get_registry_store
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -51,8 +52,24 @@ _FULL_MANAGEMENT_CAPABILITIES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _close_registry_test_clients(monkeypatch):
+    original_init = TestClient.__init__
+    created: list[TestClient] = []
+
+    def _tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(TestClient, "__init__", _tracked_init)
+    yield
+    while created:
+        client = created.pop()
+        with contextlib.suppress(Exception):
+            client.close()
+
+
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
@@ -61,15 +78,32 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
 
 
 def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
+    from app.db.postgres import get_connection
     from app.runtime import composition as runtime_composition
+    from app.config import load_config
+    from app.runtime.startup import initialize_runtime_health_startup
+    from tests.support.handler_support import reset_handler_test_runtime
+    from tests.support.postgres_support import (
+        truncate_content_tables,
+        truncate_credential_tables,
+        truncate_registry_tables,
+        truncate_runtime_tables,
+    )
 
     data_dir = tmp_path / "bot-data"
     monkeypatch.setenv("BOT_PROVIDER", "claude")
     monkeypatch.setenv("BOT_DATA_DIR", str(data_dir))
     monkeypatch.setenv("BOT_WORKING_DIR", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-test-token")
-    ensure_data_dirs(data_dir)
+    reset_handler_test_runtime()
     ingress.reset_for_test()
+    database_url = os.environ["OCTOPUS_DATABASE_URL"]
+    with get_connection(database_url) as conn:
+        truncate_runtime_tables(conn)
+        truncate_registry_tables(conn)
+        truncate_content_tables(conn)
+        truncate_credential_tables(conn)
+    initialize_runtime_health_startup(load_config())
     runtime_composition.workflows.cache_clear()
     return data_dir
 
@@ -319,6 +353,9 @@ def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_
     filtered = client.get("/v1/agents?q=review&state=connected")
     assert filtered.status_code == 200
     assert [item["slug"] for item in filtered.json()["agents"]] == ["alpha-reviewer"]
+    assert filtered.json()["agents"][0]["selector"] == "@alpha-reviewer"
+    assert filtered.json()["agents"][0]["selector_aliases"] == ["@alpha-reviewer"]
+    assert filtered.json()["agents"][0]["role_selector"] == "@role:developer"
 
     disconnected = client.get("/v1/agents?state=disconnected")
     assert disconnected.status_code == 200
@@ -1103,14 +1140,13 @@ def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: P
 
     settings = registry_auth.load_settings()
 
-    assert settings.db_path == tmp_path / "registry.sqlite3"
+    assert settings.database_url == os.environ["OCTOPUS_DATABASE_URL"]
     assert settings.enroll_token == "enroll-secret"
     assert settings.ui_token == "ui-secret"
     assert settings.display_name == "QA Registry"
 
 
 def test_registry_auth_validate_settings_rejects_missing_enroll_token(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.delenv("REGISTRY_ENROLL_TOKEN", raising=False)
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
 
@@ -1122,7 +1158,6 @@ def test_registry_auth_validate_settings_rejects_missing_enroll_token(monkeypatc
 
 
 def test_registry_auth_validate_settings_rejects_missing_ui_token(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.delenv("REGISTRY_UI_TOKEN", raising=False)
 
@@ -1134,7 +1169,6 @@ def test_registry_auth_validate_settings_rejects_missing_ui_token(monkeypatch, t
 
 
 def test_registry_auth_validate_settings_rejects_default_tokens(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "dev-ui-token")
 
@@ -1146,7 +1180,6 @@ def test_registry_auth_validate_settings_rejects_default_tokens(monkeypatch, tmp
 
 
 def test_registry_auth_session_cookie_is_secure_by_default(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.delenv("REGISTRY_ALLOW_HTTP", raising=False)
@@ -1158,7 +1191,6 @@ def test_registry_auth_session_cookie_is_secure_by_default(monkeypatch, tmp_path
 
 
 def test_registry_auth_session_cookie_can_allow_http_for_local_dev(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
@@ -1170,7 +1202,6 @@ def test_registry_auth_session_cookie_can_allow_http_for_local_dev(monkeypatch, 
 
 
 def test_registry_auth_session_secret_fallback_is_stable(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.delenv("REGISTRY_SESSION_SECRET", raising=False)
@@ -1188,7 +1219,6 @@ def test_registry_auth_session_secret_fallback_is_stable(monkeypatch, tmp_path: 
 
 
 def test_registry_auth_explicit_session_secret_overrides_fallback(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_SESSION_SECRET", "explicit-secret")
@@ -1662,7 +1692,7 @@ def test_approvals_endpoint_returns_only_pending_requests(monkeypatch, tmp_path:
     decision = client.post(
         f"/v1/conversations/{decided['conversation_id']}/actions",
         headers={"X-CSRF-Token": csrf},
-        json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "evt-approval-decided"}},
+        json={"action_id": "approval-action-1", "action": "approve_pending", "payload": {"request_id": "evt-approval-decided"}},
     )
     assert decision.status_code == 200
 
@@ -1863,12 +1893,37 @@ def test_agent_resource_endpoints_round_trip(monkeypatch, tmp_path: Path):
     assert task_detail.json()["routed_task_id"] == "endpoint-task-1"
 
 
+def test_conversation_message_endpoint_rejects_selector_only_direct_assignment(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Selector Bot", "selector-bot")
+    conv = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "conv-selector-only",
+        title="Selector only conversation",
+    )
+
+    _login_ui(client)
+    csrf_token = _ui_csrf_token(client)
+    response = client.post(
+        f"/v1/conversations/{conv['conversation_id']}/messages",
+        headers={"X-CSRF-Token": csrf_token},
+        json={"text": "@m2"},
+    )
+
+    assert response.status_code == 422
+    assert "Add instructions after the target selector" in response.json()["detail"]
+
+
 def test_management_result_endpoint_and_ui_logout(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
     agent_id, token = _enroll_and_register(client, "Management Bot", "management-bot")
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    store = get_registry_store()
     request = store.create_management_request(
         ManagementRequest(
             agent_id=agent_id,

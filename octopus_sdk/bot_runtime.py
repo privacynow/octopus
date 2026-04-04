@@ -7,7 +7,7 @@ import html
 import re
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Awaitable
 from typing import Callable
@@ -34,7 +34,18 @@ from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUs
 from octopus_sdk.messages import MessageTemplatePort
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
-from octopus_sdk.registry.models import DiscoveredAgentRef, ExecutionStateRecord, RoutedTaskUpdate
+from octopus_sdk.registry_inspection import RegistryInspectionPort
+from octopus_sdk.runtime.skills import (
+    SkillInspectionPort,
+    render_skill_inspection_response,
+)
+from octopus_sdk.registry.models import (
+    DiscoveredAgentRef,
+    ExecutionStateRecord,
+    RoutedTaskUpdate,
+    extract_leading_requested_skills,
+    extract_target_selector_message,
+)
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.transport import InboundSubmissionResult
 from octopus_sdk.transport import EditableHandle
@@ -262,6 +273,7 @@ class ControlPlanePort(Protocol):
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
+    registry_inspection: RegistryInspectionPort
     health_publication: HealthPublicationPort
 
 
@@ -272,6 +284,7 @@ class ExecutionServices:
     runtime_skill_setup: WorkflowRuntimeSkillSetupPort
     sessions: SessionRuntimePort
     artifacts: ArtifactStorePort
+    skill_inspection: SkillInspectionPort | None = None
     execution_faults: ExecutionFaultStatePort | None = None
     agent_directory: AgentDirectoryPort | None = None
     conversation_projection: ConversationProjectionPort | None = None
@@ -695,6 +708,7 @@ class BotRuntime:
             runtime_skill_setup=self.workflows.runtime_skills.setup,
             sessions=self.sessions,
             artifacts=services.artifacts,
+            skill_inspection=services.skill_inspection,
             execution_faults=services.execution_faults,
             agent_directory=services.agent_directory,
             conversation_projection=services.conversation_projection,
@@ -837,6 +851,11 @@ class BotRuntime:
                 authority_ref=authority_ref,
                 external_conversation_ref=str(getattr(event, "external_conversation_ref", "") or ""),
                 target_agent_id=self._target_agent_id_for_authority(authority_ref),
+                requested_skills=tuple(
+                    str(skill).strip().lower()
+                    for skill in getattr(event, "requested_skills", ())
+                    if str(skill).strip()
+                ),
             ),
             conversation_callback_factory=lambda _conversation_ref, _routed_task_id: self._noop_timeline_callback,
             routed_task_callback_factory=lambda task_id, auth_ref: (
@@ -1397,27 +1416,174 @@ class BotRuntime:
         if event.action not in {"delegation_approve", "delegation_cancel"}:
             return False
         from octopus_sdk.workflows.delegation import (
-            ParticipantDelegationRuntime,
             approve_participant_delegation,
             cancel_participant_delegation,
         )
+        target_key = item.conversation_key
+        if event.params.get("target_conversation_key"):
+            target_key = str(event.params["target_conversation_key"])
+        if event.action == "delegation_approve":
+            outcome = await approve_participant_delegation(self._participant_delegation_runtime(), target_key)
+        else:
+            outcome = await cancel_participant_delegation(self._participant_delegation_runtime(), target_key)
+        await egress.send_text(outcome.message or "Delegation updated.")
+        return True
 
-        runtime = ParticipantDelegationRuntime(
+    def _participant_delegation_runtime(self):
+        from octopus_sdk.workflows.delegation import ParticipantDelegationRuntime
+
+        return ParticipantDelegationRuntime(
             config=self.config,
             provider_name=self.provider.name,
             provider_state_factory=self.provider.new_provider_state,
             coordination=self.registry.coordination,
             sessions=self.sessions,
         )
-        target_key = item.conversation_key
-        if event.params.get("target_conversation_key"):
-            target_key = str(event.params["target_conversation_key"])
-        if event.action == "delegation_approve":
-            outcome = await approve_participant_delegation(runtime, target_key)
+
+    async def _dispatch_direct_assignment_message(
+        self,
+        event: InboundMessage,
+        item: WorkItemRecord,
+        *,
+        egress: TransportEgress,
+        conversation_ref: str,
+    ) -> bool:
+        from octopus_sdk.workflows.delegation import submit_participant_direct_assignment
+
+        direct_assignment = extract_target_selector_message(event.text)
+        if direct_assignment is None:
+            return False
+
+        selector, instructions = direct_assignment
+        requested_skills: tuple[str, ...] = ()
+        effective_instructions = instructions
+        if selector.kind != "skill":
+            requested_skills, stripped_instructions = extract_leading_requested_skills(instructions)
+            if requested_skills and stripped_instructions:
+                effective_instructions = stripped_instructions
+        parent_event_id = ""
+        if conversation_ref.startswith("registry:"):
+            parent_event_id = str(item.event_id or "").strip()
+            if parent_event_id.startswith("reg:"):
+                parent_event_id = parent_event_id.split(":", 1)[1]
+        title = summarize_text(effective_instructions) or "Direct assignment"
+        result = await submit_participant_direct_assignment(
+            self._participant_delegation_runtime(),
+            item.conversation_key,
+            conversation_ref=conversation_ref,
+            selector=selector,
+            title=title,
+            instructions=effective_instructions,
+            parent_event_id=parent_event_id,
+            message_text=event.text,
+            origin_channel=str(getattr(event, "transport", "") or getattr(event, "source", "") or "registry"),
+            external_ref=(
+                str(getattr(event, "external_conversation_ref", "") or "")
+                or conversation_ref
+                or item.conversation_key
+            ),
+            authorized_actor_key=(
+                str(getattr(event, "authorized_actor_key", "") or "")
+                or item.actor_key
+                or str(getattr(event.user, "id", "") or "")
+            ),
+            requested_skills=requested_skills,
+        )
+        task_ref = result.routed_tasks[0] if result.routed_tasks else None
+        target_label = (
+            f"@{selector.value}"
+            if selector.kind == "agent"
+            else f"@{selector.kind}:{selector.value}"
+        )
+        if task_ref is None:
+            await egress.send_text(f"Task sent to {target_label}.")
         else:
-            outcome = await cancel_participant_delegation(runtime, target_key)
-        await egress.send_text(outcome.message or "Delegation updated.")
+            await egress.send_text(
+                f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
+            )
         return True
+
+    def _effective_message_text(self, event: InboundMessage) -> str:
+        text = str(event.text or "").strip()
+        sections = []
+        context_text = str(getattr(event, "context_text", "") or "").strip()
+        constraints_text = str(getattr(event, "constraints_text", "") or "").strip()
+        if context_text:
+            sections.append(f"Context:\n{context_text}")
+        if constraints_text:
+            sections.append(f"Constraints:\n{constraints_text}")
+        if not sections:
+            return text
+        if not text:
+            return "\n\n".join(sections)
+        return text + "\n\n" + "\n\n".join(sections)
+
+    def _activate_requested_routing_skills(
+        self,
+        session: SessionState,
+        *,
+        requested_skills: tuple[str, ...],
+    ) -> bool:
+        if not requested_skills:
+            return False
+        activation = self._require_execution_services().skill_activation
+        catalog = self.workflows.runtime_skills.catalog
+        mutated = False
+        for skill_name in requested_skills:
+            detail = catalog.get_skill(skill_name)
+            if detail is None or not detail.can_activate:
+                continue
+            mutated = activation.activate(session, skill_name) or mutated
+        return mutated
+
+    async def _dispatch_skill_inspection_message(
+        self,
+        event: InboundMessage,
+        item: WorkItemRecord,
+        *,
+        egress: TransportEgress,
+        conversation_ref: str,
+    ):
+        from octopus_sdk.event_sink import build_event_sink_for_context
+        from octopus_sdk.execution import completed_reply_outcome
+
+        inspection = self._require_execution_services().skill_inspection
+        if inspection is None:
+            return None
+        actor_key = item.actor_key or str(getattr(event.user, "id", "") or "")
+        response = await inspection.inspect_text(
+            text=event.text,
+            conversation_key=item.conversation_key,
+            conversation_ref=conversation_ref,
+            actor_key=actor_key,
+            provider_name=self.provider.name,
+            provider_state_factory=self.provider.new_provider_state,
+        )
+        if response is None:
+            return None
+        reply = render_skill_inspection_response(response).strip()
+        if not reply:
+            return None
+        follow_up_subject = response.follow_up_subject
+        if follow_up_subject is not None:
+            session = self._load_session(item.conversation_key)
+            if session.last_skill_subject != follow_up_subject:
+                session.last_skill_subject = follow_up_subject
+                self.sessions.save(item.conversation_key, session)
+        transport_identity = self._build_transport_identity(
+            event=event,
+            conversation_ref=conversation_ref,
+            actor_key=actor_key,
+        )
+        event_sink = build_event_sink_for_context(
+            transport_identity,
+            self.control_plane.conversation_projection if self.control_plane is not None else None,
+            self.config,
+        )
+        await event_sink.on_user_message(event.text, actor=actor_key)
+        await egress.send_formatted_reply(reply)
+        await event_sink.on_bot_reply(reply[:2000])
+        return completed_reply_outcome(reply)
 
     async def _dispatch_claimed_message(
         self,
@@ -1439,7 +1605,7 @@ class BotRuntime:
         if not allowed:
             return
 
-        title = summarize_text(event.text) or "Conversation"
+        title = str(getattr(event, "title_text", "") or "").strip() or summarize_text(event.text) or "Conversation"
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
         authority_ref = str(getattr(event, "authority_ref", "") or "")
 
@@ -1506,6 +1672,54 @@ class BotRuntime:
             )
 
         session = self._load_session(item.conversation_key)
+        if not routed_task_id:
+            if await self._dispatch_direct_assignment_message(
+                event,
+                item,
+                egress=egress,
+                conversation_ref=conversation_ref,
+            ):
+                return
+        inspection_outcome = await self._dispatch_skill_inspection_message(
+            event,
+            item,
+            egress=egress,
+            conversation_ref=conversation_ref,
+        )
+        if inspection_outcome is not None:
+            await finalize_execution(
+                inspection_outcome,
+                context=FinalizationContext(
+                    config=self.config,
+                    item_id=item.id,
+                    conversation_key=item.conversation_key,
+                    runtime_chat=item.conversation_key,
+                    conversation_ref=conversation_ref,
+                    chat_id=event.chat_id if isinstance(event.chat_id, int) else 0,
+                    routed_task_id=routed_task_id,
+                    authority_ref=authority_ref,
+                    skip_approval=bool(getattr(event, "skip_approval", False)),
+                    load_session=self._load_session,
+                    save_session=self.sessions.save,
+                    task_routing=self.control_plane.task_routing if self.control_plane is not None else None,
+                    record_usage=self.work_queue.record_usage,
+                    completion_webhook_sender=self.workflows.completion_webhook,
+                    deferred_notifications=self.workflows.deferred_notifications,
+                    deferred_target_agent_id=self._target_agent_id_for_authority(authority_ref),
+                    deferred_actor_key=str(getattr(event, "authorized_actor_key", "") or ""),
+                    deferred_title=title,
+                ),
+            )
+            return
+        skill_mutated = self._activate_requested_routing_skills(
+            session,
+            requested_skills=tuple(
+                str(skill).strip()
+                for skill in getattr(event, "requested_skills", ())
+                if str(skill).strip()
+            ),
+        )
+        self._save_session_if_mutated(item.conversation_key, session, mutated=skill_mutated)
         expiration = expire_stale_delegations(
             session.pending_delegation,
             timeout_seconds=self.config.delegation_timeout_seconds,
@@ -1514,8 +1728,9 @@ class BotRuntime:
             session.pending_delegation = expiration.pending
             self.sessions.save(item.conversation_key, session)
 
+        execution_event = replace(event, text=self._effective_message_text(event))
         outcome = await self._execute_message_request(
-            event=event,
+            event=execution_event,
             item=item,
             egress=egress,
             conversation_ref=conversation_ref,

@@ -297,7 +297,7 @@ async def test_propose_delegation_plan_autonomous_registry_origin_uses_bound_ext
     )
 
     assert outcome.status == "delegation_submitted"
-    assert [envelope.action for _, envelope in submitted] == ["delegate_tasks", "approve_delegation"]
+    assert [envelope.action for _, envelope in submitted] == ["delegate_tasks", "delegation_approve"]
     assert submitted[0][0] == submitted[1][0]
     assert session.pending_delegation is not None
     assert session.pending_delegation.status == "submitted"
@@ -388,3 +388,70 @@ async def test_submit_direct_assignment_uses_live_registry_state_not_config_snap
     assert session.pending_delegation.status == "submitted"
     assert session.pending_delegation.tasks[0].routed_task_id == "task-direct-1"
     assert session.pending_delegation.tasks[0].status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_submit_direct_assignment_derives_requested_skills_from_skill_selector(
+    monkeypatch,
+    tmp_path: Path,
+):
+    cfg = make_config(
+        tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+        registry_agent_ids={},
+    )
+    runtime = build_telegram_runtime(
+        cfg,
+        FakeProvider("codex"),
+        services=build_test_bot_services(config=cfg),
+    )
+    _save_live_registry_state(tmp_path, agent_id="live-agent")
+    message = FakeMessage(chat=FakeChat(12345), text="/delegate @skill:architecture review this")
+    submitted: list[tuple[str, object]] = []
+    qualified_ref = telegram_conversation_ref(cfg, message.chat.id)
+
+    async def _create_conversation(**kwargs):
+        return "conversation-id"
+
+    async def _submit_action(*, conversation_id, envelope):
+        submitted.append((conversation_id, envelope))
+        return CoordinationActionResult(
+            conversation_id=conversation_id,
+            action_id=envelope.action_id,
+            action=envelope.action,
+            accepted=True,
+            routed_tasks=[
+                RoutedTaskRef(
+                    routed_task_id="task-direct-skill-1",
+                    target_agent_id="agent-architecture",
+                    title="Architecture review",
+                    status="queued",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "create_conversation",
+        _create_conversation,
+    )
+    monkeypatch.setattr(
+        runtime.services.control_plane.conversation_projection,
+        "submit_action",
+        _submit_action,
+    )
+
+    await delegation_channel.submit_direct_assignment(
+        runtime,
+        "tg:12345",
+        message,
+        conversation_ref=qualified_ref,
+        selector=TargetSelector(kind="skill", value="architecture"),
+        title="Architecture review",
+        instructions="Review this design.",
+        message_text="/delegate @skill:architecture review this",
+    )
+
+    assert submitted
+    assert submitted[0][1].payload["requested_skills"] == ["architecture"]

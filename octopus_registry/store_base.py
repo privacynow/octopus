@@ -94,19 +94,6 @@ def routed_task_external_conversation_ref(routed_task_id: str) -> str:
     return f"routed-task:{str(routed_task_id or '').strip()}"
 
 
-def direct_assignment_message_text(payload: DirectAssignActionPayload) -> str:
-    raw = str(payload.message_text or "").strip()
-    if raw:
-        return raw
-    if payload.selector.kind == "agent":
-        selector = f"@{payload.selector.value}"
-    elif payload.selector.kind == "skill":
-        selector = f"@skill:{payload.selector.value}"
-    else:
-        selector = f"@role:{payload.selector.value}"
-    return f"{selector} {payload.instructions}".strip()
-
-
 class RoutingSkillDisabledError(RuntimeError):
     """Raised when routing requests a routing skill that has been globally disabled."""
 
@@ -301,7 +288,7 @@ def validated_action_payload(
         payload = raw_payload.as_dict()
     else:
         payload = raw_payload
-    if envelope.action in {"approve", "reject"}:
+    if envelope.action in {"approve_pending", "reject_pending"}:
         return ApproveRejectActionPayload.model_validate(payload)
     if envelope.action in {"retry_allow", "retry_skip"}:
         return RetryDecisionActionPayload.model_validate(payload)
@@ -311,9 +298,9 @@ def validated_action_payload(
         return DirectAssignActionPayload.model_validate(payload)
     if envelope.action == "delegate_tasks":
         return DelegateTasksActionPayload.model_validate(payload)
-    if envelope.action == "approve_delegation":
+    if envelope.action == "delegation_approve":
         return ApproveDelegationActionPayload.model_validate(payload)
-    if envelope.action == "cancel_delegation":
+    if envelope.action == "delegation_cancel":
         return CancelDelegationActionPayload.model_validate(payload)
     if envelope.action == "cancel_task":
         return CancelTaskActionPayload.model_validate(payload)
@@ -456,7 +443,7 @@ def routed_task_created_event(request: RoutedTaskRequest) -> EventRecord:
     routed_task_id = str(request.routed_task_id)
     title = str(request.title or routed_task_id)
     return EventRecord(
-        event_id=f"routed-task:{routed_task_id}:queued:{created_at}",
+        event_id=f"routed-task:{routed_task_id}:queued",
         conversation_id=str(request.parent_conversation_id),
         kind="task.status",
         content=title,

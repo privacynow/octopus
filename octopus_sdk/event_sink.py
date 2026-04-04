@@ -40,6 +40,7 @@ class NoOpEventSink:
         file_policy: str,
         image_count: int,
         prompt_char_count: int,
+        skill_manifest: dict[str, object] | None = None,
     ) -> None:
         pass
 
@@ -190,20 +191,24 @@ class RegistryEventSink:
         file_policy: str,
         image_count: int,
         prompt_char_count: int,
+        skill_manifest: dict[str, object] | None = None,
     ) -> None:
+        metadata = {
+            "provider": provider,
+            "model": model,
+            "execution_mode": execution_mode,
+            "working_dir": working_dir,
+            "file_policy": file_policy,
+            "image_count": image_count,
+            "prompt_char_count": prompt_char_count,
+        }
+        if skill_manifest:
+            metadata["skill_manifest"] = dict(skill_manifest)
         await self._publish(
             "provider.request",
             event_id=f"exec:{self._execution_event_prefix}:request",
             content=content,
-            metadata={
-                "provider": provider,
-                "model": model,
-                "execution_mode": execution_mode,
-                "working_dir": working_dir,
-                "file_policy": file_policy,
-                "image_count": image_count,
-                "prompt_char_count": prompt_char_count,
-            },
+            metadata=metadata,
         )
 
     async def on_provider_response(

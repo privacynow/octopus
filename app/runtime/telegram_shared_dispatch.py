@@ -12,7 +12,6 @@ from telegram.ext import ContextTypes
 from app import access
 from app import user_messages as _msg
 from app.presentation import telegram as telegram_presenters
-from app.runtime import composition
 from app.workflows.conversation.telegram import (
     TelegramConversationRuntime,
     cancel_chat_operation as conversation_cancel_chat_operation,
@@ -39,11 +38,11 @@ from app import work_queue
 ChatLock = Callable[..., Any]
 
 
-def _guidance_flows():
-    return composition.workflows()
+def _guidance_flows(runtime: TelegramRuntime):
+    return runtime.services.workflows
 
 
-async def handle_provider_guidance_command(event, update: Update, *, is_admin: bool) -> None:
+async def handle_provider_guidance_command(runtime: TelegramRuntime, event, update: Update, *, is_admin: bool) -> None:
     args = event.args
     if len(args) < 2:
         rendered = telegram_presenters.guidance_usage_message()
@@ -53,7 +52,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
     provider_name = args[1]
 
     if sub == "show":
-        detail = _guidance_flows().provider_guidance.management.detail(provider_name)
+        detail = _guidance_flows(runtime).provider_guidance.management.detail(provider_name)
         if detail is None:
             rendered = telegram_presenters.provider_guidance_not_found_message(provider_name)
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -62,7 +61,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "preview":
-        preview = _guidance_flows().provider_guidance.preview.preview(
+        preview = _guidance_flows(runtime).provider_guidance.preview.preview(
             provider_name,
             role="",
             active_skills=[],
@@ -73,7 +72,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "history":
-        detail = _guidance_flows().provider_guidance.management.detail(provider_name)
+        detail = _guidance_flows(runtime).provider_guidance.management.detail(provider_name)
         if detail is None:
             rendered = telegram_presenters.provider_guidance_not_found_message(provider_name)
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -82,7 +81,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "edit" and len(args) >= 3:
-        result = _guidance_flows().provider_guidance.management.edit_draft(
+        result = _guidance_flows(runtime).provider_guidance.management.edit_draft(
             provider_name,
             actor_key=str(event.user.id),
             body=" ".join(args[2:]),
@@ -91,7 +90,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "submit":
-        result = _guidance_flows().provider_guidance.management.submit(
+        result = _guidance_flows(runtime).provider_guidance.management.submit(
             provider_name,
             actor_key=str(event.user.id),
         )
@@ -103,7 +102,7 @@ async def handle_provider_guidance_command(event, update: Update, *, is_admin: b
             rendered = telegram_presenters.guidance_admin_only_message(sub)
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
-        action = getattr(_guidance_flows().provider_guidance.management, sub)
+        action = getattr(_guidance_flows(runtime).provider_guidance.management, sub)
         result = action(provider_name, actor_key=str(event.user.id))
         rendered = telegram_presenters.provider_guidance_mutation_message(result.message)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())

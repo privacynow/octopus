@@ -305,8 +305,10 @@ def test_conversation_views_distinguish_task_threads() -> None:
     ).read_text(encoding="utf-8")
 
     assert "conversation_type" in conversation_list
+    assert "operational task thread" in conversation_list
     assert "Task thread" in conversation_list
     assert "conversation_type" in agent_detail
+    assert "operational task thread" in agent_detail
     assert "Task thread" in agent_detail
     assert "No direct conversations." in agent_detail
     assert "taskThreadsGroup.hidden = false" in agent_detail
@@ -321,6 +323,48 @@ def test_conversation_views_distinguish_task_threads() -> None:
     assert "taskThreadListEl = taskList" in agent_detail
     assert "conversationPaginationEl = pag" in agent_detail
     assert "conversationPaginator = UI.createCursorPaginator" in agent_detail
+
+
+def test_conversation_tab_keeps_the_parent_view_conversational() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+
+    assert "'delegation.submitted'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
+    assert "'delegation.completed'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
+    assert "'task.status'" not in detail.split("const conversationLoadKinds =", 1)[1].split("];", 1)[0]
+    assert "return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');" in detail
+    assert "@role:' + role" not in detail
+    assert "@skill:' + value" not in detail
+    assert "agent.role_selector" in detail
+    assert "routingSkill.selector" in detail
+
+
+def test_conversation_composer_enter_submits_exact_direct_assignments() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "conversation-detail.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function currentComposerRoutingState()" in detail
+    assert "routingState.exactSuggestionMatch && routingState.instructions" in detail
+    assert "sendMessage();" in detail.split("function handleComposerKeydown(e) {", 1)[1].split("if (!suggestionList.hidden && suggestionMatches.length) {", 1)[0]
+
+
+def test_conversation_route_owns_scroll_on_wide_viewports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "#content > .content-inner.conversation-route-shell {" in css
+    assert "height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));" in css
+    assert ".conversation-page {" in css
+    assert ".conversation-shell {" in css
+    assert ".conversation-layout {" in css
+    assert "overflow: hidden;" in css
+    assert "flex: 1 1 auto;" in css
 
 
 def test_agent_surfaces_distinguish_transport_from_execution_and_offer_reset() -> None:
@@ -541,7 +585,8 @@ def test_conversation_detail_is_split_into_supporting_modules() -> None:
     assert "function _parseConversationTargetSelector(" not in conversation_detail
     assert "function _createConversationEventElement(" in event_renderers
     assert "function _createConversationTaskCard(" in task_board
-    assert "function _parseConversationTargetSelector(" in autocomplete
+    assert "function _parseConversationTargetSelector(" not in autocomplete
+    assert "function _extractConversationTargetSelectorMessage(" not in autocomplete
 
 
 def test_task_event_cards_render_outcomes_in_expandable_body_without_duplicate_leads() -> None:

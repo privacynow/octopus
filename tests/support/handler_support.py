@@ -26,11 +26,9 @@ from app.channels.telegram.bootstrap import build_application
 from app.channels.registry.channel import register_registry_channels
 from app.channels.telegram.channel import TelegramTransport
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
-from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.session_runtime import LocalSessionRuntime
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
-from octopus_sdk.bot_runtime import BotRuntime, ExecutionServices
+from octopus_sdk.bot_runtime import BotRuntime
 from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunResult
 from octopus_sdk.sessions import PendingApproval, PendingRetry
 from octopus_sdk.transport_dispatcher import TransportDispatcher
@@ -185,8 +183,8 @@ def reset_handler_test_runtime() -> None:
 def fresh_data_dir():
     """TemporaryDirectory + ensure_data_dirs + close both DBs on exit.
 
-    Closes session and transport SQLite connections BEFORE the temp dir is
-    deleted, preventing WAL checkpoint hangs on deleted files.
+    Closes session and transport handles before the temp dir is deleted so
+    test state never leaks across cases.
     """
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -194,8 +192,14 @@ def fresh_data_dir():
         try:
             yield data_dir
         finally:
-            close_db(data_dir)
-            _work_queue.close_transport_db(data_dir)
+            try:
+                close_db(data_dir)
+            except RuntimeError:
+                pass
+            try:
+                _work_queue.close_transport_db(data_dir)
+            except RuntimeError:
+                pass
 
 
 def public_user_config_overrides(**extra):
@@ -605,11 +609,13 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     ControlPlaneBus.default_timeout_seconds = 0.1
     BusConversationProjection.bus_timeout_seconds = 0.1
     global _TEST_RUNTIME, _TEST_APPLICATION
+    import app.runtime_backend as _runtime_backend
     import app.content_store as _cs
     import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
     from tests.support import skill_test_helpers as _skills_mod
 
+    _runtime_backend.init(config)
     _cs.init_content_store_for_config(config)
     _creds.init_credential_store_for_config(config)
     custom_dir = getattr(_skills_mod, "CUSTOM_DIR", None)
@@ -646,12 +652,20 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             return ""
         return load_registry_connection_state(config.data_dir, rid).agent_id
 
+    workflow_holder: dict[str, object] = {}
+    sessions = LocalSessionRuntime(
+        config,
+        catalog=lambda: workflow_holder["workflows"].runtime_skills.catalog,  # type: ignore[index,union-attr]
+        activation=get_skill_activation_service(),
+    )
     services = build_bus_bot_services(
         ControlPlaneBus(config.data_dir),
         directory,
         config=config,
         agent_id_for_authority=_agent_id_for_authority,
+        sessions=sessions,
     )
+    workflow_holder["workflows"] = services.workflows
     _TEST_RUNTIME = build_telegram_runtime(
         config,
         provider,
@@ -680,33 +694,24 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             services=services,
         )
     _TEST_RUNTIME.transport_dispatcher = dispatcher
-    sessions = LocalSessionRuntime(
-        config,
-        catalog=lambda: services.workflows.runtime_skills.catalog,
-    )
     _TEST_RUNTIME.submitter = BotRuntime(
         config=config,
         transport=dispatcher,
         registry=services.registry,
         provider=provider,
-        sessions=sessions,
+        sessions=services.sessions,
         workflows=services.workflows,
         authorization=services.authorization,
         work_queue=services.work_queue,
         control_plane=services.control_plane,
-        execution_services=ExecutionServices(
-            guidance=get_provider_guidance_service(),
-            skill_activation=get_skill_activation_service(),
-            runtime_skill_setup=services.workflows.runtime_skills.setup,
-            sessions=sessions,
-            artifacts=RuntimeArtifactStore(config),
-            agent_directory=services.control_plane.agent_directory,
-            conversation_projection=services.control_plane.conversation_projection,
-        ),
+        execution_services=services.execution_services,
         boot_id=boot_id,
         cancellations=_TEST_RUNTIME.cancellation_registry,
     )
-    _TEST_APPLICATION = build_application(_TEST_RUNTIME)
+    _TEST_APPLICATION = build_application(
+        _TEST_RUNTIME,
+        execution_runtime=_telegram_execution.build_execution_runtime(_TEST_RUNTIME),
+    )
     _TEST_RUNTIME.bot_instance = test_bot
 
 

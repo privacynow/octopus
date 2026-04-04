@@ -18,8 +18,8 @@ from octopus_registry.server import app
 from octopus_sdk.registry.models import RoutedTaskRequest, RoutedTaskUpdate, TimelineEventPayload, RegistryJsonRecord
 
 
-def _configure(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+def _configure(monkeypatch, postgres_db_url: str) -> None:
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", postgres_db_url)
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
@@ -220,9 +220,9 @@ def _ws_heartbeat_recorder(monkeypatch):
 
 
 def test_publish_events_broadcasts_via_websocket(
-    monkeypatch, tmp_path: Path, _ws_recorder,
+    monkeypatch, postgres_db_url: str, _ws_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         agent_id, token = _enroll_and_register(client, "ws-pub-bot")
         conv_id = _create_conversation(client, token, agent_id)
@@ -261,9 +261,9 @@ def test_publish_events_broadcasts_via_websocket(
 
 
 def test_publish_events_invalidates_usage_and_approvals(
-    monkeypatch, tmp_path: Path, _ws_invalidation_recorder,
+    monkeypatch, postgres_db_url: str, _ws_invalidation_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         agent_id, token = _enroll_and_register(client, "ws-invalidate-bot")
         conv_id = _create_conversation(client, token, agent_id)
@@ -309,9 +309,9 @@ def test_publish_events_invalidates_usage_and_approvals(
 
 
 def test_add_message_broadcasts_message_user_event(
-    monkeypatch, tmp_path: Path, _ws_recorder,
+    monkeypatch, postgres_db_url: str, _ws_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         _login_ui(client)
         csrf = _ui_csrf_token(client)
@@ -336,9 +336,9 @@ def test_add_message_broadcasts_message_user_event(
 
 
 def test_add_action_broadcasts_approval_decided_event(
-    monkeypatch, tmp_path: Path, _ws_recorder,
+    monkeypatch, postgres_db_url: str, _ws_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         _login_ui(client)
         csrf = _ui_csrf_token(client)
@@ -348,14 +348,14 @@ def test_add_action_broadcasts_approval_decided_event(
         resp = client.post(
             f"/v1/conversations/{conv_id}/actions",
             headers={"X-CSRF-Token": csrf},
-            json={"action_id": "approval-action-1", "action": "approve", "payload": {"request_id": "approval-1"}},
+            json={"action_id": "approval-action-1", "action": "approve_pending", "payload": {"request_id": "approval-1"}},
         )
 
         assert resp.status_code == 200
         assert len(_ws_recorder) == 1
         assert _ws_recorder[0]["event_data"]["kind"] == "approval.decided"
         assert _ws_recorder[0]["event_data"]["metadata"] == {
-            "action": "approve",
+            "action": "approve_pending",
             "decided_by": "operator",
             "decision": "approved",
         }
@@ -367,9 +367,9 @@ def test_add_action_broadcasts_approval_decided_event(
 
 
 def test_routed_task_status_broadcasts_task_status_event(
-    monkeypatch, tmp_path: Path, _ws_recorder,
+    monkeypatch, postgres_db_url: str, _ws_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         origin_id, origin_token = _enroll_and_register(client, "ws-origin-bot")
         target_id, target_token = _enroll_and_register(client, "ws-target-bot")
@@ -445,9 +445,9 @@ def test_routed_task_status_broadcasts_task_status_event(
 
 
 def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
-    monkeypatch, tmp_path: Path, _ws_recorder, _ws_invalidation_recorder,
+    monkeypatch, postgres_db_url: str, _ws_recorder, _ws_invalidation_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         origin_id, origin_token = _enroll_and_register(client, "ws-origin-2")
         target_id, target_token = _enroll_and_register(client, "ws-target-2")
@@ -517,9 +517,9 @@ def test_routed_task_create_and_result_invalidate_tasks_and_conversations(
 
 
 def test_publish_progress_broadcasts_ephemeral_progress(
-    monkeypatch, tmp_path: Path, _ws_progress_recorder,
+    monkeypatch, postgres_db_url: str, _ws_progress_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         agent_id, token = _enroll_and_register(client, "ws-progress-bot")
         conv_id = _create_conversation(client, token, agent_id)
@@ -548,11 +548,11 @@ def test_publish_progress_broadcasts_ephemeral_progress(
 
 def test_agent_heartbeat_broadcasts_targeted_update_without_collection_invalidation(
     monkeypatch,
-    tmp_path: Path,
+    postgres_db_url: str,
     _ws_heartbeat_recorder,
     _ws_invalidation_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         agent_id, token = _enroll_and_register(client, "ws-heartbeat-bot")
         _ws_heartbeat_recorder.clear()
@@ -580,11 +580,11 @@ def test_agent_heartbeat_broadcasts_targeted_update_without_collection_invalidat
 
 def test_routed_task_running_status_without_timeline_events_does_not_broadcast_parent_event(
     monkeypatch,
-    tmp_path: Path,
+    postgres_db_url: str,
     _ws_recorder,
     _ws_invalidation_recorder,
 ) -> None:
-    _configure(monkeypatch, tmp_path)
+    _configure(monkeypatch, postgres_db_url)
     with TestClient(app) as client:
         origin_id, origin_token = _enroll_and_register(client, "ws-origin-running")
         target_id, target_token = _enroll_and_register(client, "ws-target-running")

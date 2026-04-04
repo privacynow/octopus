@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
-from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.identity import filesystem_component_for_key
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
@@ -21,14 +19,11 @@ from octopus_sdk.sessions import default_session  # re-export for callers
 # Pure directory / path helpers (no backend)
 # ---------------------------------------------------------------------------
 
-def ensure_data_dirs(data_dir: Path, *, database_url: str = "") -> None:
-    """Create data_dir and subdirs. When database_url is set, skip SQLite init (backend uses Postgres)."""
+def ensure_data_dirs(data_dir: Path) -> None:
+    """Create runtime directories used regardless of the persistence backend."""
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
     (data_dir / "credentials").mkdir(parents=True, exist_ok=True)
-    if database_url:
-        return
-    # First use of session/transport store will create SQLite DBs on demand
 
 
 def sanitize_filename(name: str) -> str:
@@ -103,24 +98,6 @@ def save_session(data_dir: Path, conversation_key: str, session: dict[str, Any])
     runtime_backend.session_store().save_session(data_dir, conversation_key, session)
 
 
-def apply_delegation_result_atomically(
-    data_dir: Path,
-    conversation_key: str,
-    *,
-    routed_task_id: str,
-    authority_ref: str,
-    result: RoutedTaskResult,
-) -> DelegationUpdateOutcome:
-    from app import runtime_backend
-    return runtime_backend.session_store().apply_delegation_result_atomically(
-        data_dir,
-        conversation_key,
-        routed_task_id=routed_task_id,
-        authority_ref=authority_ref,
-        result=result,
-    )
-
-
 def delete_session(data_dir: Path, conversation_key: str) -> None:
     from app import runtime_backend
     runtime_backend.session_store().delete_session(data_dir, conversation_key)
@@ -133,11 +110,15 @@ def list_sessions(data_dir: Path) -> list[dict[str, Any]]:
 
 def close_db(data_dir: Path) -> None:
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().close_db(data_dir)
 
 
 def close_all_db() -> None:
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().close_all_db()
 
 
@@ -183,4 +164,6 @@ def debug_session_connection(data_dir: Path):
 def reset_db_for_test(data_dir: Path) -> None:
     """Tests only: close and reset the session store for this data dir."""
     from app import runtime_backend
+    if not runtime_backend.is_initialized():
+        return
     runtime_backend.session_store().reset_db_for_test(data_dir)

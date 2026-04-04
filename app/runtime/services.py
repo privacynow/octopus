@@ -13,13 +13,10 @@ from app.agents.state import runtime_registry_agent_id
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import build_control_plane_directory
 from app.config import BotConfig
-from app.execution_faults import LocalExecutionFaultState
-from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime.artifacts import RuntimeArtifactStore
 from app.runtime.bot_services import BotServices, ControlPlaneServices, build_bus_bot_services
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.skill_activation_service import get_skill_activation_service
-from octopus_sdk.bot_runtime import BotRuntime, ExecutionServices
+from octopus_sdk.bot_runtime import BotRuntime
 from octopus_sdk.providers import Provider
 
 log = logging.getLogger(__name__)
@@ -39,6 +36,7 @@ def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
     sessions = LocalSessionRuntime(
         config,
         catalog=lambda: workflow_holder["workflows"].runtime_skills.catalog,  # type: ignore[return-value]
+        activation=get_skill_activation_service(),
     )
     authority_capabilities = (
         registry_authority_capabilities(config.agent_registries)
@@ -94,16 +92,7 @@ def build_runtime(config: BotConfig, provider: Provider) -> RuntimeBuild:
         authorization=services.authorization,
         work_queue=services.work_queue,
         control_plane=services.control_plane,
-        execution_services=ExecutionServices(
-            guidance=get_provider_guidance_service(),
-            skill_activation=get_skill_activation_service(),
-            runtime_skill_setup=services.workflows.runtime_skills.setup,
-            sessions=sessions,
-            artifacts=RuntimeArtifactStore(config),
-            execution_faults=LocalExecutionFaultState(config.data_dir),
-            agent_directory=services.control_plane.agent_directory,
-            conversation_projection=services.control_plane.conversation_projection,
-        ),
+        execution_services=services.execution_services,
         boot_id=transport_build.boot_id,
         cancellations=transport_build.telegram_runtime.cancellation_registry,
         execution_inflight=getattr(

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from app.access import get_authorization
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.events import ConversationEvent
 from octopus_sdk.registry.models import (
@@ -25,6 +23,7 @@ from octopus_sdk.health_publication import (
     HealthReport,
     NoOpHealthPublication,
 )
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import (
     NoOpTaskRouting,
     TaskResultReport,
@@ -32,7 +31,8 @@ from octopus_sdk.task_routing import (
     TaskSubmissionResult,
 )
 from app.runtime.services import BotServices, ControlPlaneServices
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.config_support import make_config
+from tests.support.service_support import build_test_bot_services
 
 
 async def test_noop_conversation_projection_satisfies_port_and_is_silent() -> None:
@@ -141,6 +141,7 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
     projection = NoOpConversationProjection()
     routing = NoOpTaskRouting()
     directory = NoOpAgentDirectory()
+    registry_inspection = NoOpRegistryInspection()
     health = NoOpHealthPublication()
 
     assert isinstance(health, HealthPublicationPort)
@@ -153,17 +154,17 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
         )
     )
     summary = health.connection_summary()
-    services = BotServices(
+    config = make_config()
+    runtime_backend.init(config)
+    services = build_test_bot_services(
+        config=config,
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
             task_routing=routing,
             agent_directory=directory,
+            registry_inspection=registry_inspection,
             health_publication=health,
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
     assert isinstance(summary, ConnectionSummary)
@@ -171,4 +172,5 @@ async def test_noop_health_publication_and_service_container_remain_usable() -> 
     assert services.control_plane.conversation_projection is projection
     assert services.control_plane.task_routing is routing
     assert services.control_plane.agent_directory is directory
+    assert services.control_plane.registry_inspection is registry_inspection
     assert services.control_plane.health_publication is health

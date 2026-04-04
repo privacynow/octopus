@@ -18,7 +18,6 @@ from app.runtime.telegram_session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
 from app.agents.state import runtime_registry_agent_id
 from app.credential_validation import validate_credential
-from app.execution_faults import LocalExecutionFaultState
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.identity import (
     telegram_conversation_ref,
@@ -28,11 +27,6 @@ from octopus_sdk.identity import (
 from octopus_sdk.bot_runtime import ExecutionServices
 from octopus_sdk.bot_runtime import ProviderDispatchRuntime
 from octopus_sdk.inbound_types import InboundAttachment
-from app.provider_guidance_service import get_provider_guidance_service
-from app.skill_activation_service import get_skill_activation_service
-from app.runtime import composition
-from app.runtime.session_runtime import resolve_session_context
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from octopus_sdk.sessions import SessionState
 from app.storage import chat_upload_dir, is_image_path, resolve_allowed_path
 from app.summarize import save_raw
@@ -46,68 +40,6 @@ from octopus_sdk.execution import (
     execute_request as execution_execute_request,
     request_approval as execution_request_approval,
 )
-
-@dataclass(frozen=True)
-class _TelegramSessionRuntime:
-    state: TelegramRuntime
-
-    def load(
-        self,
-        conversation_key: str,
-        *,
-        provider_name: str,
-        provider_state_factory,
-        approval_mode: str,
-        default_role: str = "",
-        default_skills: tuple[str, ...] = (),
-    ) -> SessionState:
-        return load_runtime_session(
-            self.state.config.data_dir,
-            conversation_key,
-            provider_name=provider_name,
-            provider_state_factory=provider_state_factory,
-            approval_mode=approval_mode,
-            default_role=default_role,
-            default_skills=default_skills,
-        )
-
-    def save(self, conversation_key: str, session: SessionState) -> None:
-        save_runtime_session(self.state.config.data_dir, conversation_key, session)
-
-    def resolve_context(
-        self,
-        session: SessionState,
-        *,
-        config,
-        provider_name: str,
-        trust_tier: str = "trusted",
-    ) -> ResolvedExecutionContext:
-        return resolve_session_context(
-            session,
-            config=config,
-            provider_name=provider_name,
-            trust_tier=trust_tier,
-            catalog=self.state.services.workflows.runtime_skills.catalog,
-        )
-
-
-@dataclass(frozen=True)
-class _TelegramArtifactStore:
-    state: TelegramRuntime
-
-    def upload_dir(self, conversation_key: str) -> Path:
-        return chat_upload_dir(self.state.config.data_dir, conversation_key)
-
-    def save_raw(
-        self,
-        conversation_key: str,
-        prompt: str,
-        raw_text: str,
-        *,
-        kind: str = "request",
-    ) -> int:
-        return save_raw(self.state.config.data_dir, conversation_key, prompt, raw_text, kind=kind)
-
 
 @dataclass(frozen=True)
 class TelegramExecutionMessage:
@@ -216,12 +148,11 @@ def resolve_context(
     session: SessionState,
     trust_tier: str = "trusted",
 ) -> ResolvedExecutionContext:
-    return resolve_session_context(
+    return runtime.services.sessions.resolve_context(
         session,
         config=runtime.config,
         provider_name=runtime.provider.name,
         trust_tier=trust_tier,
-        catalog=runtime.services.workflows.runtime_skills.catalog,
     )
 
 
@@ -476,21 +407,9 @@ def execution_channel_metadata(
 def build_execution_runtime(
     runtime: TelegramRuntime,
 ) -> ExecutionRuntime:
-    projection = runtime.services.control_plane.conversation_projection
-    services = ExecutionServices(
-        guidance=get_provider_guidance_service(),
-        skill_activation=get_skill_activation_service(),
-        runtime_skill_setup=composition.workflows().runtime_skills.setup,
-        sessions=_TelegramSessionRuntime(runtime),
-        artifacts=_TelegramArtifactStore(runtime),
-        execution_faults=LocalExecutionFaultState(runtime.config.data_dir),
-        agent_directory=runtime.services.control_plane.agent_directory,
-        conversation_projection=projection,
-    )
-
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime),
-        services=services,
+        services=runtime.services.execution_services,
         interrupted_exc=work_queue.LeaveClaimed,
     )
 

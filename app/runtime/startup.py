@@ -39,7 +39,7 @@ def runs_ingress(config: BotConfig) -> bool:
 def initialize_runtime_health_startup(config: BotConfig) -> None:
     """Initialize only the runtime dependencies needed by doctor/health checks."""
     runtime_backend.init(config)
-    ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
+    ensure_data_dirs(config.data_dir)
     init_content_store_for_config(config)
     init_credential_store_for_config(config)
 
@@ -129,7 +129,8 @@ async def run_provider_health(provider: Provider) -> None:
 
 def run_database_startup_checks(config: BotConfig) -> None:
     if not config.database_url:
-        return
+        print("OCTOPUS_DATABASE_URL must be set before starting the runtime.", file=sys.stderr)
+        raise SystemExit(1)
     try:
         from app.db.postgres import get_connection
         from app.db.postgres_doctor import run_doctor as run_postgres_doctor
@@ -151,7 +152,7 @@ def run_database_startup_checks(config: BotConfig) -> None:
             print(f"  FAIL: {error}", file=sys.stderr)
         print(
             "Run: docker compose --project-directory . -f infra/compose/docker-compose.yml "
-            "--profile tools run --rm db-bootstrap (or db-update). See README.",
+            "--profile tools run --rm db-init. Existing non-current schemas must be reset first.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -208,13 +209,9 @@ def initialize_runtime_startup(config: BotConfig, provider: Provider) -> None:
 
 
 def close_runtime_resources(config: BotConfig) -> None:
-    if config.database_url:
-        from app.db.postgres import close_pools
+    from app.db.postgres import close_pools
 
-        close_pools()
-    else:
-        close_transport_db(config.data_dir)
-        close_db(config.data_dir)
+    close_pools()
 
     purge_old(config.data_dir)
 

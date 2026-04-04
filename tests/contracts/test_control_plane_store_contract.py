@@ -32,48 +32,40 @@ def _command(
     )
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def backend_bus_and_data_dir(request):
+@pytest.fixture()
+def bus_and_data_dir(postgres_truncated):
     from app import runtime_backend
     from tests.support.config_support import make_config
 
-    if request.param == "sqlite":
-        runtime_backend.reset_for_test()
-        with tempfile.TemporaryDirectory() as tmp:
-            data_dir = Path(tmp)
-            ensure_data_dirs(data_dir)
-            bus = ControlPlaneBus(data_dir)
-            bus.reset_for_test()
-            yield "sqlite", bus, data_dir
-        return
-
-    postgres_url = request.getfixturevalue("postgres_truncated")
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
-        ensure_data_dirs(data_dir, database_url=postgres_url)
-        cfg = make_config(data_dir=data_dir, database_url=postgres_url)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir=data_dir, database_url=postgres_truncated)
         runtime_backend.init(cfg)
         try:
-            yield "postgres", ControlPlaneBus(data_dir), data_dir
+            yield ControlPlaneBus(data_dir), data_dir
         finally:
             runtime_backend.reset_for_test()
 
 
+@pytest.fixture()
+def backend_bus_and_data_dir(bus_and_data_dir):
+    bus, data_dir = bus_and_data_dir
+    return "postgres", bus, data_dir
+
+
 @pytest.mark.asyncio
-async def test_backend_selection_matches_runtime_backend(backend_bus_and_data_dir):
-    backend, _bus, _data_dir = backend_bus_and_data_dir
+async def test_backend_selection_matches_runtime_backend(bus_and_data_dir):
+    _bus, _data_dir = bus_and_data_dir
     from app import runtime_backend
 
     store = runtime_backend.control_plane_store()
-    if backend == "sqlite":
-        assert store.__class__.__name__ == "SQLiteControlPlaneStore"
-    else:
-        assert store.__class__.__name__ == "PostgresControlPlaneStore"
+    assert store.__class__.__name__ == "PostgresControlPlaneStore"
 
 
 @pytest.mark.asyncio
-async def test_submit_poll_complete_and_reply_round_trip(backend_bus_and_data_dir):
-    _backend, bus, data_dir = backend_bus_and_data_dir
+async def test_submit_poll_complete_and_reply_round_trip(bus_and_data_dir):
+    bus, data_dir = bus_and_data_dir
     from app import runtime_backend
 
     command = _command("cmd-roundtrip")
@@ -97,8 +89,8 @@ async def test_submit_poll_complete_and_reply_round_trip(backend_bus_and_data_di
 
 
 @pytest.mark.asyncio
-async def test_request_waits_for_processor_completion(backend_bus_and_data_dir):
-    _backend, bus, _data_dir = backend_bus_and_data_dir
+async def test_request_waits_for_processor_completion(bus_and_data_dir):
+    bus, _data_dir = bus_and_data_dir
     command = _command(
         "cmd-request",
         capability="task_routing",
@@ -131,8 +123,8 @@ async def test_request_waits_for_processor_completion(backend_bus_and_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_poll_commands_is_pair_aware(backend_bus_and_data_dir):
-    _backend, bus, _data_dir = backend_bus_and_data_dir
+async def test_poll_commands_is_pair_aware(bus_and_data_dir):
+    bus, _data_dir = bus_and_data_dir
     await bus.submit(
         _command(
             "cmd-pair-aware",
@@ -153,8 +145,8 @@ async def test_poll_commands_is_pair_aware(backend_bus_and_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_submit_deduplicates_by_idempotency_key(backend_bus_and_data_dir):
-    _backend, bus, _data_dir = backend_bus_and_data_dir
+async def test_submit_deduplicates_by_idempotency_key(bus_and_data_dir):
+    bus, _data_dir = bus_and_data_dir
     first = _command("cmd-idem-1", idempotency_key="key-1")
     second = _command("cmd-idem-2", idempotency_key="key-1")
 
@@ -170,8 +162,8 @@ async def test_submit_deduplicates_by_idempotency_key(backend_bus_and_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_fail_respects_retry_backoff_before_requeue(backend_bus_and_data_dir):
-    _backend, bus, _data_dir = backend_bus_and_data_dir
+async def test_fail_respects_retry_backoff_before_requeue(bus_and_data_dir):
+    bus, _data_dir = bus_and_data_dir
     await bus.submit(_command("cmd-retry", max_retries=2))
     claimed = await bus.poll_commands(
         allowed_pairs={("registry:alpha", "conversation_projection")},
@@ -198,8 +190,8 @@ async def test_fail_respects_retry_backoff_before_requeue(backend_bus_and_data_d
 
 
 @pytest.mark.asyncio
-async def test_reclaim_expired_consumes_retry_budget(backend_bus_and_data_dir):
-    _backend, bus, data_dir = backend_bus_and_data_dir
+async def test_reclaim_expired_consumes_retry_budget(bus_and_data_dir):
+    bus, data_dir = bus_and_data_dir
     from app import runtime_backend
 
     store = runtime_backend.control_plane_store()
@@ -232,8 +224,8 @@ async def test_reclaim_expired_consumes_retry_budget(backend_bus_and_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_stale_claim_token_cannot_complete_reclaimed_command(backend_bus_and_data_dir):
-    _backend, bus, data_dir = backend_bus_and_data_dir
+async def test_stale_claim_token_cannot_complete_reclaimed_command(bus_and_data_dir):
+    bus, data_dir = bus_and_data_dir
     from app import runtime_backend
 
     store = runtime_backend.control_plane_store()

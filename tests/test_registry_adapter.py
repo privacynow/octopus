@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.access import get_authorization
 from app.channels.registry.channel import (
     RegistryConversationChannel,
     RegistryTaskChannel,
@@ -19,14 +18,14 @@ from app.runtime.services import (
     BotServices,
     ControlPlaneServices,
 )
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from tests.support.config_support import make_config, make_registry_connection
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.service_support import build_test_bot_services
 from octopus_sdk.config import RegistryConnectionConfig
 from octopus_sdk.transport import TransportBindingRecord
 
@@ -53,24 +52,24 @@ class _ProjectionRecorder:
             raise RuntimeError("events failed")
 
 
-def _services(recorder: _ProjectionRecorder) -> BotServices:
+def _services(config, recorder: _ProjectionRecorder) -> BotServices:
+    runtime_backend.init(config)
     noop = ControlPlaneServices(
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
-    return BotServices(
+    return build_test_bot_services(
+        config=config,
         control_plane=ControlPlaneServices(
             conversation_projection=recorder,
             task_routing=noop.task_routing,
             agent_directory=noop.agent_directory,
+            registry_inspection=noop.registry_inspection,
             health_publication=noop.health_publication,
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
 
@@ -84,7 +83,7 @@ async def test_registry_channel_publishes_started_event_on_bind(tmp_path):
     channel_egress = RegistryChannelEgress(
         cfg,
         conversation_ref=registry_conversation_ref("default", "conv-1"),
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     await channel_egress.bind(title="Spec review", config=cfg)
@@ -103,7 +102,7 @@ async def test_registry_channel_sync_binding_no_started_event(tmp_path):
     channel_egress = RegistryChannelEgress(
         cfg,
         conversation_ref=registry_conversation_ref("default", "conv-sync"),
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     await channel_egress.sync_binding(
@@ -130,7 +129,7 @@ async def test_registry_channel_rate_limits_progress_events(tmp_path, monkeypatc
     channel_egress = RegistryChannelEgress(
         cfg,
         conversation_ref=registry_conversation_ref("default", "conv-4"),
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     monotonic_values = iter([10.0, 11.0])
@@ -163,7 +162,7 @@ async def test_registry_channel_does_not_persist_ephemeral_working_status(tmp_pa
     channel_egress = RegistryChannelEgress(
         cfg,
         conversation_ref=registry_conversation_ref("default", "conv-ephemeral"),
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     await channel_egress.send_text("Working…")
@@ -184,7 +183,7 @@ async def test_registry_channel_swallows_projection_failures(tmp_path):
         cfg,
         conversation_ref=registry_conversation_ref("default", "conv-5"),
         output_log=output_log,
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     await channel_egress.bind(title="No bind", config=cfg)
@@ -206,7 +205,7 @@ async def test_registry_channel_rejects_unqualified_refs(tmp_path):
         RegistryChannelEgress(
             cfg,
             conversation_ref="conv-unqualified",
-            services=_services(_ProjectionRecorder()),
+            services=_services(cfg, _ProjectionRecorder()),
         )
 
 
@@ -228,12 +227,12 @@ async def test_registry_channels_build_scoped_egress__qualified_refs(tmp_path):
     conversation_channel = RegistryConversationChannel(
         cfg,
         registry,
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
     task_channel = RegistryTaskChannel(
         cfg,
         registry,
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     conversation_egress = conversation_channel.build_egress(
@@ -271,7 +270,7 @@ async def test_registry_conversation_channel_preserves_explicit_external_id(tmp_
     conversation_channel = RegistryConversationChannel(
         cfg,
         registry,
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     conversation_egress = conversation_channel.build_egress(
@@ -293,7 +292,7 @@ async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path
     task_egress = RegistryChannelEgress(
         cfg,
         conversation_ref=registry_task_ref("default", "task-no-project"),
-        services=_services(projection),
+        services=_services(cfg, projection),
     )
 
     await task_egress.bind(title="Task", config=cfg)
@@ -328,15 +327,17 @@ def test_register_registry_channels_registers_channels_by_scope(tmp_path):
     )
     dispatcher = TransportDispatcher()
 
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(prod, ops),
+    )
+
     register_registry_channels(
-        make_config(
-            data_dir=tmp_path,
-            agent_mode="registry",
-            agent_registries=(prod, ops),
-        ),
+        config,
         (prod, ops),
         dispatcher,
-        services=_services(_ProjectionRecorder()),
+        services=_services(config, _ProjectionRecorder()),
     )
 
     assert dispatcher.transport_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
@@ -362,7 +363,7 @@ def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
     task_channel = RegistryTaskChannel(
         cfg,
         registry,
-        services=_services(_ProjectionRecorder()),
+        services=_services(cfg, _ProjectionRecorder()),
     )
 
     assert task_channel.descriptor.contributes_transport_capability is False

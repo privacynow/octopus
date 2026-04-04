@@ -10,10 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.agents.client import AgentRegistryClient
 from app.agents.state import load_runtime_registry_connection_state
 from app.formatting import summarize_text
 from octopus_sdk.registry.models import DelegationIntent
+from octopus_sdk.registry.client import RegistryClient
+from octopus_sdk.registry.models import ConversationProgressUpdate
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from app.channels.registry.refs import binding_external_id_for_ref, parse_registry_ref
 from app.config import BotConfig
@@ -216,7 +217,7 @@ class RegistryChannelEgress(TransportEgress):
             return
         parsed = parse_registry_ref(self.conversation_ref)
         conversation_id = parsed[2] if parsed else self.conversation_ref
-        client = AgentRegistryClient(
+        client = RegistryClient(
             registry.url,
             agent_token=state.agent_token,
             timeout_seconds=10.0,
@@ -224,8 +225,10 @@ class RegistryChannelEgress(TransportEgress):
         try:
             await client.publish_progress(
                 conversation_id,
-                content=summary,
-                created_at=utc_now_iso(),
+                ConversationProgressUpdate(
+                    content=summary,
+                    created_at=utc_now_iso(),
+                ),
             )
         except Exception:
             log.warning(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+import re
 from typing import Literal, NewType
 from uuid import uuid4
 
@@ -20,6 +21,10 @@ ExternalConversationRef = NewType("ExternalConversationRef", str)
 DeliveryId = NewType("DeliveryId", str)
 ConnectivityState = NewType("ConnectivityState", str)
 RegistryJsonValue = JsonValue
+_DIRECT_SKILL_MESSAGE_RE = re.compile(
+    r"^(?:using|use)\s+([a-z0-9][a-z0-9_-]*)\s+skill\s*[,:-]\s*(.+)$",
+    re.IGNORECASE,
+)
 
 
 class RegistryRecordModel(BaseModel):
@@ -168,6 +173,74 @@ class AgentDiscoveryQuery(RegistryRecordModel):
     free_text: str = ""
     exclude_agent_ids: list[str] = Field(default_factory=list)
     required_state: str = "connected"
+
+
+_DISCOVERY_ALLOWED_STATES = frozenset({"connected", "degraded", "standalone", "disconnected"})
+
+
+def parse_agent_discovery_query(
+    raw: tuple[str, ...] | list[str],
+    *,
+    exclude_agent_id: str = "",
+) -> AgentDiscoveryQuery | None:
+    role = ""
+    skills: list[str] = []
+    tags: list[str] = []
+    required_state = "connected"
+    free_text_parts: list[str] = []
+    for token in raw:
+        piece = str(token or "").strip()
+        if not piece:
+            continue
+        key = ""
+        value = ""
+        if ":" in piece:
+            key, value = piece.split(":", 1)
+        elif "=" in piece:
+            key, value = piece.split("=", 1)
+        else:
+            free_text_parts.append(piece)
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            free_text_parts.append(piece)
+            continue
+        if key == "role":
+            role = value
+        elif key in {"skill", "skills"}:
+            skills.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"tag", "tags"}:
+            tags.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key == "state":
+            required_state = value.lower()
+        else:
+            free_text_parts.append(piece)
+    if required_state not in _DISCOVERY_ALLOWED_STATES:
+        return None
+    if not role and not skills and not tags and not free_text_parts:
+        return None
+    return AgentDiscoveryQuery(
+        role=role,
+        skills=skills,
+        tags=tags,
+        free_text=" ".join(free_text_parts).strip(),
+        exclude_agent_ids=[exclude_agent_id] if exclude_agent_id else [],
+        required_state=required_state,
+    )
+
+
+def format_target_selector(kind: Literal["agent", "skill", "role"], value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if kind == "agent":
+        return normalized if normalized.startswith("@") else f"@{normalized}"
+    if kind == "skill":
+        return f"@skill:{normalized}"
+    if kind == "role":
+        return f"@role:{normalized}"
+    raise ValueError(f"Unsupported target selector kind: {kind!r}")
 
 
 class DiscoveredAgentRef(RegistryRecordModel):
@@ -528,16 +601,55 @@ def parse_target_selector(raw: str) -> TargetSelector | None:
     return TargetSelector(kind="agent", value=body)
 
 
+def normalized_requested_skills(
+    requested_skills: list[str] | tuple[str, ...] | None = None,
+    *,
+    selector: TargetSelector | None = None,
+) -> list[str]:
+    names: list[str] = []
+    if requested_skills:
+        names.extend(str(item or "").strip() for item in requested_skills)
+    if selector is not None and selector.kind == "skill":
+        names.append(str(selector.value or "").strip())
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for name in names:
+        if not name:
+            continue
+        slug = name.lower()
+        if slug in seen:
+            continue
+        seen.add(slug)
+        normalized.append(slug)
+    return normalized
+
+
+def extract_leading_requested_skills(raw: str) -> tuple[tuple[str, ...], str]:
+    text = str(raw or "").strip()
+    match = _DIRECT_SKILL_MESSAGE_RE.match(text)
+    if not match:
+        return (), text
+    skill_name = str(match.group(1) or "").strip().lower()
+    instructions = str(match.group(2) or "").strip()
+    if not skill_name or not instructions:
+        return (), text
+    return (skill_name,), instructions
+
+
 def extract_target_selector_message(raw: str) -> tuple[TargetSelector, str] | None:
     text = str(raw or "").strip()
-    if not text.startswith("@"):
+    if text.startswith("@"):
+        parts = text.split(None, 1)
+        selector_token = parts[0]
+        selector = parse_target_selector(selector_token)
+        if selector is None:
+            return None
+        instructions = parts[1].strip() if len(parts) > 1 else ""
+        return (selector, instructions) if instructions else None
+    requested_skills, instructions = extract_leading_requested_skills(text)
+    if not requested_skills:
         return None
-    parts = text.split(None, 1)
-    selector_token = parts[0]
-    selector = parse_target_selector(selector_token)
-    if selector is None:
-        return None
-    instructions = parts[1].strip() if len(parts) > 1 else ""
+    selector = TargetSelector(kind="skill", value=requested_skills[0])
     return (selector, instructions) if instructions else None
 
 
@@ -570,6 +682,7 @@ class DirectAssignmentRequest(RegistryRecordModel):
     selector: TargetSelector
     title: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
+    parent_event_id: str = ""
     origin_transport_ref: str = ""
     authorized_actor_key: str = ""
     message_text: str = ""
@@ -639,8 +752,8 @@ class CoordinationActionEnvelope(RegistryRecordModel):
 
     action_id: str = Field(..., min_length=1)
     action: Literal[
-        "approve",
-        "reject",
+        "approve_pending",
+        "reject_pending",
         "cancel_conversation",
         "retry_allow",
         "retry_skip",
@@ -648,8 +761,8 @@ class CoordinationActionEnvelope(RegistryRecordModel):
         "recovery_replay",
         "direct_assign",
         "delegate_tasks",
-        "approve_delegation",
-        "cancel_delegation",
+        "delegation_approve",
+        "delegation_cancel",
         "cancel_task",
         "retry_task",
     ]

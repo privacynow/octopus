@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
@@ -10,6 +9,7 @@ from app.agents.registry_capabilities import (
 )
 from app.agents.registry_control_processor import RegistryControlProcessor
 from octopus_sdk.config import RegistryConnectionConfig
+from octopus_sdk.registry.client import RegistryClientError
 from app.control_plane.models import ControlCommand
 from app.control_plane.requests import (
     PublishHealthRequest,
@@ -153,13 +153,19 @@ def test_registry_authority_capabilities_tracks_scope_in_one_builder() -> None:
 
     assert mapping == {
         "registry:channel": {"conversation_projection", "health_publication", "mirror_retry"},
-        "registry:coord": {"task_routing", "agent_directory", "health_publication"},
+        "registry:coord": {
+            "task_routing",
+            "agent_directory",
+            "health_publication",
+            "registry_inspection",
+        },
         "registry:full": {
             "conversation_projection",
             "task_routing",
             "agent_directory",
             "health_publication",
             "mirror_retry",
+            "registry_inspection",
         },
     }
     assert registry_authority_ref("channel") == "registry:channel"
@@ -346,6 +352,50 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert client.reported_results[0][1].transition_id == "transition-2"
     assert client.reported_results[0][1].artifacts == [{"path": "/tmp/report.txt"}]
     assert client.last_search.exclude_agent_ids == ["self-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_registry_control_processor_resolves_target_authority_by_slug_alias() -> None:
+    registry = RegistryConnectionConfig(
+        registry_id="alpha",
+        url="http://alpha",
+        enroll_token="enroll-alpha",
+        registry_scope="full",
+    )
+    client = _FakeRegistryClient(
+        search_rows=[
+            {
+                "agent_id": "agent-target-1",
+                "display_name": "M1",
+                "slug": "m1",
+                "role": "advisor",
+                "routing_skills": ["wisdom"],
+                "tags": [],
+                "description": "Advice bot",
+                "connectivity_state": "connected",
+                "current_capacity": 1,
+                "max_capacity": 2,
+            }
+        ]
+    )
+    runtime = _FakeRegistryAccess((registry,), {"alpha": client}, origin_ids={"alpha": "agent-self"})
+    processor = RegistryControlProcessor(runtime)
+
+    reply = await processor.process(
+        _command(
+            "cmd-resolve-slug",
+            capability="agent_directory",
+            operation="resolve_target_authority",
+            authority_ref="registry:alpha",
+            payload_json=ResolveTargetAuthorityRequest(target_agent_id="m1").model_dump_json(),
+        )
+    )
+
+    resolution = AuthorityResolution.model_validate_json(reply.result_json or "{}")
+    assert reply.status == "completed"
+    assert resolution.status == "resolved"
+    assert resolution.authority_ref == "registry:alpha"
+    assert client.last_search.exclude_agent_ids == ["agent-self"]
 
 
 @pytest.mark.asyncio

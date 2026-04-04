@@ -135,7 +135,7 @@ def _content_store_failure_message(exc: BaseException) -> str:
     return (
         "Content store check failed: "
         f"{exc.__class__.__name__}. "
-        "Check BOT_DATABASE_URL and content-store connectivity."
+        "Check OCTOPUS_DATABASE_URL and content-store connectivity."
     )
 
 
@@ -381,6 +381,23 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
         diagnostics: list[RuntimeDiagnostic] = []
         snapshot: SharedRuntimeSnapshot | None = None
         execution_state = load_execution_state(config.data_dir)
+
+        try:
+            from app import runtime_backend
+
+            runtime_backend.init(config)
+        except Exception as exc:
+            log.exception(
+                "Runtime backend initialization failed during health collection: %s",
+                exc.__class__.__name__,
+            )
+            diagnostics.append(
+                _diag(
+                    "error",
+                    "session.backend_init_failed",
+                    _session_store_failure_message(exc),
+                )
+            )
 
         diagnostics.extend(
             _diag("error", "config.invalid", message)

@@ -406,6 +406,14 @@ select {
     max-width: var(--content-max-wide);
 }
 
+#content > .content-inner.conversation-route-shell {
+    min-height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    height: calc(100dvh - (2 * clamp(18px, 1.8vw, 24px)));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 .agent-detail-conversation-groups {
     display: grid;
     gap: var(--space-4);
@@ -1303,15 +1311,20 @@ select {
 }
 
 .conversation-screen {
-    display: block;
+    display: flex;
+    flex: 1 1 auto;
+    height: 100%;
     min-height: 0;
 }
 
 .conversation-page {
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    height: 100%;
     gap: var(--space-2);
     min-height: 0;
-    align-content: start;
+    overflow: hidden;
 }
 
 .conversation-page.conversation-page-compact {
@@ -1323,8 +1336,13 @@ select {
 }
 
 .conversation-shell {
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
     gap: var(--space-2);
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
 }
 
 .conversation-management-grid {
@@ -1430,14 +1448,18 @@ select {
 
 .conversation-layout {
     display: flex;
+    flex: 1 1 auto;
+    height: 100%;
     min-height: 0;
+    overflow: hidden;
 }
 
 .conversation-panel {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
     width: 100%;
-    min-height: clamp(280px, 40vh, 540px);
+    min-height: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: var(--bg-secondary);

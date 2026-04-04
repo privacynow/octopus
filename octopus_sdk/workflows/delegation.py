@@ -17,6 +17,7 @@ from octopus_sdk.registry.models import (
     RoutedTaskResult,
     TargetResolutionPreview,
     TargetSelector,
+    normalized_requested_skills,
 )
 from octopus_sdk.registry_participant import RegistryCoordination
 from octopus_sdk.sessions import DelegatedTask, PendingDelegation, SessionState
@@ -806,10 +807,12 @@ async def submit_participant_direct_assignment(
     selector: TargetSelector,
     title: str,
     instructions: str,
+    parent_event_id: str = "",
     message_text: str = "",
     origin_channel: str,
     external_ref: str,
     authorized_actor_key: str = "",
+    requested_skills: list[str] | tuple[str, ...] = (),
 ) -> CoordinationActionResult:
     validated_origin_transport_ref = validate_qualified_transport_ref(
         conversation_ref,
@@ -826,14 +829,17 @@ async def submit_participant_direct_assignment(
         external_ref=coordination_external_ref,
         title=f"{origin_channel.title()} {external_ref}",
     )
+    requested_skills = normalized_requested_skills(requested_skills, selector=selector)
     result = await runtime.coordination.direct_assign(
         conversation_id,
         selector=selector,
         title=title,
         instructions=instructions,
+        parent_event_id=parent_event_id,
         origin_transport_ref=validated_origin_transport_ref,
         authorized_actor_key=authorized_actor_key,
         message_text=message_text,
+        requested_skills=requested_skills,
     )
     if result.accepted and result.routed_tasks:
         pending = build_delegation_plan(
@@ -857,6 +863,7 @@ async def submit_participant_direct_assignment(
                     "selector_kind": selector.kind,
                     "selector_value": selector.value,
                     "instructions": instructions,
+                    "requested_skills": list(requested_skills),
                 }
             ],
             origin_conversation_key=conversation_key,

@@ -13,12 +13,18 @@ from app.agents.state import load_runtime_registry_connection_state
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.config import BotConfig
-from app.runtime.composition import compose_workflows, workflows
+from app.execution_faults import LocalExecutionFaultState
+from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime.artifacts import RuntimeArtifactStore
+from app.runtime.composition import compose_workflows
+from app.skill_inspection_service import SkillInspectionService
+from app.skill_activation_service import get_skill_activation_service
 from octopus_sdk.agent_directory import AgentDirectoryPort
 from octopus_sdk.authorization import AuthorizationPort
-from octopus_sdk.bot_runtime import SessionRuntimePort, WorkflowComposition
+from octopus_sdk.bot_runtime import ExecutionServices, SessionRuntimePort, WorkflowComposition
 from octopus_sdk.conversation_projection import ConversationProjectionPort
 from octopus_sdk.health_publication import HealthPublicationPort
+from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.work_queue import WorkQueuePort
@@ -31,6 +37,7 @@ class ControlPlaneServices:
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
     agent_directory: AgentDirectoryPort
+    registry_inspection: RegistryInspectionPort
     health_publication: HealthPublicationPort
 
 
@@ -39,6 +46,8 @@ class BotServices:
     control_plane: ControlPlaneServices
     registry: RegistryParticipantImplementation
     workflows: WorkflowComposition
+    sessions: SessionRuntimePort
+    execution_services: ExecutionServices
     authorization: AuthorizationPort
     work_queue: WorkQueuePort
 
@@ -54,6 +63,7 @@ def build_bus_control_plane_services(
         BusAgentDirectory,
         BusConversationProjection,
         BusHealthPublication,
+        BusRegistryInspection,
         BusTaskRouting,
     )
 
@@ -83,6 +93,7 @@ def build_bus_control_plane_services(
         ),
         task_routing=BusTaskRouting(bus, directory),
         agent_directory=BusAgentDirectory(bus, directory),
+        registry_inspection=BusRegistryInspection(bus, directory),
         health_publication=BusHealthPublication(
             bus,
             directory,
@@ -97,9 +108,14 @@ def build_bus_bot_services(
     *,
     config: BotConfig,
     agent_id_for_authority: Callable[[str], str] | None = None,
-    sessions: SessionRuntimePort | None = None,
+    sessions: SessionRuntimePort,
 ) -> BotServices:
     from app.runtime.registry_participant import build_control_plane_registry_participant
+
+    try:
+        runtime_backend.transport_store()
+    except RuntimeError:
+        runtime_backend.init(config)
 
     control_plane = build_bus_control_plane_services(
         bus,
@@ -107,17 +123,32 @@ def build_bus_bot_services(
         config=config,
         agent_id_for_authority=agent_id_for_authority,
     )
+    workflow_graph = compose_workflows(config=config, sessions=sessions)
+    execution_services = ExecutionServices(
+        guidance=get_provider_guidance_service(),
+        skill_activation=get_skill_activation_service(),
+        runtime_skill_setup=workflow_graph.runtime_skills.setup,
+        sessions=sessions,
+        artifacts=RuntimeArtifactStore(config),
+        skill_inspection=SkillInspectionService(
+            config=config,
+            workflows=workflow_graph,
+            agent_directory=control_plane.agent_directory,
+            registry_inspection=control_plane.registry_inspection,
+        ),
+        execution_faults=LocalExecutionFaultState(config.data_dir),
+        agent_directory=control_plane.agent_directory,
+        conversation_projection=control_plane.conversation_projection,
+    )
     return BotServices(
         control_plane=control_plane,
         registry=build_control_plane_registry_participant(
             config,
             control_plane,
         ),
-        workflows=(
-            compose_workflows(config=config, sessions=sessions)
-            if sessions is not None
-            else workflows()
-        ),
+        workflows=workflow_graph,
+        sessions=sessions,
+        execution_services=execution_services,
         authorization=get_authorization(),
         work_queue=runtime_backend.transport_store(),
     )

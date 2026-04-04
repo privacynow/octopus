@@ -1,5 +1,6 @@
 from telegram.constants import ParseMode
 
+from octopus_sdk.registry.models import parse_agent_discovery_query
 from octopus_sdk.work_queue import UserAccessRecord
 from app.presentation.telegram import (
     access_overrides_message,
@@ -15,6 +16,7 @@ from app.presentation.telegram import (
     discover_degraded_message,
     discover_failed_message,
     discover_results_message,
+    discover_usage_message,
     extract_summary,
     formatted_reply_messages,
     guidance_admin_only_message,
@@ -403,6 +405,19 @@ def test_discover_results_message_renders_matching_agents():
     assert "registry:prod" in rendered.text
     assert "Routing skills" in rendered.text
     assert "backend" in rendered.text
+
+
+def test_discover_usage_example_matches_sdk_parser() -> None:
+    rendered = discover_usage_message()
+    example = rendered.text.split("<code>/discover ", 1)[1].split("</code>", 1)[0]
+    query = parse_agent_discovery_query(tuple(example.split()))
+
+    assert query is not None
+    assert query.role == "developer"
+    assert query.skills == ["architecture"]
+    assert query.tags == ["backend"]
+    assert query.free_text == "schema review"
+    assert query.required_state == "connected"
 
 
 def test_access_overrides_message_renders_expected_html():

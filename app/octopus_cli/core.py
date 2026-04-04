@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.provider_auth import ensure_auth_layout, has_auth_artifacts, shared_auth_root
 from app.provider_health import health_detail
 from app.octopus_cli.envfiles import (
@@ -44,6 +43,7 @@ from app.octopus_cli.models import (
     TargetKind,
     Workspace,
 )
+from octopus_sdk.exact_aliases import collect_exact_aliases, matches_exact_alias
 from app.subprocess_env import build_subprocess_env
 
 
@@ -284,6 +284,7 @@ class DockerRunner:
         values = parse_env_file(env_file)
         provider = values.get("BOT_PROVIDER", "claude")
         provider_auth_dir = str(self.ensure_provider_auth_dir(provider))
+        database_host = f"{slug}-postgres"
         command = [
             "docker",
             "compose",
@@ -306,6 +307,8 @@ class DockerRunner:
         command += ["--env-file", str(env_file.relative_to(self.repo_dir)), *args]
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
+            "OCTOPUS_DB_HOST": database_host,
+            "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": provider_auth_dir,
             "BOT_ENV_FILE": str(env_file.relative_to(self.repo_dir)),
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),
@@ -331,6 +334,7 @@ class DockerRunner:
         env = {
             "OCTOPUS_NETWORK": "octopus-net",
             "BOT_PROVIDER": provider,
+            "OCTOPUS_RUNTIME_IMAGE": f"octopus-agent:{provider}",
             "PROVIDER_AUTH_DIR": auth_dir,
             "BOT_ENV_FILE": "/dev/null",
             "REGISTRY_ENROLL_TOKEN": os.environ.get("REGISTRY_ENROLL_TOKEN", "placeholder-registry-enroll"),
@@ -354,7 +358,11 @@ class DockerRunner:
             ".deploy/registry/.env",
             *args,
         ]
-        env = {"OCTOPUS_NETWORK": "octopus-net"}
+        env = {
+            "OCTOPUS_NETWORK": "octopus-net",
+            "OCTOPUS_DB_HOST": "registry-postgres",
+            "OCTOPUS_RUNTIME_IMAGE": "octopus-registry-service:latest",
+        }
         return command, env
 
     def bot_compose(self, slug: str, *args: str, capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -646,6 +654,7 @@ class OctopusManager:
             paths = [
                 Path("requirements.txt"),
                 Path("infra/docker/Dockerfile.registry"),
+                Path("app"),
                 Path("octopus_registry"),
                 Path("octopus_sdk"),
             ]
@@ -961,21 +970,21 @@ class OctopusManager:
                 if target.kind == TargetKind.REGISTRY:
                     rebuild_images.append("octopus-registry-service:latest")
                     recreate_targets.append("registry")
-                    notes.append("Registry data volume will be preserved.")
+                    notes.append("Registry volumes will be preserved. Only the current schema is supported.")
                 else:
                     provider = next(bot.provider for bot in state.bots if bot.slug == target.identifier)
                     image = f"octopus-agent:{provider}"
                     if image not in rebuild_images:
                         rebuild_images.append(image)
                     recreate_targets.append(target.label)
-                    notes.append(f"Bot state for {target.label} will be preserved.")
+                    notes.append(f"Bot volumes for {target.label} will be preserved. Only the current schema is supported.")
         elif action == Action.RESTART:
             restart_targets = [target.label for target in targets]
             for target in targets:
                 if target.kind == TargetKind.REGISTRY:
-                    notes.append("Registry data volume will be preserved.")
+                    notes.append("Registry volumes will be preserved.")
                 else:
-                    notes.append(f"Bot state for {target.label} will be preserved.")
+                    notes.append(f"Bot volumes for {target.label} will be preserved.")
         elif action == Action.START:
             restart_targets = [target.label for target in targets]
         elif action == Action.STOP:
@@ -1160,6 +1169,7 @@ class OctopusManager:
             values = parse_env_file(self.registry_env_file())
         values = self._validated_registry_deploy_values(deploy, existing=values, creating=created)
         write_env_file(self.registry_env_file(), values)
+        self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         self.docker.registry_compose("up", "-d", "--remove-orphans", "service", capture_output=False)
         state = self.inspect_state().registry
         if created:
@@ -1183,6 +1193,7 @@ class OctopusManager:
             return
         values = self._validated_registry_deploy_values(deploy, existing=parse_env_file(self.registry_env_file()), creating=False)
         write_env_file(self.registry_env_file(), values)
+        self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         args = ["up", "-d", "--remove-orphans"]
         if force_recreate:
             args.append("--force-recreate")
@@ -1200,6 +1211,7 @@ class OctopusManager:
         provider = self.bot_values(slug).get("BOT_PROVIDER", "claude")
         self.ensure_provider_image_ready(provider, force=force_rebuild)
         self.reconcile_bot_registry_connections(slug)
+        self.docker.bot_compose(slug, "run", "--rm", "db-init", capture_output=False)
         args = ["up", "-d"]
         if force_recreate:
             args.append("--force-recreate")

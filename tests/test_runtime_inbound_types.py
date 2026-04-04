@@ -44,11 +44,15 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
             user=InboundUser(id="reg:actor", username="registry"),
             conversation_key="registry:prod:task:task-1",
             text="hello",
+            title_text="Task title",
             source="registry",
             transport="registry",
             conversation_ref="registry:prod:task:task-1",
             external_conversation_ref="registry-ext-1",
             routed_task_id="task-1",
+            context_text="Investigate the deployment.",
+            constraints_text="Read only.",
+            requested_skills=("architecture",),
             authority_ref="registry:prod",
         )
     )
@@ -72,8 +76,12 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert isinstance(message, InboundMessage)
     assert isinstance(action, InboundAction)
     assert message.authority_ref == "registry:prod"
+    assert message.title_text == "Task title"
     assert action.authority_ref == "registry:prod"
     assert message.external_conversation_ref == "registry-ext-1"
+    assert message.context_text == "Investigate the deployment."
+    assert message.constraints_text == "Read only."
+    assert message.requested_skills == ("architecture",)
     assert action.external_conversation_ref == "registry-ext-2"
     assert message.transport == "registry"
     assert action.transport == "registry"

@@ -1602,7 +1602,7 @@ class PostgresTransportStore:
         pass
 
     def debug_connection(self, data_dir: Path):
-        raise NotImplementedError(
-            "Postgres transport store does not expose a runtime debug connection; "
-            "use the conn-based transport implementation helpers in tests"
-        )
+        del data_dir
+        from app.db.postgres import PostgresDebugConnection
+
+        return PostgresDebugConnection(self._database_url, search_path="bot_runtime")

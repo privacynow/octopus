@@ -32,6 +32,7 @@ from .auth import (
 )
 from .ws import WebSocketManager
 from .routing_skill_service import RoutingSkillService
+from octopus_sdk.exact_aliases import direct_selector_aliases
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
@@ -40,6 +41,7 @@ from octopus_sdk.registry.models import (
     TaskRecord,
     RoutedTaskResult,
     RoutedTaskUpdate,
+    format_target_selector,
     utcnow_iso,
 )
 from octopus_sdk.registry.management import ManagementResult
@@ -86,6 +88,7 @@ from .store_base import (
     AbstractRegistryStore,
     RoutingSkillDisabledError,
     RegistryScopeError,
+    validated_agent_card_payload,
     validated_routed_task_request,
 )
 from .http_support import (
@@ -239,7 +242,6 @@ def get_csrf_token(request: Request) -> dict[str, Any]:
 async def enroll(
     request: Request,
     payload: dict[str, Any],
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     settings = load_settings()
@@ -249,17 +251,18 @@ async def enroll(
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
     clear_auth_attempt_limit(request, "registry-enroll")
     try:
-        result = store.enroll(payload.get("agent_card"))
+        result = authority.enroll_agent(
+            validated_agent_card_payload(
+                payload.get("agent_card"),
+                require_registry_scope=True,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    authority.remember_agent_token(
-        str(result.get("agent_id", "") or ""),
-        str(result.get("agent_token", "") or ""),
-    )
     await _broadcast_invalidations(
         topics=("agents", "summary"),
         reason="agent.enrolled",
-        agent_id=str(result.get("agent_id", "")),
+        agent_id=str(result.agent_id or ""),
     )
     return _json_payload(result)
 
@@ -268,17 +271,16 @@ async def enroll(
 async def register(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        agent = store.register(agent_token, payload)
+        result = authority.register_agent(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    agent_id = str(agent.agent_id)
-    authority.remember_agent_token(agent_id, agent_token)
+    agent = result.agent
+    agent_id = str(agent.agent_id or "")
     if agent_id:
         await _ws_manager.broadcast_heartbeat(agent_id, _json_payload(agent))
     await _broadcast_invalidations(
@@ -286,35 +288,27 @@ async def register(
         reason="agent.registered",
         agent_id=agent_id,
     )
-    return _json_payload(
-        HealthSummary(
-            agent=agent,
-            collections_changed=True,
-            server_time=utcnow_iso(),
-        )
-    )
+    return _json_payload(result)
 
 
 @app.post("/v1/agents/heartbeat")
 async def heartbeat(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        result = store.heartbeat(agent_token, payload)
+        result = authority.heartbeat_agent(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # Broadcast heartbeat status to WebSocket subscribers
-    agent_data = result.get("agent", {})
-    agent_id = agent_data.get("agent_id", "")
-    authority.remember_agent_token(str(agent_id or ""), agent_token)
-    if agent_id:
-        await _ws_manager.broadcast_heartbeat(agent_id, _json_payload(agent_data))
-    if result.get("collections_changed"):
+    agent = result.agent
+    agent_id = str(agent.agent_id or "") if agent is not None else ""
+    if agent is not None and agent_id:
+        await _ws_manager.broadcast_heartbeat(agent_id, _json_payload(agent))
+    if result.collections_changed:
         await _broadcast_invalidations(
             topics=("agents", "summary"),
             reason="agent.heartbeat",
@@ -327,19 +321,14 @@ async def heartbeat(
 def search_agents(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        store.assert_agent_scope(agent_token, {"coordination", "full"})
-    except PermissionError as exc:
-        raise _agent_permission_http_error(exc) from exc
-    try:
-        query = AgentDiscoveryQuery.model_validate(payload)
-        agents = authority.search_agents(query)
+        agents = authority.search_agents_for_agent(agent_token, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    store.heartbeat(agent_token, {"connectivity_state": "connected"})
+    except PermissionError as exc:
+        raise _agent_permission_http_error(exc) from exc
     return {"agents": [agent.model_dump(mode="json") for agent in agents]}
 
 
@@ -347,14 +336,10 @@ def search_agents(
 async def create_routed_task(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        store.assert_agent_scope(agent_token, {"coordination", "full"})
-        validated_request = validated_routed_task_request(payload)
-        store.heartbeat(agent_token, {"connectivity_state": "connected"})
-        result = authority.submit_routed_task(validated_request)
+        result = authority.submit_routed_task_for_agent(agent_token, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except RoutingSkillDisabledError as exc:
@@ -382,25 +367,27 @@ def poll(
     limit: int = Query(default=20, ge=1, le=100),
     wait_seconds: int = Query(default=1, ge=0, le=30),
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
+    authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     del wait_seconds
     try:
-        return _json_payload(store.poll(agent_token, cursor=int(cursor or "0"), limit=limit))
+        return _json_payload(authority.poll_for_agent(agent_token, cursor=int(cursor or "0"), limit=limit))
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
 @app.post("/v1/agents/ack")
 def ack(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
+    authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        return _json_payload(store.ack(
-            agent_token,
-            delivery_ids=payload.get("delivery_ids"),
-            classification=payload.get("classification"),
-        ))
+        return _json_payload(
+            authority.ack_for_agent(
+                agent_token,
+                delivery_ids=payload.get("delivery_ids"),
+                classification=payload.get("classification"),
+            )
+        )
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
@@ -410,21 +397,16 @@ async def routed_task_status(
     routed_task_id: str,
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        agent_row = store.resolve_agent_for_token(agent_token)
-        if agent_row is None:
-            raise HTTPException(status_code=401, detail="Invalid or expired agent token.")
-        authority.remember_agent_token(str(agent_row.get("agent_id", "") or ""), agent_token)
-        update = RoutedTaskUpdate.model_validate(
+        result = authority.update_routed_task_for_agent(
+            agent_token,
             {
                 **payload,
                 "routed_task_id": routed_task_id,
             }
         )
-        result = authority.update_routed_task(update)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
@@ -449,21 +431,16 @@ async def routed_task_result(
     routed_task_id: str,
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        agent_row = store.resolve_agent_for_token(agent_token)
-        if agent_row is None:
-            raise HTTPException(status_code=401, detail="Invalid or expired agent token.")
-        authority.remember_agent_token(str(agent_row.get("agent_id", "") or ""), agent_token)
-        result_payload = RoutedTaskResult.model_validate(
+        result = authority.report_routed_result_for_agent(
+            agent_token,
             {
                 **payload,
                 "routed_task_id": routed_task_id,
             }
         )
-        result = authority.report_routed_result(result_payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except ValueError as exc:
@@ -489,10 +466,10 @@ def management_request_result(
     request_id: str,
     payload: ManagementResult,
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
+    authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        result = store.report_management_result(agent_token, request_id, payload)
+        result = authority.report_management_result_for_agent(agent_token, request_id, payload)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
     except KeyError as exc:
@@ -505,19 +482,17 @@ def management_request_result(
 @app.post("/v1/agents/deregister")
 async def deregister(
     agent_token: str = Depends(require_agent_token),
-    store: AbstractRegistryStore = Depends(get_store),
     authority: StoreBackedRegistryAuthority = Depends(get_authority),
 ) -> dict[str, Any]:
     try:
-        result = store.deregister(agent_token)
+        result = authority.disconnect_agent_token(agent_token)
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
-    agent_id = str(result.get("agent_id", ""))
-    authority.remember_agent_token(agent_id, agent_token)
+    agent_id = str(result.agent_id or "")
     if agent_id:
         await _ws_manager.broadcast_heartbeat(
             agent_id,
-            _json_payload({"agent_id": agent_id, "connectivity_state": result.get("connectivity_state", "disconnected")}),
+            _json_payload({"agent_id": agent_id, "connectivity_state": str(result.connectivity_state or "disconnected")}),
         )
     await _broadcast_invalidations(
         topics=("agents", "summary"),
@@ -573,7 +548,19 @@ def resource_list_agents(
         q=q,
         connectivity_state=state,
     )
-    return _json_payload(_paginated_response("agents", agents, cursor, limit))
+    agent_rows: list[dict[str, Any]] = []
+    for agent in agents:
+        row = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
+        selector_aliases = direct_selector_aliases(
+            slug=str(row.get("slug", "") or ""),
+            display_name=str(row.get("display_name", "") or ""),
+        )
+        role = str(row.get("role", "") or "").strip()
+        row["selector"] = selector_aliases[0] if selector_aliases else ""
+        row["selector_aliases"] = list(selector_aliases)
+        row["role_selector"] = format_target_selector("role", role) if role else ""
+        agent_rows.append(row)
+    return _json_payload(_paginated_response("agents", agent_rows, cursor, limit))
 
 
 @app.get("/v1/agents/{agent_id}/status")
@@ -979,6 +966,7 @@ def resource_list_routing_skills(
     return [
         {
             "skill_name": item.skill_name,
+            "selector": format_target_selector("skill", item.skill_name),
             "advertised_by_agents": list(item.advertised_by_agents),
             "enabled": item.enabled,
         }

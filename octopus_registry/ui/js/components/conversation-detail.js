@@ -26,10 +26,7 @@ function renderConversationDetail(container, params) {
         'message.user',
         'message.bot',
         'approval.requested',
-        'delegation.submitted',
-        'delegation.completed',
         'error',
-        'task.status',
     ];
     let relatedTasks = [];
     let tasksLoaded = false;
@@ -261,15 +258,13 @@ function renderConversationDetail(container, params) {
                 const slug = (agent.slug || agent.agent_id || '').trim();
                 if (!slug) return;
                 const displayName = String(agent.display_name || '').trim();
-                const compactDisplayName = displayName && !/\s/.test(displayName) ? displayName : '';
-                const preferredLabel = '@' + (compactDisplayName || slug);
-                const aliases = Array.from(new Set([
-                    preferredLabel,
-                    '@' + slug,
-                    compactDisplayName ? '@' + compactDisplayName : '',
-                ].filter(Boolean)));
+                const preferredLabel = String(agent.selector || '').trim();
+                const aliases = Array.from(new Set(
+                    (agent.selector_aliases || []).map((value) => String(value || '').trim()).filter(Boolean)
+                ));
+                if (!preferredLabel || !aliases.length) return;
                 const detail = [
-                    compactDisplayName && compactDisplayName.toLowerCase() !== slug.toLowerCase() ? slug : '',
+                    displayName && preferredLabel.toLowerCase() !== '@' + slug.toLowerCase() ? slug : '',
                     agent.role || '',
                     (agent.routing_skills || []).slice(0, 2).join(', '),
                 ].filter(Boolean).join(' · ');
@@ -284,26 +279,28 @@ function renderConversationDetail(container, params) {
             });
             agents.forEach((agent) => {
                 const role = String(agent.role || '').trim();
-                if (!role) return;
+                const roleSelector = String(agent.role_selector || '').trim();
+                if (!role || !roleSelector) return;
                 pushTarget({
                     key: role,
-                    label: '@role:' + role,
+                    label: roleSelector,
                     kind: 'role',
                     display: role,
                     detail: 'Role target',
-                    aliases: ['@role:' + role],
+                    aliases: [roleSelector],
                 });
             });
             routingSkills.forEach((routingSkill) => {
                 const value = String(routingSkill.name || routingSkill.skill_name || routingSkill || '').trim();
-                if (!value) return;
+                const selector = String(routingSkill.selector || '').trim();
+                if (!value || !selector) return;
                 pushTarget({
                     key: value,
-                    label: '@skill:' + value,
+                    label: selector,
                     kind: 'skill',
                     display: value,
                     detail: 'Routing skill',
-                    aliases: ['@skill:' + value],
+                    aliases: [selector],
                 });
             });
             if (typeof Fuse === 'function') {
@@ -1276,25 +1273,12 @@ function renderConversationDetail(container, params) {
     async function sendMessage() {
         const text = textarea.value.trim();
         if (!text) return;
-        const directAssignment = _extractConversationTargetSelectorMessage(text);
-        const selectorOnly = !directAssignment && _parseConversationTargetSelector(_leadingConversationTargetToken(text));
         sendBtn.disabled = true;
         textarea.disabled = true;
         clearSuggestions();
         suggestionList.hidden = true;
         try {
-            if (directAssignment) {
-                await API.conversationAction(convoId, 'direct_assign', {
-                    selector: directAssignment.selector,
-                    title: directAssignment.instructions.slice(0, 120),
-                    instructions: directAssignment.instructions,
-                    message_text: text,
-                });
-            } else if (selectorOnly) {
-                throw new Error('Add instructions after the target selector to route work directly.');
-            } else {
-                await API.sendMessage(convoId, text);
-            }
+            await API.sendMessage(convoId, text);
             textarea.value = '';
             updateComposerAssist();
         } catch (err) {
@@ -1305,7 +1289,27 @@ function renderConversationDetail(container, params) {
         textarea.focus();
     }
 
+    function currentComposerRoutingState() {
+        const text = textarea.value.trim();
+        const selectorToken = _leadingConversationTargetToken(text);
+        return {
+            text,
+            selectorToken,
+            selectorPrefix: selectorToken.startsWith('@'),
+            exactSuggestionMatch: selectorMatchesAvailableTarget(selectorToken),
+            instructions: selectorToken && text.startsWith(selectorToken)
+                ? text.slice(selectorToken.length).trim()
+                : '',
+        };
+    }
+
     function handleComposerKeydown(e) {
+        const routingState = currentComposerRoutingState();
+        if (e.key === 'Enter' && !e.shiftKey && routingState.exactSuggestionMatch && routingState.instructions) {
+            e.preventDefault();
+            sendMessage();
+            return;
+        }
         if (!suggestionList.hidden && suggestionMatches.length) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -1352,12 +1356,12 @@ function renderConversationDetail(container, params) {
 
     function selectorMatchesAvailableTarget(selectorToken) {
         const token = String(selectorToken || '').trim().toLowerCase();
-        if (!token) return false;
-        return availableTargets.some((item) => {
+        if (!token) return null;
+        return availableTargets.find((item) => {
             if (String(item.label || '').trim().toLowerCase() === token) return true;
             return Array.isArray(item.aliases)
                 && item.aliases.some((alias) => String(alias || '').trim().toLowerCase() === token);
-        });
+        }) || null;
     }
 
     function clearSuggestions() {
@@ -1377,37 +1381,24 @@ function renderConversationDetail(container, params) {
     }
 
     function updateComposerAssist() {
-        const text = textarea.value.trim();
-        const directAssignment = _extractConversationTargetSelectorMessage(text);
-        const selectorToken = _leadingConversationTargetToken(text);
-        const selector = selectorToken ? _parseConversationTargetSelector(selectorToken) : null;
-        const selectorPrefix = selectorToken.startsWith('@');
-        const exactSuggestionMatch = selectorMatchesAvailableTarget(selectorToken);
-        if (directAssignment) {
+        const {
+            selectorToken,
+            selectorPrefix,
+            exactSuggestionMatch,
+            instructions,
+        } = currentComposerRoutingState();
+        if (exactSuggestionMatch) {
             targetPreview.hidden = false;
-            targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(directAssignment.selector)}.`;
-            setComposeHint('Direct assignment will create a routed task immediately.');
+            targetPreview.textContent = `Routing directly to ${exactSuggestionMatch.label}.`;
+            setComposeHint(
+                instructions
+                    ? 'Direct assignment will create a routed task immediately.'
+                    : 'Add instructions after the selector to route work directly.'
+            );
             textarea.placeholder = 'Describe the delegated task';
-            sendBtn.textContent = 'Assign';
-            sendBtn.setAttribute('aria-label', 'Assign task');
-            renderTargetSuggestions('');
-            return;
-        }
-        if (selector) {
-            targetPreview.hidden = !exactSuggestionMatch;
-            if (exactSuggestionMatch) {
-                targetPreview.textContent = `Routing directly to ${_formatConversationTargetLabel(selector)}.`;
-                setComposeHint('Add instructions after the selector to assign work directly.');
-            } else if (selectorToken.startsWith('@')) {
-                setComposeHint('Choose an agent, skill, or role from the suggestions to route work directly.');
-            }
-            textarea.placeholder = 'Describe the delegated task';
-            sendBtn.textContent = 'Assign';
-            sendBtn.setAttribute('aria-label', 'Assign task');
+            sendBtn.textContent = instructions ? 'Assign' : 'Send';
+            sendBtn.setAttribute('aria-label', instructions ? 'Assign task' : 'Send message');
             renderTargetSuggestions(selectorToken);
-            if (!suggestionMatches.length && selectorToken.startsWith('@') && !exactSuggestionMatch) {
-                setComposeHint('No connected agent, skill, or role matches that selector yet.');
-            }
             return;
         }
         if (selectorPrefix) {
@@ -1486,12 +1477,7 @@ function renderConversationDetail(container, params) {
     }
 
     function shouldRenderConversationEvent(event) {
-        const kind = event.kind || '';
-        if (kind === 'task.status') {
-            const status = String((event.metadata && event.metadata.status) || '');
-            return ['completed', 'failed', 'cancelled', 'timed_out'].includes(status);
-        }
-        return ['message.user', 'message.bot', 'approval.requested', 'delegation.submitted', 'delegation.completed', 'error'].includes(kind);
+        return ['message.user', 'message.bot', 'approval.requested', 'error'].includes(event.kind || '');
     }
 
     function visibleTimelineEvents(events) {
@@ -1514,9 +1500,11 @@ function renderConversationDetail(container, params) {
             target: String(conversationWith || ''),
             assignedTo: String(assignedTo || ''),
             origin: String(data.origin_channel || 'registry'),
+            type: String(data.conversation_type || 'conversation'),
             updatedLabel: data.updated_at ? UI.relativeTime(data.updated_at) : '',
         }, () => {
         const title = data.title || convoId;
+        const isTaskThread = String(data.conversation_type || 'conversation') === 'task_thread';
         const titleRow = document.createElement('div');
         titleRow.className = 'workspace-header-main';
         titleRow.dataset.key = 'meta-title-row';
@@ -1540,7 +1528,11 @@ function renderConversationDetail(container, params) {
         statements.className = 'meta-inline meta-inline-quiet';
 
         const metaParts = [];
-        if (conversationWith) {
+        if (isTaskThread && conversationWith) {
+            metaParts.push(`Operational task thread for ${conversationWith}`);
+        } else if (isTaskThread) {
+            metaParts.push('Operational task thread');
+        } else if (conversationWith) {
             metaParts.push(`With ${conversationWith}`);
         }
         if (assignedTo) {
@@ -1927,20 +1919,23 @@ function renderConversationDetail(container, params) {
             }
             return;
         }
-        if (activeView === 'conversation' && !shouldRenderConversationEvent(event)) return;
         const seq = Number(event.seq || 0);
         if (seq && latestSeq && seq <= latestSeq) return;
+        if (meta) {
+            meta.event_count = Number(meta.event_count || 0) + 1;
+            meta.updated_at = event.created_at || meta.updated_at;
+            renderMetaCard(meta);
+        }
+        if (activeView === 'conversation' && !shouldRenderConversationEvent(event)) {
+            if (seq) latestSeq = Math.max(latestSeq, seq);
+            return;
+        }
         const shouldStick = isNearBottom();
         const empty = eventList.querySelector('.empty-state');
         if (empty) empty.remove();
         eventList.appendChild(_createConversationEventElement(event, convoId, relatedTasks));
         syncConversationDensityForCurrentView();
         if (seq) latestSeq = Math.max(latestSeq, seq);
-        if (meta) {
-            meta.event_count = Number(meta.event_count || 0) + 1;
-            meta.updated_at = event.created_at || meta.updated_at;
-            renderMetaCard(meta);
-        }
         if (
             event.kind === 'message.user'
             || event.kind === 'message.bot'

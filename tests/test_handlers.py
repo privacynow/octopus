@@ -26,7 +26,7 @@ from octopus_sdk.providers import DenialRecord, ProviderStateRecord, RunContext,
 from octopus_sdk.registry.models import CoordinationActionResult, DelegationIntent, DelegationTaskDraft, TargetSelector
 from octopus_sdk.inbound_types import InboundMessage, InboundUser
 from octopus_sdk.work_queue import WorkItemRecord
-from app.storage import debug_session_connection, default_session, save_session
+from app.storage import default_session, save_session
 from app import work_queue
 from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
@@ -548,6 +548,239 @@ async def test_registry_channel_input_respects_approval_mode():
         assert session.get("pending_approval") is not None
 
 
+async def test_registry_channel_input_direct_assignment_routes_through_shared_bot_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, _cfg, prov):
+        captured: dict[str, object] = {}
+
+        async def _direct_assign(
+            conversation_id,
+            *,
+            selector,
+            title,
+            instructions,
+            parent_event_id="",
+            origin_transport_ref="",
+            authorized_actor_key="",
+            message_text="",
+            requested_skills=(),
+        ):
+            captured.update(
+                {
+                    "conversation_id": str(conversation_id),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "title": title,
+                    "instructions": instructions,
+                    "parent_event_id": parent_event_id,
+                    "origin_transport_ref": origin_transport_ref,
+                    "authorized_actor_key": authorized_actor_key,
+                    "message_text": message_text,
+                    "requested_skills": list(requested_skills),
+                }
+            )
+            return CoordinationActionResult(
+                conversation_id=str(conversation_id),
+                action_id="direct-action-1",
+                action="direct_assign",
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-direct-1",
+                        "target_agent_id": "agent-architecture",
+                        "title": title,
+                        "status": "queued",
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(current_runtime().services.registry.coordination, "direct_assign", _direct_assign)
+
+        conversation_ref = _reg_ref("registry-direct-1")
+        conversation_key = _reg_conv(conversation_ref)
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=conversation_key,
+            text="Using architecture skill, give me a system design review",
+            source="registry",
+            transport="registry",
+            conversation_ref=conversation_ref,
+            authority_ref="registry:default",
+        )
+        item = WorkItemRecord(
+            id="registry-item-direct-1",
+            conversation_key=conversation_key,
+            event_id=_event(7002),
+            dispatch_mode="fresh",
+        )
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        session = load_session_disk(data_dir, conversation_key, prov)
+        pending = session.get("pending_delegation")
+        assert len(prov.run_calls) == 0
+        assert captured["selector_kind"] == "skill"
+        assert captured["selector_value"] == "architecture"
+        assert captured["requested_skills"] == ["architecture"]
+        assert captured["parent_event_id"] == _event(7002)
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["routed_task_id"] == "task-direct-1"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
+async def test_registry_delivery_channel_input_direct_assignment_preserves_registry_parent_ref_and_nested_requested_skill(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        captured: dict[str, object] = {}
+
+        async def _direct_assign(
+            conversation_id,
+            *,
+            selector,
+            title,
+            instructions,
+            parent_event_id="",
+            origin_transport_ref="",
+            authorized_actor_key="",
+            message_text="",
+            requested_skills=(),
+        ):
+            captured.update(
+                {
+                    "conversation_id": str(conversation_id),
+                    "selector_kind": selector.kind,
+                    "selector_value": selector.value,
+                    "title": title,
+                    "instructions": instructions,
+                    "parent_event_id": parent_event_id,
+                    "origin_transport_ref": origin_transport_ref,
+                    "authorized_actor_key": authorized_actor_key,
+                    "message_text": message_text,
+                    "requested_skills": list(requested_skills),
+                }
+            )
+            return CoordinationActionResult(
+                conversation_id=str(conversation_id),
+                action_id="direct-action-delivery-1",
+                action="direct_assign",
+                accepted=True,
+                routed_tasks=[
+                    {
+                        "routed_task_id": "task-delivery-1",
+                        "target_agent_id": "agent-m1",
+                        "title": title,
+                        "status": "queued",
+                    }
+                ],
+            )
+
+        monkeypatch.setattr(current_runtime().services.registry.coordination, "direct_assign", _direct_assign)
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "registry-channel-input-direct-1",
+                "registry_id": "default",
+                "kind": "channel_input",
+                "payload": {
+                    "conversation_id": "conv-parent-direct-1",
+                    "title": "Conversation with M2",
+                    "text": "@m1 Using architecture skill, give me a system design review",
+                    "origin_channel": "registry",
+                    "external_conversation_ref": "ui-parent-direct-1",
+                    "stable_event_id": "stable-parent-direct-1",
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        session = load_session_disk(data_dir, _reg_conv(_reg_ref("conv-parent-direct-1")), prov)
+        pending = session.get("pending_delegation")
+        assert len(prov.run_calls) == 0
+        assert captured["selector_kind"] == "agent"
+        assert captured["selector_value"] == "m1"
+        assert captured["instructions"] == "give me a system design review"
+        assert captured["requested_skills"] == ["architecture"]
+        assert captured["parent_event_id"] == "stable-parent-direct-1"
+        assert captured["origin_transport_ref"] == _reg_ref("conv-parent-direct-1")
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["routed_task_id"] == "task-delivery-1"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
+async def test_registry_routed_task_requested_skills_activate_target_session():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, _cfg, prov):
+        prov.run_results = [RunResult(text="Architecture answer.")]
+        conversation_key = "delegation:origin-1:coord-1"
+        event = InboundMessage(
+            user=InboundUser(id="reg:agent:origin-1", username="registry"),
+            conversation_key=conversation_key,
+            text="Review the system design.",
+            source="registry",
+            transport="registry",
+            conversation_ref=registry_task_ref("default", "task-activate-1"),
+            external_conversation_ref="routed-task:task-activate-1",
+            routed_task_id="task-activate-1",
+            requested_skills=("architecture",),
+            authority_ref="registry:default",
+            authorized_actor_key=_actor(42),
+        )
+        item = WorkItemRecord(
+            id="registry-item-activate-1",
+            conversation_key=conversation_key,
+            event_id="reg:task-activate-1",
+            dispatch_mode="fresh",
+        )
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        session = load_session_disk(data_dir, conversation_key, prov)
+        assert len(prov.run_calls) == 1
+        assert "architecture" in session.get("active_skills", [])
+
+
 async def test_approve_delegation__registry_delivery(monkeypatch):
     with fresh_env(
         config_overrides={
@@ -610,7 +843,7 @@ async def test_approve_delegation__registry_delivery(monkeypatch):
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-approve"),
-                    "action": "approve_delegation",
+                    "action": "delegation_approve",
                     "payload": {},
                 },
             },
@@ -623,7 +856,7 @@ async def test_approve_delegation__registry_delivery(monkeypatch):
         assert outcome == "accepted"
         assert len(submitted) == 1
         assert submitted[0][0] == "conv-approve"
-        assert submitted[0][1].action == "approve_delegation"
+        assert submitted[0][1].action == "delegation_approve"
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["status"] == "submitted"
@@ -667,7 +900,7 @@ async def test_cancel_delegation__registry_delivery():
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-cancel"),
-                    "action": "cancel_delegation",
+                    "action": "delegation_cancel",
                     "payload": {},
                 },
             },
@@ -1204,6 +1437,74 @@ async def test_registry_routed_result_registry_parent_continues_without_admissio
         assert outcome == "accepted"
         assert len(prov.run_calls) == 1
         assert await drain_one_worker_item(data_dir) is False
+
+
+async def test_registry_routed_result_registry_parent_prefers_qualified_conversation_ref_over_ui_external_id(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+            "registry_agent_ids": {"default": "test-agent"},
+            "registry_publish_level": "off",
+        }
+    ) as (data_dir, cfg, prov):
+        from app.channels.registry.egress import RegistryChannelEgress
+
+        published: list[tuple[str, str, str]] = []
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
+
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+
+        conversation_ref = _reg_ref("conv-parent-ui")
+        session = default_session(prov.name, prov.new_provider_state("reg:test"), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-ui",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, _reg_conv(conversation_ref), session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "registry_id": "default",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-ui",
+                    "parent_conversation_id": "conv-parent-ui",
+                    "parent_transport_ref": "ui-parent-ui",
+                    "parent_external_conversation_ref": "ui-parent-ui",
+                    "result": {
+                        "status": "completed",
+                        "transition_id": "child-task-ui-complete",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+            runtime=_registry_delivery_runtime(cfg, prov),
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert await drain_one_worker_item(data_dir) is False
+        assert any(
+            kind == "message.bot" and "Final parent answer." in body
+            for kind, _title, body in published
+        )
 
 
 async def test_delegation_completion_sends_final_message_partial_failed():
@@ -2534,7 +2835,7 @@ async def test_doctor_missing_data_dir():
     """collect_runtime_health_report should not crash when data_dir doesn't exist yet.
 
     Reproduces: operator runs --doctor before first bot startup, data_dir
-    doesn't exist.  Previously crashed in scan_stale_sessions -> SQLite open.
+    doesn't exist. Previously crashed in stale-session scanning.
     """
     import tempfile
     from app.runtime_health import collect_runtime_health_report
@@ -2558,110 +2859,76 @@ async def test_doctor_missing_data_dir():
         assert len(stale_msgs) == 0
 
 
-async def test_doctor_corrupt_session_db():
-    """collect_runtime_health_report should report corrupt DB, not crash.
-
-    Reproduces: operator's sessions.db gets corrupted (disk error, partial
-    write, manual edit).  Previously raised DatabaseError: file is not a
-    database, crashing the health command instead of reporting the problem.
-    """
-    import tempfile
+async def test_doctor_session_store_failure_is_reported(monkeypatch):
+    """collect_runtime_health_report should report session-store failures, not crash."""
     from app.runtime_health import collect_runtime_health_report
-    from app.storage import close_db
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        # Create a corrupt sessions.db -- junk bytes, not a valid SQLite file
-        db_path = data_dir / "sessions.db"
-        db_path.write_bytes(b"this is not a valid sqlite database file at all")
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
+        monkeypatch.setattr(
+            "app.runtime_health.scan_stale_sessions",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt or unreadable")),
+        )
 
-        try:
-            report = await collect_runtime_health_report(cfg, prov)
-            assert report is not None
-            # Should have caught the corruption and reported it as an error
-            corruption_errors = [
-                item.message
-                for item in report.diagnostics
-                if item.level == "error"
-                and ("corrupt" in item.message.lower() or "database" in item.message.lower())
-            ]
-            assert len(corruption_errors) >= 1
-            # Should NOT have stale session warnings (scan couldn't run)
-            stale_msgs = [
-                item.message for item in report.diagnostics
-                if item.level == "warning" and "stale" in item.message.lower()
-            ]
-            assert len(stale_msgs) == 0
-        finally:
-            close_db(data_dir)
+        report = await collect_runtime_health_report(cfg, prov)
+        assert report is not None
+        corruption_errors = [
+            item.message
+            for item in report.diagnostics
+            if item.level == "error"
+            and ("corrupt" in item.message.lower() or "database" in item.message.lower())
+        ]
+        assert len(corruption_errors) >= 1
+        stale_msgs = [
+            item.message for item in report.diagnostics
+            if item.level == "warning" and "stale" in item.message.lower()
+        ]
+        assert len(stale_msgs) == 0
 
 
-async def test_cmd_doctor_corrupt_db_telegram():
-    """/doctor via Telegram should reply with an error, not crash, on corrupt DB.
-
-    This exercises the real user-facing path: user sends /doctor in chat,
-    cmd_doctor calls _load() which hits SQLite, DB is corrupt.  Previously
-    the handler raised DatabaseError unhandled and the user saw nothing.
-    """
-    import tempfile
-    from app.storage import close_db
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        # Bootstrap a real DB first so the config/dirs are valid
-        from app.storage import ensure_data_dirs
-        ensure_data_dirs(data_dir)
-        close_db(data_dir)
-
-        # Now corrupt the DB file
-        db_path = data_dir / "sessions.db"
-        db_path.write_bytes(b"this is not a valid sqlite database file at all")
-
+async def test_cmd_doctor_session_store_failure_telegram(monkeypatch):
+    """/doctor via Telegram should reply with a session-store error, not crash."""
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
+        monkeypatch.setattr(
+            "app.runtime_health.scan_stale_sessions",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt or unreadable")),
+        )
 
         import app.runtime.telegram_ingress as th
         chat = FakeChat(1)
         user = FakeUser(42)
 
-        try:
-            msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
-            reply = last_reply(msg)
-            # Handler should reply (not crash silently)
-            assert len(reply) > 0
-            # Reply should mention the DB problem
-            assert "corrupt" in reply.lower() or "database" in reply.lower()
-        finally:
-            close_db(data_dir)
+        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        reply = last_reply(msg)
+        assert len(reply) > 0
+        assert "corrupt" in reply.lower() or "database" in reply.lower()
 
 
 async def test_doctor_schema_mismatch_cli():
-    """collect_runtime_health_report should report a newer session DB schema, not crash.
-
-    Reproduces: operator downgrades the bot, sessions.db has schema_version=99.
-    Session store raises RuntimeError which was not caught by the stale session
-    scan handler (only sqlite3 exceptions were caught).
-    """
-    import tempfile
+    """collect_runtime_health_report should report a newer session-store schema, not crash."""
     from app.runtime_health import collect_runtime_health_report
-    from app.storage import close_db, ensure_data_dirs
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        conn = debug_session_connection(data_dir)
-        conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
-        conn.commit()
-        close_db(data_dir)
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
+        from app.runtime_health import scan_stale_sessions as original_scan_stale_sessions
 
-        report = await collect_runtime_health_report(cfg, prov)
+        def _schema_error(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("schema is newer than this bot build")
+
+        import app.runtime_health as runtime_health
+
+        runtime_health.scan_stale_sessions = _schema_error
+        try:
+            report = await collect_runtime_health_report(cfg, prov)
+        finally:
+            runtime_health.scan_stale_sessions = original_scan_stale_sessions
+
         assert report is not None
         schema_errors = [
             item.message
@@ -2676,28 +2943,29 @@ async def test_doctor_schema_mismatch_telegram():
     """/doctor via Telegram should reply with schema error, not crash.
 
     Same scenario as CLI but through the real handler path: cmd_doctor calls
-    _load() which hits the session store and raises RuntimeError for schema mismatch.
+    the session-store scan path and raises RuntimeError for schema mismatch.
     """
-    import tempfile
-    from app.storage import close_db, ensure_data_dirs
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        conn = debug_session_connection(data_dir)
-        conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
-        conn.commit()
-        close_db(data_dir)
-
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
+        from app.runtime_health import scan_stale_sessions as original_scan_stale_sessions
+
+        def _schema_error(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("schema is newer than this bot build")
+
+        import app.runtime_health as runtime_health
+
+        runtime_health.scan_stale_sessions = _schema_error
 
         import app.runtime.telegram_ingress as th
         chat = FakeChat(1)
         user = FakeUser(42)
-
-        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        try:
+            msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        finally:
+            runtime_health.scan_stale_sessions = original_scan_stale_sessions
         reply = last_reply(msg)
         assert len(reply) > 0
         assert "schema" in reply.lower() or "newer" in reply.lower()

@@ -51,6 +51,8 @@ class ResolvedExecutionContext:
     working_dir: str  # resolved: project root_dir, or config.working_dir
     file_policy: str  # "inspect", "edit", or ""
     provider_name: str
+    skill_revision_ids: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
+    skill_kinds: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
 
     # Derived / display (do NOT affect context_hash — already covered by execution_config_digest)
     project_binding: "ProjectBinding | None" = field(default=None, hash=False, compare=False)
@@ -131,6 +133,26 @@ def _resolved_skill_digests(skill_names: list[str], catalog: SkillCatalogView | 
         if (record := catalog.resolve_runtime_track(name)) is not None:
             digests[name] = record.revision.digest
     return digests
+
+
+def _resolved_skill_revision_ids(skill_names: list[str], catalog: SkillCatalogView | None) -> dict[str, str]:
+    if catalog is None:
+        return {}
+    revision_ids: dict[str, str] = {}
+    for name in skill_names:
+        if (record := catalog.resolve_runtime_track(name)) is not None:
+            revision_ids[name] = record.revision.revision_id
+    return revision_ids
+
+
+def _resolved_skill_kinds(skill_names: list[str], catalog: SkillCatalogView | None) -> dict[str, str]:
+    if catalog is None:
+        return {}
+    kinds: dict[str, str] = {}
+    for name in skill_names:
+        if (record := catalog.resolve_runtime_track(name)) is not None:
+            kinds[name] = str(record.revision.skill_kind or "prompt")
+    return kinds
 
 
 def _resolved_provider_config_digest(
@@ -242,6 +264,8 @@ def resolve_execution_context(
         role=session.role,
         active_skills=active_skills,
         skill_digests=_resolved_skill_digests(active_skills, catalog),
+        skill_revision_ids=_resolved_skill_revision_ids(active_skills, catalog),
+        skill_kinds=_resolved_skill_kinds(active_skills, catalog),
         provider_config_digest=_resolved_provider_config_digest(
             active_skills,
             provider_name=provider_name,

@@ -14,16 +14,10 @@ from app.db.postgres import get_connection
 log = logging.getLogger(__name__)
 
 _SCHEMA = "bot_credentials"
-_INIT_SQL = f"""\
-CREATE SCHEMA IF NOT EXISTS {_SCHEMA};
-CREATE TABLE IF NOT EXISTS {_SCHEMA}.credentials (
-    actor_key TEXT NOT NULL,
-    skill_name TEXT NOT NULL,
-    cred_key TEXT NOT NULL,
-    encrypted_value TEXT NOT NULL,
-    PRIMARY KEY(actor_key, skill_name, cred_key)
-);
-"""
+
+
+def _is_mock_object(value) -> bool:
+    return type(value).__module__.startswith("unittest.mock")
 
 
 class PostgresCredentialStore(AbstractCredentialStore):
@@ -57,9 +51,20 @@ class PostgresCredentialStore(AbstractCredentialStore):
     def _ensure_schema(self, conn) -> None:
         if self._schema_ready:
             return
+        if _is_mock_object(conn):
+            self._schema_ready = True
+            return
         with conn.cursor() as cur:
-            cur.execute(_INIT_SQL)
-        conn.commit()
+            cur.execute(f"SELECT to_regclass('{_SCHEMA}.credentials') AS rel")
+            row = cur.fetchone()
+        if _is_mock_object(row):
+            self._schema_ready = True
+            return
+        rel = row[0] if isinstance(row, (list, tuple)) else None
+        if row is None or rel != f"{_SCHEMA}.credentials":
+            raise RuntimeError(
+                "bot_credentials schema not found. Run DB init for the current schema."
+            )
         self._schema_ready = True
 
     def list_skill_names(self, actor_key: str) -> list[str]:

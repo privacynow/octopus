@@ -44,22 +44,7 @@ class BusTaskRouting:
         request: RoutedTaskRequest,
         authority_ref: str,
     ) -> TaskSubmissionResult:
-        payload = SubmitRoutedTaskPayload(
-            routed_task_id=request.routed_task_id,
-            parent_conversation_id=request.parent_conversation_id,
-            origin_transport_ref=request.origin_transport_ref,
-            authorized_actor_key=request.authorized_actor_key,
-            external_conversation_ref=request.external_conversation_ref,
-            origin_agent_id=request.origin_agent_id,
-            target_agent_id=request.target_agent_id,
-            title=request.title,
-            instructions=request.instructions,
-            context=dict(request.context),
-            constraints=dict(request.constraints),
-            requested_skills=list(request.requested_skills),
-            priority=request.priority,
-            created_at=request.created_at,
-        )
+        payload = SubmitRoutedTaskPayload.model_validate(request.model_dump(mode="json"))
         try:
             reply = await self._bus.request(
                 ControlCommand(
@@ -84,15 +69,11 @@ class BusTaskRouting:
         authority_ref: str,
         result: RoutedTaskResult,
     ) -> TaskResultReport:
-        payload = ReportTaskResultPayload(
-            routed_task_id=routed_task_id,
-            status=result.status,
-            transition_id=result.transition_id,
-            summary=result.summary,
-            full_text=result.full_text,
-            artifacts=list(result.artifacts),
-            follow_up_questions=list(result.follow_up_questions),
-            completed_at=result.completed_at,
+        payload = ReportTaskResultPayload.model_validate(
+            {
+                **result.model_dump(mode="json"),
+                "routed_task_id": routed_task_id,
+            }
         )
         try:
             reply = await self._bus.request(

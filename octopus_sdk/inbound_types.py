@@ -79,11 +79,15 @@ class InboundMessage:
     user: InboundUser
     conversation_key: str
     text: str
+    title_text: str = ""
     attachments: tuple[InboundAttachment, ...] = ()
     source: str | object = _SOURCE_MISSING
     conversation_ref: str = ""
     external_conversation_ref: str = ""
     routed_task_id: str = ""
+    context_text: str = ""
+    constraints_text: str = ""
+    requested_skills: tuple[str, ...] = ()
     authority_ref: str = ""
     authorized_actor_key: str = ""
     skip_approval: bool = False
@@ -205,11 +209,15 @@ def serialize_inbound(
                 "username": event.user.username,
                 "conversation_key": event.conversation_key,
                 "text": event.text,
+                "title_text": event.title_text,
                 "source": event.source,
                 "transport": resolved_transport,
                 "conversation_ref": event.conversation_ref,
                 "external_conversation_ref": event.external_conversation_ref,
                 "routed_task_id": event.routed_task_id,
+                "context_text": event.context_text,
+                "constraints_text": event.constraints_text,
+                "requested_skills": list(event.requested_skills),
                 "authority_ref": event.authority_ref,
                 "authorized_actor_key": event.authorized_actor_key,
                 "skip_approval": event.skip_approval,
@@ -314,12 +322,16 @@ def deserialize_inbound(
             user=user,
             conversation_key=conversation_key,
             text=data.get("text", ""),
+            title_text=str(data.get("title_text", "") or ""),
             attachments=attachments,
             source=source,
             transport=transport,
             conversation_ref=conversation_ref,
             external_conversation_ref=external_conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
+            context_text=str(data.get("context_text", "") or ""),
+            constraints_text=str(data.get("constraints_text", "") or ""),
+            requested_skills=tuple(str(item).strip() for item in (data.get("requested_skills", []) or []) if str(item).strip()),
             authority_ref=authority_ref,
             authorized_actor_key=str(data.get("authorized_actor_key", "") or ""),
             skip_approval=bool(data.get("skip_approval", False)),

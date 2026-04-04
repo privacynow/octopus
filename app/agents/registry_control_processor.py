@@ -6,15 +6,19 @@ import json
 import uuid
 from typing import Any, Protocol
 
-from app.agents.client import RegistryClientError
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_id_from_authority_ref,
 )
 from app.control_plane.models import ControlCommand, ControlReply
 from app.control_plane.processor_base import ControlProcessor
+from octopus_sdk.exact_aliases import matches_exact_alias
+from octopus_sdk.registry.client import RegistryClientError
 from app.control_plane.requests import (
     AddConversationMessagePayload,
+    GetConversationRequest,
+    GetTaskRequest,
+    ListConversationEventsRequest,
     PublishHealthRequest,
     ReportTaskResultPayload,
     ResolveTargetAuthorityRequest,
@@ -77,6 +81,8 @@ class RegistryControlProcessor(ControlProcessor):
                 return await self._process_agent_directory(command, client, registry_id)
             if command.capability == "health_publication":
                 return await self._process_health_publication(command, client)
+            if command.capability == "registry_inspection":
+                return await self._process_registry_inspection(command, client)
             return ControlReply(
                 command_id=command.command_id,
                 status="failed",
@@ -192,22 +198,7 @@ class RegistryControlProcessor(ControlProcessor):
     async def _process_task_routing(self, command: ControlCommand, client) -> ControlReply:
         if command.operation == "submit_routed_task":
             payload = SubmitRoutedTaskPayload.model_validate_json(command.payload_json)
-            request = RoutedTaskRequest(
-                routed_task_id=payload.routed_task_id,
-                parent_conversation_id=payload.parent_conversation_id,
-                origin_transport_ref=payload.origin_transport_ref,
-                authorized_actor_key=payload.authorized_actor_key,
-                external_conversation_ref=payload.external_conversation_ref,
-                origin_agent_id=payload.origin_agent_id,
-                target_agent_id=payload.target_agent_id,
-                title=payload.title,
-                instructions=payload.instructions,
-                context=dict(payload.context),
-                constraints=dict(payload.constraints),
-                requested_skills=list(payload.requested_skills),
-                priority=payload.priority,
-                created_at=payload.created_at,
-            )
+            request = RoutedTaskRequest.model_validate(payload.model_dump(mode="json"))
             response = await client.submit_routed_task(request)
             return ControlReply(
                 command_id=command.command_id,
@@ -220,16 +211,7 @@ class RegistryControlProcessor(ControlProcessor):
             )
         if command.operation == "report_routed_task_result":
             payload = ReportTaskResultPayload.model_validate_json(command.payload_json)
-            result = RoutedTaskResult(
-                routed_task_id=payload.routed_task_id,
-                status=payload.status,
-                transition_id=payload.transition_id,
-                summary=payload.summary,
-                full_text=payload.full_text,
-                artifacts=[dict(item) for item in payload.artifacts],
-                follow_up_questions=list(payload.follow_up_questions),
-                completed_at=payload.completed_at,
-            )
+            result = RoutedTaskResult.model_validate(payload.model_dump(mode="json"))
             response = await client.routed_task_result(payload.routed_task_id, result)
             return ControlReply(
                 command_id=command.command_id,
@@ -241,15 +223,7 @@ class RegistryControlProcessor(ControlProcessor):
             )
         if command.operation == "update_routed_task_status":
             payload = UpdateRoutedTaskStatusPayload.model_validate_json(command.payload_json)
-            update = RoutedTaskUpdate(
-                routed_task_id=payload.routed_task_id,
-                status=payload.status,
-                transition_id=payload.transition_id,
-                summary=payload.summary,
-                timeline_events=[event.model_dump() for event in payload.timeline_events],
-                progress=payload.progress,
-                updated_at=payload.updated_at,
-            )
+            update = RoutedTaskUpdate.model_validate(payload.model_dump(mode="json"))
             await client.routed_task_status(payload.routed_task_id, update)
             return ControlReply(command_id=command.command_id, status="completed")
         return ControlReply(
@@ -261,28 +235,28 @@ class RegistryControlProcessor(ControlProcessor):
     async def _process_agent_directory(self, command: ControlCommand, client, registry_id: str) -> ControlReply:
         if command.operation == "search_agents":
             request = SearchAgentsRequest.model_validate_json(command.payload_json)
-            query = AgentDiscoveryQuery(
-                role=request.role,
-                skills=list(request.skills),
-                tags=list(request.tags),
-                free_text=request.free_text,
-                exclude_agent_ids=list(request.exclude_agent_ids),
-                required_state=request.required_state,
-            )
+            query = AgentDiscoveryQuery.model_validate(request.model_dump(mode="json"))
             rows = await client.search(query)
             agents = [
-                DiscoveredAgentRef(
-                    authority_ref=command.authority_ref,
-                    agent_id=row.agent_id,
-                    display_name=row.display_name,
-                    slug=row.slug,
-                    role=row.role,
-                    routing_skills=[str(item) for item in row.routing_skills if item],
-                    tags=[str(item) for item in row.tags if item],
-                    description=row.description,
-                    connectivity_state=row.connectivity_state,
-                    current_capacity=int(row.current_capacity or 0),
-                    max_capacity=int(row.max_capacity or 1),
+                DiscoveredAgentRef.model_validate(
+                    {
+                        "authority_ref": command.authority_ref,
+                        **row.model_dump(
+                            mode="json",
+                            include={
+                                "agent_id",
+                                "display_name",
+                                "slug",
+                                "role",
+                                "routing_skills",
+                                "tags",
+                                "description",
+                                "connectivity_state",
+                                "current_capacity",
+                                "max_capacity",
+                            },
+                        ),
+                    }
                 )
                 for row in rows
             ]
@@ -300,7 +274,12 @@ class RegistryControlProcessor(ControlProcessor):
             )
             rows = await client.search(query)
             for row in rows:
-                if row.agent_id == request.target_agent_id:
+                if matches_exact_alias(
+                    request.target_agent_id,
+                    identifier=row.agent_id,
+                    slug=row.slug,
+                    display_name=row.display_name,
+                ):
                     return ControlReply(
                         command_id=command.command_id,
                         status="completed",
@@ -338,3 +317,40 @@ class RegistryControlProcessor(ControlProcessor):
             runtime_health=runtime_health,
         )
         return ControlReply(command_id=command.command_id, status="completed")
+
+    async def _process_registry_inspection(self, command: ControlCommand, client) -> ControlReply:
+        if command.operation == "get_conversation":
+            request = GetConversationRequest.model_validate_json(command.payload_json)
+            record = await client.get_conversation(request.conversation_id)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        if command.operation == "get_task":
+            request = GetTaskRequest.model_validate_json(command.payload_json)
+            record = await client.get_task(request.routed_task_id)
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        if command.operation == "list_events":
+            request = ListConversationEventsRequest.model_validate_json(command.payload_json)
+            record = await client.list_events(
+                request.conversation_id,
+                kind=request.kind,
+                before_seq=request.before_seq,
+                after_seq=request.after_seq,
+                limit=request.limit,
+            )
+            return ControlReply(
+                command_id=command.command_id,
+                status="completed",
+                result_json=record.model_dump_json(),
+            )
+        return ControlReply(
+            command_id=command.command_id,
+            status="failed",
+            error=f"unsupported registry_inspection operation {command.operation!r}",
+        )

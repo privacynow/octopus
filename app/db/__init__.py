@@ -1,7 +1,7 @@
-"""Postgres runtime backend (Phase 12).
+"""Postgres runtime backend.
 
 - postgres: connection pool and lifecycle
-- postgres_migrate: versioned SQL runner (bootstrap / update)
+- postgres_init: current-schema initialization
 - postgres_doctor: connectivity and schema validation
 """
 

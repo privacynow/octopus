@@ -1,9 +1,8 @@
 # Octopus Agent Platform
 
-Octopus runs Claude or Codex behind Telegram and adds a local registry so
-operators can manage bots, monitor work, review approvals, inspect
-conversations, route tasks, manage skills, and edit provider guidance from a
-browser UI.
+Octopus runs Claude or Codex behind Telegram and adds a local registry UI for
+operators. You use Telegram to talk to bots, and you use the registry to view
+conversations, review approvals, manage skills, and inspect agent health.
 
 The main entrypoint is:
 
@@ -11,14 +10,23 @@ The main entrypoint is:
 ./octopus
 ```
 
-`./octopus` manages local deployment state under `.deploy/`, starts and
-reconnects the local registry stack, and handles normal operator lifecycle
-work.
+`./octopus` manages the local Docker deployment under `.deploy/`. For the
+standard local setup, it starts the registry stack and one bot stack per bot,
+including the Postgres containers those stacks need. You normally do not need
+to wire the database manually.
+
+## Prerequisites
+
+Before you start:
+
+- Docker Desktop is running
+- you have a Telegram bot token from `@BotFather`
+- you have provider auth available for Claude or Codex
+- you cloned the repo into a persistent checkout
 
 ## Quick Start
 
-1. Create a Telegram bot with `@BotFather` and copy the token.
-2. Clone the repo into a persistent checkout:
+Clone the repo and run the setup flow:
 
 ```bash
 git clone git@github.com:privacynow/octopus.git ~/octopus
@@ -26,324 +34,125 @@ cd ~/octopus
 ./octopus
 ```
 
-Setup offers three modes:
+The setup flow will:
 
-- **Autonomous**: private bot, no approval gates
-- **Safe**: default; requests go through approval mode
-- **Advanced**: manual role, tags, description, default skills, allowed users,
-  working dir, and timeout settings
+- create or update `.deploy/`
+- configure the registry
+- configure one or more bots
+- start the local Docker stacks
+- connect the bots to the registry
 
-## First Run
-
-After setup, verify the deployment before you start tuning features.
-
-1. Run `./octopus status`.
-2. Open the registry UI at the URL shown by `./octopus status`
-   (default `http://127.0.0.1:<port>/ui`).
-3. Send the bot a normal Telegram message.
-4. If you chose **Safe** mode, approve the request in Telegram or the registry
-   UI.
-
-At this point the essential path is working:
-
-- Telegram user message in
-- provider execution
-- optional approval gate
-- bot reply back in the same chat
-- operator visibility in the registry UI
-
-Provider auth is reported at two levels:
-
-- `not configured`: no provider auth artifacts are present
-- `configured`: auth artifacts exist, but no live probe was requested
-
-By default, `./octopus status` is static and cheap. Use
-`./octopus status --live-provider`, `Diagnose -> Provider auth`, or
-`Recommended Actions` when you want a live provider check. Live checks can
-add:
-
-- `authenticated`: the live provider probe succeeded
-- `configured, unable to authenticate`: auth artifacts exist, but the live
-  provider probe failed
-
-Bot status now separates transport from execution:
-
-- `transport connected` means the bot is enrolled in the registry and
-  heartbeating normally
-- `execution ready` means requests are allowed to execute
-- `execution faulted` means a real runtime provider failure was classified as
-  irrecoverable and new requests are blocked until reset
-
-Execution faults are intentionally runtime-driven. Octopus does not try to
-repair provider login during startup or deploy. If a request fails because a
-provider login expired or an API key/account problem needs operator action,
-the bot stays transport-connected and manageable, but execution is latched off
-until an operator resets it.
-
-## Deployment And Operations
-
-The shipped runtime in this repo is registry-first:
-
-- bots run in `BOT_AGENT_MODE=registry`
-- Telegram startup expects registry connectivity
-- the operator UI and bot runtime are designed to run together
-- bots managed by `./octopus` can connect either to the co-deployed local
-  registry or to a remote registry URL
-
-Important URLs and env values:
-
-- local registry bind address:
-  `REGISTRY_BIND_HOST` + `REGISTRY_PORT`
-  (`127.0.0.1`, `0.0.0.0`, or a concrete IP)
-- local registry public/operator URL:
-  `REGISTRY_PUBLIC_URL`
-- bot-to-registry URL inside Docker for the co-deployed local registry:
-  `http://registry:8787`
-- operator login secret: `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`
-- bot enrollment secret: `REGISTRY_ENROLL_TOKEN` on the registry side, copied
-  into bot registry connection records as `BOT_AGENT_REGISTRY_<n>_ENROLL_TOKEN`
-
-The three registry URLs are intentionally different:
-
-- **bind host + port**: where Docker publishes the local registry on the host
-- **public URL**: what operators open in the browser and what remote bots use
-- **internal Docker URL**: what co-deployed local bot containers use
-
-`0.0.0.0` is only a listen address. It is never a usable browser or bot URL.
-
-Example local registry starts:
+When setup finishes, verify the stack:
 
 ```bash
-./octopus start registry
-./octopus start registry --registry-bind-host 0.0.0.0 --registry-public-url http://mybox.local:8787
-./octopus restart registry --registry-bind-host 192.168.1.20 --registry-port 9000 --registry-public-url http://registry.example.internal:9000
+./octopus status
 ```
 
-Example bot connections:
+You should see:
 
-```bash
-./octopus connect m1
-./octopus connect m1 --registry-url http://registry.example.internal:9000 --registry-enroll-token <token>
-./octopus connect bots --registry-url http://registry.example.internal:9000 --registry-enroll-token <token> --registry-id qa --registry-scope observe
-```
+- the registry is `running`
+- your bots are `running`
+- registry connection state is `connected`
+- execution state is `healthy`
 
-Remote registry enroll tokens are still distributed out-of-band. `./octopus`
-does not fetch them from the registry UI or API.
+## Open The Registry
 
-Core operator commands:
+`./octopus status` prints the registry URL. By default it is:
+
+- [http://127.0.0.1:8787/ui](http://127.0.0.1:8787/ui)
+
+Use the registry to:
+
+- inspect agents
+- open conversations
+- review approvals
+- manage skills
+- manage provider guidance
+
+If you want the browser workflow in detail, use
+[docs/registry-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-user-guide.md).
+
+## Use The Telegram Bot
+
+After the stack is up:
+
+1. open Telegram
+2. find your bot
+3. send a normal message
+4. if approval mode is enabled, approve the request in Telegram or the registry
+
+Useful Telegram commands:
+
+- `/help`
+- `/project <name>`
+- `/skills ...`
+- `/guidance ...`
+
+If you want the Telegram workflow in detail, use
+[docs/telegram-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/telegram-user-guide.md).
+
+## Common Commands
 
 ```bash
 ./octopus
 ./octopus status
 ./octopus start registry
-./octopus connect m1
+./octopus start bots
 ./octopus restart bots
-./octopus redeploy registry
+./octopus connect m1
+./octopus logs m1 --follow
 ./octopus shell m1
 ./octopus doctor m1
 ./octopus clean
 ```
 
-For a persistent `~/octopus` checkout, the repo also ships non-interactive ops
-helpers under [`scripts/ops/`](/Users/tinker/output/bots/telegram-agent-bot/scripts/ops):
+## Skills
 
-```bash
-bash scripts/ops/backup_octopus_deploy.sh --help
-bash scripts/ops/refresh_octopus_with_backup.sh --help
-```
+Skills are the main way you control what a bot can do.
 
-Use the clean refresh flow when you need to redeploy without losing local
-deployment state:
+The important states are:
 
-1. back up `~/octopus/.deploy`
-2. `git pull --ff-only`
-3. run `./octopus clean`
-4. restore `.deploy`
-5. start the registry and bots again
-6. reconnect bots to the registry
-7. verify registry health and bot freshness
-
-The runtime supports multiple registry records through indexed
-`BOT_AGENT_REGISTRY_<n>_*` env vars. `./octopus` keeps the local registry
-workflow simple while also supporting explicit remote registry connection
-records on bots.
-
-## How People Use Octopus
-
-Octopus has two primary user roles:
-
-- **end users** interact with the bot in Telegram
-- **operators** manage bots and work through the CLI and registry UI
-
-### End Users
-
-For most users, Octopus is just a Telegram chat bot.
-
-- send a normal message to ask for work
-- use `/help` for command discovery
-- if approval mode is enabled, the bot pauses for review before executing
-- if routed work is used, the parent reply still comes back into the same
-  Telegram chat
-
-Most users can get started with:
-
-```text
-/help
-/project <name>
-```
-
-### Operators
-
-Operators work through two surfaces:
-
-- the `./octopus` CLI
-- the local registry UI at `/ui`
-
-Core registry UI routes:
-
-- **Dashboard**: open conversations, running work, recent completions,
-  follow-up items, and agent health
-- **Approvals**: pending operator decisions
-- **Agents**: roster plus direct open-conversation actions
-- **Conversations**: active thread list and quick-start row
-- **Conversation detail**: one workspace for replies, routing, tasks, and full
-  activity
-- **Tasks**: cross-conversation routed-task queue
-- **Usage**: per-conversation token and cost rollups
-- **Skills** and **Guidance**: operator management surfaces
-
-## Shared Workspaces
-
-Workspaces let multiple bots collaborate on the same host directory mounted at
-`/workspace/<name>` inside the container.
-
-Use:
-
-1. `./octopus`
-2. `Workspaces`
-3. create the workspace
-4. attach bots
-5. restart the affected bots
-
-Each member bot receives a `BOT_PROJECTS` entry, so users can switch into the
-workspace with `/project <name>`.
-
-## Skills And Guidance
-
-Skills and guidance share one backend lifecycle across the registry UI and chat
-clients.
-
-The user-facing skill model has four bot/session states:
-
-- `Catalog`
 - `Available on this bot`
 - `Default for new conversations`
 - `Active in this conversation`
 
-Cross-bot discovery and delegation use a derived bot-level projection:
+Skills can come from:
 
-- `Routing skills`
+- `Core`
+- `Store`
+- `Custom`
 
-And these orthogonal labels:
+For the practical guide to installing, activating, configuring, and authoring
+skills, use [docs/skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).
 
-- `Source`: `Core`, `Store`, `Custom`
-- `Setup`: `Needs setup`, `Ready`
-- `Lifecycle`: draft through published/archive for custom skills
-
-Current product behavior:
-
-- `Core` skills ship with the bot runtime and can be turned on by default with
-  `BOT_SKILLS`
-- `Store` skills come from the remote skill store and can be installed on a bot
-  from the browser **Skills** page or chat `/skills install ...`
-- the browser **Skills** page manages what is available on a bot and the custom
-  skill lifecycle
-- conversation activation is separate and happens in a conversation’s
-  **Skills** panel or via chat `/skills add ...`
-- defaults seed new sessions only; they do not activate every existing
-  conversation
-- routing skills are the subset advertised for discovery and cross-bot
-  delegation
-- guidance is provider-level baseline policy for Claude/Codex behavior
-- published guidance is applied to every run for that provider on that bot
-- guidance is not a skill, is not routed, and is not conversation-activated
-- guidance is managed through Telegram `/guidance ...` commands or the browser
-  **Guidance** page, which separates published policy, draft policy, and the
-  effective runtime preview of the final composed prompt
-
-Custom skills now use the same shared package model across the registry UI and
-chat clients. A mutable draft can include:
-
-- metadata: `name`, `display_name`, `description`
-- instructions: `body`
-- setup requirements: `requirements`
-- provider extensions: `provider_config`
-- supporting artifacts: `files`
-
-The registry **Skills** page is the richest wrapper over those shared
-operations, but it is not a different system. Telegram exposes the same draft
-operations through `/skills ...` commands, including:
-
-- `/skills package <name>` to inspect the full draft package as JSON
-- `/skills package <name> <json>` to replace the full draft package
-
-Submit and publish always invoke backend validation. Validation and
-publish-readiness are derived from the package contents, not guessed separately
-by each client. File and script policy is also shared across clients:
-
-- safe relative paths only
-- reserved skill-package filenames may not be reused
-- only `.sh` files may be marked executable
-- at most 16 attached files
-- 64 KB per file, 256 KB total across attached files
-
-If you need the full shared skill model, package format, lifecycle, and
-provider guidance structure, see
-[docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md),
-[ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md).
+For the lower-level shared model, use
+[docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md).
 
 ## Troubleshooting
 
-If something fails:
+If something is wrong, start here:
 
 1. `./octopus status`
 2. `./octopus doctor <bot>`
-3. inspect the relevant `.deploy/.../.env` file and registry settings
+3. inspect the relevant `.deploy/.../.env` file
+4. confirm the registry is reachable and provider auth is valid
 
-If `./octopus status --live-provider` or `Diagnose -> Provider auth` shows
-`configured, unable to authenticate` for a provider, the auth files are
-present but the provider login is no longer valid. Run `./octopus`, choose
-`Diagnose`, then `Provider auth`, and complete the provider login flow again.
+If a bot is running but not connected, check its registry state first.
 
-If a bot shows `execution faulted`, fix the underlying provider/account issue
-first, then open the bot in the registry UI and use **Reset execution**. The
-reset clears the latched fault and allows the next real request through. If
-the provider is still broken, the bot faults again on that request and stays
-blocked.
+If a bot is connected but not executing, check provider auth and execution
+fault state.
 
-If a remote registry connection fails:
+## Further Reading
 
-1. confirm the URL is `https://...`
-   or `http://...` if that registry intentionally allows plain HTTP
-2. confirm the enrollment token and scope values
-3. inspect the indexed `BOT_AGENT_REGISTRY_<n>_*` env records
-4. run `./octopus doctor <bot>` and inspect per-registry state
-
-## Repo Layout
-
-The codebase is split into three main packages:
-
-- `app/`: shipped Telegram bot runtime and the `./octopus` CLI
-- `octopus_registry/`: standalone registry service, websocket layer, store,
-  ingress, and operator SPA
-- `octopus_sdk/`: shared runtime contracts, workflows, registry protocols,
-  composition seams, and test-only fixtures (`octopus_sdk/testing/`)
-
-## Documentation
-
-- [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/ARCHITECTURE.md):
-  registry, bot SDK, bot implementation, extending Octopus, and cross-cutting concerns
-- [docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md):
-  shared skills model, package format, lifecycle, and client semantics
+- [docs/registry-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-user-guide.md)
+  Browser/operator guide
+- [docs/telegram-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/telegram-user-guide.md)
+  Telegram user guide
+- [docs/skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md)
+  Core, store, and custom skills
+- [docs/sdk-bot-development.md](/Users/tinker/output/bots/telegram-agent-bot/docs/sdk-bot-development.md)
+  SDK-oriented bot development guide
+- [docs/ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/docs/ARCHITECTURE.md)
+  System architecture and runtime boundaries
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

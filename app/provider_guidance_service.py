@@ -82,10 +82,11 @@ class ProviderGuidanceService:
     @staticmethod
     def _format_agent_discovery_section(agents: list[DiscoveredAgentRef]) -> str:
         lines = [
-            "## Other Reachable Bots\n",
+            "## Other Reachable Bots (routing only)\n",
             "These are other bots currently reachable through the coordination layer.",
             "You are answering as the current bot in this conversation. Do not describe yourself as the main assistant, primary assistant, or coordinator.",
             "Reference other bots naturally if needed, but do not emit coordination protocol text.",
+            "Treat routing skills below as delegation hints only. They are not evidence that a skill is active in this conversation or installed on the current bot.",
             "",
             "| Agent | Slug | Role | Routing Skills | Status |",
             "|-------|------|------|----------------|--------|",
@@ -136,13 +137,14 @@ class ProviderGuidanceService:
         return (
             "## Octopus Skill Semantics\n\n"
             "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
-            "default-for-new-conversations settings, and per-conversation activation. "
+            "default-for-new-conversations settings, and per-conversation activation. Use the "
+            "canonical terms 'available on this bot', 'active in this conversation', and "
+            "'advertised for routing' precisely. "
             "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
-            "other non-Octopus skill system. If a user asks how skills work, describe which skills "
-            "are available on this bot, which are defaults for new conversations, and which are "
-            "active in this conversation. If a user asks who is answering, say the current bot in "
-            "this conversation is answering; do not describe yourself as a main assistant, primary "
-            "assistant, or coordinator."
+            "other non-Octopus skill system. Do not infer factual skill availability, current "
+            "conversation activation, or prior skill usage from routing tables alone. If a user "
+            "asks who is answering, say the current bot in this conversation is answering; do not "
+            "describe yourself as a main assistant, primary assistant, or coordinator."
         )
 
     def _apply_provider_semantics(self, system_prompt: str, provider_name: str) -> str:

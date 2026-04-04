@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
-from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.time_utils import utc_now_iso
-from octopus_sdk.workflows.delegation import DelegationUpdateOutcome
-from octopus_sdk.workflows.delegation import apply_routed_result
 
 _SCHEMA_TABLE = "bot_runtime.sessions"
 _DEFERRED_NOTIFICATIONS_TABLE = "bot_runtime.deferred_notifications"
@@ -52,27 +50,23 @@ def load_session(
         row = cur.fetchone()
     if row is None:
         return session
-    raw = row[0]
+    return _normalize_loaded_session(row[0], conversation_key)
+
+
+def _normalize_loaded_session(raw: object, conversation_key: str) -> dict[str, Any]:
     try:
-        saved = raw if isinstance(raw, dict) else json.loads(raw)
-        for key in (
-            "active_skills", "role", "pending_approval", "pending_retry",
-            "awaiting_skill_setup", "pending_delegation",
-            "compact_mode", "project_id", "file_policy",
-            "model_profile", "created_at", "updated_at",
-        ):
-            if key in saved:
-                session[key] = saved[key]
-        if saved.get("approval_mode_explicit"):
-            session["approval_mode"] = saved["approval_mode"]
-            session["approval_mode_explicit"] = True
-        if saved.get("provider") == provider_name:
-            fresh_state = provider_state_factory(conversation_key)
-            fresh_state.update(saved.get("provider_state", {}))
-            session["provider_state"] = fresh_state
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        pass
-    return session
+        if isinstance(raw, (str, bytes, bytearray)):
+            saved = json.loads(raw)
+        else:
+            saved = raw
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Invalid stored session JSON for {conversation_key}") from exc
+    if not isinstance(saved, Mapping):
+        raise RuntimeError(f"Stored session for {conversation_key} is not an object")
+    try:
+        return session_to_dict(session_from_dict(saved))
+    except Exception as exc:
+        raise RuntimeError(f"Stored session for {conversation_key} is not valid current schema data") from exc
 
 
 def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
@@ -127,50 +121,6 @@ def save_session(conn, conversation_key: str, session: dict[str, Any]) -> None:
     conn.commit()
 
 
-def apply_delegation_result_atomically(
-    conn,
-    conversation_key: str,
-    *,
-    routed_task_id: str,
-    authority_ref: str,
-    result: RoutedTaskResult,
-) -> DelegationUpdateOutcome:
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT data FROM {_SCHEMA_TABLE} WHERE conversation_key = %s FOR UPDATE",
-                (conversation_key,),
-            )
-            row = cur.fetchone()
-        raw: dict[str, Any] = {}
-        if row is not None:
-            decoded = row[0]
-            if isinstance(decoded, dict):
-                raw = decoded
-            else:
-                try:
-                    parsed = json.loads(decoded) if decoded else {}
-                    if isinstance(parsed, dict):
-                        raw = parsed
-                except json.JSONDecodeError:
-                    raw = {}
-        session = session_from_dict(raw)
-        applied = apply_routed_result(
-            session.pending_delegation,
-            routed_task_id=routed_task_id,
-            authority_ref=authority_ref,
-            result=result,
-        )
-        if applied.matched:
-            session.pending_delegation = applied.pending
-            _upsert(conn, conversation_key, session_to_dict(session))
-        conn.commit()
-        return applied
-    except Exception:
-        conn.rollback()
-        raise
-
-
 def delete_session(conn, conversation_key: str) -> None:
     with conn.cursor() as cur:
         cur.execute(f"DELETE FROM {_SCHEMA_TABLE} WHERE conversation_key = %s", (conversation_key,))
@@ -192,13 +142,7 @@ def list_sessions(conn) -> list[dict[str, Any]]:
         conversation_key, provider, data, has_pending, has_setup, created_at, updated_at = (
             row[0], row[1], row[2], row[3], row[4], row[5], row[6]
         )
-        if isinstance(data, dict):
-            data_dict = data
-        else:
-            try:
-                data_dict = json.loads(data) if data else {}
-            except json.JSONDecodeError:
-                data_dict = {}
+        data_dict = _normalize_loaded_session(data, conversation_key)
         results.append({
             "conversation_key": conversation_key,
             "provider": provider,
@@ -357,24 +301,6 @@ class PostgresSessionStore:
         with self._conn() as conn:
             save_session(conn, conversation_key, session)
 
-    def apply_delegation_result_atomically(
-        self,
-        data_dir: Path,
-        conversation_key: str,
-        *,
-        routed_task_id: str,
-        authority_ref: str,
-        result: RoutedTaskResult,
-    ) -> DelegationUpdateOutcome:
-        with self._conn() as conn:
-            return apply_delegation_result_atomically(
-                conn,
-                conversation_key,
-                routed_task_id=routed_task_id,
-                authority_ref=authority_ref,
-                result=result,
-            )
-
     def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         with self._conn() as conn:
             delete_session(conn, conversation_key)
@@ -390,11 +316,10 @@ class PostgresSessionStore:
         pass
 
     def debug_connection(self, data_dir: Path):
-        """Not available via runtime backend; use conn-based helpers in tests."""
-        raise NotImplementedError(
-            "Postgres session store does not expose a runtime debug connection; "
-            "use app.storage_postgres conn-based helpers in tests"
-        )
+        del data_dir
+        from app.db.postgres import PostgresDebugConnection
+
+        return PostgresDebugConnection(self._database_url, search_path="bot_runtime")
 
     def reset_db_for_test(self, data_dir: Path) -> None:
         pass  # Tests use conn-based API and truncate; no per-dir reset

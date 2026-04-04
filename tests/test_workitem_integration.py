@@ -1,11 +1,11 @@
 """Integration tests for work-item claim serialization.
 
 These tests exercise the real production code path: handler decorator →
-_chat_lock → work_queue SQLite → claim_for_update / claim_next.  The only
+_chat_lock → Postgres work_queue → claim_for_update / claim_next.  The only
 fakes are the Telegram transport and provider subprocess — those are the
 actual external boundaries.
 
-Each test creates real contention: concurrent asyncio tasks, real SQLite
+Each test creates real contention: concurrent asyncio tasks, real Postgres
 transactions, real _chat_lock acquisition.  No mock databases, no mock
 locks, no mock work_queue.
 """

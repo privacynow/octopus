@@ -139,6 +139,27 @@ function _renderProviderRequestCard(body, event, metadata) {
         ['Prompt chars', Number(metadata.prompt_char_count || 0).toLocaleString()],
     ]));
 
+    const manifest = metadata.skill_manifest || null;
+    if (manifest && typeof manifest === 'object') {
+        const requested = Array.isArray(manifest.requested_skills) ? manifest.requested_skills.filter(Boolean).join(', ') : '';
+        const active = Array.isArray(manifest.active_skills) ? manifest.active_skills.filter(Boolean).join(', ') : '';
+        const composed = Array.isArray(manifest.composed_skill_slugs) ? manifest.composed_skill_slugs.filter(Boolean).join(', ') : '';
+        const invoked = Array.isArray(manifest.invoked_skill_slugs) ? manifest.invoked_skill_slugs.filter(Boolean).join(', ') : '';
+        const skillKinds = manifest.skill_kind_map && typeof manifest.skill_kind_map === 'object'
+            ? Object.entries(manifest.skill_kind_map)
+                .map(([name, kind]) => `${name}:${kind}`)
+                .join(', ')
+            : '';
+        body.appendChild(_metadataGrid([
+            ['Requested for run', requested || 'none'],
+            ['Active for run', active || 'none'],
+            ['Composed for run', composed || 'none'],
+            ['Invoked for run', invoked || 'n/a'],
+            ['Skill kinds', skillKinds || ''],
+            ['Manifest hash', manifest.prompt_manifest_hash || ''],
+        ]));
+    }
+
     if (event.content) {
         const details = document.createElement('details');
         details.className = 'event-details';
@@ -270,8 +291,8 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
     status.className = 'action-status';
     if (expired && requestKind !== 'recovery') status.textContent = 'Expired';
 
-    let primaryAction = 'approve';
-    let secondaryAction = 'reject';
+    let primaryAction = 'approve_pending';
+    let secondaryAction = 'reject_pending';
     let payloadForAction = () => ({ request_id: event.event_id });
 
     if (requestKind === 'retry') {
@@ -304,8 +325,8 @@ function _renderApprovalRequestedCard(body, event, metadata, convoId) {
         secondary.disabled = true;
         try {
             await API.conversationAction(convoId, action, payloadForAction());
-            if (action === 'approve') status.textContent = 'Approved';
-            else if (action === 'reject') status.textContent = 'Rejected';
+            if (action === 'approve_pending') status.textContent = 'Approved';
+            else if (action === 'reject_pending') status.textContent = 'Rejected';
             else if (action === 'retry_allow') status.textContent = 'Retrying';
             else if (action === 'retry_skip') status.textContent = 'Skipped';
             else if (action === 'recovery_replay') status.textContent = 'Replaying';

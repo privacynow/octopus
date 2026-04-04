@@ -23,8 +23,7 @@ from octopus_sdk.sessions import (
     session_to_dict,
 )
 from octopus_sdk.registry.models import (
-    AgentDiscoveryQuery,
-    extract_target_selector_message,
+    parse_agent_discovery_query,
 )
 from app.workflows.delegation.telegram import (
     handle_delegation_approve,
@@ -78,8 +77,6 @@ from app.workflows.pending.telegram import (
     handle_recovery_callback as pending_handle_recovery_callback,
     reject_pending as pending_reject_pending,
 )
-from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime import composition
 from app.runtime.work_admission import trust_tier_for_ref
 from app.formatting import summarize_text
 from octopus_sdk.identity import resolve_event_conversation_ref
@@ -412,12 +409,13 @@ def _callback_handler(fn):
     return wrapper
 
 def _settings_model_profile_state(
+    runtime: TelegramRuntime,
     session: SessionState,
     cfg: BotConfig,
     trust_tier: str,
     effective_model: str,
 ) -> tuple[list[str], str]:
-    state = composition.workflows().conversation.settings.model_profile_state(
+    state = runtime.services.workflows.conversation.settings.model_profile_state(
         session,
         cfg,
         trust_tier,
@@ -522,14 +520,14 @@ async def cmd_session(
 
     file_policy = resolved.file_policy or "edit"
     _, model_profile = _settings_model_profile_state(
-        session, cfg, trust, resolved.effective_model or ""
+        runtime, session, cfg, trust, resolved.effective_model or ""
     )
     model_id = resolved.effective_model or cfg.model or "(default)"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_display = "on" if compact else "off"
     # Note: excludes agent discovery context (requires async bus call, not available in /settings).
     # Execution path includes agents via build_run_context; this is a best-effort UI estimate.
-    prompt_weight_count = get_provider_guidance_service().prompt_weight(
+    prompt_weight_count = runtime.services.execution_services.guidance.prompt_weight(
         resolved.role,
         resolved.active_skills,
     )
@@ -654,7 +652,6 @@ async def cmd_doctor(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    import sqlite3
     from app.runtime_health import (
         SessionHealthContext,
         collect_runtime_health_report,
@@ -662,7 +659,7 @@ async def cmd_doctor(
     )
     try:
         session = telegram_session_io.load(runtime, event.chat_id)
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
+    except RuntimeError:
         session = None
     cfg = runtime.config
     session_context = None
@@ -698,7 +695,7 @@ async def cmd_doctor(
                 event=event,
             ),
         )
-        prompt_weight_count = get_provider_guidance_service().prompt_weight(
+        prompt_weight_count = runtime.services.execution_services.guidance.prompt_weight(
             resolved.role,
             resolved.active_skills,
         ) or None
@@ -707,58 +704,6 @@ async def cmd_doctor(
         prompt_weight_count,
     )
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-
-
-def _parse_discovery_query(
-    args: tuple[str, ...],
-    *,
-    exclude_agent_id: str = "",
-) -> tuple[AgentDiscoveryQuery | None, str | None]:
-    role = ""
-    skills: list[str] = []
-    tags: list[str] = []
-    required_state = "connected"
-    free_text_parts: list[str] = []
-    for token in args:
-        key = ""
-        value = ""
-        if ":" in token:
-            key, value = token.split(":", 1)
-        elif "=" in token:
-            key, value = token.split("=", 1)
-        else:
-            free_text_parts.append(token)
-            continue
-        key = key.strip().lower()
-        value = value.strip()
-        if not value:
-            free_text_parts.append(token)
-            continue
-        if key == "role":
-            role = value
-        elif key in {"skill", "skills"}:
-            skills.extend(part.strip() for part in value.split(",") if part.strip())
-        elif key in {"tag", "tags"}:
-            tags.extend(part.strip() for part in value.split(",") if part.strip())
-        elif key == "state":
-            required_state = value.lower()
-        else:
-            free_text_parts.append(token)
-    if required_state not in {"connected", "degraded", "standalone", "disconnected"}:
-        return None, telegram_presenters.discover_usage_message().text
-    if not role and not skills and not tags and not free_text_parts:
-        return None, telegram_presenters.discover_usage_message().text
-    return (
-        AgentDiscoveryQuery(
-            role=role,
-            skills=tuple(skills),
-            tags=tuple(tags),
-            free_text=" ".join(free_text_parts).strip(),
-            exclude_agent_ids=(exclude_agent_id,) if exclude_agent_id else (),
-            required_state=required_state,
-        ),
-        None,
-    )
 
 
 @_command_handler
@@ -774,10 +719,10 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
         rendered = telegram_presenters.discover_not_enrolled_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    query, error = _parse_discovery_query(event.args)
-    if error is not None or query is None:
+    query = parse_agent_discovery_query(event.args)
+    if query is None:
         rendered = telegram_presenters.discover_usage_message()
-        await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
+        await update.effective_message.reply_text(rendered.text, parse_mode=rendered.parse_mode)
         return
     try:
         search = await participant.discovery.search_agents(query=query)
@@ -931,7 +876,7 @@ async def cmd_admin(
 
     # Filter stale active_skills that no longer resolve
     for s in sessions:
-        s["active_skills"] = composition.workflows().runtime_skills.catalog.filter_resolvable(
+        s["active_skills"] = runtime.services.workflows.runtime_skills.catalog.filter_resolvable(
             s["active_skills"]
         )
 
@@ -1002,6 +947,7 @@ async def cmd_guidance(
     if await _public_guard(runtime, event, update):
         return
     await channel_handle_guidance_command(
+        runtime,
         event,
         update,
         is_admin=is_admin(runtime, event.user),
@@ -1182,40 +1128,6 @@ async def handle_message(
             execution_runtime=_bound_execution_runtime(runtime),
         ),
     ):
-        return
-
-    direct_assignment = extract_target_selector_message(msg.text)
-    if direct_assignment is not None:
-        selector, instructions = direct_assignment
-        title = summarize_text(instructions) or "Direct assignment"
-        try:
-            result = await submit_direct_assignment(
-                runtime,
-                telegram_session_io.conversation_key(chat_id),
-                message,
-                conversation_ref=msg.conversation_ref,
-                selector=selector,
-                title=title,
-                instructions=instructions,
-                message_text=str(msg.text or ""),
-            )
-        except Exception as exc:
-            await update.effective_message.reply_text(
-                f"Delegation unavailable right now. {exc}"
-            )
-            return
-        task_ref = result.routed_tasks[0] if result.routed_tasks else None
-        target_label = (
-            f"@{selector.value}"
-            if selector.kind == "agent"
-            else f"@{selector.kind}:{selector.value}"
-        )
-        if task_ref is None:
-            await update.effective_message.reply_text(f"Task sent to {target_label}.")
-        else:
-            await update.effective_message.reply_text(
-                f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
-            )
         return
 
     envelope = InboundEnvelope(

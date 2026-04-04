@@ -37,6 +37,7 @@ class SkillFileRecord:
 @dataclass(frozen=True)
 class SkillRevisionRecord:
     instruction_body: str
+    skill_kind: str = "prompt"
     requirements: list[SkillRequirement] = field(default_factory=list)
     provider_config: ProviderConfigRecord = field(default_factory=ProviderConfigRecord)
     files: tuple[SkillFileRecord, ...] = ()
@@ -74,6 +75,7 @@ class SkillRevisionRecord:
         payload = "\n".join(
             (
                 self.version_label,
+                self.skill_kind,
                 self.instruction_body,
                 self.changelog,
                 _stable_json([item.to_dict() for item in self.requirements]),
@@ -115,6 +117,7 @@ class RuntimeSkillSummary:
     slug: str
     display_name: str
     description: str
+    skill_kind: str
     source_kind: str
     source_uri: str
     visibility: str

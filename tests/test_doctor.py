@@ -154,6 +154,7 @@ async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
         agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
+    runtime_backend.init(config)
     save_registry_connection_state(
         tmp_path,
         RegistryConnectionState(
@@ -201,6 +202,7 @@ async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: P
         agent_registries=(make_registry_connection(url="http://registry:8787"),),
     )
     provider = FakeProvider()
+    runtime_backend.init(config)
     session = default_session(provider.name, provider.new_provider_state("tg:test"), "off")
     session["pending_delegation"] = {
         "conversation_ref": "telegram:agent:1002",
@@ -336,7 +338,9 @@ async def test_doctor_errors_when_no_healthy_shared_workers(tmp_path: Path):
     runtime_backend.init(config)
     try:
         report = await _collect_health(config, provider)
-        assert any("no healthy worker heartbeats" in err.lower() for err in _diagnostic_messages(report, "error"))
+        assert any(
+            item.code == "shared.no_healthy_workers" for item in report.diagnostics
+        ), [(item.level, item.code, item.message) for item in report.diagnostics]
     finally:
         runtime_backend.reset_for_test()
 

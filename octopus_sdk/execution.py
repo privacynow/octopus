@@ -31,6 +31,8 @@ from octopus_sdk.sessions import (
     SessionState,
 )
 from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
+from octopus_sdk.runtime.skills import skill_execution_manifest_hash
+from octopus_sdk.runtime.skills import normalize_skill_kind
 from octopus_sdk.transport import TransportEgress
 
 _log = logging.getLogger(__name__)
@@ -122,6 +124,7 @@ class TransportIdentity:
     conversation_ref: str
     routed_task_id: str
     authority_ref: str
+    requested_skills: tuple[str, ...] = ()
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
@@ -136,6 +139,7 @@ class ExecutionChannelMetadata:
     authority_ref: str
     external_conversation_ref: str
     target_agent_id: str
+    requested_skills: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,10 @@ class RequestExecutionOutcome:
     cached_prompt_tokens: int | None = None
     cached_completion_tokens: int | None = None
     cost_usd: float = 0.0
+
+
+def completed_reply_outcome(reply_text: str) -> RequestExecutionOutcome:
+    return RequestExecutionOutcome(status="completed", reply_text=reply_text)
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,7 @@ def build_transport_identity_from_metadata(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
+            requested_skills=metadata.requested_skills,
             timeline_callback=routed_task_callback_factory(
                 metadata.routed_task_id,
                 metadata.authority_ref,
@@ -195,6 +204,7 @@ def build_transport_identity_from_metadata(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
             authority_ref=metadata.authority_ref,
+            requested_skills=metadata.requested_skills,
             timeline_callback=conversation_callback_factory(
                 conversation_ref,
                 metadata.routed_task_id,
@@ -209,6 +219,7 @@ def build_transport_identity_from_metadata(
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
         authority_ref=metadata.authority_ref,
+        requested_skills=metadata.requested_skills,
         timeline_callback=None,
     )
 
@@ -458,6 +469,53 @@ async def _execute_request_locked(
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     provider_request_content = _provider_request_content(prompt, context.system_prompt)
+    requested_skills = tuple(
+        str(skill).strip().lower()
+        for skill in (transport.requested_skills or ())
+        if str(skill).strip()
+    )
+    active_skill_slugs = tuple(
+        str(skill).strip().lower()
+        for skill in session.active_skills
+        if str(skill).strip()
+    )
+    composed_skill_slugs = tuple(
+        str(skill).strip().lower()
+        for skill in resolved.active_skills
+        if str(skill).strip()
+    )
+    composed_track_revision_ids = tuple(
+        str(resolved.skill_revision_ids.get(skill, "")).strip()
+        for skill in composed_skill_slugs
+        if str(resolved.skill_revision_ids.get(skill, "")).strip()
+    )
+    skill_kind_map = {
+        str(skill).strip().lower(): normalize_skill_kind(resolved.skill_kinds.get(skill, "prompt"))
+        for skill in composed_skill_slugs
+    }
+    skill_manifest = {
+        "schema_version": 1,
+        "routed_task_id": str(transport.routed_task_id or ""),
+        "conversation_key": conversation_key,
+        "bot_slug": str(cfg.agent_slug or cfg.instance or ""),
+        "requested_skills": list(requested_skills),
+        "active_skills": list(active_skill_slugs),
+        "composed_skill_slugs": list(composed_skill_slugs),
+        "composed_track_revision_ids": list(composed_track_revision_ids),
+        "invoked_skill_slugs": [],
+        "skill_kind_map": skill_kind_map,
+        "prompt_manifest_hash": skill_execution_manifest_hash(
+            routed_task_id=str(transport.routed_task_id or ""),
+            conversation_key=conversation_key,
+            bot_slug=str(cfg.agent_slug or cfg.instance or ""),
+            requested_skills=requested_skills,
+            active_skills=active_skill_slugs,
+            composed_skill_slugs=composed_skill_slugs,
+            composed_track_revision_ids=composed_track_revision_ids,
+            invoked_skill_slugs=(),
+            skill_kind_map=skill_kind_map,
+        ),
+    }
     await event_sink.on_provider_request(
         provider_request_content,
         provider=prov.name,
@@ -467,6 +525,7 @@ async def _execute_request_locked(
         file_policy=resolved.file_policy or "edit",
         image_count=len(image_paths),
         prompt_char_count=len(provider_request_content),
+        skill_manifest=skill_manifest,
     )
     label = _progress_resuming() if is_resume else _progress_working()
 

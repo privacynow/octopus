@@ -19,6 +19,7 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
+from octopus_sdk.exact_aliases import matches_exact_alias
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -28,7 +29,6 @@ from .routing_skill_service import (
     requested_routed_skills,
 )
 from .postgres import get_connection
-from .exact_aliases import matches_exact_alias
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
     get_agent_runtime_health as shared_get_agent_runtime_health,
@@ -95,7 +95,6 @@ from .store_base import (
     RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
     delegation_event,
-    direct_assignment_message_text,
     routed_task_created_event,
     routed_task_external_conversation_ref,
     validated_action_payload,
@@ -159,6 +158,7 @@ from octopus_sdk.registry.models import (
     TargetSelector,
     TaskRecord,
     UsageSummaryRecord,
+    normalized_requested_skills,
 )
 from octopus_sdk.task_protocol import (
     RoutedTaskSnapshot,
@@ -1764,7 +1764,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "created_at": row["created_at"],
                 })
 
-            if validated_envelope.action in {"approve", "reject", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
+            if validated_envelope.action in {"approve_pending", "reject_pending", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
                 self._create_delivery(
                     conn,
                     target_agent_id=conversation["target_agent_id"],
@@ -1813,9 +1813,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         metadata={
                             "action": validated_envelope.action,
                             "decided_by": "operator",
-                            "decision": (
-                                "rejected"
-                                if validated_envelope.action in {"reject", "retry_skip", "recovery_discard"}
+                                "decision": (
+                                    "rejected"
+                                if validated_envelope.action in {"reject_pending", "retry_skip", "recovery_discard"}
                                 else "approved"
                             ),
                         },
@@ -1883,7 +1883,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     event=inserted_event,
                 )
 
-            if validated_envelope.action == "approve_delegation":
+            if validated_envelope.action == "delegation_approve":
                 proposal_id = action_payload.proposal_id
                 with _cur(conn) as cur:
                     cur.execute(
@@ -1926,6 +1926,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             "context": entry.get("context", {}),
                         }
                     )
+                    requested_skills = normalized_requested_skills(
+                        entry.get("requested_skills", []),
+                        selector=draft.selector,
+                    )
                     resolved_target = self._resolve_selector(conn, draft.selector)
                     request = {
                         "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, index),
@@ -1943,7 +1947,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         "title": draft.title,
                         "instructions": draft.instructions,
                         "context": dict(draft.context),
-                        "requested_skills": list(draft.requested_skills),
+                        "requested_skills": requested_skills,
                         "priority": draft.priority,
                         "created_at": now,
                     }
@@ -2005,28 +2009,34 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
             if validated_envelope.action == "direct_assign":
                 assignment = action_payload
-                operator_message = direct_assignment_message_text(assignment)
                 routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
                 resolved_target = self._resolve_selector(conn, assignment.selector)
-                inserted_events: list[EventRecord] = []
-                message_event = self._insert_event(
-                    conn,
-                    event_id=f"message.user:{validated_envelope.action_id}",
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind="message.user",
-                    actor="operator",
-                    content=operator_message,
-                    metadata={
-                        "source_action": "direct_assign",
-                        "selector_kind": assignment.selector.kind,
-                        "selector_value": assignment.selector.value,
-                        "routed_task_id": routed_task_id,
-                    },
-                    created_at=now,
+                requested_skills = normalized_requested_skills(
+                    assignment.requested_skills,
+                    selector=assignment.selector,
                 )
-                if message_event is not None:
-                    inserted_events.append(message_event)
+                inserted_events: list[EventRecord] = []
+                parent_event_id = str(assignment.parent_event_id or "").strip()
+                message_metadata = {
+                    "source_action": "direct_assign",
+                    "action_id": validated_envelope.action_id,
+                    "selector_kind": assignment.selector.kind,
+                    "selector_value": assignment.selector.value,
+                    "routed_task_id": routed_task_id,
+                    "requested_skills": requested_skills,
+                }
+                if parent_event_id:
+                    with _cur(conn) as cur:
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.events
+                            SET metadata_json = COALESCE(metadata_json, '{{}}'::jsonb) || %s
+                            WHERE conversation_id = %s
+                              AND event_id = %s
+                              AND kind = 'message.user'
+                            """,
+                            (_jsonb(message_metadata), conversation_id, parent_event_id),
+                        )
                 request = {
                     "routed_task_id": routed_task_id,
                     "parent_conversation_id": conversation_id,
@@ -2041,13 +2051,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": assignment.title,
                     "instructions": assignment.instructions,
                     "context": dict(assignment.context),
-                    "requested_skills": list(assignment.requested_skills),
+                    "requested_skills": requested_skills,
                     "priority": assignment.priority,
                     "created_at": now,
                 }
                 created = self._create_routed_task_in_tx(conn, request, now=now)
-                if created.get("event") is not None:
-                    inserted_events.append(created["event"])
+                inserted_event = created.get("event")
+                if inserted_event is not None:
+                    inserted_events.append(inserted_event)
                 routed_tasks.append({
                     "routed_task_id": request["routed_task_id"],
                     "target_agent_id": resolved_target["agent_id"],
@@ -2055,51 +2066,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "title": assignment.title,
                     "status": "queued",
                 })
-                submitted_event = delegation_event(
-                    kind="delegation.submitted",
-                    proposal_id=validated_envelope.action_id,
-                    conversation_id=conversation_id,
-                    tasks=[
-                        {
-                            "draft_id": validated_envelope.action_id,
-                            "title": assignment.title,
-                            "target": resolved_target["agent_id"],
-                            "status": "submitted",
-                            "routed_task_id": request["routed_task_id"],
-                            "selector_kind": assignment.selector.kind,
-                            "selector_value": assignment.selector.value,
-                            "instructions": assignment.instructions,
-                            "priority": assignment.priority,
-                            "requested_skills": list(assignment.requested_skills),
-                            "context": dict(assignment.context),
-                        }
-                    ],
-                    created_at=now,
-                    content="Direct assignment submitted",
-                    origin_transport_ref=str(assignment.origin_transport_ref or ""),
-                    authorized_actor_key=str(assignment.authorized_actor_key or ""),
-                )
-                inserted_event = self._insert_event(
-                    conn,
-                    event_id=f"delegation.submitted:{validated_envelope.action_id}",
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind=submitted_event["kind"],
-                    actor="operator",
-                    content=submitted_event["content"],
-                    metadata=submitted_event["metadata"],
-                    created_at=submitted_event["created_at"],
-                )
                 with _cur(conn) as cur:
                     cur.execute(
                         f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
                         (now, conversation_id),
                     )
-                duplicate = inserted_event is None
                 if inserted_event is None:
-                    inserted_event = _event__row(f"delegation.submitted:{validated_envelope.action_id}")
-                elif inserted_event is not None:
-                    inserted_events.append(inserted_event)
+                    inserted_event = _event__row(f"routed-task:{routed_task_id}:queued")
+                duplicate = created.get("event") is None
                 return CoordinationActionResult(
                     conversation_id=conversation_id,
                     action_id=validated_envelope.action_id,
@@ -2112,8 +2086,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     event=inserted_event,
                 )
 
-            if validated_envelope.action in {"cancel_task", "retry_task", "cancel_delegation"}:
-                if validated_envelope.action == "cancel_delegation":
+            if validated_envelope.action in {"cancel_task", "retry_task", "delegation_cancel"}:
+                if validated_envelope.action == "delegation_cancel":
                     inserted_event = self._insert_event(
                         conn,
                         event_id=validated_envelope.action_id,

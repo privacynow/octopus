@@ -6,6 +6,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY app ./app
 COPY octopus_sdk ./octopus_sdk
 COPY octopus_registry ./octopus_registry
 

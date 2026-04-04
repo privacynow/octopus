@@ -11,13 +11,14 @@ import pytest
 import app.runtime_backend as runtime_backend
 from app.agents.state import RegistryConnectionState, save_registry_connection_state
 from octopus_registry.authority import StoreBackedRegistryAuthority
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 from app.runtime.services import build_runtime
 from app.runtime.registry_participant import build_control_plane_registry_participant
 from app.runtime.services import ControlPlaneServices
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.conversation_projection import NoOpConversationProjection
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, serialize_inbound
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import (
@@ -47,6 +48,7 @@ def _noop_control_plane_services() -> ControlPlaneServices:
         conversation_projection=NoOpConversationProjection(),
         task_routing=NoOpTaskRouting(),
         agent_directory=NoOpAgentDirectory(),
+        registry_inspection=NoOpRegistryInspection(),
         health_publication=NoOpHealthPublication(),
     )
 
@@ -271,8 +273,8 @@ async def test_infrastructure_profile_behavioral_suite_uses_typed_work_queue_and
     assert work_queue.calls == ["record_and_admit_message"]
 
 
-def test_authority_profile_behavioral_suite_round_trips_store_backed_authority(tmp_path: Path) -> None:
-    authority = StoreBackedRegistryAuthority(RegistrySQLiteStore(tmp_path / "registry.sqlite3"))
+def test_authority_profile_behavioral_suite_round_trips_store_backed_authority(postgres_db_url: str) -> None:
+    authority = StoreBackedRegistryAuthority(RegistryPostgresStore(postgres_db_url))
     enrollment = authority.enroll_agent(_agent_card(slug="m1", display_name="M1"))
     renewed = authority.renew_enrollment(
         enrollment.agent_id,
@@ -486,33 +488,32 @@ async def test_telegram_runtime_passes_transport_participant_and_workflow_profil
     runtime_backend.init(config)
     try:
         runtime_process = build_runtime(config, FakeProvider())
+        dispatcher = runtime_process.bot_runtime.transport
+        assert dispatcher.active_transport_types() == ["telegram", "registry"]
+
+        egress = dispatcher.create_egress(
+            "telegram:test:12345",
+            config=config,
+            bot=MinimalFakeBot(),
+            conversation_key="telegram:12345",
+            source="telegram",
+        )
+        await egress.bind(title="Telegram profile", config=config)
+
+        registry = runtime_process.services.registry
+        assert registry.health.live_local_agent_ids() == {"registry:default": "agent-1"}
+
+        session = runtime_process.bot_runtime.sessions.load(
+            "telegram:12345",
+            provider_name=runtime_process.bot_runtime.provider.name,
+            provider_state_factory=runtime_process.bot_runtime.provider.new_provider_state,
+            approval_mode=config.approval_mode,
+            default_role=config.role,
+            default_skills=config.default_skills,
+        )
+        approval = runtime_process.services.workflows.conversation.settings.set_approval_mode(session, "on")
+        assert approval.mutated is True
+        credentials = runtime_process.services.workflows.credentials.management.load_credentials("telegram:42")
+        assert isinstance(credentials, dict)
     finally:
         runtime_backend.reset_for_test()
-
-    dispatcher = runtime_process.bot_runtime.transport
-    assert dispatcher.active_transport_types() == ["telegram", "registry"]
-
-    egress = dispatcher.create_egress(
-        "telegram:test:12345",
-        config=config,
-        bot=MinimalFakeBot(),
-        conversation_key="telegram:12345",
-        source="telegram",
-    )
-    await egress.bind(title="Telegram profile", config=config)
-
-    registry = runtime_process.services.registry
-    assert registry.health.live_local_agent_ids() == {"registry:default": "agent-1"}
-
-    session = runtime_process.bot_runtime.sessions.load(
-        "telegram:12345",
-        provider_name=runtime_process.bot_runtime.provider.name,
-        provider_state_factory=runtime_process.bot_runtime.provider.new_provider_state,
-        approval_mode=config.approval_mode,
-        default_role=config.role,
-        default_skills=config.default_skills,
-    )
-    approval = runtime_process.services.workflows.conversation.settings.set_approval_mode(session, "on")
-    assert approval.mutated is True
-    credentials = runtime_process.services.workflows.credentials.management.load_credentials("telegram:42")
-    assert isinstance(credentials, dict)

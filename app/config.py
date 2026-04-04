@@ -502,7 +502,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
         claim_sweep_interval_seconds=max(0.1, get_float("BOT_CLAIM_SWEEP_INTERVAL_SECONDS", "60.0")),
         delegation_timeout_seconds=get_int("BOT_DELEGATION_TIMEOUT_SECONDS", "3600"),
-        database_url=get("BOT_DATABASE_URL", "").strip(),
+        database_url=get("OCTOPUS_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
         db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
@@ -513,7 +513,7 @@ def load_config(instance: str | None = None) -> BotConfig:
 def load_config_provider_health() -> BotConfig:
     """Load minimal config environment for provider-only health checks.
 
-    Used by --provider-health. Does not require BOT_DATABASE_URL or Telegram
+    Used by --provider-health. Does not require OCTOPUS_DATABASE_URL or Telegram
     config. Reads BOT_PROVIDER, BOT_MODEL, BOT_DATA_DIR, BOT_WORKING_DIR, and
     provider-specific vars so provider auth and runtime probes work correctly.
     """
@@ -782,7 +782,7 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(
-            "BOT_DATABASE_URL must be a valid postgresql:// connection string when set"
+            "OCTOPUS_DATABASE_URL must be a valid postgresql:// connection string when set"
         )
 
     seen_project_names: set[str] = set()

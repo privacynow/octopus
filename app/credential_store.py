@@ -44,20 +44,19 @@ def build_credential_store(
     connect_timeout: int = 10,
 ) -> AbstractCredentialStore:
     encryption_key = derive_credential_encryption_key(secret_material)
-    if database_url:
-        from app.credential_store_postgres import PostgresCredentialStore
+    del data_dir
+    configured_url = database_url.strip() or os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
+    if not configured_url:
+        raise RuntimeError("OCTOPUS_DATABASE_URL must be set before building the credential store")
+    from app.credential_store_postgres import PostgresCredentialStore
 
-        return PostgresCredentialStore(
-            database_url,
-            encryption_key=encryption_key,
-            pool_min=pool_min,
-            pool_max=pool_max,
-            connect_timeout=connect_timeout,
-        )
-
-    from app.credential_store_sqlite import SQLiteCredentialStore
-
-    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=encryption_key)
+    return PostgresCredentialStore(
+        configured_url,
+        encryption_key=encryption_key,
+        pool_min=pool_min,
+        pool_max=pool_max,
+        connect_timeout=connect_timeout,
+    )
 
 
 def init_credential_store(
@@ -70,12 +69,13 @@ def init_credential_store(
     connect_timeout: int = 10,
 ) -> AbstractCredentialStore:
     global _store, _store_key
-    key = (str(data_dir), secret_material, database_url, pool_min, pool_max, connect_timeout)
+    configured_url = database_url.strip() or os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
+    key = (str(data_dir), secret_material, configured_url, pool_min, pool_max, connect_timeout)
     if _store is None or _store_key != key:
         _store = build_credential_store(
             data_dir=data_dir,
             secret_material=secret_material,
-            database_url=database_url,
+            database_url=configured_url,
             pool_min=pool_min,
             pool_max=pool_max,
             connect_timeout=connect_timeout,
@@ -132,7 +132,7 @@ def get_credential_store() -> AbstractCredentialStore:
         credential_key=os.environ.get("BOT_CREDENTIAL_KEY", ""),
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
     )
-    database_url = os.environ.get("BOT_DATABASE_URL", "").strip()
+    database_url = os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
     pool_min = int(os.environ.get("BOT_DB_POOL_MIN_SIZE", "1") or "1")
     pool_max = int(os.environ.get("BOT_DB_POOL_MAX_SIZE", "10") or "10")
     connect_timeout = int(os.environ.get("BOT_DB_CONNECT_TIMEOUT_SECONDS", "10") or "10")
@@ -151,3 +151,12 @@ def reset_for_test() -> None:
     _store = None
     _store_key = None
     _fallback_warning_emitted = False
+    try:
+        from app.db.postgres import close_pools
+
+        close_pools()
+    except Exception as exc:
+        log.debug(
+            "Postgres pool cleanup failed during credential-store test reset: %s",
+            exc.__class__.__name__,
+        )

@@ -1,5 +1,6 @@
 """Shared BotConfig factory for tests."""
 
+import os
 from pathlib import Path
 
 from app.config import BotConfig
@@ -110,7 +111,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         claim_lease_ttl_seconds=300,
         claim_sweep_interval_seconds=60.0,
         delegation_timeout_seconds=3600,
-        database_url="",
+        database_url=os.environ.get("OCTOPUS_DATABASE_URL", ""),
         db_pool_min_size=1,
         db_pool_max_size=10,
         db_connect_timeout_seconds=10,

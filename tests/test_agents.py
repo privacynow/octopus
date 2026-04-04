@@ -10,7 +10,6 @@ import pytest
 
 from app import work_queue
 import app.agents.state as agent_state_module
-from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.channels.registry.delivery_transport import (
     admit_registry_delivery,
     build_registry_delivery_runtime,
@@ -32,6 +31,8 @@ from octopus_sdk.identity import (
     load_bot_identity_state,
     telegram_conversation_ref,
 )
+from octopus_sdk.registry.client import RegistryClient
+from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.inbound_types import deserialize_inbound
 from octopus_sdk.transport import (
     DelegationContinuationResult,
@@ -49,6 +50,7 @@ from app.agents.state import (
     save_registry_connection_state,
 )
 from tests.support.config_support import make_config, make_registry_connection
+from tests.support.service_support import build_test_bot_services
 from tests.support.handler_support import current_runtime, fresh_env
 from tests.support.handler_support import current_bot_instance
 from tests.support.service_support import build_test_bot_services
@@ -168,11 +170,7 @@ def test_registry_channel_services_resolve_runtime_agent_id_after_enrollment(tmp
         agent_mode="registry",
         agent_registries=(registry,),
     )
-    services = build_bus_bot_services(
-        ControlPlaneBus(tmp_path),
-        build_control_plane_directory(
-            {registry_authority_ref("local"): {"conversation_projection"}}
-        ),
+    services = build_test_bot_services(
         config=config,
         agent_id_for_authority=lambda authority_ref: load_runtime_registry_connection_state(
             tmp_path,
@@ -447,7 +445,7 @@ async def test_registry_client_error_omits_response_body():
         transport=httpx.MockTransport(handler),
         base_url="http://registry.test",
     ) as client:
-        registry = AgentRegistryClient(
+        registry = RegistryClient(
             "http://registry.test",
             agent_token="secret-token",
             client=client,
@@ -470,7 +468,7 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             return {
                 "agent_id": "agent-123",
                 "slug": "product-bot",
@@ -486,7 +484,7 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
                 status_code=500,
             )
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -511,7 +509,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             calls.append(("enroll", card.display_name, enrollment_token))
             return {
                 "agent_id": "agent-123",
@@ -529,7 +527,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
             calls.append(("heartbeat", connectivity_state, str(current_capacity)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -580,7 +578,7 @@ async def test_agent_runtime_connected_sync_uses_heartbeat_without_re_registerin
             calls.append(("register", "unexpected"))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -615,7 +613,7 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             return {
                 "agent_id": "agent-123",
                 "slug": "product-bot",
@@ -665,7 +663,7 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
                 ),
             )
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     config = make_config(
         data_dir=tmp_path,
         provider_name="codex",
@@ -722,7 +720,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             return {
                 "agent_id": "agent-123",
                 "slug": "product-bot",
@@ -765,7 +763,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     seen_deliveries: list[str] = []
 
     async def handler(delivery):
@@ -802,7 +800,7 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             return {
                 "agent_id": "agent-123",
                 "slug": "product-bot",
@@ -831,7 +829,7 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     seen_deliveries: list[str] = []
 
     async def handler(delivery):
@@ -868,7 +866,7 @@ async def test_agent_runtime_poll_does_not_advance_cursor_past_retry_later(monke
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             return {
                 "agent_id": "agent-123",
                 "slug": "product-bot",
@@ -911,7 +909,7 @@ async def test_agent_runtime_poll_does_not_advance_cursor_past_retry_later(monke
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
 
     async def handler(delivery):
         return "accepted" if delivery["delivery_id"] == "d1" else "retry_later"
@@ -980,7 +978,7 @@ async def test_agent_runtime_poll_resets_cursor_and_repolls_when_registry_epoch_
             calls.append((classification, tuple(delivery_ids)))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     save_registry_connection_state(
         tmp_path,
         RegistryConnectionState(
@@ -1030,7 +1028,7 @@ async def test_agent_runtime_sync_reenrolls_after_registry_auth_failure(monkeypa
             self.base_url = base_url
             self.agent_token = agent_token
 
-        async def enroll(self, card, enrollment_token: str):
+        async def enroll(self, enrollment_token: str, card):
             calls.append(("enroll", enrollment_token))
             return {
                 "agent_id": "agent-new",
@@ -1056,7 +1054,7 @@ async def test_agent_runtime_sync_reenrolls_after_registry_auth_failure(monkeypa
             calls.append(("heartbeat", self.agent_token))
             return {"ok": True}
 
-    monkeypatch.setattr("app.runtime.registry_participant.AgentRegistryClient", FakeRegistryClient)
+    monkeypatch.setattr("app.runtime.registry_participant.RegistryClient", FakeRegistryClient)
     save_registry_connection_state(
         tmp_path,
         RegistryConnectionState(
@@ -1290,6 +1288,9 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
     class _CapturingSubmitter:
         async def admit_message(self, envelope):
             captured["text"] = envelope.event.text
+            captured["title_text"] = envelope.event.title_text
+            captured["context_text"] = envelope.event.context_text
+            captured["constraints_text"] = envelope.event.constraints_text
             return InboundSubmissionResult(status="queued", item_id="queued-item")
 
     config = make_config(
@@ -1309,6 +1310,8 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
                 "title": "what is 2 + 3",
                 "instructions": "what is 2 + 3",
                 "origin_agent_id": "origin-1",
+                "context": "This came from the finance queue.",
+                "constraints": "Answer briefly.",
             },
         },
         submitter=_CapturingSubmitter(),
@@ -1317,6 +1320,54 @@ async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_
 
     assert outcome == "accepted"
     assert captured["text"] == "what is 2 + 3"
+    assert captured["title_text"] == "what is 2 + 3"
+    assert captured["context_text"] == "This came from the finance queue."
+    assert captured["constraints_text"] == "Answer briefly."
+
+
+async def test_admit_registry_delivery_routed_task_keeps_title_structured_and_body_instruction_only(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["text"] = envelope.event.text
+            captured["title_text"] = envelope.event.title_text
+            captured["context_text"] = envelope.event.context_text
+            captured["constraints_text"] = envelope.event.constraints_text
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "routed_task",
+            "delivery_id": "delivery-structured-1",
+            "registry_id": "prod",
+            "payload": {
+                "routed_task_id": "task-structured-1",
+                "title": "Database investigation",
+                "instructions": "Check the replication lag on the follower.",
+                "origin_agent_id": "origin-1",
+                "context": {"ticket": 42, "service": "registry"},
+                "constraints": {"mode": "readonly"},
+            },
+        },
+        submitter=_CapturingSubmitter(),
+        dispatcher=None,
+    )
+
+    assert outcome == "accepted"
+    assert captured["title_text"] == "Database investigation"
+    assert captured["text"] == "Check the replication lag on the follower."
+    assert captured["context_text"] == '{\n  "service": "registry",\n  "ticket": 42\n}'
+    assert captured["constraints_text"] == '{\n  "mode": "readonly"\n}'
 
 
 async def test_admit_registry_delivery_routed_task_preserves_external_conversation_ref(
@@ -1533,7 +1584,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
                 "delivery_id": "d-approve",
                 "registry_id": "prod",
                 "kind": "channel_action",
-                "payload": {"conversation_id": "conv-approve", "action": "approve"},
+                "payload": {"conversation_id": "conv-approve", "action": "approve_pending"},
             },
             runtime=runtime,
         )
@@ -1599,7 +1650,7 @@ async def test_handle_registry_channel_action_preserves_already_qualified_future
                 "delivery_id": "d-slack-approve",
                 "registry_id": "prod",
                 "kind": "channel_action",
-                "payload": {"conversation_id": qualified_ref, "action": "approve"},
+                "payload": {"conversation_id": qualified_ref, "action": "approve_pending"},
             },
             runtime=runtime,
         )
@@ -1698,7 +1749,7 @@ async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry
             {
                 "delivery_id": "d-missing-action-registry",
                 "kind": "channel_action",
-                "payload": {"conversation_id": "conv-1", "action": "approve"},
+                "payload": {"conversation_id": "conv-1", "action": "approve_pending"},
             },
             runtime=runtime,
         ) == "rejected"
@@ -1929,8 +1980,9 @@ async def test_handle_registry_routed_result_resumes_telegram_parent_from_saved_
 
 async def test_direct_assign_round_trip_from_registry_store_resumes_parent_telegram_chat(
     tmp_path: Path,
+    postgres_db_url: str,
 ):
-    from octopus_registry.store import RegistrySQLiteStore
+    from octopus_registry.store_postgres import RegistryPostgresStore
     from octopus_sdk.registry.models import (
         AgentCard,
         AgentRegisterRequest,
@@ -1940,7 +1992,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
         TargetSelector,
     )
 
-    def _enroll_registered(store: RegistrySQLiteStore, slug: str, display_name: str) -> tuple[str, str]:
+    def _enroll_registered(store: RegistryPostgresStore, slug: str, display_name: str) -> tuple[str, str]:
         card = AgentCard(
             display_name=display_name,
             slug=slug,
@@ -1973,7 +2025,7 @@ async def test_direct_assign_round_trip_from_registry_store_resumes_parent_teleg
             "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, cfg, prov):
-        store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+        store = RegistryPostgresStore(postgres_db_url)
         origin_id, origin_token = _enroll_registered(store, "origin-bot", "Origin Bot")
         target_id, target_token = _enroll_registered(store, "m2-bot", "M2 Bot")
         parent_ref = telegram_conversation_ref(cfg, 12345)

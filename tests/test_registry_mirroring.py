@@ -14,16 +14,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from psycopg.rows import dict_row
 
 from app.control_plane.adapters.conversation_projection import BusConversationProjection
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand, ControlReply
 from octopus_sdk.identity import conversation_key_for_ref
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore, _SCHEMA
 from octopus_sdk.registry.models import AgentCard
 
 
@@ -31,13 +31,12 @@ from octopus_sdk.registry.models import AgentCard
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_store(tmp_path: Path) -> RegistrySQLiteStore:
-    db_path = tmp_path / "registry.sqlite3"
-    return RegistrySQLiteStore(db_path)
+def _make_store(postgres_registry_truncated: str) -> RegistryPostgresStore:
+    return RegistryPostgresStore(postgres_registry_truncated)
 
 
 def _enroll_agent(
-    store: RegistrySQLiteStore,
+    store: RegistryPostgresStore,
     *,
     bot_key: str = "bot-alpha",
     display_name: str = "Alpha",
@@ -111,8 +110,8 @@ def _projection_adapter(
 
 
 class TestStoreContracts:
-    def test_create_conversation_deterministic_id(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_create_conversation_deterministic_id(self, postgres_registry_truncated: str) -> None:
+        store = _make_store(postgres_registry_truncated)
         agent = _enroll_agent(store, bot_key="bot-x", slug="agentx")
         agent_id = agent.agent_id
 
@@ -139,8 +138,8 @@ class TestStoreContracts:
         expected = hashlib.sha256(canonical.encode()).hexdigest()[:32]
         assert cid == expected
 
-    def test_create_conversation_concurrent_idempotency(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_create_conversation_concurrent_idempotency(self, postgres_registry_truncated: str) -> None:
+        store = _make_store(postgres_registry_truncated)
         agent = _enroll_agent(store, bot_key="bot-idem", slug="idem")
         agent_id = agent.agent_id
 
@@ -159,9 +158,12 @@ class TestStoreContracts:
 
         assert conv_a.conversation_id == conv_b.conversation_id
 
-    def test_create_conversation_different_agents_same_canonical_key(self, tmp_path: Path) -> None:
+    def test_create_conversation_different_agents_same_canonical_key(
+        self,
+        postgres_registry_truncated: str,
+    ) -> None:
         """Two agents sharing the same bot_key produce the same conversation_id."""
-        store = _make_store(tmp_path)
+        store = _make_store(postgres_registry_truncated)
         agent_a = _enroll_agent(store, bot_key="shared-bot", slug="agent-a", display_name="A")
         agent_b = _enroll_agent(store, bot_key="shared-bot", slug="agent-b", display_name="B")
 
@@ -183,8 +185,8 @@ class TestStoreContracts:
 
         assert conv_a.conversation_id == conv_b.conversation_id
 
-    def test_create_conversation_rejects_empty_origin_channel(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_create_conversation_rejects_empty_origin_channel(self, postgres_registry_truncated: str) -> None:
+        store = _make_store(postgres_registry_truncated)
         agent = _enroll_agent(store, slug="reject-test")
 
         with pytest.raises(ValueError, match="origin_channel"):
@@ -195,8 +197,11 @@ class TestStoreContracts:
                 title="Bad",
             )
 
-    def test_create_conversation_rejects_empty_external_ref(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_create_conversation_rejects_empty_external_ref(
+        self,
+        postgres_registry_truncated: str,
+    ) -> None:
+        store = _make_store(postgres_registry_truncated)
         agent = _enroll_agent(store, slug="reject-test2")
 
         with pytest.raises(ValueError, match="external_conversation_ref"):
@@ -207,23 +212,22 @@ class TestStoreContracts:
                 title="Bad",
             )
 
-    def test_no_timeline_events_table(self, tmp_path: Path) -> None:
-        """Fresh SQLite store has no timeline_events table (events stored in events table)."""
-        store = _make_store(tmp_path)
-        import sqlite3
+    def test_no_timeline_events_table(self, postgres_registry_truncated: str) -> None:
+        """Fresh registry schema uses the shared events table, not a timeline_events table."""
+        store = _make_store(postgres_registry_truncated)
+        with store._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT to_regclass(%s) AS rel",
+                    (f"{_SCHEMA}.timeline_events",),
+                )
+                row = cur.fetchone()
 
-        conn = sqlite3.connect(str(store.db_path))
-        tables = [
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        ]
-        conn.close()
+        tables = [] if row is None or row[0] is None else [row[0]]
         assert "timeline_events" not in tables
 
-    def test_enrollment_idempotent_by_bot_key(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_enrollment_idempotent_by_bot_key(self, postgres_registry_truncated: str) -> None:
+        store = _make_store(postgres_registry_truncated)
         first = _enroll_agent(store, bot_key="rekey-bot", slug="rekey")
         second = _enroll_agent(store, bot_key="rekey-bot", slug="rekey")
 
@@ -353,7 +357,7 @@ class TestBusConversationProjectionAdapter:
 
 
 class TestExecutionRuntimeWiring:
-    def test_execution_runtime_has_conversation_projection(self, tmp_path: Path) -> None:
+    def test_execution_runtime_has_conversation_projection(self) -> None:
         """ExecutionRuntime built through the Telegram builder path has conversation_projection."""
         from tests.support.handler_support import fresh_env, current_runtime
 
@@ -369,8 +373,8 @@ class TestExecutionRuntimeWiring:
 
 
 class TestDeliveryCanonicalIdentity:
-    def test_delivery_payload_carries_canonical_identity(self, tmp_path: Path) -> None:
-        store = _make_store(tmp_path)
+    def test_delivery_payload_carries_canonical_identity(self, postgres_registry_truncated: str) -> None:
+        store = _make_store(postgres_registry_truncated)
         agent = _enroll_agent(store, bot_key="delivery-bot", slug="delivery")
         agent_id = agent.agent_id
 
@@ -386,18 +390,25 @@ class TestDeliveryCanonicalIdentity:
         assert result.accepted is True
 
         # Check the delivery was created with canonical identity fields
-        import sqlite3
-
-        conn = sqlite3.connect(str(store.db_path))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT payload_json FROM deliveries WHERE target_agent_id = ? ORDER BY seq DESC LIMIT 1",
-            (agent_id,),
-        ).fetchall()
-        conn.close()
+        with store._connect() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            try:
+                cur.execute(
+                    f"""
+                    SELECT payload_json
+                    FROM {_SCHEMA}.deliveries
+                    WHERE target_agent_id = %s
+                    ORDER BY seq DESC
+                    LIMIT 1
+                    """,
+                    (agent_id,),
+                )
+                rows = cur.fetchall()
+            finally:
+                cur.close()
 
         assert len(rows) == 1
-        payload = json.loads(rows[0]["payload_json"])
+        payload = rows[0]["payload_json"]
 
         assert payload["bot_key"] == "delivery-bot"
         assert payload["origin_channel"] == "telegram"

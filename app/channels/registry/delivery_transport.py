@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
 from typing import Any
 from collections.abc import Callable
 
-from app.agents.client import AgentRegistryClient
 from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.state import load_runtime_registry_connection_state
@@ -19,8 +19,7 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.execution_faults import LocalExecutionFaultState
-from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.runtime.session_runtime import save_runtime_session
 from app.control_plane.bus import ControlPlaneBus
 from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.processor_runner import ProcessorRunner
@@ -28,7 +27,6 @@ from octopus_sdk.transport_dispatcher import TransportDispatcher
 from app.runtime.services import BotServices
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.runtime.registry_participant import AgentRuntime
-from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.config import RegistryConnectionConfig
@@ -45,6 +43,7 @@ from octopus_sdk.inbound_types import (
     serialize_inbound,
 )
 from octopus_sdk.providers import Provider
+from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
 from octopus_sdk.registry.management import ManagementRequest
 from octopus_sdk.registry.management_executor import (
@@ -68,13 +67,13 @@ class _RegistryControlAccess:
     registries: tuple[RegistryConnectionConfig, ...]
     runtimes_by_id: dict[str, AgentRuntime]
 
-    def client_for_registry(self, registry_id: str) -> AgentRegistryClient | None:
+    def client_for_registry(self, registry_id: str) -> RegistryClient | None:
         registry = next((item for item in self.registries if item.registry_id == registry_id), None)
         if registry is None:
             return None
         runtime = self.runtimes_by_id.get(registry_id)
         if runtime is not None and runtime.state.agent_token:
-            return AgentRegistryClient(registry.url, agent_token=runtime.state.agent_token)
+            return RegistryClient(registry.url, agent_token=runtime.state.agent_token)
         state = load_runtime_registry_connection_state(
             self.config.data_dir,
             registry_id,
@@ -82,7 +81,7 @@ class _RegistryControlAccess:
         )
         if not state.agent_token:
             return None
-        return AgentRegistryClient(registry.url, agent_token=state.agent_token)
+        return RegistryClient(registry.url, agent_token=state.agent_token)
 
     def origin_agent_id(self, registry_id: str) -> str:
         registry = next((item for item in self.registries if item.registry_id == registry_id), None)
@@ -138,6 +137,7 @@ def build_registry_message_delivery(
     *,
     conversation_ref: str,
     text: str,
+    title_text: str = "",
     actor_ref: str,
     delivery_id: str,
     external_conversation_ref: str = "",
@@ -146,12 +146,16 @@ def build_registry_message_delivery(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    context_text: str = "",
+    constraints_text: str = "",
+    requested_skills: tuple[str, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> tuple[str, str, str, str]:
     envelope = build_registry_message_envelope(
         conversation_ref=conversation_ref,
         text=text,
+        title_text=title_text,
         actor_ref=actor_ref,
         delivery_id=delivery_id,
         external_conversation_ref=external_conversation_ref,
@@ -160,6 +164,9 @@ def build_registry_message_delivery(
         skip_approval=skip_approval,
         conversation_key_override=conversation_key_override,
         authorized_actor_key=authorized_actor_key,
+        context_text=context_text,
+        constraints_text=constraints_text,
+        requested_skills=requested_skills,
         source_transport=source_transport,
         admission_class=admission_class,
     )
@@ -171,6 +178,7 @@ def build_registry_message_envelope(
     *,
     conversation_ref: str,
     text: str,
+    title_text: str = "",
     actor_ref: str,
     delivery_id: str,
     external_conversation_ref: str = "",
@@ -179,6 +187,9 @@ def build_registry_message_envelope(
     skip_approval: bool = False,
     conversation_key_override: str = "",
     authorized_actor_key: str = "",
+    context_text: str = "",
+    constraints_text: str = "",
+    requested_skills: tuple[str, ...] = (),
     source_transport: str = "registry",
     admission_class: str = "external",
 ) -> InboundEnvelope:
@@ -192,12 +203,16 @@ def build_registry_message_envelope(
         user=InboundUser(id=actor_key, username="registry"),
         conversation_key=conversation_key,
         text=text,
+        title_text=title_text,
         attachments=(),
         source=source_transport,
         transport=source_transport,
         conversation_ref=conversation_ref,
         external_conversation_ref=external_conversation_ref,
         routed_task_id=routed_task_id,
+        context_text=context_text,
+        constraints_text=constraints_text,
+        requested_skills=requested_skills,
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_authority_ref(registry_id),
         skip_approval=skip_approval,
@@ -258,13 +273,12 @@ def build_registry_action_envelope(
         conversation_ref=conversation_ref,
     )
 
-
-def _routed_task_text(request: dict[str, Any]) -> str:
-    title = str(request.get("title", "")).strip()
-    instructions = str(request.get("instructions", "")).strip()
-    if title and instructions and title != instructions:
-        return f"{title}\n\n{instructions}".strip()
-    return instructions or title
+def _coerce_registry_message_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, sort_keys=True)
+    return str(value or "").strip()
 
 
 async def admit_registry_delivery(
@@ -320,18 +334,8 @@ async def admit_registry_delivery(
         if not registry_id:
             return "rejected"
         request = payload
-        context_lines = []
-        if request.get("context"):
-            context_lines.append(f"Context: {request['context']}")
-        if request.get("constraints"):
-            context_lines.append(f"Constraints: {request['constraints']}")
-        if request.get("requested_skills"):
-            context_lines.append(
-                "Requested skills: " + ", ".join(request.get("requested_skills", []))
-            )
-        text = _routed_task_text(request)
-        if context_lines:
-            text = text + "\n\n" + "\n".join(context_lines)
+        title_text = _coerce_registry_message_text(request.get("title", ""))
+        text = _coerce_registry_message_text(request.get("instructions", "")) or title_text
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
         origin_agent_id = request.get("origin_agent_id", "")
         parent_conversation_id = request.get("parent_conversation_id", "")
@@ -345,11 +349,15 @@ async def admit_registry_delivery(
             conversation_ref=conversation_ref,
             conversation_key_override=shared_key,
             text=text,
+            title_text=title_text,
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
             delivery_id=delivery_id,
             external_conversation_ref=str(request.get("external_conversation_ref", "") or ""),
             routed_task_id=request["routed_task_id"],
             authorized_actor_key=str(request.get("authorized_actor_key", "") or ""),
+            context_text=_coerce_registry_message_text(request.get("context", "")),
+            constraints_text=_coerce_registry_message_text(request.get("constraints", "")),
+            requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             registry_id=registry_id,
         )
         await submitter.admit_message(envelope)
@@ -363,8 +371,7 @@ def _load_session(
     runtime: RegistryDeliveryRuntime,
     conversation_key: str,
 ):
-    session = load_runtime_session(
-        config.data_dir,
+    return runtime.services.sessions.load(
         conversation_key,
         provider_name=runtime.provider_name,
         provider_state_factory=runtime.provider_state_factory,
@@ -372,54 +379,10 @@ def _load_session(
         default_role=config.role,
         default_skills=config.default_skills,
     )
-    if get_skill_activation_service().normalize(session):
-        _save_session(config, conversation_key, session)
-    return session
 
 
 def _save_session(config: BotConfig, conversation_key: str, session) -> None:
     save_runtime_session(config.data_dir, conversation_key, session)
-
-
-def _registry_semantic_action(
-    *,
-    conversation_ref: str,
-    action: str,
-    payload: dict[str, object],
-    delivery_id: str,
-    registry_id: str,
-    external_conversation_ref: str = "",
-):
-    semantic = {
-        "approve": "approve_pending",
-        "reject": "reject_pending",
-        "cancel_conversation": "cancel_conversation",
-        "retry_skip": "retry_skip",
-        "retry_allow": "retry_allow",
-        "approve_delegation": "delegation_approve",
-        "cancel_delegation": "delegation_cancel",
-        "recovery_discard": "recovery_discard",
-        "recovery_replay": "recovery_replay",
-    }.get(action)
-    if not semantic:
-        return None
-
-    params = dict(payload)
-    if semantic in {"recovery_discard", "recovery_replay"}:
-        recovery_id = str(payload.get("recovery_id") or "").strip()
-        if not recovery_id:
-            return None
-        params["recovery_id"] = recovery_id
-
-    return build_registry_action_envelope(
-        conversation_ref=conversation_ref,
-        action=semantic,
-        action_payload=params,
-        actor_ref=f"registry-ui:{conversation_ref}",
-        delivery_id=delivery_id,
-        registry_id=registry_id,
-        external_conversation_ref=external_conversation_ref,
-    )
 
 
 async def handle_registry_delivery(
@@ -459,18 +422,35 @@ async def handle_registry_delivery(
         if action in {"recovery_discard", "recovery_replay"} and "recovery_id" not in action_payload:
             action_payload = dict(action_payload)
             action_payload["recovery_id"] = payload.get("recovery_id")
+        if action not in {
+            "approve_pending",
+            "reject_pending",
+            "cancel_conversation",
+            "retry_skip",
+            "retry_allow",
+            "delegation_approve",
+            "delegation_cancel",
+            "recovery_discard",
+            "recovery_replay",
+        }:
+            return "rejected"
+        if action in {"recovery_discard", "recovery_replay"}:
+            recovery_id = str(action_payload.get("recovery_id") or "").strip()
+            if not recovery_id:
+                return "rejected"
+            action_payload = dict(action_payload)
+            action_payload["recovery_id"] = recovery_id
         stable_event_id = str(payload.get("stable_event_id", "") or "")
         effective_delivery_id = stable_event_id if stable_event_id else delivery_id
-        envelope = _registry_semantic_action(
+        envelope = build_registry_action_envelope(
             conversation_ref=conversation_ref,
             action=action,
-            payload=action_payload,
+            action_payload=action_payload,
+            actor_ref=f"registry-ui:{conversation_ref}",
             delivery_id=effective_delivery_id,
             registry_id=registry_id,
             external_conversation_ref=str(payload.get("external_conversation_ref", "") or ""),
         )
-        if envelope is None:
-            return "rejected"
         if action == "cancel_conversation":
             is_new = await submitter.record(envelope)
             if not is_new:
@@ -577,10 +557,10 @@ async def handle_registry_delivery(
                 config=config,
                 workflows=runtime.services.workflows,
                 provider_state_factory=runtime.provider_state_factory,
-                execution_faults=LocalExecutionFaultState(config.data_dir),
+                execution_faults=runtime.services.execution_services.execution_faults,
             ),
         )
-        client = AgentRegistryClient(registry.url, agent_token=state.agent_token)
+        client = RegistryClient(registry.url, agent_token=state.agent_token)
         try:
             await client.management_result(request.request_id, result)
         except Exception:

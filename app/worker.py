@@ -7,9 +7,8 @@ inline provider execution. Recovered items (dispatch_mode='recovery')
 get a recovery notice and move to pending_recovery.
 
 The loop runs as an asyncio task alongside the bot's event loop.
-claim_next_any uses backend-specific serialization (e.g. BEGIN IMMEDIATE
-on SQLite, advisory lock on Postgres) so only one worker claims a given
-item.
+claim_next_any uses the shared Postgres queue serialization path so only
+one worker claims a given item.
 """
 
 import asyncio

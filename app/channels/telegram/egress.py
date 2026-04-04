@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from telegram.constants import ParseMode
 
@@ -24,6 +24,9 @@ from octopus_sdk.providers import DenialRecord
 from octopus_sdk.sessions import AwaitingSkillSetup, SessionState
 from octopus_sdk.skill_types import SkillRequirement
 from app.runtime.services import BotServices
+
+if TYPE_CHECKING:
+    from app.channels.telegram.state import TelegramRuntime
 
 
 log = logging.getLogger(__name__)
@@ -54,6 +57,7 @@ class TelegramChannelEgress(TransportEgress):
         bot: Any,
         chat_id: int,
         *,
+        runtime: "TelegramRuntime",
         config: BotConfig | None = None,
         conversation_ref: str = "",
         services: BotServices,
@@ -62,6 +66,7 @@ class TelegramChannelEgress(TransportEgress):
     ) -> None:
         self._bot = bot
         self.chat_id = chat_id
+        self._runtime = runtime
         self._config = config
         self.conversation_ref = conversation_ref
         self._services = services
@@ -220,20 +225,11 @@ class TelegramChannelEgress(TransportEgress):
         result: RunResult,
     ) -> RequestExecutionOutcome:
         from app.workflows.delegation.telegram import propose_delegation_plan
-        from types import SimpleNamespace
 
         if self._config is None:
             raise RuntimeError("Telegram delegation requires config")
-        runtime = SimpleNamespace(
-            config=self._config,
-            provider=SimpleNamespace(
-                name=self._config.provider_name,
-                new_provider_state=lambda _conversation_key: {},
-            ),
-            services=self._services,
-        )
         return await propose_delegation_plan(
-            runtime,
+            self._runtime,
             conversation_key_value,
             self,
             session,

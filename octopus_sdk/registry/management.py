@@ -117,6 +117,7 @@ class RuntimeSkillCatalogItemRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    skill_kind: str = "prompt"
     source_kind: str = ""
     source_label: str = ""
     has_custom_override: bool = False
@@ -167,6 +168,7 @@ class RuntimeSkillDetailRecord(RegistryRecordModel):
     display_name: str = ""
     description: str = ""
     body: str = ""
+    skill_kind: str = "prompt"
     source_kind: str = ""
     source_label: str = ""
     has_custom_override: bool = False
@@ -245,6 +247,7 @@ class ConversationSkillItemRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    skill_kind: str = "prompt"
     source_kind: str = ""
     source_label: str = ""
     providers: list[str] = Field(default_factory=list)
@@ -430,6 +433,7 @@ def runtime_skill_catalog_item_record(item: RuntimeSkillCatalogItem) -> RuntimeS
         name=item.name,
         display_name=item.display_name,
         description=item.description,
+        skill_kind=item.skill_kind,
         source_kind=item.source_kind,
         source_label=item.source_label,
         has_custom_override=item.has_custom_override,
@@ -494,6 +498,7 @@ def runtime_skill_detail_record(detail: RuntimeSkillDetail) -> RuntimeSkillDetai
         display_name=detail.display_name,
         description=detail.description,
         body=detail.body,
+        skill_kind=detail.skill_kind,
         source_kind=detail.source_kind,
         source_label=detail.source_label,
         has_custom_override=detail.has_custom_override,
@@ -598,6 +603,7 @@ def conversation_skill_item_record(item: ConversationSkillItem) -> ConversationS
         name=item.name,
         display_name=item.display_name,
         description=item.description,
+        skill_kind=item.skill_kind,
         source_kind=item.source_kind,
         source_label=item.source_label,
         providers=list(item.providers),

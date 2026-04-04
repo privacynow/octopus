@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY octopus_sdk ./octopus_sdk
-COPY skills ./skills
 COPY scripts ./scripts
 
 # Stub providers: satisfy config validation and doctor/startup so the container

@@ -6,38 +6,37 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.access import get_authorization
 import app.runtime.telegram_progress as telegram_progress
 import app.user_messages as _msg
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
 from octopus_sdk.registry.models import RoutedTaskUpdate
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeMessage, FakeProvider
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.service_support import build_test_bot_services
 
 
-def _services(*, task_routing=None) -> BotServices:
+def _services(*, task_routing=None, config=None) -> BotServices:
+    effective_config = config or make_config()
+    runtime_backend.init(effective_config)
     projection = SimpleNamespace(
         create_conversation=AsyncMock(return_value="conv-1"),
         publish_events=AsyncMock(),
     )
-    return BotServices(
+    return build_test_bot_services(
+        config=effective_config,
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
             task_routing=task_routing or NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
+            registry_inspection=NoOpRegistryInspection(),
             health_publication=NoOpHealthPublication(),
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
     )
 
 
@@ -50,11 +49,8 @@ async def test_keep_typing_uses_explicit_runtime_until_cancelled():
         async def send_action(self, action: str) -> None:
             self.actions.append(action)
 
-    runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress"), typing_interval_seconds=0.01),
-        FakeProvider("codex"),
-        services=_services(),
-    )
+    config = make_config(data_dir=Path("/tmp/telegram-progress"), typing_interval_seconds=0.01)
+    runtime = build_telegram_runtime(config, FakeProvider("codex"), services=_services(config=config))
     chat = _Chat()
 
     task = asyncio.create_task(telegram_progress.keep_typing(chat, runtime=runtime))
@@ -67,11 +63,8 @@ async def test_keep_typing_uses_explicit_runtime_until_cancelled():
 
 @pytest.mark.asyncio
 async def test_progress_timeline_callback_is_noop():
-    runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress-timeline")),
-        FakeProvider("codex"),
-        services=_services(),
-    )
+    config = make_config(data_dir=Path("/tmp/telegram-progress-timeline"))
+    runtime = build_telegram_runtime(config, FakeProvider("codex"), services=_services(config=config))
 
     # progress_timeline_callback is now a no-op (legacy timeline removed)
     await telegram_progress.progress_timeline_callback(
@@ -85,10 +78,11 @@ async def test_progress_timeline_callback_is_noop():
 @pytest.mark.asyncio
 async def test_routed_task_progress_callback_updates_task_status_via_port() -> None:
     routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    config = make_config(data_dir=Path("/tmp/telegram-progress-routed-task"))
     runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress-routed-task")),
+        config,
         FakeProvider("codex"),
-        services=_services(task_routing=routing),
+        services=_services(task_routing=routing, config=config),
     )
 
     await telegram_progress.routed_task_progress_callback(
@@ -114,10 +108,11 @@ async def test_routed_task_progress_callback_updates_task_status_via_port() -> N
 @pytest.mark.asyncio
 async def test_routed_task_progress_callback_skips_empty_markup() -> None:
     routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    config = make_config(data_dir=Path("/tmp/telegram-progress-routed-task-empty"))
     runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress-routed-task-empty")),
+        config,
         FakeProvider("codex"),
-        services=_services(task_routing=routing),
+        services=_services(task_routing=routing, config=config),
     )
 
     await telegram_progress.routed_task_progress_callback(
@@ -133,13 +128,14 @@ async def test_routed_task_progress_callback_skips_empty_markup() -> None:
 @pytest.mark.asyncio
 async def test_telegram_progress_throttles_routed_task_callback_and_force_bypasses() -> None:
     routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    config = make_config(
+        data_dir=Path("/tmp/telegram-progress-routed-task-throttle"),
+        stream_update_interval_seconds=60.0,
+    )
     runtime = build_telegram_runtime(
-        make_config(
-            data_dir=Path("/tmp/telegram-progress-routed-task-throttle"),
-            stream_update_interval_seconds=60.0,
-        ),
+        config,
         FakeProvider("codex"),
-        services=_services(task_routing=routing),
+        services=_services(task_routing=routing, config=config),
     )
     message = FakeMessage(text="status")
     progress = telegram_progress.TelegramProgress(
@@ -202,10 +198,11 @@ async def test_telegram_progress_logs_concern_neutral_callback_failure(caplog) -
 @pytest.mark.asyncio
 async def test_routed_task_progress_callback_keeps_terminal_progress_label_in_flight(label: str) -> None:
     routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    config = make_config(data_dir=Path("/tmp/telegram-progress-routed-task-terminal"))
     runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-progress-routed-task-terminal")),
+        config,
         FakeProvider("codex"),
-        services=_services(task_routing=routing),
+        services=_services(task_routing=routing, config=config),
     )
 
     await telegram_progress.routed_task_progress_callback(

@@ -19,6 +19,7 @@ import os
 import tempfile
 
 from pathlib import Path
+import app.runtime_backend as runtime_backend
 from app.config import load_dotenv_file, validate_config
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.providers import DenialRecord, PreflightContext, ProviderStateRecord, RunContext
@@ -367,30 +368,35 @@ def test_codex_system_prompt_injection():
 def test_session_persistence():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
-        (data_dir / "sessions").mkdir(parents=True)
+        cfg = make_config(data_dir=data_dir)
+        runtime_backend.reset_for_test()
+        runtime_backend.init(cfg)
 
-        # Create session with skills and role
-        session = default_session("claude", _state(session_id="x", started=False), "on", "engineer", ("code-review",))
-        assert session["active_skills"] == ["code-review"]
-        assert session["role"] == "engineer"
+        try:
+            # Create session with skills and role
+            session = default_session("claude", _state(session_id="x", started=False), "on", "engineer", ("code-review",))
+            assert session["active_skills"] == ["code-review"]
+            assert session["role"] == "engineer"
 
-        # Save and reload
-        save_session(data_dir, telegram_conversation_key(100), session)
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on", "default-role", ("testing",))
+            # Save and reload
+            save_session(data_dir, telegram_conversation_key(100), session)
+            loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on", "default-role", ("testing",))
 
-        # Saved values should override defaults
-        assert loaded["active_skills"] == ["code-review"]
-        assert loaded["role"] == "engineer"
+            # Saved values should override defaults
+            assert loaded["active_skills"] == ["code-review"]
+            assert loaded["role"] == "engineer"
 
-        # Fresh session for new chat uses defaults
-        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda _ck="": _state(session_id="z", started=False), "on", "default-role", ("testing",))
-        assert fresh["role"] == "default-role"
-        assert fresh["active_skills"] == ["testing"]
+            # Fresh session for new chat uses defaults
+            fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda _ck="": _state(session_id="z", started=False), "on", "default-role", ("testing",))
+            assert fresh["role"] == "default-role"
+            assert fresh["active_skills"] == ["testing"]
 
-        # /new resets to defaults (simulated)
-        new_session = default_session("claude", _state(session_id="w", started=False), "on", "default-role", ("testing",))
-        assert new_session["active_skills"] == ["testing"]
-        assert new_session["role"] == "default-role"
+            # /new resets to defaults (simulated)
+            new_session = default_session("claude", _state(session_id="w", started=False), "on", "default-role", ("testing",))
+            assert new_session["active_skills"] == ["testing"]
+            assert new_session["role"] == "default-role"
+        finally:
+            runtime_backend.reset_for_test()
 
 
 # =====================================================================
@@ -555,10 +561,6 @@ def test_per_user_credential_storage():
         creds_999 = load_user_credentials(data_dir, 999, key)
         assert creds_999 == {}
 
-        # Credential store is materialized for the local runtime backend
-        cred_store = data_dir / "credentials.db"
-        assert cred_store.is_file()
-
         # Overwrite existing credential
         save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "ghp_alice_new", key)
         creds_111_new = load_user_credentials(data_dir, 111, key)
@@ -701,28 +703,33 @@ def test_build_credential_env():
 def test_awaiting_skill_setup_persistence():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
-        (data_dir / "sessions").mkdir(parents=True)
+        cfg = make_config(data_dir=data_dir)
+        runtime_backend.reset_for_test()
+        runtime_backend.init(cfg)
 
-        session = default_session("claude", _state(session_id="x", started=False), "on")
-        setup_state = {
-            "actor_key": "tg:111",
-            "skill": "github",
-            "remaining": [
-                {"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": "https://example.com"},
-            ],
-        }
-        session["awaiting_skill_setup"] = setup_state
-        save_session(data_dir, telegram_conversation_key(100), session)
+        try:
+            session = default_session("claude", _state(session_id="x", started=False), "on")
+            setup_state = {
+                "actor_key": "tg:111",
+                "skill": "github",
+                "remaining": [
+                    {"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": "https://example.com"},
+                ],
+            }
+            session["awaiting_skill_setup"] = setup_state
+            save_session(data_dir, telegram_conversation_key(100), session)
 
-        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on")
-        assert loaded.get("awaiting_skill_setup") is not None
-        assert loaded["awaiting_skill_setup"]["actor_key"] == "tg:111"
-        assert loaded["awaiting_skill_setup"]["skill"] == "github"
-        assert len(loaded["awaiting_skill_setup"]["remaining"]) == 1
+            loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda _ck="": _state(session_id="y", started=False), "on")
+            assert loaded.get("awaiting_skill_setup") is not None
+            assert loaded["awaiting_skill_setup"]["actor_key"] == "tg:111"
+            assert loaded["awaiting_skill_setup"]["skill"] == "github"
+            assert len(loaded["awaiting_skill_setup"]["remaining"]) == 1
 
-        # /new clears awaiting_skill_setup
-        new_session = default_session("claude", _state(session_id="z", started=False), "on")
-        assert new_session.get("awaiting_skill_setup") is None
+            # /new clears awaiting_skill_setup
+            new_session = default_session("claude", _state(session_id="z", started=False), "on")
+            assert new_session.get("awaiting_skill_setup") is None
+        finally:
+            runtime_backend.reset_for_test()
 
 
 # =====================================================================

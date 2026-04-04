@@ -4,41 +4,58 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.access import get_authorization
 from app.channels.telegram.egress import TelegramChannelEgress, TelegramEditableHandle
+from app.channels.telegram.state import build_telegram_runtime
 from octopus_sdk.agent_directory import NoOpAgentDirectory
 from octopus_sdk.health_publication import NoOpHealthPublication
+from octopus_sdk.registry_inspection import NoOpRegistryInspection
 from octopus_sdk.task_routing import NoOpTaskRouting
 from app.runtime.services import BotServices, ControlPlaneServices
-from app.runtime import composition
 import app.runtime_backend as runtime_backend
-from tests.support.handler_support import MinimalFakeBot
-from tests.support.registry_participant_support import build_noop_registry_participant
+from tests.support.handler_support import FakeProvider, MinimalFakeBot
+from tests.support.config_support import make_config
+from tests.support.service_support import build_test_bot_services
 
 
-def _services(*, publish=None) -> BotServices:
+def _services(*, publish=None, config=None) -> BotServices:
+    effective_config = config or make_config()
+    runtime_backend.init(effective_config)
     projection = SimpleNamespace(
         create_conversation=AsyncMock(return_value="conv-1"),
         publish_events=publish or AsyncMock(),
     )
-    return BotServices(
+    return build_test_bot_services(
+        config=effective_config,
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
             task_routing=NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
+            registry_inspection=NoOpRegistryInspection(),
             health_publication=NoOpHealthPublication(),
         ),
-        registry=build_noop_registry_participant(),
-        workflows=composition.workflows(),
-        authorization=get_authorization(),
-        work_queue=runtime_backend.transport_store(),
+    )
+
+
+def _runtime(bot, services: BotServices, *, config=None):
+    effective_config = config or make_config()
+    return build_telegram_runtime(
+        effective_config,
+        FakeProvider("claude"),
+        bot_instance=bot,
+        services=services,
     )
 
 
 @pytest.mark.asyncio
 async def test_send_message_delegates_to_send_text():
     bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(bot, chat_id=1, services=_services())
+    services = _services()
+    channel_egress = TelegramChannelEgress(
+        bot,
+        chat_id=1,
+        runtime=_runtime(bot, services),
+        services=services,
+    )
 
     handle = await channel_egress.send_message("hello")
 
@@ -49,7 +66,13 @@ async def test_send_message_delegates_to_send_text():
 @pytest.mark.asyncio
 async def test_send_recovery_notice_uses_presenter_markup_shape():
     bot = MinimalFakeBot()
-    channel_egress = TelegramChannelEgress(bot, chat_id=1, services=_services())
+    services = _services()
+    channel_egress = TelegramChannelEgress(
+        bot,
+        chat_id=1,
+        runtime=_runtime(bot, services),
+        services=services,
+    )
 
     await channel_egress.send_recovery_notice(
         preview="preview",
@@ -68,11 +91,13 @@ async def test_send_recovery_notice_uses_presenter_markup_shape():
 @pytest.mark.asyncio
 async def test_bind_updates_telegram_egress_binding_state():
     bot = MinimalFakeBot()
+    services = _services()
     channel_egress = TelegramChannelEgress(
         bot,
         chat_id=12345,
+        runtime=_runtime(bot, services),
         conversation_ref="telegram:bot-1:12345",
-        services=_services(),
+        services=services,
     )
 
     await channel_egress.bind(title="Conversation", config=SimpleNamespace())

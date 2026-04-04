@@ -1,18 +1,17 @@
 """Tests for registry-managed routing-skill policy and discovery enforcement."""
 
 import os
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
 from octopus_registry.server import app
-from octopus_registry.store import RegistrySQLiteStore
+from octopus_registry.store_postgres import RegistryPostgresStore
 from octopus_sdk.registry.models import AgentCard, AgentDiscoveryQuery, AgentRegisterRequest
 
 
-def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, routing_skills: list[str]) -> tuple[str, str]:
+def _register_agent(store: RegistryPostgresStore, *, name: str, slug: str, routing_skills: list[str]) -> tuple[str, str]:
     card = AgentCard(
         bot_key=f"bot:{slug}",
         display_name=name,
@@ -41,25 +40,25 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, routing
     return enrolled.agent_id, enrolled.agent_token
 
 
-def _store(tmp_path: Path) -> RegistrySQLiteStore:
-    return RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+def _store(postgres_db_url: str) -> RegistryPostgresStore:
+    return RegistryPostgresStore(postgres_db_url)
 
 
-def _configure_registry(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+def _configure_registry(monkeypatch, postgres_db_url: str) -> None:
+    monkeypatch.setenv("OCTOPUS_DATABASE_URL", postgres_db_url)
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
     monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
 
 
-def test_list_routing_skills_empty_when_no_agents(tmp_path: Path):
-    store = _store(tmp_path)
+def test_list_routing_skills_empty_when_no_agents(postgres_db_url: str):
+    store = _store(postgres_db_url)
 
     assert store.list_routing_skills() == []
 
 
-def test_list_routing_skills_aggregates_declared(tmp_path: Path):
-    store = _store(tmp_path)
+def test_list_routing_skills_aggregates_declared(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search", "code_exec"])
     _register_agent(store, name="Beta Bot", slug="beta-bot", routing_skills=["web_search", "file_read"])
 
@@ -71,8 +70,8 @@ def test_list_routing_skills_aggregates_declared(tmp_path: Path):
     assert skills["web_search"].advertised_by_agents == ["alpha-bot", "beta-bot"]
 
 
-def test_search_agents_free_text_handles_disabled_routing_skills(tmp_path: Path):
-    store = _store(tmp_path)
+def test_search_agents_free_text_handles_disabled_routing_skills(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     hits = store.search_agents(AgentDiscoveryQuery(free_text="web", required_state="connected"))
@@ -83,8 +82,8 @@ def test_search_agents_free_text_handles_disabled_routing_skills(tmp_path: Path)
     assert misses == []
 
 
-def test_set_and_get_override(tmp_path: Path):
-    store = _store(tmp_path)
+def test_set_and_get_override(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     store.set_routing_skill_override("web_search", False)
@@ -94,8 +93,8 @@ def test_set_and_get_override(tmp_path: Path):
     assert skills["web_search"].enabled is False
 
 
-def test_enable_override(tmp_path: Path):
-    store = _store(tmp_path)
+def test_enable_override(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     store.set_routing_skill_override("web_search", False)
@@ -106,8 +105,8 @@ def test_enable_override(tmp_path: Path):
     assert skills["web_search"].enabled is True
 
 
-def test_override_row_survives_agent_deregistration(tmp_path: Path):
-    store = _store(tmp_path)
+def test_override_row_survives_agent_deregistration(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     store.set_routing_skill_override("web_search", False)
@@ -118,8 +117,8 @@ def test_override_row_survives_agent_deregistration(tmp_path: Path):
     assert skills["web_search"].advertised_by_agents == []
 
 
-def test_disabled_skill_absent_from_search_results(tmp_path: Path):
-    store = _store(tmp_path)
+def test_disabled_skill_absent_from_search_results(postgres_db_url: str):
+    store = _store(postgres_db_url)
     _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     assert [
@@ -133,10 +132,13 @@ def test_disabled_skill_absent_from_search_results(tmp_path: Path):
     assert store.search_agents(AgentDiscoveryQuery(skills=["web_search"])) == []
 
 
-def test_ui_routing_skill_endpoints_toggle_override_and_affect_search(monkeypatch, tmp_path: Path):
-    _configure_registry(monkeypatch, tmp_path)
+def test_ui_routing_skill_endpoints_toggle_override_and_affect_search(
+    monkeypatch,
+    postgres_db_url: str,
+):
+    _configure_registry(monkeypatch, postgres_db_url)
     client = TestClient(app)
-    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
+    store = RegistryPostgresStore(postgres_db_url)
     _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", routing_skills=["web_search"])
 
     # Authenticate as operator
@@ -148,6 +150,7 @@ def test_ui_routing_skill_endpoints_toggle_override_and_affect_search(monkeypatc
     assert listed.json() == [
         {
             "skill_name": "web_search",
+            "selector": "@skill:web_search",
             "advertised_by_agents": ["alpha-bot"],
             "enabled": None,
         }

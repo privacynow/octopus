@@ -23,6 +23,7 @@ class ExecutionEventSink(Protocol):
         file_policy: str,
         image_count: int,
         prompt_char_count: int,
+        skill_manifest: dict[str, object] | None = None,
     ) -> None: ...
     async def on_provider_response(
         self,

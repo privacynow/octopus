@@ -12,7 +12,7 @@ Three packages, three clean boundaries:
 |---------|------|-----------|
 | `octopus_registry/` | Management plane — API, store, UI, realtime | Registry service container |
 | `octopus_sdk/` | Shared contracts, orchestration, workflow logic | Shared dependency (not deployed alone) |
-| `app/` | Telegram bot runtime, providers, storage backends, and `./octopus` CLI | Bot container(s) + host-side CLI |
+| `app/` | Telegram bot runtime, providers, Postgres-backed state, and `./octopus` CLI | Bot container(s) + host-side CLI |
 
 Import direction is one-way: `app/` → `octopus_sdk/`; `octopus_registry/` → `octopus_sdk/`.
 Neither `app/` nor `octopus_registry/` imports the other. The SDK imports neither.
@@ -31,7 +31,7 @@ flowchart LR
     Browser --> Registry
     Bot <--> Registry
     Bot --> Provider["Claude / Codex"]
-    Registry -.-> Postgres["Postgres (optional)"]
+    Registry -.-> Postgres["Postgres"]
 ```
 
 `octopus_sdk/` is a shared library embedded in both Bot and Registry at
@@ -68,7 +68,6 @@ flowchart TB
         authority["authority.py<br/>Authority facade"]
         store_base["store_base.py<br/>Protocol + shared helpers"]
         store_shared["store_shared/<br/>Domain-sliced queries"]
-        store_sqlite["store.py<br/>SQLite backend"]
         store_pg["store_postgres.py<br/>Postgres backend"]
         ui["ui/<br/>Vanilla JS SPA"]
     end
@@ -78,9 +77,7 @@ flowchart TB
     server --> auth
     ingress --> mgmt_client
     authority --> store_base
-    store_sqlite --> store_base
     store_pg --> store_base
-    store_sqlite --> store_shared
     store_pg --> store_shared
     server --> ui
 ```
@@ -186,6 +183,19 @@ Management responses are cached server-side in `ingress.py` with TTL and
 in-flight deduplication. Mutations (make available, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
 
+`ingress.py` and `management_client.py` have different jobs:
+
+- `ingress.py` is the operator-facing HTTP bridge. It validates browser/API
+  requests, manages cache/invalidation, and translates them into typed
+  management operations.
+- `management_client.py` is the registry-internal delivery relay. It pushes a
+  typed management request onto a connected agent's delivery queue and waits
+  for the corresponding typed result.
+
+They both touch management traffic, but they are not duplicate surfaces.
+`ingress.py` owns operator request semantics; `management_client.py` owns the
+server-side request/result relay to connected bots.
+
 Guidance remains a separate product concept from skills:
 
 - skills are selectable capability packages
@@ -230,14 +240,14 @@ only rebuild rows when the visible text actually changes.
 
 ### Store architecture
 
-The registry store supports SQLite (default) and Postgres (via env vars).
-`store_base.py` defines the protocol and ~36 shared helper functions.
-`store_shared/` contains domain-sliced query logic. `store.py` and
-`store_postgres.py` provide backend-specific SQL and connection handling.
+The registry store is Postgres-only.
 
-Both backends support the same operations: agent lifecycle, conversations,
-events, routed tasks (with recipient-side projection), deliveries,
-management requests, skills, guidance, and usage rollups.
+- `store_base.py` defines the protocol and shared validation helpers
+- `store_shared/` contains domain-sliced SQL helpers used by the Postgres store
+- `store_postgres.py` owns the live registry persistence implementation
+
+The registry database lives in the shared deployment Postgres instance under
+the `agent_registry` schema.
 
 ---
 
@@ -399,6 +409,18 @@ explicitly through the round-trip.
 
 All metadata models use `extra="forbid"` — unknown fields are rejected.
 
+`provider.request` metadata now carries a bounded `skill_manifest` alongside
+the human-readable prompt content. Skill-factual questions must resolve from
+that manifest plus runtime/session/catalog inspection, not from prompt
+fragments or model memory. Canonical skill terms are:
+
+- available on this bot
+- active in this conversation
+- advertised for routing
+- requested for run
+- composed for run
+- invoked for run
+
 ### Task protocol
 
 Routed tasks follow a formal lifecycle enforced by `python-statemachine`:
@@ -422,7 +444,7 @@ This section describes the shipped Telegram bot built on the SDK.
 - Telegram transport (`app/channels/telegram/`)
 - Registry bot-side transport (`app/channels/registry/`)
 - Claude and Codex provider implementations (`app/providers/`)
-- SQLite and Postgres storage backends for sessions, work queue, content, credentials
+- Postgres-backed sessions, work queue, content, credentials, and control-plane state
 - Runtime composition and startup (`app/runtime/`)
 - Control plane bus and adapters (`app/control_plane/`)
 - Telegram-specific workflows (`app/workflows/`)
@@ -462,9 +484,16 @@ flowchart TD
     runtime_build -.-> launch
 ```
 
+`app/runtime/composition.py` is the only place that should wire the
+process-wide provider-guidance singleton into the workflow graph.
+`app/runtime/bot_services.py` then injects that already-owned guidance service
+into `ExecutionServices`. Runtime handlers should consume injected
+`BotServices` / `ExecutionServices` ports and must not call
+`get_provider_guidance_service()` directly.
+
 1. `services.py` calls `bot_services.py` which internally uses
    `composition.py` to wire the `WorkflowComposer` with app-side port
-   implementations (SQLite session store, content store, credential
+   implementations (Postgres session store, content store, credential
    service, etc.)
 2. `services.py` calls `transport_builders.py` to register Telegram
    and registry transports with the dispatcher
@@ -622,10 +651,9 @@ This section shows how to add a new transport (e.g., Slack) using only the SDK.
    - Egress: send messages via Slack Web API
    - Identity: map channel_id/user_id to conversation_key/actor_key
 
-2. **Storage backends** implementing SDK ports
-   - `WorkQueuePort` — Redis, Postgres, or SQLite
-   - `SessionRuntimePort` — any durable store
-   - Optional: `ContentStorePort`, `CredentialServicePort`
+2. **Durable store implementations** for the required SDK ports
+   - shipped repo: Postgres-backed runtime/content/credential stores
+   - external integrations may implement the same ports over another durable backend
 
 3. **main.py** (~50 lines) — compose and run
 
@@ -670,7 +698,7 @@ flowchart TB
 1. Add `octopus_sdk/` to the Python path (local dependency — not yet
    published as a distributable package)
 2. Implement `SlackTransport(TransportImplementation)`
-3. Implement storage backends for required ports
+3. Implement durable store adapters for the required ports
 4. Compose with `WorkflowComposer().with_messages(...).with_sessions(...).build()`
 5. Create `BotRuntime(transport=slack, workflows=composed, ...)`
 6. Call `runtime.run()`
@@ -702,14 +730,15 @@ Actor identity uses `actor_key` everywhere — not `user_id`, not
 
 ### Persistence seams
 
-| Seam | Default | Postgres option | Notes |
-|------|---------|-----------------|-------|
-| Session storage | SQLite | `BOT_DATABASE_URL` | Per-conversation provider state |
-| Work queue | SQLite | `BOT_DATABASE_URL` | Durable admission + claim |
-| Content store | SQLite | `BOT_CONTENT_DATABASE_URL` | Skill files + guidance |
-| Credential store | SQLite | `BOT_DATABASE_URL` | Per-user API keys |
-| Control plane bus | SQLite | `BOT_DATABASE_URL` | Command store + retry |
-| Registry store | SQLite | `REGISTRY_DATABASE_URL` | Agent/conversation/task data |
+The shipped product uses one logical Postgres database per deployment, exposed
+through `OCTOPUS_DATABASE_URL`.
+
+| Schema | Owns | Notes |
+|--------|------|-------|
+| `bot_runtime` | Sessions, work queue, usage log, control-plane commands | Per-conversation runtime state |
+| `bot_content` | Skills and provider guidance | Shared package/policy content |
+| `bot_credentials` | Encrypted user credentials | Provider/setup secrets |
+| `agent_registry` | Agents, conversations, events, routed tasks, deliveries | Shared management plane state |
 
 ### Approval and delegation
 
@@ -738,4 +767,4 @@ carries structured delegation intent. Direct assignment from the UI uses
 10. Event metadata uses `extra="forbid"`. Unknown fields are rejected.
 11. Realtime topics are explicit. No wildcard subscriptions.
 12. Live registry identity comes from runtime state, not startup config snapshots.
-13. SQLite and Postgres backends pass identical contract tests.
+13. Postgres-backed seams pass the shared contract tests and deploy through one startup path.

@@ -25,6 +25,7 @@ from octopus_sdk.registry.models import (
     ConversationProgressUpdate,
     DeliveryPollResult,
     EnrollmentResult,
+    EventPageRecord,
     HealthSummary,
     MessageRecord,
     RuntimeHealthPayload,
@@ -173,6 +174,27 @@ class RegistryClient:
         result = await self._request("GET", f"/v1/conversations/{conversation_id}")
         return ConversationRecord.model_validate(result)
 
+    async def list_events(
+        self,
+        conversation_id: str,
+        *,
+        kind: str = "",
+        before_seq: int = 0,
+        after_seq: int = 0,
+        limit: int = 50,
+    ) -> EventPageRecord:
+        result = await self._request(
+            "GET",
+            f"/v1/conversations/{conversation_id}/events",
+            params={
+                "kind": kind,
+                "before_seq": before_seq,
+                "after_seq": after_seq,
+                "limit": limit,
+            },
+        )
+        return EventPageRecord.model_validate(result)
+
     async def add_message(self, conversation_id: str, text: str) -> MessageRecord:
         result = await self._request(
             "POST",
@@ -294,6 +316,10 @@ class RegistryClient:
             json=payload.model_dump(exclude_unset=True),
         )
         return [AgentRecord.model_validate(item) for item in list(result.get("agents", []))]
+
+    async def get_task(self, routed_task_id: str) -> TaskRecord:
+        result = await self._request("GET", f"/v1/tasks/{routed_task_id}")
+        return TaskRecord.model_validate(result)
 
     async def submit_routed_task(
         self,

@@ -166,7 +166,7 @@ def test_startup_fails_with_clear_config_error():
     env["TELEGRAM_BOT_TOKEN"] = ""
     env["BOT_PROVIDER"] = "claude"
     env["BOT_ALLOW_OPEN"] = "1"
-    env.pop("BOT_DATABASE_URL", None)
+    env.pop("OCTOPUS_DATABASE_URL", None)
     result = subprocess.run(
         [sys.executable, "-m", "app.main"],
         env=env,
@@ -266,13 +266,13 @@ def test_validate_config_webhook_mode_requires_url():
     assert any("BOT_WEBHOOK_URL" in e for e in errors)
 
 def test_validate_config_database_url_must_be_postgres():
-    """BOT_DATABASE_URL when set must be a postgresql:// URL."""
+    """OCTOPUS_DATABASE_URL when set must be a postgresql:// URL."""
     errors = validate_config(make_config(database_url="mysql://localhost/db"))
-    assert any("BOT_DATABASE_URL" in e and "postgresql" in e for e in errors)
+    assert any("OCTOPUS_DATABASE_URL" in e and "postgresql" in e for e in errors)
     errors_empty = validate_config(make_config(database_url=""))
-    assert not any("BOT_DATABASE_URL" in e for e in errors_empty)
+    assert not any("OCTOPUS_DATABASE_URL" in e for e in errors_empty)
     errors_ok = validate_config(make_config(database_url="postgresql://localhost/bot"))
-    assert not any("BOT_DATABASE_URL" in e for e in errors_ok)
+    assert not any("OCTOPUS_DATABASE_URL" in e for e in errors_ok)
 
 
 def test_validate_config_rejects_malformed_registry_url():
@@ -297,7 +297,7 @@ def test_validate_config_rejects_remote_http_registry_url(tmp_path: Path):
 
 def test_validate_config_rejects_malformed_postgres_url():
     errors = validate_config(make_config(database_url="postgresql://"))
-    assert any("BOT_DATABASE_URL" in e and "valid postgresql" in e for e in errors)
+    assert any("OCTOPUS_DATABASE_URL" in e and "valid postgresql" in e for e in errors)
 
 
 def test_validate_config_webhook_mode_with_url():
@@ -393,17 +393,19 @@ def _runtime_ok_provider(name: str = "claude"):
 
 
 @contextmanager
-def _patched_main_runtime(cfg, mock_app, provider=None):
+def _patched_main_runtime(
+    cfg,
+    mock_app,
+    provider=None,
+    *,
+    skip_database_startup_checks: bool = True,
+):
     """Patch main() dependencies for mode-selection tests.
 
     main() now validates provider auth before starting, so the provider double
     must expose awaitable auth/runtime health checks.
     """
     provider = provider or _runtime_ok_provider()
-
-    @contextmanager
-    def _fake_conn():
-        yield MagicMock()
 
     dispatcher = MagicMock()
     mock_app.bot_data = {}
@@ -429,15 +431,23 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         boot_id="test-boot",
     )
     delivery_transport = SimpleNamespace(transport_id="registry-delivery")
+    transport_store = MagicMock(name="transport_store")
+    content_store = MagicMock(name="content_store")
 
     with ExitStack() as stack:
         stack.enter_context(patch("app.main.load_config", return_value=cfg))
         stack.enter_context(patch("app.main.make_provider", return_value=provider))
         stack.enter_context(patch("app.main.fail_fast"))
+        if skip_database_startup_checks:
+            stack.enter_context(patch("app.runtime.startup.run_database_startup_checks"))
         stack.enter_context(patch("app.runtime.startup.runtime_backend.init"))
+        stack.enter_context(patch("app.runtime_backend.transport_store", return_value=transport_store))
         stack.enter_context(patch("app.runtime.startup.ensure_data_dirs"))
         stack.enter_context(patch("app.runtime.startup.init_content_store_for_config"))
         stack.enter_context(patch("app.runtime.startup.init_credential_store_for_config"))
+        stack.enter_context(
+            patch("app.runtime.composition.get_content_store", return_value=content_store)
+        )
         stack.enter_context(patch("app.runtime.transport_builders.TransportDispatcher", return_value=dispatcher))
         stack.enter_context(patch("app.runtime.services.ControlPlaneBus", return_value=bus))
         register_registry_channels = stack.enter_context(
@@ -462,14 +472,6 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         bot_runtime_runner.return_value = None
         stack.enter_context(patch("app.runtime.startup.close_db"))
         stack.enter_context(patch("app.runtime.startup.close_transport_db"))
-        stack.enter_context(
-            patch(
-                "app.db.postgres.get_connection",
-                side_effect=lambda *a, **k: _fake_conn(),
-            )
-        )
-        stack.enter_context(patch("app.db.postgres_doctor.run_doctor", return_value=[]))
-        stack.enter_context(patch("app.db.postgres.close_pools"))
         stack.enter_context(patch("sys.argv", ["bot"]))
         yield SimpleNamespace(
             provider=provider,
@@ -483,6 +485,8 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
             register_registry_channels=register_registry_channels,
             build_registry_delivery_transport=build_registry_delivery_transport,
             delivery_transport=delivery_transport,
+            content_store=content_store,
+            transport_store=transport_store,
             bot_runtime_runner=bot_runtime_runner,
         )
 
@@ -571,7 +575,7 @@ def test_main_database_error_is_sanitized(capsys):
 
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:secret@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app, skip_database_startup_checks=False):
         with patch(
             "app.db.postgres.get_connection",
             side_effect=OperationalError("postgresql://bot:secret@localhost:5432/bot refused connection"),
@@ -703,6 +707,7 @@ def test_main_registry_only_starts_without_telegram_ingress():
         stack.enter_context(patch("app.main.make_provider", return_value=provider))
         stack.enter_context(patch("app.main.fail_fast"))
         stack.enter_context(patch("app.runtime.startup.runtime_backend.init"))
+        stack.enter_context(patch("app.runtime_backend.transport_store", return_value=MagicMock(name="transport_store")))
         stack.enter_context(patch("app.runtime.startup.ensure_data_dirs"))
         stack.enter_context(patch("app.runtime.startup.init_content_store_for_config"))
         stack.enter_context(patch("app.runtime.startup.init_credential_store_for_config"))
@@ -1142,19 +1147,20 @@ def test_validate_config_rejects_invalid_telegram_api_base_url():
 
 
 def test_load_config_reads_database_url_and_pool_settings():
-    """load_config picks up BOT_DATABASE_URL and pool settings .env."""
+    """load_config picks up OCTOPUS_DATABASE_URL and pool settings .env."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
         f.write("BOT_ALLOW_OPEN=1\n")
-        f.write("BOT_DATABASE_URL=postgresql://localhost:5432/botdb\n")
+        f.write("OCTOPUS_DATABASE_URL=postgresql://localhost:5432/botdb\n")
         f.write("BOT_DB_POOL_MIN_SIZE=2\n")
         f.write("BOT_DB_POOL_MAX_SIZE=20\n")
         f.write("BOT_DB_CONNECT_TIMEOUT=15\n")
         env_path = f.name
     try:
         with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
-            cfg = load_config("test-db")
+            with patch.dict(os.environ, {}, clear=True):
+                cfg = load_config("test-db")
         assert cfg.database_url == "postgresql://localhost:5432/botdb"
         assert cfg.db_pool_min_size == 2
         assert cfg.db_pool_max_size == 20

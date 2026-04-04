@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Protocol, TypeVar
 
@@ -58,7 +58,6 @@ from octopus_sdk.registry.models import (
     RuntimeHealthPayload,
     RuntimeHealthSummaryRecord,
     RuntimeWorkerRecord,
-    TimelineEventPayload,
     RecoveryActionPayload,
     RetryDecisionActionPayload,
     RetryTaskActionPayload,
@@ -118,19 +117,6 @@ def offline_before_iso() -> str:
 _DefaultT = TypeVar("_DefaultT")
 
 
-def ensure_json(value: object) -> str:
-    """Serialize dataclasses and JSON-encodable values to a JSON string."""
-    if is_dataclass(value):
-        value = asdict(value)
-    elif isinstance(value, RegistryJsonRecord):
-        value = value.as_dict()
-    elif isinstance(value, RegistryRecordModel):
-        value = value.model_dump(mode="json")
-    elif hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    return json.dumps(value)
-
-
 def _required_text(value: object, field_name: str) -> str:
     text = str(value or "")
     if not text.strip():
@@ -186,22 +172,6 @@ def validated_heartbeat_payload(payload: object) -> AgentHeartbeatRequest:
         return AgentHeartbeatRequest.model_validate(payload)
     except Exception as exc:
         raise ValueError(str(exc)) from exc
-def validated_timeline_events(
-    value: object,
-    *,
-    field_name: str = "events",
-) -> list[TimelineEventPayload]:
-    if isinstance(value, str) or not isinstance(value, list):
-        raise ValueError(f"{field_name} must be a list")
-    events: list[TimelineEventPayload] = []
-    for index, raw_event in enumerate(value):
-        try:
-            events.append(TimelineEventPayload.model_validate(raw_event))
-        except Exception as exc:
-            raise ValueError(f"{field_name}[{index}] {exc}") from exc
-    return events
-
-
 def validated_search_query(query: object) -> AgentDiscoveryQuery:
     try:
         return AgentDiscoveryQuery.model_validate(query)
@@ -435,70 +405,6 @@ def runtime_health_detail(
         report=RegistryJsonRecord.model_validate(report_to_dict(report)),
         workers=workers,
         last_mirrored_at=report.generated_at,
-    )
-
-
-def routed_task_created_event(request: RoutedTaskRequest) -> EventRecord:
-    created_at = str(request.created_at or utcnow_iso())
-    routed_task_id = str(request.routed_task_id)
-    title = str(request.title or routed_task_id)
-    return EventRecord(
-        event_id=f"routed-task:{routed_task_id}:queued",
-        conversation_id=str(request.parent_conversation_id),
-        kind="task.status",
-        content=title,
-        metadata=RegistryJsonRecord(
-            {"routed_task_id": routed_task_id, "status": "queued"}
-        ),
-        created_at=created_at,
-    )
-
-
-def routed_task_progress_event(
-    *,
-    routed_task_id: str,
-    parent_conversation_id: str,
-    payload: RoutedTaskUpdate,
-) -> EventRecord:
-    created_at = str(payload.updated_at or utcnow_iso())
-    metadata: dict[str, object] = {
-        "routed_task_id": routed_task_id,
-        "status": str(payload.status),
-        "transition_id": str(payload.transition_id),
-    }
-    if payload.progress is not None:
-        metadata["progress"] = payload.progress
-    return EventRecord(
-        event_id=f"routed-task:{routed_task_id}:{payload.status}:{created_at}",
-        conversation_id=parent_conversation_id,
-        kind="task.status",
-        content=str(payload.summary or payload.status),
-        metadata=RegistryJsonRecord.model_validate(metadata),
-        created_at=created_at,
-    )
-
-
-def routed_task_result_event(
-    *,
-    routed_task_id: str,
-    parent_conversation_id: str,
-    payload: RoutedTaskResult,
-) -> EventRecord:
-    created_at = str(payload.completed_at or utcnow_iso())
-    content = str(payload.summary or payload.full_text or payload.status)
-    return EventRecord(
-        event_id=f"routed-task:{routed_task_id}:result:{created_at}",
-        conversation_id=parent_conversation_id,
-        kind="task.status",
-        content=content,
-        metadata=RegistryJsonRecord(
-            {
-                "routed_task_id": routed_task_id,
-                "status": str(payload.status),
-                "transition_id": str(payload.transition_id),
-            }
-        ),
-        created_at=created_at,
     )
 
 

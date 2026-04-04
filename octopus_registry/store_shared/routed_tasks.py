@@ -7,13 +7,80 @@ from octopus_sdk.task_protocol import TaskTransitionRequest, apply_task_transiti
 
 from octopus_registry.store_base import (
     decode_json_field,
-    routed_task_created_event,
     validated_routed_task_request,
     validated_routed_task_result_payload,
     validated_routed_task_status_payload,
 )
 from octopus_registry.store_dialect import StoreDialect
 from octopus_registry.store_shared.common import record
+from octopus_registry.store_shared.conversations import touch_conversation
+
+
+def _write_task_events(
+    conn,
+    *,
+    dialect: StoreDialect,
+    task_row,
+    task_request: dict[str, object],
+    agent_id: str,
+    event_id: str,
+    content: str,
+    metadata: dict[str, object],
+    recipient_metadata: dict[str, object] | None = None,
+    created_at: str,
+    insert_event,
+    ensure_conversation_in_tx,
+) -> tuple[list[EventRecord], str, list[EventRecord]]:
+    inserted_events: list[EventRecord] = []
+    primary_event = insert_event(
+        conn,
+        event_id=event_id,
+        conversation_id=str(task_row["parent_conversation_id"] or ""),
+        agent_id=agent_id,
+        kind="task.status",
+        actor="",
+        content=content,
+        metadata=metadata,
+        created_at=created_at,
+    )
+    if primary_event is not None:
+        inserted_events.append(primary_event)
+        touch_conversation(
+            conn,
+            dialect=dialect,
+            conversation_id=str(task_row["parent_conversation_id"] or ""),
+            updated_at=created_at,
+        )
+    recipient_conversation_id = ensure_conversation_in_tx(
+        conn,
+        target_agent_id=str(task_row["target_agent_id"] or ""),
+        title=str(task_row["title"] or str(task_row["routed_task_id"] or "")),
+        conversation_type="task_thread",
+        origin_channel="registry",
+        external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
+        now=created_at,
+    )
+    recipient_inserted_events: list[EventRecord] = []
+    recipient_event = insert_event(
+        conn,
+        event_id=f"{event_id}:recipient",
+        conversation_id=recipient_conversation_id,
+        agent_id=agent_id,
+        kind="task.status",
+        actor="",
+        content=content,
+        metadata=recipient_metadata if recipient_metadata is not None else metadata,
+        created_at=created_at,
+    )
+    if recipient_event is not None:
+        recipient_inserted_events.append(recipient_event)
+        touch_conversation(
+            conn,
+            dialect=dialect,
+            conversation_id=recipient_conversation_id,
+            updated_at=created_at,
+        )
+    return inserted_events, recipient_conversation_id, recipient_inserted_events
 
 
 def create_routed_task(
@@ -157,50 +224,21 @@ def update_routed_task_status(
         }
         if validated_payload.progress is not None:
             primary_metadata["progress"] = validated_payload.progress
-        primary_event = insert_event(
-            conn,
-            event_id=primary_event_id,
-            conversation_id=str(task_row["parent_conversation_id"] or ""),
-            agent_id=str(row["agent_id"] or ""),
-            kind="task.status",
-            actor="",
-            content=str(validated_payload.summary or decision.new_state),
-            metadata=primary_metadata,
-            created_at=now,
-        )
-        if primary_event is not None:
-            inserted_events.append(primary_event)
         task_request = decode_json_field(task_row["request_json"], {})
-        recipient_conversation_id = ensure_conversation_in_tx(
+        inserted_events, recipient_conversation_id, recipient_inserted_events = _write_task_events(
             conn,
-            target_agent_id=str(task_row["target_agent_id"] or ""),
-            title=str(task_row["title"] or routed_task_id),
-            conversation_type="task_thread",
-            origin_channel="registry",
-            external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
-            now=now,
-        )
-        recipient_event = insert_event(
-            conn,
-            event_id=f"{primary_event_id}:recipient",
-            conversation_id=recipient_conversation_id,
+            dialect=dialect,
+            task_row=task_row,
+            task_request=task_request,
             agent_id=str(row["agent_id"] or ""),
-            kind="task.status",
-            actor="",
+            event_id=primary_event_id,
             content=str(validated_payload.summary or decision.new_state),
             metadata=primary_metadata,
+            recipient_metadata=primary_metadata,
             created_at=now,
+            insert_event=insert_event,
+            ensure_conversation_in_tx=ensure_conversation_in_tx,
         )
-        if recipient_event is not None:
-            recipient_inserted_events.append(recipient_event)
-            dialect.execute(
-                conn,
-                (
-                    f"UPDATE {dialect.qualify('conversations')} "
-                    f"SET updated_at = {dialect.placeholder(1)} WHERE conversation_id = {dialect.placeholder(2)}"
-                ),
-                (now, recipient_conversation_id),
-            )
         for event in validated_payload.timeline_events:
             raw_metadata = event.metadata.as_dict() if hasattr(event.metadata, "as_dict") else dict(event.metadata or {})
             event_metadata = {
@@ -225,13 +263,11 @@ def update_routed_task_status(
             if inserted_event is not None:
                 inserted_events.append(inserted_event)
         if inserted_events:
-            dialect.execute(
+            touch_conversation(
                 conn,
-                (
-                    f"UPDATE {dialect.qualify('conversations')} "
-                    f"SET updated_at = {dialect.placeholder(1)} WHERE conversation_id = {dialect.placeholder(2)}"
-                ),
-                (inserted_events[-1].created_at, task_row["parent_conversation_id"]),
+                dialect=dialect,
+                conversation_id=task_row["parent_conversation_id"],
+                updated_at=inserted_events[-1].created_at,
             )
     return record(TaskRecord, {
         "routed_task_id": routed_task_id,
@@ -396,61 +432,24 @@ def update_routed_task_result(
         if validated_payload.provider:
             event_metadata["provider"] = validated_payload.provider
         content = str(validated_payload.summary or validated_payload.full_text or decision.new_state)
-        mirrored_event = insert_event(
+        inserted_events, recipient_conversation_id, recipient_inserted_events = _write_task_events(
             conn,
-            event_id=primary_event_id,
-            conversation_id=str(task["parent_conversation_id"] or ""),
+            dialect=dialect,
+            task_row=task,
+            task_request=task_request,
             agent_id=str(row["agent_id"] or ""),
-            kind="task.status",
-            actor="",
+            event_id=primary_event_id,
             content=content,
             metadata=event_metadata,
-            created_at=completed_at,
-        )
-        if mirrored_event is not None:
-            inserted_events.append(mirrored_event)
-            dialect.execute(
-                conn,
-                (
-                    f"UPDATE {dialect.qualify('conversations')} "
-                    f"SET updated_at = {dialect.placeholder(1)} WHERE conversation_id = {dialect.placeholder(2)}"
-                ),
-                (completed_at, task["parent_conversation_id"]),
-            )
-        recipient_conversation_id = ensure_conversation_in_tx(
-            conn,
-            target_agent_id=str(task["target_agent_id"] or ""),
-            title=str(task["title"] or routed_task_id),
-            conversation_type="task_thread",
-            origin_channel="registry",
-            external_conversation_ref=str(task_request.get("external_conversation_ref", "") or ""),
-            now=completed_at,
-        )
-        recipient_event = insert_event(
-            conn,
-            event_id=f"{primary_event_id}:recipient",
-            conversation_id=recipient_conversation_id,
-            agent_id=str(row["agent_id"] or ""),
-            kind="task.status",
-            actor="",
-            content=content,
-            metadata={
+            recipient_metadata={
                 "routed_task_id": routed_task_id,
                 "status": decision.new_state,
                 "transition_id": validated_payload.transition_id,
             },
             created_at=completed_at,
+            insert_event=insert_event,
+            ensure_conversation_in_tx=ensure_conversation_in_tx,
         )
-        if recipient_event is not None:
-            recipient_inserted_events.append(recipient_event)
-            dialect.execute(
-                conn,
-                (
-                    f"UPDATE {dialect.qualify('conversations')} "
-                    f"SET updated_at = {dialect.placeholder(1)} WHERE conversation_id = {dialect.placeholder(2)}"
-                ),
-                (completed_at, recipient_conversation_id),
-            )
     return record(TaskRecord, {
         "routed_task_id": routed_task_id,
         "status": decision.new_state,

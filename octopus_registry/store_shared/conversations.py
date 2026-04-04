@@ -129,6 +129,102 @@ def touch_conversation(
     )
 
 
+def _operator_event(
+    conn,
+    *,
+    dialect: StoreDialect,
+    json_param,
+    conversation_id: str,
+    event_id: str,
+    kind: str,
+    content: str,
+    metadata: dict[str, object],
+    created_at: str,
+) -> EventRecord | None:
+    return insert_event(
+        conn,
+        dialect=dialect,
+        json_param=json_param,
+        event_id=event_id,
+        conversation_id=conversation_id,
+        agent_id="",
+        kind=kind,
+        actor="operator",
+        content=content,
+        metadata=metadata,
+        created_at=created_at,
+    )
+
+
+def _coordination_result(
+    conn,
+    *,
+    dialect: StoreDialect,
+    conversation_id: str,
+    action_id: str,
+    action: str,
+    event_id: str,
+    inserted_event: EventRecord | None,
+    **extra,
+) -> CoordinationActionResult:
+    duplicate = inserted_event is None
+    event = inserted_event or event_record_by_id(conn, dialect=dialect, event_id=event_id)
+    return CoordinationActionResult(
+        conversation_id=conversation_id,
+        action_id=action_id,
+        action=action,
+        accepted=True,
+        duplicate=duplicate,
+        event=event,
+        **extra,
+    )
+
+
+def _task_stub(
+    *,
+    routed_task_id: str,
+    target_agent_id: str,
+    title: str,
+    status: str,
+) -> dict[str, object]:
+    return {
+        "routed_task_id": routed_task_id,
+        "target_agent_id": target_agent_id,
+        "authority_ref": "",
+        "title": title,
+        "status": status,
+    }
+
+
+def _conversation_context(
+    conn,
+    *,
+    dialect: StoreDialect,
+    conversation_id: str,
+) -> dict[str, object]:
+    conversation = dialect.fetchone(
+        conn,
+        f"""
+        SELECT
+            c.target_agent_id,
+            c.title,
+            c.origin_channel,
+            c.external_conversation_ref,
+            a.bot_key
+        FROM {dialect.qualify('conversations')} c
+        LEFT JOIN {dialect.qualify('agents')} a ON a.agent_id = c.target_agent_id
+        WHERE c.conversation_id = {dialect.placeholder(1)}
+        """,
+        (conversation_id,),
+    )
+    if conversation is None:
+        raise KeyError(conversation_id)
+    bot_key = str(conversation["bot_key"] or "").strip()
+    if not bot_key:
+        raise ValueError(f"Unknown agent or missing bot_key: {conversation['target_agent_id']}")
+    return conversation
+
+
 def insert_event(
     conn,
     *,
@@ -271,24 +367,7 @@ def add_conversation_message(
     now: str,
 ) -> MessageRecord:
     validated_text = validated_conversation_message_text(text)
-    conversation = dialect.fetchone(
-        conn,
-        (
-            f"SELECT target_agent_id, title, origin_channel, external_conversation_ref "
-            f"FROM {dialect.qualify('conversations')} WHERE conversation_id = {dialect.placeholder(1)}"
-        ),
-        (conversation_id,),
-    )
-    if conversation is None:
-        raise KeyError(conversation_id)
-    agent_row = dialect.fetchone(
-        conn,
-        f"SELECT bot_key FROM {dialect.qualify('agents')} WHERE agent_id = {dialect.placeholder(1)}",
-        (conversation["target_agent_id"],),
-    )
-    bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
-    if not bot_key:
-        raise ValueError(f"Unknown agent or missing bot_key: {conversation['target_agent_id']}")
+    conversation = _conversation_context(conn, dialect=dialect, conversation_id=conversation_id)
     event_id = uuid.uuid4().hex
     create_delivery(
         conn,
@@ -299,7 +378,7 @@ def add_conversation_message(
             "title": conversation["title"],
             "text": validated_text,
             "channel": "registry",
-            "bot_key": bot_key,
+            "bot_key": conversation["bot_key"],
             "origin_channel": conversation["origin_channel"],
             "external_conversation_ref": conversation["external_conversation_ref"],
             "stable_event_id": event_id,
@@ -308,15 +387,13 @@ def add_conversation_message(
         now=now,
         delivery_id=uuid.uuid4().hex,
     )
-    inserted_event = insert_event(
+    inserted_event = _operator_event(
         conn,
         dialect=dialect,
         json_param=json_param,
         event_id=event_id,
         conversation_id=conversation_id,
-        agent_id="",
         kind="message.user",
-        actor="operator",
         content=validated_text,
         metadata={},
         created_at=now,
@@ -342,27 +419,8 @@ def add_conversation_action(
 ) -> CoordinationActionResult:
     validated_envelope = validated_conversation_action(envelope)
     action_payload = validated_action_payload(validated_envelope)
-    conversation = dialect.fetchone(
-        conn,
-        (
-            f"SELECT target_agent_id, origin_channel, external_conversation_ref, title "
-            f"FROM {dialect.qualify('conversations')} WHERE conversation_id = {dialect.placeholder(1)}"
-        ),
-        (conversation_id,),
-    )
-    if conversation is None:
-        raise KeyError(conversation_id)
-    agent_row = dialect.fetchone(
-        conn,
-        f"SELECT bot_key FROM {dialect.qualify('agents')} WHERE agent_id = {dialect.placeholder(1)}",
-        (conversation["target_agent_id"],),
-    )
-    bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
-    if not bot_key:
-        raise ValueError(f"Unknown agent or missing bot_key: {conversation['target_agent_id']}")
-    inserted_event = None
+    conversation = _conversation_context(conn, dialect=dialect, conversation_id=conversation_id)
     routed_tasks: list[dict[str, object]] = []
-    duplicate = False
 
     if validated_envelope.action in {
         "approve_pending",
@@ -383,7 +441,7 @@ def add_conversation_action(
                 "action": validated_envelope.action,
                 "payload": {} if action_payload is None else action_payload.model_dump(exclude_unset=True),
                 "channel": "registry",
-                "bot_key": bot_key,
+                "bot_key": conversation["bot_key"],
                 "origin_channel": conversation["origin_channel"],
                 "external_conversation_ref": conversation["external_conversation_ref"],
                 "stable_event_id": validated_envelope.action_id,
@@ -393,15 +451,13 @@ def add_conversation_action(
             delivery_id=uuid.uuid4().hex,
         )
         if validated_envelope.action == "cancel_conversation":
-            inserted_event = insert_event(
+            inserted_event = _operator_event(
                 conn,
                 dialect=dialect,
                 json_param=json_param,
                 event_id=validated_envelope.action_id,
                 conversation_id=conversation_id,
-                agent_id="",
                 kind="task.status",
-                actor="operator",
                 content="",
                 metadata={"routed_task_id": "", "status": "cancelling"},
                 created_at=now,
@@ -414,15 +470,13 @@ def add_conversation_action(
                 status="cancelling",
             )
         else:
-            inserted_event = insert_event(
+            inserted_event = _operator_event(
                 conn,
                 dialect=dialect,
                 json_param=json_param,
                 event_id=validated_envelope.action_id,
                 conversation_id=conversation_id,
-                agent_id="",
                 kind="approval.decided",
-                actor="operator",
                 content=json.dumps(action_payload.model_dump(exclude_unset=True)),
                 metadata={
                     "action": validated_envelope.action,
@@ -436,16 +490,14 @@ def add_conversation_action(
                 created_at=now,
             )
             touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-        duplicate = inserted_event is None
-        if inserted_event is None:
-            inserted_event = event_record_by_id(conn, dialect=dialect, event_id=validated_envelope.action_id)
-        return CoordinationActionResult(
+        return _coordination_result(
+            conn,
+            dialect=dialect,
             conversation_id=conversation_id,
             action_id=validated_envelope.action_id,
             action=validated_envelope.action,
-            accepted=True,
-            duplicate=duplicate,
-            event=inserted_event,
+            event_id=validated_envelope.action_id,
+            inserted_event=inserted_event,
         )
 
     if validated_envelope.action == "delegate_tasks":
@@ -476,31 +528,27 @@ def add_conversation_action(
             origin_transport_ref=str(proposal.origin_transport_ref or ""),
             authorized_actor_key=str(proposal.authorized_actor_key or ""),
         )
-        inserted_event = insert_event(
+        inserted_event = _operator_event(
             conn,
             dialect=dialect,
             json_param=json_param,
             event_id=delegation_evt["event_id"],
             conversation_id=conversation_id,
-            agent_id="",
             kind=delegation_evt["kind"],
-            actor="operator",
             content=delegation_evt["content"],
             metadata=delegation_evt["metadata"],
             created_at=delegation_evt["created_at"],
         )
         touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-        duplicate = inserted_event is None
-        if inserted_event is None:
-            inserted_event = event_record_by_id(conn, dialect=dialect, event_id=delegation_evt["event_id"])
-        return CoordinationActionResult(
+        return _coordination_result(
+            conn,
+            dialect=dialect,
             conversation_id=conversation_id,
             action_id=validated_envelope.action_id,
             action=validated_envelope.action,
-            accepted=True,
-            duplicate=duplicate,
+            event_id=delegation_evt["event_id"],
+            inserted_event=inserted_event,
             proposal_id=validated_envelope.action_id,
-            event=inserted_event,
         )
 
     if validated_envelope.action == "delegation_approve":
@@ -543,14 +591,13 @@ def add_conversation_action(
             )
             requested_skills = normalized_requested_skills(entry.get("requested_skills", []), selector=draft.selector)
             resolved_target = resolve_selector(conn, draft.selector)
+            routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, index)
             request = {
-                "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, index),
+                "routed_task_id": routed_task_id,
                 "parent_conversation_id": conversation_id,
                 "origin_transport_ref": proposal_origin_transport_ref or str(conversation["external_conversation_ref"] or ""),
                 "authorized_actor_key": proposal_authorized_actor_key,
-                "external_conversation_ref": routed_task_external_conversation_ref(
-                    stable_routed_task_id(conversation_id, validated_envelope.action_id, index)
-                ),
+                "external_conversation_ref": routed_task_external_conversation_ref(routed_task_id),
                 "origin_agent_id": conversation["target_agent_id"],
                 "target_agent_id": resolved_target["agent_id"],
                 "title": draft.title,
@@ -561,15 +608,12 @@ def add_conversation_action(
                 "created_at": now,
             }
             create_routed_task_in_tx(conn, request, now=now)
-            routed_tasks.append(
-                {
-                    "routed_task_id": request["routed_task_id"],
-                    "target_agent_id": resolved_target["agent_id"],
-                    "authority_ref": "",
-                    "title": draft.title,
-                    "status": "queued",
-                }
-            )
+            routed_tasks.append(_task_stub(
+                routed_task_id=request["routed_task_id"],
+                target_agent_id=resolved_target["agent_id"],
+                title=draft.title,
+                status="queued",
+            ))
         submitted_event = delegation_event(
             kind="delegation.submitted",
             proposal_id=proposal_id,
@@ -588,36 +632,28 @@ def add_conversation_action(
             origin_transport_ref=proposal_origin_transport_ref,
             authorized_actor_key=proposal_authorized_actor_key,
         )
-        inserted_event = insert_event(
+        inserted_event = _operator_event(
             conn,
             dialect=dialect,
             json_param=json_param,
             event_id=f"delegation.submitted:{validated_envelope.action_id}",
             conversation_id=conversation_id,
-            agent_id="",
             kind=submitted_event["kind"],
-            actor="operator",
             content=submitted_event["content"],
             metadata=submitted_event["metadata"],
             created_at=submitted_event["created_at"],
         )
         touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-        duplicate = inserted_event is None
-        if inserted_event is None:
-            inserted_event = event_record_by_id(
-                conn,
-                dialect=dialect,
-                event_id=f"delegation.submitted:{validated_envelope.action_id}",
-            )
-        return CoordinationActionResult(
+        return _coordination_result(
+            conn,
+            dialect=dialect,
             conversation_id=conversation_id,
             action_id=validated_envelope.action_id,
             action=validated_envelope.action,
-            accepted=True,
-            duplicate=duplicate,
+            event_id=f"delegation.submitted:{validated_envelope.action_id}",
+            inserted_event=inserted_event,
             proposal_id=proposal_id,
             routed_tasks=routed_tasks,
-            event=inserted_event,
         )
 
     if validated_envelope.action == "direct_assign":
@@ -668,46 +704,35 @@ def add_conversation_action(
         inserted_event = created.get("event")
         if inserted_event is not None:
             inserted_events.append(inserted_event)
-        routed_tasks.append(
-            {
-                "routed_task_id": request["routed_task_id"],
-                "target_agent_id": resolved_target["agent_id"],
-                "authority_ref": "",
-                "title": assignment.title,
-                "status": "queued",
-            }
-        )
+        routed_tasks.append(_task_stub(
+            routed_task_id=request["routed_task_id"],
+            target_agent_id=resolved_target["agent_id"],
+            title=assignment.title,
+            status="queued",
+        ))
         touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-        if inserted_event is None:
-            inserted_event = event_record_by_id(
-                conn,
-                dialect=dialect,
-                event_id=f"routed-task:{routed_task_id}:queued",
-            )
-        duplicate = created.get("event") is None
-        return CoordinationActionResult(
+        return _coordination_result(
+            conn,
+            dialect=dialect,
             conversation_id=conversation_id,
             action_id=validated_envelope.action_id,
             action=validated_envelope.action,
-            accepted=True,
-            duplicate=duplicate,
+            event_id=f"routed-task:{routed_task_id}:queued",
+            inserted_event=inserted_event,
             proposal_id=validated_envelope.action_id,
             routed_tasks=routed_tasks,
             inserted_events=inserted_events,
-            event=inserted_event,
         )
 
     if validated_envelope.action in {"cancel_task", "retry_task", "delegation_cancel"}:
         if validated_envelope.action == "delegation_cancel":
-            inserted_event = insert_event(
+            inserted_event = _operator_event(
                 conn,
                 dialect=dialect,
                 json_param=json_param,
                 event_id=validated_envelope.action_id,
                 conversation_id=conversation_id,
-                agent_id="",
                 kind="approval.decided",
-                actor="operator",
                 content="",
                 metadata={
                     "action": validated_envelope.action,
@@ -717,17 +742,15 @@ def add_conversation_action(
                 created_at=now,
             )
             touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-            duplicate = inserted_event is None
-            if inserted_event is None:
-                inserted_event = event_record_by_id(conn, dialect=dialect, event_id=validated_envelope.action_id)
-            return CoordinationActionResult(
+            return _coordination_result(
+                conn,
+                dialect=dialect,
                 conversation_id=conversation_id,
                 action_id=validated_envelope.action_id,
                 action=validated_envelope.action,
-                accepted=True,
-                duplicate=duplicate,
+                event_id=validated_envelope.action_id,
+                inserted_event=inserted_event,
                 proposal_id=action_payload.proposal_id,
-                event=inserted_event,
             )
         task_row = dialect.fetchone(
             conn,
@@ -746,15 +769,12 @@ def add_conversation_action(
             request["created_at"] = now
             request["parent_conversation_id"] = conversation_id
             created = create_routed_task_in_tx(conn, request, now=now)
-            routed_tasks.append(
-                {
-                    "routed_task_id": request["routed_task_id"],
-                    "target_agent_id": request["target_agent_id"],
-                    "authority_ref": "",
-                    "title": request["title"],
-                    "status": "queued",
-                }
-            )
+            routed_tasks.append(_task_stub(
+                routed_task_id=request["routed_task_id"],
+                target_agent_id=request["target_agent_id"],
+                title=request["title"],
+                status="queued",
+            ))
             inserted_event = created.get("event")
         else:
             decision = apply_task_transition(
@@ -780,15 +800,13 @@ def add_conversation_action(
                 ),
                 ("cancelled", "Cancelled by operator.", now, action_payload.routed_task_id),
             )
-            inserted_event = insert_event(
+            inserted_event = _operator_event(
                 conn,
                 dialect=dialect,
                 json_param=json_param,
                 event_id=validated_envelope.action_id,
                 conversation_id=conversation_id,
-                agent_id="",
                 kind="task.status",
-                actor="operator",
                 content="Cancelled by operator.",
                 metadata={
                     "routed_task_id": action_payload.routed_task_id,
@@ -797,27 +815,22 @@ def add_conversation_action(
                 },
                 created_at=now,
             )
-            routed_tasks.append(
-                {
-                    "routed_task_id": action_payload.routed_task_id,
-                    "target_agent_id": str(task_row["target_agent_id"] or ""),
-                    "authority_ref": "",
-                    "title": str(task_row["title"] or ""),
-                    "status": "cancelled",
-                }
-            )
+            routed_tasks.append(_task_stub(
+                routed_task_id=action_payload.routed_task_id,
+                target_agent_id=str(task_row["target_agent_id"] or ""),
+                title=str(task_row["title"] or ""),
+                status="cancelled",
+            ))
         touch_conversation(conn, dialect=dialect, conversation_id=conversation_id, updated_at=now)
-        duplicate = inserted_event is None
-        if inserted_event is None:
-            inserted_event = event_record_by_id(conn, dialect=dialect, event_id=validated_envelope.action_id)
-        return CoordinationActionResult(
+        return _coordination_result(
+            conn,
+            dialect=dialect,
             conversation_id=conversation_id,
             action_id=validated_envelope.action_id,
             action=validated_envelope.action,
-            accepted=True,
-            duplicate=duplicate,
+            event_id=validated_envelope.action_id,
+            inserted_event=inserted_event,
             routed_tasks=routed_tasks,
-            event=inserted_event,
         )
 
     raise ValueError(f"Unsupported action: {validated_envelope.action}")

@@ -110,7 +110,6 @@ from .store_base import (
     stable_routed_task_id,
     RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
-    routed_task_created_event,
     routed_task_external_conversation_ref,
     validated_routed_task_request,
     decode_json_field,
@@ -622,46 +621,51 @@ class RegistryPostgresStore(AbstractRegistryStore):
             now=now,
             delivery_id=uuid.uuid4().hex,
         )
-        mirrored_event = routed_task_created_event(validated_request)
+        mirrored_event_id = f"routed-task:{validated_request.routed_task_id}:queued"
+        mirrored_content = str(validated_request.title or validated_request.routed_task_id)
+        mirrored_metadata = {
+            "routed_task_id": validated_request.routed_task_id,
+            "status": "queued",
+        }
         inserted_event = shared_insert_event(
             conn,
             dialect=_POSTGRES_STORE_DIALECT,
             json_param=_jsonb,
-            event_id=mirrored_event.event_id,
-            conversation_id=mirrored_event.conversation_id,
+            event_id=mirrored_event_id,
+            conversation_id=validated_request.parent_conversation_id,
             agent_id=validated_request.target_agent_id,
-            kind=mirrored_event.kind,
+            kind="task.status",
             actor="",
-            content=mirrored_event.content,
-            metadata=mirrored_event.metadata,
-            created_at=mirrored_event.created_at,
+            content=mirrored_content,
+            metadata=mirrored_metadata,
+            created_at=now,
         )
         if inserted_event is not None:
             shared_touch_conversation(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
-                conversation_id=mirrored_event.conversation_id,
-                updated_at=mirrored_event.created_at,
+                conversation_id=validated_request.parent_conversation_id,
+                updated_at=now,
             )
         recipient_event = shared_insert_event(
             conn,
             dialect=_POSTGRES_STORE_DIALECT,
             json_param=_jsonb,
-            event_id=f"{mirrored_event.event_id}:recipient",
+            event_id=f"{mirrored_event_id}:recipient",
             conversation_id=recipient_conversation_id,
             agent_id=validated_request.target_agent_id,
-            kind=mirrored_event.kind,
+            kind="task.status",
             actor="",
-            content=mirrored_event.content,
-            metadata=mirrored_event.metadata,
-            created_at=mirrored_event.created_at,
+            content=mirrored_content,
+            metadata=mirrored_metadata,
+            created_at=now,
         )
         if recipient_event is not None:
             shared_touch_conversation(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 conversation_id=recipient_conversation_id,
-                updated_at=mirrored_event.created_at,
+                updated_at=now,
             )
         return {
             "request": validated_request,

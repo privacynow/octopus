@@ -104,7 +104,7 @@ def restore_runtime_env():
 # Phase 12: Postgres test harness
 # ---------------------------------------------------------------------------
 # Postgres URL comes only a test container we start (never BOT_DATABASE_URL
-# or env), so truncate/bootstrap never touch dev/staging/production.
+# or env), so truncate/init never touch dev/staging/production.
 
 @pytest.fixture(scope="session")
 def postgres_base_url(request):
@@ -139,16 +139,16 @@ def postgres_db_url(postgres_base_url, request):
         create_test_database,
         get_test_db_url,
         get_worker_id,
-        bootstrap_test_db,
+        init_test_db,
     )
     worker_id = get_worker_id(request.config)
     db_name = f"test_bot_{worker_id}".replace("-", "_")
     create_test_database(postgres_base_url, db_name)
     url = get_test_db_url(postgres_base_url, worker_id)
     with get_connection(url) as conn:
-        errors = bootstrap_test_db(conn)
+        errors = init_test_db(conn)
         if errors:
-            raise RuntimeError(f"Postgres bootstrap failed: {errors}")
+            raise RuntimeError(f"Postgres init failed: {errors}")
     yield url
 
 

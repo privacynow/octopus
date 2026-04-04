@@ -28,18 +28,9 @@ services:
         aliases:
           - ${OCTOPUS_DB_HOST:-postgres}
 
-  db-bootstrap:
+  db-init:
     image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
-    command: ["python", "-m", "app.db.cli", "bootstrap"]
-    environment:
-      OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  db-update:
-    image: ${OCTOPUS_RUNTIME_IMAGE:?Set OCTOPUS_RUNTIME_IMAGE to the runtime service image}
-    command: ["python", "-m", "app.db.cli", "update"]
+    command: ["python", "-m", "app.db.cli", "init"]
     environment:
       OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}
     depends_on:

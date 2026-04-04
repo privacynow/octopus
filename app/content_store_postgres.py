@@ -95,7 +95,7 @@ class PostgresContentStore(AbstractContentStore):
         rel = row[0] if isinstance(row, (list, tuple)) else None
         if row is None or rel != f"{_SCHEMA}.skill_namespaces":
             raise RuntimeError(
-                "bot_content schema not found. Run DB bootstrap or DB update to apply 0017_content.sql."
+                "bot_content schema not found. Run DB init for the current schema."
             )
         self._schema_ready = True
 

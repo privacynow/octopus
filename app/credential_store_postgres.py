@@ -63,7 +63,7 @@ class PostgresCredentialStore(AbstractCredentialStore):
         rel = row[0] if isinstance(row, (list, tuple)) else None
         if row is None or rel != f"{_SCHEMA}.credentials":
             raise RuntimeError(
-                "bot_credentials schema not found. Run DB bootstrap or DB update to apply 0018_credentials.sql."
+                "bot_credentials schema not found. Run DB init for the current schema."
             )
         self._schema_ready = True
 

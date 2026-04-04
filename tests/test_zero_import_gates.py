@@ -263,8 +263,6 @@ def test_legacy_registry_column_tokens_are_limited_to_migration_owners() -> None
     repo_root = Path(__file__).resolve().parents[1]
     allowed_paths = {
         repo_root / "octopus_registry" / "store.py",
-        repo_root / "app" / "db" / "migrations" / "postgres" / "0004_registry.sql",
-        repo_root / "app" / "db" / "migrations" / "postgres" / "0010_rename_registry_channel_columns.sql",
         repo_root / "tests" / "test_registry_service.py",
         repo_root / "tests" / "test_db_postgres.py",
         Path(__file__).resolve(),
@@ -289,7 +287,6 @@ def test_legacy_delivery_kind_tokens_are_limited_to_migration_owners() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     allowed_paths = {
         repo_root / "octopus_registry" / "store.py",
-        repo_root / "app" / "db" / "migrations" / "postgres" / "0009_rename_delivery_kinds.sql",
         repo_root / "tests" / "test_agents.py",
         repo_root / "tests" / "test_db_postgres.py",
         repo_root / "tests" / "test_registry_service.py",
@@ -1252,7 +1249,6 @@ def _non_registry_orchestration_paths() -> list[Path]:
     }
     excluded_dirs = {
         app_root / "channels" / "registry",
-        app_root / "db" / "migrations",
     }
     paths: list[Path] = []
     for path in sorted(app_root.rglob("*.py")):

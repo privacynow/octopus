@@ -168,7 +168,7 @@ def test_compose_runtime_services_use_stack_specific_db_host() -> None:
         "${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@${OCTOPUS_DB_HOST:-postgres}:5432/bot}"
     )
 
-    assert compose_text.count(expected) >= 5
+    assert compose_text.count(expected) >= 4
     assert (
         "OCTOPUS_DATABASE_URL: ${OCTOPUS_DATABASE_URL:-postgresql://bot:bot@postgres:5432/bot}"
         not in compose_text
@@ -211,7 +211,7 @@ def test_start_bot_rebuilds_provider_image_before_start(tmp_path: Path) -> None:
 
     assert calls == ["image:codex"]
     assert docker.commands == [
-        ("example-bot", "run", "--rm", "db-bootstrap"),
+        ("example-bot", "run", "--rm", "db-init"),
         ("example-bot", "up", "-d", "bot"),
     ]
 

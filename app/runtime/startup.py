@@ -152,7 +152,7 @@ def run_database_startup_checks(config: BotConfig) -> None:
             print(f"  FAIL: {error}", file=sys.stderr)
         print(
             "Run: docker compose --project-directory . -f infra/compose/docker-compose.yml "
-            "--profile tools run --rm db-bootstrap (or db-update). See README.",
+            "--profile tools run --rm db-init. Existing non-current schemas must be reset first.",
             file=sys.stderr,
         )
         raise SystemExit(1)

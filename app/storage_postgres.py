@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from octopus_sdk.deferred_notifications import DeferredNotification
-from octopus_sdk.providers import coerce_provider_state
 from octopus_sdk.sessions import default_session, session_from_dict, session_to_dict
 from octopus_sdk.time_utils import utc_now_iso
 
@@ -51,27 +50,23 @@ def load_session(
         row = cur.fetchone()
     if row is None:
         return session
-    raw = row[0]
+    return _normalize_loaded_session(row[0], conversation_key)
+
+
+def _normalize_loaded_session(raw: object, conversation_key: str) -> dict[str, Any]:
     try:
-        saved = raw if isinstance(raw, dict) else json.loads(raw)
-        normalized_input = dict(saved)
-        if not isinstance(normalized_input.get("provider_state"), Mapping):
-            normalized_input["provider_state"] = {}
-        normalized_saved = session_to_dict(session_from_dict(normalized_input))
-        for key, value in normalized_saved.items():
-            if key in {"provider", "provider_state", "approval_mode"}:
-                continue
-            session[key] = value
-        if normalized_saved.get("approval_mode_explicit"):
-            session["approval_mode"] = normalized_saved["approval_mode"]
-            session["approval_mode_explicit"] = True
-        if normalized_saved.get("provider") == provider_name:
-            fresh_state = coerce_provider_state(provider_state_factory(conversation_key)).to_dict()
-            fresh_state.update(normalized_saved.get("provider_state", {}))
-            session["provider_state"] = fresh_state
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        pass
-    return session
+        if isinstance(raw, (str, bytes, bytearray)):
+            saved = json.loads(raw)
+        else:
+            saved = raw
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Invalid stored session JSON for {conversation_key}") from exc
+    if not isinstance(saved, Mapping):
+        raise RuntimeError(f"Stored session for {conversation_key} is not an object")
+    try:
+        return session_to_dict(session_from_dict(saved))
+    except Exception as exc:
+        raise RuntimeError(f"Stored session for {conversation_key} is not valid current schema data") from exc
 
 
 def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
@@ -147,13 +142,7 @@ def list_sessions(conn) -> list[dict[str, Any]]:
         conversation_key, provider, data, has_pending, has_setup, created_at, updated_at = (
             row[0], row[1], row[2], row[3], row[4], row[5], row[6]
         )
-        if isinstance(data, dict):
-            data_dict = data
-        else:
-            try:
-                data_dict = json.loads(data) if data else {}
-            except json.JSONDecodeError:
-                data_dict = {}
+        data_dict = _normalize_loaded_session(data, conversation_key)
         results.append({
             "conversation_key": conversation_key,
             "provider": provider,

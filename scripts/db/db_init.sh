@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# First-time schema bootstrap for an existing Postgres database.
-# Requires OCTOPUS_DATABASE_URL. See README.md.
+# Initialize the current Postgres schema. Requires OCTOPUS_DATABASE_URL.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -9,4 +8,4 @@ if [ ! -x "$PYTHON" ]; then
     PYTHON=python3
 fi
 cd "$REPO_DIR"
-"$PYTHON" -m app.db.cli bootstrap
+"$PYTHON" -m app.db.cli init

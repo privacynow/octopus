@@ -1,5 +1,7 @@
 """Tests for Postgres-backed session store (Phase 12). Require Postgres harness."""
 
+import pytest
+
 from octopus_sdk.deferred_notifications import DeferredNotification
 from octopus_sdk.providers import ProviderStateRecord
 from app import storage_postgres
@@ -161,8 +163,8 @@ def test_created_at_preserved_on_resave(postgres_truncated):
     assert reloaded["created_at"] == original_created
 
 
-def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
-    """If stored provider_state is not a mapping, load_session must fall back to defaults."""
+def test_load_session_corrupt_provider_state_raises(postgres_truncated):
+    """If stored provider_state is not a mapping, load_session must fail explicitly."""
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60002)
@@ -175,12 +177,15 @@ def test_load_session_corrupt_provider_state_falls_back(postgres_truncated):
                 ('{"provider_state": [1, 2, 3]}', conversation_key),
             )
         conn.commit()
-        loaded = storage_postgres.load_session(
-            conn, conversation_key, "claude", lambda _ck="": ProviderStateRecord({"session_id": "new"}), "on"
-        )
-    assert isinstance(loaded["provider_state"], dict)
-    assert loaded["provider_state"]["session_id"] == "new"
-    assert loaded["created_at"] == session["created_at"], "row was not read — test is blind"
+        with pytest.raises(RuntimeError, match="not valid current schema data"):
+            storage_postgres.load_session(
+                conn,
+                conversation_key,
+                "claude",
+                lambda _ck="": ProviderStateRecord({"session_id": "new"}),
+                "on",
+            )
+    assert session["created_at"], "row was not written — test is blind"
 
 
 def test_falsy_created_at_normalized_on_save(postgres_truncated):
@@ -199,8 +204,8 @@ def test_falsy_created_at_normalized_on_save(postgres_truncated):
     assert len(loaded["created_at"]) > 10, "created_at should be an ISO timestamp"
 
 
-def test_load_session_non_object_json_falls_back_to_defaults(postgres_truncated):
-    """If stored JSON decodes to a non-object, load_session must fall back to defaults."""
+def test_load_session_non_object_json_raises(postgres_truncated):
+    """If stored JSON decodes to a non-object, load_session must fail explicitly."""
     from app.db.postgres import get_connection
 
     conversation_key = telegram_conversation_key(60004)
@@ -213,8 +218,7 @@ def test_load_session_non_object_json_falls_back_to_defaults(postgres_truncated)
                 (conversation_key,),
             )
         conn.commit()
-        loaded = storage_postgres.load_session(
-            conn, conversation_key, "claude", _provider_state_factory, "on"
-        )
-    assert isinstance(loaded["provider_state"], dict)
-    assert loaded["provider"] == "claude"
+        with pytest.raises(RuntimeError, match="not an object"):
+            storage_postgres.load_session(
+                conn, conversation_key, "claude", _provider_state_factory, "on"
+            )

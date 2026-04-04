@@ -22,7 +22,7 @@ from urllib.parse import urlparse, urlunparse
 
 from psycopg import connect
 
-from app.db.postgres_migrate import run_bootstrap
+from app.db.postgres_init import run_init
 
 # Test-only container: prefix + worker + run_id for name; base port + worker offset + run offset for port.
 TEST_POSTGRES_CONTAINER_PREFIX = "telegram_bot_test_pg"
@@ -217,13 +217,14 @@ def create_test_database(base_url: str, db_name: str) -> None:
 
 
 def truncate_runtime_tables(conn) -> None:
-    """Truncate bot_runtime tables used by runtime and transport tests. Do not truncate schema_migrations.
+    """Truncate bot_runtime tables used by runtime and transport tests.
 
     Must only be called for connections to the harness-started test Postgres container,
     never for dev/staging/production (see module docstring).
     """
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE bot_runtime.control_plane_commands RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE bot_runtime.deferred_notifications CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.worker_heartbeats CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
@@ -267,9 +268,9 @@ def truncate_credential_tables(conn) -> None:
     conn.commit()
 
 
-def bootstrap_test_db(conn) -> list[str]:
-    """Apply full schema (run_bootstrap). Returns list of errors."""
-    return run_bootstrap(conn)
+def init_test_db(conn) -> list[str]:
+    """Apply the current schema (run_init). Returns list of errors."""
+    return run_init(conn)
 
 
 def get_test_db_url(base_url: str, worker_id: str) -> str:

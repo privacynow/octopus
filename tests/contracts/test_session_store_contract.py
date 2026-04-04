@@ -82,7 +82,7 @@ def test_save_load_roundtrip(data_dir):
     assert loaded["provider"] == "claude"
 
 
-def test_load_merge_provider_state_factory_defaults(data_dir):
+def test_load_session_preserves_saved_provider_state(data_dir):
     session = default_session("claude", _provider_state_factory, "on")
     session["provider_state"] = {"session_id": "s1"}
     save_session(data_dir, telegram_conversation_key(666), session)
@@ -92,7 +92,7 @@ def test_load_merge_provider_state_factory_defaults(data_dir):
         "on",
     )
     assert loaded["provider_state"]["session_id"] == "s1"
-    assert loaded["provider_state"]["new_key"] == "default_val"
+    assert "new_key" not in loaded["provider_state"]
 
 
 # --- delete ---

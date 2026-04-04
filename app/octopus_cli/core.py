@@ -970,21 +970,21 @@ class OctopusManager:
                 if target.kind == TargetKind.REGISTRY:
                     rebuild_images.append("octopus-registry-service:latest")
                     recreate_targets.append("registry")
-                    notes.append("Registry data volume will be preserved.")
+                    notes.append("Registry volumes will be preserved. Only the current schema is supported.")
                 else:
                     provider = next(bot.provider for bot in state.bots if bot.slug == target.identifier)
                     image = f"octopus-agent:{provider}"
                     if image not in rebuild_images:
                         rebuild_images.append(image)
                     recreate_targets.append(target.label)
-                    notes.append(f"Bot state for {target.label} will be preserved.")
+                    notes.append(f"Bot volumes for {target.label} will be preserved. Only the current schema is supported.")
         elif action == Action.RESTART:
             restart_targets = [target.label for target in targets]
             for target in targets:
                 if target.kind == TargetKind.REGISTRY:
-                    notes.append("Registry data volume will be preserved.")
+                    notes.append("Registry volumes will be preserved.")
                 else:
-                    notes.append(f"Bot state for {target.label} will be preserved.")
+                    notes.append(f"Bot volumes for {target.label} will be preserved.")
         elif action == Action.START:
             restart_targets = [target.label for target in targets]
         elif action == Action.STOP:
@@ -1169,7 +1169,7 @@ class OctopusManager:
             values = parse_env_file(self.registry_env_file())
         values = self._validated_registry_deploy_values(deploy, existing=values, creating=created)
         write_env_file(self.registry_env_file(), values)
-        self.docker.registry_compose("run", "--rm", "db-bootstrap", capture_output=False)
+        self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         self.docker.registry_compose("up", "-d", "--remove-orphans", "service", capture_output=False)
         state = self.inspect_state().registry
         if created:
@@ -1193,7 +1193,7 @@ class OctopusManager:
             return
         values = self._validated_registry_deploy_values(deploy, existing=parse_env_file(self.registry_env_file()), creating=False)
         write_env_file(self.registry_env_file(), values)
-        self.docker.registry_compose("run", "--rm", "db-bootstrap", capture_output=False)
+        self.docker.registry_compose("run", "--rm", "db-init", capture_output=False)
         args = ["up", "-d", "--remove-orphans"]
         if force_recreate:
             args.append("--force-recreate")
@@ -1211,7 +1211,7 @@ class OctopusManager:
         provider = self.bot_values(slug).get("BOT_PROVIDER", "claude")
         self.ensure_provider_image_ready(provider, force=force_rebuild)
         self.reconcile_bot_registry_connections(slug)
-        self.docker.bot_compose(slug, "run", "--rm", "db-bootstrap", capture_output=False)
+        self.docker.bot_compose(slug, "run", "--rm", "db-init", capture_output=False)
         args = ["up", "-d"]
         if force_recreate:
             args.append("--force-recreate")

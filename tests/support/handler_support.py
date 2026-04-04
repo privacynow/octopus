@@ -835,13 +835,6 @@ def bot_texts(bot) -> list[str]:
             out.append(t)
     return out
 
-
-def last_bot_text(bot, default: str = "") -> str:
-    """Last text in bot.sent_messages (send or edit)."""
-    texts = bot_texts(bot)
-    return texts[-1] if texts else default
-
-
 def last_reply(msg):
     if not msg.replies:
         return ""

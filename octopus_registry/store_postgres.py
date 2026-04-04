@@ -107,12 +107,10 @@ from .store_shared.tasks import (
 )
 from .store_base import (
     AbstractRegistryStore,
-    stable_routed_task_id,
-    RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
+    RoutingSkillDisabledError,
     routed_task_external_conversation_ref,
     validated_routed_task_request,
-    decode_json_field,
     hash_agent_token,
     offline_before_iso,
     require_registry_scope,
@@ -290,9 +288,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             )
             return epoch
 
-    def _offline_before(self) -> str:
-        return offline_before_iso()
-
     def _token_row(self, conn, token: str) -> dict[str, object] | None:
         with _cur(conn) as cur:
             cur.execute(
@@ -300,6 +295,40 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 (hash_agent_token(token),),
             )
             return cur.fetchone()
+
+    def _create_delivery(self, conn, **kwargs) -> DeliveryRecord:
+        return shared_create_delivery(
+            conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            json_param=_jsonb,
+            **kwargs,
+        )
+
+    def _insert_event(self, conn, **kwargs) -> EventRecord | None:
+        return shared_insert_event(
+            conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            json_param=_jsonb,
+            **kwargs,
+        )
+
+    def _ensure_conversation_in_tx(self, conn, **kwargs) -> str:
+        return shared_ensure_conversation_in_tx(
+            conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _require_coordination_scope(agent_row) -> None:
+        require_registry_scope(agent_row, {"coordination", "full"})
+
+    def _runtime_worker_rows(self, conn, agent_id: str):
+        return shared_runtime_worker_rows(
+            conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            agent_id=agent_id,
+        )
 
     def resolve_agent_for_token(self, agent_token: str) -> AgentRecord | None:
         with self._connect() as conn:
@@ -423,7 +452,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     GROUP BY skill_key
                     ORDER BY skill_key
                     """,
-                    (self._offline_before(),),
+                    (offline_before_iso(),),
                 )
                 declared_rows = cur.fetchall()
                 cur.execute(
@@ -489,10 +518,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             else payload
         )
         with self._connect() as conn, _write_tx(conn):
-            return shared_create_delivery(
+            return self._create_delivery(
                 conn,
-                dialect=_POSTGRES_STORE_DIALECT,
-                json_param=_jsonb,
                 target_agent_id=target_agent_id,
                 kind=kind,
                 payload=delivery_payload,
@@ -507,12 +534,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return shared_create_management_request(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
-                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
+                create_delivery=self._create_delivery,
                 json_param=_jsonb,
                 request=request,
                 now=now,
@@ -529,22 +551,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             dialect=_POSTGRES_STORE_DIALECT,
             selector=selector,
         )
-
-    @staticmethod
-    def _task_row_to_summary(row: dict[str, object]) -> TaskRecord:
-        request_payload = decode_json_field(row["request_json"], {})
-        return _record(TaskRecord, {
-            "routed_task_id": row["routed_task_id"],
-            "parent_conversation_id": row["parent_conversation_id"],
-            "origin_transport_ref": str(request_payload.get("origin_transport_ref", "") or ""),
-            "origin_agent_id": row["origin_agent_id"],
-            "target_agent_id": row["target_agent_id"],
-            "title": row["title"],
-            "status": row["status"],
-            "summary": row["summary"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        })
 
     @staticmethod
     def _task_snapshot__row(row: dict[str, object]) -> RoutedTaskSnapshot:
@@ -570,9 +576,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
         for skill_name in requested_routed_skills(request_payload):
             if skill_name.lower() in disabled_skills:
                 raise RoutingSkillDisabledError(skill_name)
-        recipient_conversation_id = shared_ensure_conversation_in_tx(
+        recipient_conversation_id = self._ensure_conversation_in_tx(
             conn,
-            dialect=_POSTGRES_STORE_DIALECT,
             target_agent_id=validated_request.target_agent_id,
             title=validated_request.title,
             conversation_type="task_thread",
@@ -611,10 +616,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     now,
                 ),
             )
-        delivery = shared_create_delivery(
+        delivery = self._create_delivery(
             conn,
-            dialect=_POSTGRES_STORE_DIALECT,
-            json_param=_jsonb,
             target_agent_id=validated_request.target_agent_id,
             kind="routed_task",
             payload=request_payload,
@@ -627,10 +630,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "routed_task_id": validated_request.routed_task_id,
             "status": "queued",
         }
-        inserted_event = shared_insert_event(
+        inserted_event = self._insert_event(
             conn,
-            dialect=_POSTGRES_STORE_DIALECT,
-            json_param=_jsonb,
             event_id=mirrored_event_id,
             conversation_id=validated_request.parent_conversation_id,
             agent_id=validated_request.target_agent_id,
@@ -647,10 +648,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=validated_request.parent_conversation_id,
                 updated_at=now,
             )
-        recipient_event = shared_insert_event(
+        recipient_event = self._insert_event(
             conn,
-            dialect=_POSTGRES_STORE_DIALECT,
-            json_param=_jsonb,
             event_id=f"{mirrored_event_id}:recipient",
             conversation_id=recipient_conversation_id,
             agent_id=validated_request.target_agent_id,
@@ -730,19 +729,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
-                require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
+                require_coordination_scope=self._require_coordination_scope,
                 task_snapshot_row=self._task_snapshot__row,
-                insert_event=lambda inner_conn, **kwargs: shared_insert_event(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
-                ensure_conversation_in_tx=lambda inner_conn, **kwargs: shared_ensure_conversation_in_tx(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    **kwargs,
-                ),
+                insert_event=self._insert_event,
+                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
                 agent_token=agent_token,
                 routed_task_id=routed_task_id,
                 payload=payload,
@@ -761,25 +751,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
-                require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
+                require_coordination_scope=self._require_coordination_scope,
                 task_snapshot_row=self._task_snapshot__row,
-                insert_event=lambda inner_conn, **kwargs: shared_insert_event(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
-                ensure_conversation_in_tx=lambda inner_conn, **kwargs: shared_ensure_conversation_in_tx(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    **kwargs,
-                ),
-                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
+                insert_event=self._insert_event,
+                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
+                create_delivery=self._create_delivery,
                 json_param=_jsonb,
                 agent_token=agent_token,
                 routed_task_id=routed_task_id,
@@ -862,11 +838,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_id=agent_id,
-                runtime_worker_rows=lambda inner_conn, inner_agent_id: shared_runtime_worker_rows(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    agent_id=inner_agent_id,
-                ),
+                runtime_worker_rows=self._runtime_worker_rows,
             )
             return _record(RuntimeHealthDetailRecord, detail) if detail is not None else None
 
@@ -1004,12 +976,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return shared_add_conversation_message(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
-                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
+                create_delivery=self._create_delivery,
                 json_param=_jsonb,
                 conversation_id=conversation_id,
                 text=text,
@@ -1026,12 +993,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return shared_add_conversation_action(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
-                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    json_param=_jsonb,
-                    **kwargs,
-                ),
+                create_delivery=self._create_delivery,
                 create_routed_task_in_tx=self._create_routed_task_in_tx,
                 resolve_selector=self._resolve_selector,
                 json_param=_jsonb,
@@ -1149,11 +1111,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_id=agent_id,
                 row_to_agent=shared_row_to_agent,
-                runtime_worker_rows=lambda inner_conn, inner_agent_id: shared_runtime_worker_rows(
-                    inner_conn,
-                    dialect=_POSTGRES_STORE_DIALECT,
-                    agent_id=inner_agent_id,
-                ),
+                runtime_worker_rows=self._runtime_worker_rows,
             )
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:

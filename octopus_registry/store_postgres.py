@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import secrets
 import uuid
 from contextlib import contextmanager
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Literal
 
 from octopus_sdk.content_models import (
@@ -19,23 +16,38 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
-from octopus_sdk.exact_aliases import matches_exact_alias
-
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from .routing_skill_service import (
-    query_routing_skills,
     requested_routed_skills,
 )
 from .postgres import get_connection
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
+    enroll as shared_enroll,
     get_agent_runtime_health as shared_get_agent_runtime_health,
     get_agent_status as shared_get_agent_status,
+    heartbeat as shared_heartbeat,
     list_agents as shared_list_agents,
+    register as shared_register,
+    replace_runtime_health_workers as shared_replace_runtime_health_workers,
+    resolve_agent_for_token as shared_resolve_agent_for_token,
+    resolve_selector as shared_resolve_selector,
+    row_to_agent as shared_row_to_agent,
+    runtime_worker_rows as shared_runtime_worker_rows,
+    search_agents as shared_search_agents,
 )
 from .store_shared.conversations import (
+    add_conversation_action as shared_add_conversation_action,
+    add_conversation_message as shared_add_conversation_message,
+    create_conversation as shared_create_conversation,
+    ensure_conversation_in_tx as shared_ensure_conversation_in_tx,
+    insert_event as shared_insert_event,
+    list_events as shared_list_events,
+    list_messages as shared_list_messages,
+    publish_events as shared_publish_events,
+    touch_conversation as shared_touch_conversation,
     get_conversation as shared_get_conversation,
     list_agent_conversations as shared_list_agent_conversations,
     list_conversations as shared_list_conversations,
@@ -72,7 +84,11 @@ from .store_shared.content import (
 )
 from .store_shared.delivery import (
     ack as shared_ack,
+    create_delivery as shared_create_delivery,
+    create_management_request as shared_create_management_request,
+    get_management_result as shared_get_management_result,
     poll as shared_poll,
+    report_management_result as shared_report_management_result,
 )
 from .store_shared.summary import (
     get_summary as shared_get_summary,
@@ -94,36 +110,16 @@ from .store_base import (
     stable_routed_task_id,
     RoutingSkillDisabledError,
     PROTECTED_ROUTED_TASK_STATUSES,
-    delegation_event,
     routed_task_created_event,
     routed_task_external_conversation_ref,
-    validated_action_payload,
-    validated_agent_card_payload,
-    validated_conversation_action,
-    validated_conversation_message_text,
-    validated_heartbeat_payload,
-    validated_management_request,
-    validated_management_result,
-    validated_register_payload,
     validated_routed_task_request,
-    validated_search_query,
     decode_json_field,
-    canonical_registry_connectivity_state,
-    effective_connectivity_state,
     hash_agent_token,
     offline_before_iso,
     require_registry_scope,
-    runtime_health_generated_at,
-    runtime_health_execution_fields,
-    runtime_health_summary,
     utcnow_iso,
-    validated_registry_scope,
 )
-from octopus_sdk.registry.management import (
-    ManagementRequest,
-    ManagementResult,
-    required_management_capability,
-)
+from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.registry.models import (
     AckResult,
     AgentCard,
@@ -140,10 +136,7 @@ from octopus_sdk.registry.models import (
     ConversationSearchHitRecord,
     DeliveryPollResult,
     DeliveryRecord,
-    DelegationTaskDraft,
-    DirectAssignActionPayload,
     EnrollmentResult,
-    EventRecord,
     EventPageRecord,
     HealthSummary,
     MessageRecord,
@@ -152,19 +145,12 @@ from octopus_sdk.registry.models import (
     RegistryRecordModel,
     RegistryJsonRecord,
     RegistrySummaryRecord,
-    RuntimeHealthPayload,
     RuntimeHealthDetailRecord,
-    RuntimeWorkerRecord,
     TargetSelector,
     TaskRecord,
     UsageSummaryRecord,
-    normalized_requested_skills,
 )
-from octopus_sdk.task_protocol import (
-    RoutedTaskSnapshot,
-    TaskTransitionRequest,
-    apply_task_transition,
-)
+from octopus_sdk.task_protocol import RoutedTaskSnapshot
 
 _SCHEMA = "agent_registry"
 _REGISTRY_EPOCH_KEY = "registry_epoch"
@@ -272,7 +258,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 row = cur.fetchone()
                 if row is None or row["table_name"] is None:
                     raise RuntimeError(
-                        "agent_registry schema not found. Run DB bootstrap or DB update to apply 0004_registry.sql."
+                        "agent_registry schema not found. Run db-init to create the current schema."
                     )
                 cur.execute(
                     f"""
@@ -318,8 +304,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def resolve_agent_for_token(self, agent_token: str) -> AgentRecord | None:
         with self._connect() as conn:
-            row = self._token_row(conn, agent_token)
-            return self._row_to_agent(row) if row else None
+            return shared_resolve_agent_for_token(
+                conn,
+                token_row=self._token_row,
+                agent_token=agent_token,
+            )
 
     def _ensure_unique_slug(self, conn, requested: str) -> str:
         slug = requested
@@ -335,195 +324,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 slug = f"{requested}-{suffix}"
                 suffix += 1
 
-    def _row_to_agent(self, row: dict[str, object]) -> AgentRecord:
-        effective_state = row.get("effective_state") or effective_connectivity_state(
-            row["connectivity_state"], row["last_heartbeat_at"]
-        )
-        return _record(AgentRecord, {
-            **runtime_health_execution_fields(row.get("runtime_health_json")),
-            "agent_id": row["agent_id"],
-            "display_name": row["display_name"],
-            "slug": row["slug"],
-            "role": row["role"],
-            "registry_scope": row.get("registry_scope", "full"),
-            "routing_skills": decode_json_field(row["skills_json"], []),
-            "tags": decode_json_field(row["tags_json"], []),
-            "description": row["description"],
-            "provider": row["provider"],
-            "mode": row["mode"],
-            "connectivity_state": effective_state,
-            "current_capacity": row["current_capacity"],
-            "max_capacity": row["max_capacity"],
-            "channel_capabilities": decode_json_field(row["channel_capabilities_json"], []),
-            "management_capabilities": decode_json_field(row.get("management_capabilities_json"), []),
-            "version": row["version"],
-            "last_heartbeat_at": row["last_heartbeat_at"],
-            "updated_at": row["updated_at"],
-            "runtime_health_summary": runtime_health_summary(row.get("runtime_health_json")),
-            "runtime_health_generated_at": runtime_health_generated_at(row.get("runtime_health_json")),
-        })
-
-    def _replace_runtime_health_workers(
-        self,
-        conn,
-        *,
-        agent_id: str,
-        runtime_health_payload: RuntimeHealthPayload,
-        mirrored_at: str,
-    ) -> None:
-        workers: list[RuntimeWorkerRecord] = []
-        snapshot = runtime_health_payload.snapshot
-        if snapshot is not None:
-            raw_workers = snapshot.get("workers") or []
-            if isinstance(raw_workers, list):
-                for worker in raw_workers:
-                    try:
-                        workers.append(RuntimeWorkerRecord.model_validate(worker))
-                    except Exception:
-                        continue
-        with _cur(conn) as cur:
-            cur.execute(
-                f"DELETE FROM {_SCHEMA}.agent_runtime_workers WHERE agent_id = %s",
-                (agent_id,),
-            )
-            for worker in workers:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.agent_runtime_workers (
-                        agent_id, worker_id, process_role, started_at, last_seen_at,
-                        current_item_id, current_conversation_key, current_kind,
-                        items_processed, stale_recoveries_seen, last_error, mirrored_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        agent_id,
-                        worker.worker_id,
-                        worker.process_role,
-                        worker.started_at,
-                        worker.last_seen_at,
-                        worker.current_item_id,
-                        worker.current_conversation_key,
-                        worker.current_kind,
-                        worker.items_processed,
-                        worker.stale_recoveries_seen,
-                        worker.last_error,
-                        mirrored_at,
-                    ),
-                )
-
-    def _runtime_worker_rows(self, conn, agent_id: str) -> list[dict[str, object]]:
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                SELECT *
-                FROM {_SCHEMA}.agent_runtime_workers
-                WHERE agent_id = %s
-                ORDER BY worker_id ASC
-                """,
-                (agent_id,),
-            )
-            rows = cur.fetchall()
-        return [
-            {
-                "worker_id": row["worker_id"],
-                "process_role": row["process_role"],
-                "started_at": row["started_at"],
-                "last_seen_at": row["last_seen_at"],
-                "current_item_id": row["current_item_id"],
-                "current_conversation_key": row["current_conversation_key"],
-                "current_kind": row["current_kind"],
-                "items_processed": row["items_processed"],
-                "stale_recoveries_seen": row["stale_recoveries_seen"],
-                "last_error": row["last_error"],
-                "mirrored_at": row["mirrored_at"],
-            }
-            for row in rows
-        ]
-
-
     def enroll(self, requested_card: AgentCard) -> EnrollmentResult:
         now = utcnow_iso()
-        requested_payload = (
-            requested_card.model_dump(mode="json")
-            if hasattr(requested_card, "model_dump")
-            else requested_card
-        )
-        card = validated_agent_card_payload(requested_payload, require_registry_scope=True)
-        bot_key = str(card.get("bot_key", "") or "").strip()
-        if not bot_key:
-            raise ValueError("bot_key requires non-empty text")
-
-        # If bot_key is provided, check for existing enrollment (idempotent re-enroll)
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT agent_id, slug FROM {_SCHEMA}.agents WHERE bot_key = %s",
-                    (bot_key,),
-                )
-                existing = cur.fetchone()
-                if existing:
-                    agent_token = secrets.token_urlsafe(32)
-                    agent_token_hash = hash_agent_token(agent_token)
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.agents SET agent_token = %s, updated_at = %s WHERE bot_key = %s",
-                        (agent_token_hash, now, bot_key),
-                    )
-                    return _record(EnrollmentResult, {
-                        "agent_id": existing["agent_id"],
-                        "slug": existing["slug"],
-                        "agent_token": agent_token,
-                        "poll_cursor": "0",
-                        "registry_epoch": self._registry_epoch(conn),
-                    })
-
-        agent_id = uuid.uuid4().hex
-        agent_token = secrets.token_urlsafe(32)
-        agent_token_hash = hash_agent_token(agent_token)
-        with self._connect() as conn, _write_tx(conn):
-            slug = self._ensure_unique_slug(conn, card.get("slug") or "agent")
-            registry_epoch = self._registry_epoch(conn)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.agents (
-                        agent_id, agent_token, display_name, slug, role, registry_scope,
-                        skills_json, tags_json, description, provider, mode,
-                        connectivity_state, current_capacity, max_capacity,
-                        channel_capabilities_json, management_capabilities_json, version, bot_key,
-                        created_at, updated_at, last_heartbeat_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        agent_id,
-                        agent_token_hash,
-                        card.get("display_name") or slug,
-                        slug,
-                        card.get("role", ""),
-                        validated_registry_scope(card.get("registry_scope")),
-                        _jsonb(card.get("routing_skills", [])),
-                        _jsonb(card.get("tags", [])),
-                        card.get("description", ""),
-                        card.get("provider", ""),
-                        card.get("mode", "registry"),
-                        canonical_registry_connectivity_state(card.get("connectivity_state", "degraded")),
-                        card.get("current_capacity", 0),
-                        card.get("max_capacity", 1),
-                        _jsonb(card.get("channel_capabilities", [])),
-                        _jsonb(card.get("management_capabilities", [])),
-                        card.get("version", ""),
-                        bot_key,
-                        now,
-                        now,
-                        now,
-                    ),
-                )
-        return _record(EnrollmentResult, {
-            "agent_id": agent_id,
-            "slug": slug,
-            "agent_token": agent_token,
-            "poll_cursor": "0",
-            "registry_epoch": registry_epoch,
-        })
+            return shared_enroll(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                ensure_unique_slug=self._ensure_unique_slug,
+                registry_epoch=self._registry_epoch,
+                requested_card=requested_card,
+                now=now,
+            )
 
     def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
         with self._connect() as conn:
@@ -533,123 +344,29 @@ class RegistryPostgresStore(AbstractRegistryStore):
             require_registry_scope(row, required_scopes)
 
     def register(self, agent_token: str, payload: AgentRegisterRequest) -> AgentRecord:
-        now = utcnow_iso()
-        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            register_payload = validated_register_payload(
-                payload.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
-                if hasattr(payload, "model_dump")
-                else payload
+            return shared_register(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                token_row=self._token_row,
+                agent_token=agent_token,
+                payload=payload,
             )
-            card = register_payload.agent_card
-            requested_bot_key = str(card.bot_key or "").strip()
-            current_bot_key = str(row["bot_key"] or "").strip()
-            if requested_bot_key and requested_bot_key != current_bot_key:
-                raise ValueError("bot_key must match the enrolled agent identity")
-            current_skills = decode_json_field(row.get("skills_json"), [])
-            current_tags = decode_json_field(row.get("tags_json"), [])
-            current_channel_capabilities = decode_json_field(
-                row.get("channel_capabilities_json"),
-                [],
-            )
-            current_management_capabilities = decode_json_field(
-                row.get("management_capabilities_json"),
-                [],
-            )
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.agents
-                    SET display_name = %s, role = %s, registry_scope = %s, skills_json = %s, tags_json = %s,
-                        description = %s, provider = %s, mode = %s, connectivity_state = %s,
-                        current_capacity = %s, max_capacity = %s, channel_capabilities_json = %s,
-                        management_capabilities_json = %s,
-                        version = %s, updated_at = %s, last_heartbeat_at = %s
-                    WHERE agent_token = %s
-                    """,
-                    (
-                        card.display_name or row["display_name"],
-                        card.role or row["role"],
-                        card.registry_scope or row["registry_scope"],
-                        _jsonb(card.routing_skills or current_skills),
-                        _jsonb(card.tags or current_tags),
-                        card.description or row["description"],
-                        card.provider or row["provider"],
-                        card.mode or row["mode"],
-                        canonical_registry_connectivity_state(
-                            register_payload.connectivity_state or row["connectivity_state"]
-                        ),
-                        row["current_capacity"] if register_payload.current_capacity is None else register_payload.current_capacity,
-                        row["max_capacity"] if register_payload.max_capacity is None else register_payload.max_capacity,
-                        _jsonb(card.channel_capabilities or current_channel_capabilities),
-                        _jsonb(card.management_capabilities or current_management_capabilities),
-                        card.version or row["version"],
-                        now,
-                        now,
-                        agent_token_hash,
-                    ),
-                )
-            row = self._token_row(conn, agent_token)
-            assert row is not None
-            return self._row_to_agent(row)
 
     def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
-        now = utcnow_iso()
-        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            heartbeat_payload = validated_heartbeat_payload(
-                payload.model_dump(mode="json", exclude_none=True) if hasattr(payload, "model_dump") else payload
+            return shared_heartbeat(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                token_row=self._token_row,
+                replace_runtime_health_workers=lambda inner_conn, **kwargs: shared_replace_runtime_health_workers(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    **kwargs,
+                ),
+                agent_token=agent_token,
+                payload=payload,
             )
-            previous_effective_state = effective_connectivity_state(
-                row["connectivity_state"],
-                row["last_heartbeat_at"],
-            )
-            runtime_health_payload = heartbeat_payload.runtime_health
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.agents
-                    SET connectivity_state = %s, current_capacity = %s, max_capacity = %s,
-                        updated_at = %s, last_heartbeat_at = %s, runtime_health_json = %s
-                    WHERE agent_token = %s
-                    """,
-                    (
-                        canonical_registry_connectivity_state(
-                            heartbeat_payload.connectivity_state or row["connectivity_state"]
-                        ),
-                        row["current_capacity"] if heartbeat_payload.current_capacity is None else heartbeat_payload.current_capacity,
-                        row["max_capacity"] if heartbeat_payload.max_capacity is None else heartbeat_payload.max_capacity,
-                        now,
-                        now,
-                        (
-                            _jsonb(runtime_health_payload)
-                            if runtime_health_payload is not None
-                            else _jsonb(decode_json_field(row.get("runtime_health_json"), {}))
-                        ),
-                        agent_token_hash,
-                    ),
-                )
-            if runtime_health_payload is not None:
-                self._replace_runtime_health_workers(
-                    conn,
-                    agent_id=row["agent_id"],
-                    runtime_health_payload=runtime_health_payload,
-                    mirrored_at=now,
-                )
-            row = self._token_row(conn, agent_token)
-            assert row is not None
-            current_agent = self._row_to_agent(row)
-            return _record(HealthSummary, {
-                "agent": current_agent,
-                "collections_changed": previous_effective_state != current_agent["connectivity_state"],
-                "server_time": now,
-            })
 
     def get_routing_skill_override(self, skill_name: str) -> bool | None:
         normalized = skill_name.strip().lower()
@@ -750,114 +467,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         return {str(row["skill_name"]).lower() for row in rows}
 
     def search_agents(self, query: AgentDiscoveryQuery) -> list[AgentRecord]:
-        validated_query = validated_search_query(
-            query.model_dump(mode="json") if hasattr(query, "model_dump") else query
-        )
-        role = validated_query.get("role", "").strip().lower()
-        required_state = validated_query.get("required_state", "connected")
-        skills = query_routing_skills(validated_query)
-        tags = {t.lower() for t in validated_query.get("tags", []) if t}
-        free_text = validated_query.get("free_text", "").strip()
-        exclude = sorted(set(validated_query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_skills = self._disabled_routing_skills(conn)
-            skills = skills - disabled_skills
-            if validated_query.get("skills") and not skills:
-                return []
-            sql = [
-                f"""
-                WITH agent_rows AS (
-                    SELECT
-                        a.*,
-                        CASE
-                            WHEN coalesce(a.last_heartbeat_at, '') != ''
-                                 AND a.last_heartbeat_at::timestamptz < %s::timestamptz
-                            THEN 'disconnected'
-                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
-                            ELSE a.connectivity_state
-                        END AS effective_state
-                    FROM {_SCHEMA}.agents a
-                )
-                SELECT *
-                FROM agent_rows
-                WHERE 1 = 1
-                """
-            ]
-            params: list[object] = [self._offline_before()]
-            if exclude:
-                sql.append(" AND agent_id != ALL(%s)")
-                params.append(exclude)
-            if required_state:
-                sql.append(" AND effective_state = %s")
-                params.append(required_state)
-            if role:
-                sql.append(" AND role ILIKE %s")
-                params.append(f"%{role}%")
-            for skill_name in sorted(skills):
-                sql.append(
-                    """
-                    AND EXISTS (
-                        SELECT 1
-                        FROM jsonb_array_elements_text(agent_rows.skills_json) AS je(value)
-                        WHERE lower(je.value) = %s
-                    )
-                    """
-                )
-                params.append(skill_name)
-            for tag in sorted(tags):
-                sql.append(
-                    """
-                    AND EXISTS (
-                        SELECT 1
-                        FROM jsonb_array_elements_text(agent_rows.tags_json) AS je(value)
-                        WHERE lower(je.value) = %s
-                    )
-                    """
-                )
-                params.append(tag)
-            if free_text:
-                like = f"%{free_text}%"
-                skill_clause = """
-                    EXISTS (
-                        SELECT 1
-                        FROM jsonb_array_elements_text(agent_rows.skills_json) AS je(value)
-                        WHERE je.value ILIKE %s
-                    )
-                """
-                if disabled_skills:
-                    skill_clause = f"""
-                        EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements_text(agent_rows.skills_json) AS je(value)
-                            WHERE je.value ILIKE %s
-                              AND lower(je.value) != ALL(%s)
-                        )
-                    """
-                sql.append(
-                    f"""
-                    AND (
-                        display_name ILIKE %s
-                        OR role ILIKE %s
-                        OR description ILIKE %s
-                        OR {skill_clause}
-                        OR EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements_text(agent_rows.tags_json) AS je(value)
-                            WHERE je.value ILIKE %s
-                        )
-                    )
-                    """
-                )
-                params.extend([like, like, like, like])
-                if disabled_skills:
-                    params.append(sorted(disabled_skills))
-                params.append(like)
-            sql.append(" ORDER BY lower(display_name)")
-            with _cur(conn) as cur:
-                cur.execute("".join(sql), params)
-                rows = cur.fetchall()
-        agents = [self._row_to_agent(row) for row in rows]
-        return [agent for agent in agents if str(agent.execution_state or "healthy") != "faulted"]
+            return shared_search_agents(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                disabled_skill_names=self._disabled_routing_skills(conn),
+                query=query,
+            )
 
     def create_delivery(
         self,
@@ -874,8 +490,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             else payload
         )
         with self._connect() as conn, _write_tx(conn):
-            return self._create_delivery(
+            return shared_create_delivery(
                 conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                json_param=_jsonb,
                 target_agent_id=target_agent_id,
                 kind=kind,
                 payload=delivery_payload,
@@ -885,226 +503,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
         now = utcnow_iso()
-        validated_request = validated_management_request(
-            request.model_dump(mode="json") if hasattr(request, "model_dump") else request
-        )
         delivery_id = uuid.uuid4().hex
-        capability = required_management_capability(validated_request.operation)
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.management_requests (
-                        request_id, target_agent_id, operation, capability, payload_json,
-                        status, delivery_id, result_json, error_code, error_detail, created_at, completed_at
-                    ) VALUES (%s, %s, %s, %s, %s, 'queued', %s, NULL, '', '', %s, '')
-                    ON CONFLICT (request_id) DO UPDATE SET
-                        target_agent_id = EXCLUDED.target_agent_id,
-                        operation = EXCLUDED.operation,
-                        capability = EXCLUDED.capability,
-                        payload_json = EXCLUDED.payload_json,
-                        status = 'queued',
-                        delivery_id = EXCLUDED.delivery_id,
-                        result_json = NULL,
-                        error_code = '',
-                        error_detail = '',
-                        created_at = EXCLUDED.created_at,
-                        completed_at = ''
-                    """,
-                    (
-                        validated_request.request_id,
-                        validated_request.agent_id,
-                        validated_request.operation,
-                        capability,
-                        _jsonb(validated_request.model_dump(mode="json")),
-                        delivery_id,
-                        now,
-                    ),
-                )
-            self._create_delivery(
+            return shared_create_management_request(
                 conn,
-                target_agent_id=validated_request.agent_id,
-                kind="management_request",
-                payload=validated_request.model_dump(mode="json"),
+                dialect=_POSTGRES_STORE_DIALECT,
+                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
+                json_param=_jsonb,
+                request=request,
                 now=now,
                 delivery_id=delivery_id,
             )
-        return validated_request
-
-    def _create_delivery(
-        self,
-        conn,
-        *,
-        target_agent_id: str,
-        kind: str,
-        payload: dict[str, object],
-        now: str,
-        delivery_id: str,
-    ) -> DeliveryRecord:
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {_SCHEMA}.deliveries (
-                    delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
-                )
-                VALUES (%s, %s, %s, %s, 'queued', %s, %s)
-                RETURNING seq
-                """,
-                (delivery_id, target_agent_id, kind, _jsonb(payload), now, now),
-            )
-            seq = cur.fetchone()["seq"]
-        return _record(DeliveryRecord, {"delivery_id": delivery_id, "seq": seq})
-
-    def _selector_candidates(
-        self,
-        conn,
-        selector: TargetSelector,
-    ) -> list[dict[str, object]]:
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                WITH agent_rows AS (
-                    SELECT
-                        a.*,
-                        CASE
-                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < %s THEN 'disconnected'
-                            WHEN a.connectivity_state = 'offline' THEN 'disconnected'
-                            ELSE a.connectivity_state
-                        END AS effective_state
-                    FROM {_SCHEMA}.agents a
-                )
-                SELECT *
-                FROM agent_rows
-                WHERE effective_state = 'connected'
-                ORDER BY lower(display_name), agent_id
-                """,
-                (self._offline_before(),),
-            )
-            rows = cur.fetchall()
-        value = selector.value.strip().lower()
-        matches: list[dict[str, object]] = []
-        for row in rows:
-            if selector.kind == "agent":
-                slug = str(row["slug"] or "").strip().lower()
-                agent_id = str(row["agent_id"] or "").strip().lower()
-                display_name = str(row["display_name"] or "")
-                if matches_exact_alias(
-                    value,
-                    identifier=agent_id,
-                    slug=slug,
-                    display_name=display_name,
-                ):
-                    matches.append(row)
-            elif selector.kind == "skill":
-                caps = {
-                    str(item).strip().lower()
-                    for item in decode_json_field(row["skills_json"], [])
-                    if item
-                }
-                if value in caps:
-                    matches.append(row)
-            elif selector.kind == "role":
-                role = str(row["role"] or "").strip().lower()
-                if role == value or value in role:
-                    matches.append(row)
-        return matches
 
     def _resolve_selector(
         self,
         conn,
         selector: TargetSelector,
     ) -> dict[str, object]:
-        matches = self._selector_candidates(conn, selector)
-        preferred = selector.preferred_agent_id.strip()
-        if preferred:
-            preferred_matches = [
-                row for row in matches if str(row["agent_id"] or "").strip() == preferred
-            ]
-            if not preferred_matches:
-                raise ValueError(
-                    f"Selector {selector.kind}:{selector.value} does not resolve to preferred agent {preferred}"
-                )
-            return preferred_matches[0]
-        if not matches:
-            raise ValueError(f"No connected agent matches {selector.kind}:{selector.value}")
-        if len(matches) > 1:
-            labels = ", ".join(
-                str(row["slug"] or row["agent_id"] or "").strip()
-                for row in matches[:5]
-            )
-            raise ValueError(
-                f"Selector {selector.kind}:{selector.value} is ambiguous across {len(matches)} agents: {labels}"
-            )
-        return matches[0]
-
-    def _delegation_task_metadata(
-        self,
-        task: DelegationTaskDraft,
-        *,
-        status: str,
-        target_agent_id: str = "",
-        routed_task_id: str = "",
-    ) -> dict[str, object]:
-        return {
-            "draft_id": task.draft_id,
-            "title": task.title,
-            "target": target_agent_id or task.selector.preferred_agent_id or task.selector.value,
-            "status": status,
-            "routed_task_id": routed_task_id,
-            "selector_kind": task.selector.kind,
-            "selector_value": task.selector.value,
-            "instructions": task.instructions,
-            "priority": task.priority,
-            "requested_skills": list(task.requested_skills),
-            "context": dict(task.context),
-        }
-
-    def _insert_event(
-        self,
-        conn,
-        *,
-        event_id: str,
-        conversation_id: str,
-        agent_id: str,
-        kind: str,
-        actor: str,
-        content: str,
-        metadata: dict[str, object],
-        created_at: str,
-    ) -> dict[str, object] | None:
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT(event_id) DO NOTHING
-                RETURNING seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at
-                """,
-                (
-                    event_id,
-                    conversation_id,
-                    agent_id,
-                    kind,
-                    actor,
-                    content,
-                    _jsonb(metadata),
-                    created_at,
-                ),
-            )
-            row = cur.fetchone()
-        if row is None:
-            return None
-        return _record(EventRecord, {
-            "seq": row["seq"],
-            "event_id": row["event_id"],
-            "conversation_id": row["conversation_id"],
-            "agent_id": row["agent_id"],
-            "kind": row["kind"],
-            "actor": row["actor"],
-            "content": row["content"],
-            "metadata": json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else row["metadata_json"],
-            "created_at": row["created_at"],
-        })
+        return shared_resolve_selector(
+            conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            selector=selector,
+        )
 
     @staticmethod
     def _task_row_to_summary(row: dict[str, object]) -> TaskRecord:
@@ -1129,76 +554,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             queued_at=str(row["created_at"] or ""),
         )
 
-    def _ensure_conversation_in_tx(
-        self,
-        conn,
-        *,
-        target_agent_id: str,
-        title: str,
-        conversation_type: str = "conversation",
-        origin_channel: str,
-        external_conversation_ref: str,
-        now: str,
-    ) -> str:
-        if not origin_channel or not origin_channel.strip():
-            raise ValueError("origin_channel must not be empty")
-        if not external_conversation_ref or not external_conversation_ref.strip():
-            raise ValueError("external_conversation_ref must not be empty")
-        with _cur(conn) as cur:
-            cur.execute(
-                f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                (target_agent_id,),
-            )
-            agent_row = cur.fetchone()
-            bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
-            if not bot_key:
-                raise ValueError(f"Unknown agent or missing bot_key: {target_agent_id}")
-            canonical = f"{bot_key}:{origin_channel}:{external_conversation_ref}"
-            conversation_id = hashlib.sha256(canonical.encode()).hexdigest()[:32]
-            cur.execute(
-                f"""
-                INSERT INTO {_SCHEMA}.conversations (
-                    conversation_id, target_agent_id, title, conversation_type, origin_channel,
-                    external_conversation_ref, status, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, %s)
-                ON CONFLICT(target_agent_id, origin_channel, external_conversation_ref) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    updated_at = EXCLUDED.updated_at
-                RETURNING conversation_id
-                """,
-                (
-                    conversation_id,
-                    target_agent_id,
-                    title,
-                    conversation_type,
-                    origin_channel,
-                    external_conversation_ref,
-                    now,
-                    now,
-                ),
-            )
-            return str(cur.fetchone()["conversation_id"])
-
-    def _ensure_routed_task_recipient_conversation_in_tx(
-        self,
-        conn,
-        request: RoutedTaskRequest,
-        *,
-        now: str,
-    ) -> str:
-        external_conversation_ref = str(request.external_conversation_ref or "").strip()
-        if not external_conversation_ref:
-            external_conversation_ref = routed_task_external_conversation_ref(request.routed_task_id)
-        return self._ensure_conversation_in_tx(
-            conn,
-            target_agent_id=request.target_agent_id,
-            title=request.title,
-            conversation_type="task_thread",
-            origin_channel="registry",
-            external_conversation_ref=external_conversation_ref,
-            now=now,
-        )
-
     def _create_routed_task_in_tx(
         self,
         conn,
@@ -1216,9 +571,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
         for skill_name in requested_routed_skills(request_payload):
             if skill_name.lower() in disabled_skills:
                 raise RoutingSkillDisabledError(skill_name)
-        recipient_conversation_id = self._ensure_routed_task_recipient_conversation_in_tx(
+        recipient_conversation_id = shared_ensure_conversation_in_tx(
             conn,
-            validated_request,
+            dialect=_POSTGRES_STORE_DIALECT,
+            target_agent_id=validated_request.target_agent_id,
+            title=validated_request.title,
+            conversation_type="task_thread",
+            origin_channel="registry",
+            external_conversation_ref=(
+                str(validated_request.external_conversation_ref or "").strip()
+                or routed_task_external_conversation_ref(validated_request.routed_task_id)
+            ),
             now=now,
         )
         with _cur(conn) as cur:
@@ -1249,8 +612,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     now,
                 ),
             )
-        delivery = self._create_delivery(
+        delivery = shared_create_delivery(
             conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            json_param=_jsonb,
             target_agent_id=validated_request.target_agent_id,
             kind="routed_task",
             payload=request_payload,
@@ -1258,8 +623,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             delivery_id=uuid.uuid4().hex,
         )
         mirrored_event = routed_task_created_event(validated_request)
-        inserted_event = self._insert_event(
+        inserted_event = shared_insert_event(
             conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            json_param=_jsonb,
             event_id=mirrored_event.event_id,
             conversation_id=mirrored_event.conversation_id,
             agent_id=validated_request.target_agent_id,
@@ -1270,13 +637,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
             created_at=mirrored_event.created_at,
         )
         if inserted_event is not None:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                    (mirrored_event.created_at, mirrored_event.conversation_id),
-                )
-        recipient_event = self._insert_event(
+            shared_touch_conversation(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                conversation_id=mirrored_event.conversation_id,
+                updated_at=mirrored_event.created_at,
+            )
+        recipient_event = shared_insert_event(
             conn,
+            dialect=_POSTGRES_STORE_DIALECT,
+            json_param=_jsonb,
             event_id=f"{mirrored_event.event_id}:recipient",
             conversation_id=recipient_conversation_id,
             agent_id=validated_request.target_agent_id,
@@ -1287,11 +657,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             created_at=mirrored_event.created_at,
         )
         if recipient_event is not None:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                    (mirrored_event.created_at, recipient_conversation_id),
-                )
+            shared_touch_conversation(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                conversation_id=recipient_conversation_id,
+                updated_at=mirrored_event.created_at,
+            )
         return {
             "request": validated_request,
             "delivery": delivery,
@@ -1357,8 +728,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 token_row=self._token_row,
                 require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
                 task_snapshot_row=self._task_snapshot__row,
-                insert_event=self._insert_event,
-                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
+                insert_event=lambda inner_conn, **kwargs: shared_insert_event(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
+                ensure_conversation_in_tx=lambda inner_conn, **kwargs: shared_ensure_conversation_in_tx(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    **kwargs,
+                ),
                 agent_token=agent_token,
                 routed_task_id=routed_task_id,
                 payload=payload,
@@ -1379,9 +759,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 token_row=self._token_row,
                 require_coordination_scope=lambda agent_row: require_registry_scope(agent_row, {"coordination", "full"}),
                 task_snapshot_row=self._task_snapshot__row,
-                insert_event=self._insert_event,
-                ensure_conversation_in_tx=self._ensure_conversation_in_tx,
-                create_delivery=self._create_delivery,
+                insert_event=lambda inner_conn, **kwargs: shared_insert_event(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
+                ensure_conversation_in_tx=lambda inner_conn, **kwargs: shared_ensure_conversation_in_tx(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    **kwargs,
+                ),
+                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
                 json_param=_jsonb,
                 agent_token=agent_token,
                 routed_task_id=routed_task_id,
@@ -1396,58 +790,25 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: ManagementResult,
     ) -> ManagementResult:
         now = utcnow_iso()
-        validated_result = validated_management_result(
-            payload.model_dump(mode="json", by_alias=True) if hasattr(payload, "model_dump") else payload
-        )
-        if validated_result.request_id != request_id:
-            raise ValueError("request_id must match the requested management result")
         with self._connect() as conn, _write_tx(conn):
-            row = self._token_row(conn, agent_token)
-            if row is None:
-                raise PermissionError("Unknown agent token")
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT * FROM {_SCHEMA}.management_requests WHERE request_id = %s",
-                    (request_id,),
-                )
-                request_row = cur.fetchone()
-            if request_row is None:
-                raise KeyError(request_id)
-            if str(request_row["target_agent_id"] or "") != str(row["agent_id"] or ""):
-                raise PermissionError("Management request does not belong to this agent")
-            completed_at = validated_result.completed_at or now
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.management_requests
-                    SET status = %s, result_json = %s, error_code = %s, error_detail = %s, completed_at = %s
-                    WHERE request_id = %s
-                    """,
-                    (
-                        "completed" if validated_result.success else "failed",
-                        _jsonb(validated_result.model_dump(mode="json", by_alias=True)),
-                        validated_result.error_code,
-                        validated_result.error_detail,
-                        completed_at,
-                        request_id,
-                    ),
-                )
-        return validated_result
+            return shared_report_management_result(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                token_row=self._token_row,
+                json_param=_jsonb,
+                agent_token=agent_token,
+                request_id=request_id,
+                payload=payload,
+                now=now,
+            )
 
     def get_management_result(self, request_id: str) -> ManagementResult | None:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT result_json FROM {_SCHEMA}.management_requests WHERE request_id = %s",
-                    (request_id,),
-                )
-                row = cur.fetchone()
-            if row is None:
-                return None
-            payload = decode_json_field(row.get("result_json"), None)
-            if not payload:
-                return None
-            return validated_management_result(payload)
+            return shared_get_management_result(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                request_id=request_id,
+            )
 
     def deregister(self, agent_token: str) -> AgentRecord:
         now = utcnow_iso()
@@ -1483,7 +844,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return shared_list_agents(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
-                row_to_agent=self._row_to_agent,
+                row_to_agent=shared_row_to_agent,
                 for_agent_id=for_agent_id,
                 cursor=cursor,
                 limit=limit,
@@ -1497,7 +858,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_id=agent_id,
-                runtime_worker_rows=self._runtime_worker_rows,
+                runtime_worker_rows=lambda inner_conn, inner_agent_id: shared_runtime_worker_rows(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    agent_id=inner_agent_id,
+                ),
             )
             return _record(RuntimeHealthDetailRecord, detail) if detail is not None else None
 
@@ -1518,23 +883,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
         origin_channel: str = "registry",
         external_conversation_ref: str = "",
     ) -> ConversationRecord:
-        if not origin_channel or not origin_channel.strip():
-            raise ValueError("origin_channel must not be empty")
-        if not external_conversation_ref or not external_conversation_ref.strip():
-            raise ValueError("external_conversation_ref must not be empty")
         now = utcnow_iso()
-
         with self._connect() as conn, _write_tx(conn):
-            actual_id = self._ensure_conversation_in_tx(
+            return shared_create_conversation(
                 conn,
+                dialect=_POSTGRES_STORE_DIALECT,
                 target_agent_id=target_agent_id,
                 title=title,
-                conversation_type="conversation",
                 origin_channel=origin_channel,
                 external_conversation_ref=external_conversation_ref,
                 now=now,
             )
-        return self.get_conversation(actual_id)
 
     def list_conversations(self, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 25, q: str = "", status: str = "", conversation_type: str = "") -> list[ConversationRecord]:
         fetch_limit = limit + 1
@@ -1636,571 +995,46 @@ class RegistryPostgresStore(AbstractRegistryStore):
         )
 
     def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
-        validated_text = validated_conversation_message_text(text)
+        now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT target_agent_id, title, origin_channel, external_conversation_ref FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (conversation_id,),
-                )
-                conversation = cur.fetchone()
-            if conversation is None:
-                raise KeyError(conversation_id)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (conversation["target_agent_id"],),
-                )
-                agent_row = cur.fetchone()
-            bot_key = ""
-            if agent_row is not None:
-                bot_key = str(agent_row["bot_key"] or "").strip()
-            if not bot_key:
-                raise ValueError(
-                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
-                )
-            now = utcnow_iso()
-            event_id = uuid.uuid4().hex
-            self._create_delivery(
+            return shared_add_conversation_message(
                 conn,
-                target_agent_id=conversation["target_agent_id"],
-                kind="channel_input",
-                payload={
-                    "conversation_id": conversation_id,
-                    "title": conversation["title"],
-                    "text": validated_text,
-                    "channel": "registry",
-                    "bot_key": bot_key,
-                    "origin_channel": conversation["origin_channel"],
-                    "external_conversation_ref": conversation["external_conversation_ref"],
-                    "stable_event_id": event_id,
-                    "stable_created_at": now,
-                },
+                dialect=_POSTGRES_STORE_DIALECT,
+                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
+                json_param=_jsonb,
+                conversation_id=conversation_id,
+                text=text,
                 now=now,
-                delivery_id=uuid.uuid4().hex,
             )
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(event_id) DO NOTHING
-                    RETURNING seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at""",
-                    (event_id, conversation_id, "", "message.user", "operator", validated_text, _jsonb({}), now),
-                )
-                evt_row = cur.fetchone()
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                    (now, conversation_id),
-                )
-            inserted_event = None
-            if evt_row:
-                inserted_event = _record(EventRecord, {
-                    "seq": evt_row["seq"],
-                    "event_id": evt_row["event_id"],
-                    "conversation_id": evt_row["conversation_id"],
-                    "agent_id": evt_row["agent_id"],
-                    "kind": evt_row["kind"],
-                    "actor": evt_row["actor"],
-                    "content": evt_row["content"],
-                    "metadata": json.loads(evt_row["metadata_json"]) if isinstance(evt_row["metadata_json"], str) else evt_row["metadata_json"],
-                    "created_at": evt_row["created_at"],
-                })
-        return _record(
-            MessageRecord,
-            {"conversation_id": conversation_id, "accepted": True, "event": inserted_event},
-        )
 
     def add_conversation_action(
         self,
         conversation_id: str,
         envelope: CoordinationActionEnvelope,
     ) -> CoordinationActionResult:
-        validated_envelope = validated_conversation_action(envelope)
-        action_payload = validated_action_payload(validated_envelope)
+        now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT target_agent_id, origin_channel, external_conversation_ref, title FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (conversation_id,),
-                )
-                conversation = cur.fetchone()
-            if conversation is None:
-                raise KeyError(conversation_id)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT bot_key FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (conversation["target_agent_id"],),
-                )
-                agent_row = cur.fetchone()
-            bot_key = str(agent_row["bot_key"] or "").strip() if agent_row is not None else ""
-            if not bot_key:
-                raise ValueError(
-                    f"Unknown agent or missing bot_key: {conversation['target_agent_id']}"
-                )
-            now = utcnow_iso()
-            inserted_event = None
-            routed_tasks: list[dict[str, object]] = []
-            duplicate = False
-
-            def _event__row(event_id: str) -> EventRecord | None:
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM {_SCHEMA}.events WHERE event_id = %s",
-                        (event_id,),
-                    )
-                    row = cur.fetchone()
-                if row is None:
-                    return None
-                return _record(EventRecord, {
-                    "seq": row["seq"],
-                    "event_id": row["event_id"],
-                    "conversation_id": row["conversation_id"],
-                    "agent_id": row["agent_id"],
-                    "kind": row["kind"],
-                    "actor": row["actor"],
-                    "content": row["content"],
-                    "metadata": json.loads(row["metadata_json"]) if isinstance(row["metadata_json"], str) else row["metadata_json"],
-                    "created_at": row["created_at"],
-                })
-
-            if validated_envelope.action in {"approve_pending", "reject_pending", "retry_allow", "retry_skip", "recovery_discard", "recovery_replay", "cancel_conversation"}:
-                self._create_delivery(
-                    conn,
-                    target_agent_id=conversation["target_agent_id"],
-                    kind="channel_action",
-                    payload={
-                        "conversation_id": conversation_id,
-                        "conversation_ref": conversation_id,
-                        "action": validated_envelope.action,
-                        "payload": {} if action_payload is None else action_payload.model_dump(exclude_unset=True),
-                        "channel": "registry",
-                        "bot_key": bot_key,
-                        "origin_channel": conversation["origin_channel"],
-                        "external_conversation_ref": conversation["external_conversation_ref"],
-                        "stable_event_id": validated_envelope.action_id,
-                        "stable_created_at": now,
-                    },
-                    now=now,
-                    delivery_id=uuid.uuid4().hex,
-                )
-                if validated_envelope.action == "cancel_conversation":
-                    inserted_event = self._insert_event(
-                        conn,
-                        event_id=validated_envelope.action_id,
-                        conversation_id=conversation_id,
-                        agent_id="",
-                        kind="task.status",
-                        actor="operator",
-                        content="",
-                        metadata={"routed_task_id": "", "status": "cancelling"},
-                        created_at=now,
-                    )
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s, status = %s WHERE conversation_id = %s",
-                            (now, "cancelling", conversation_id),
-                        )
-                else:
-                    inserted_event = self._insert_event(
-                        conn,
-                        event_id=validated_envelope.action_id,
-                        conversation_id=conversation_id,
-                        agent_id="",
-                        kind="approval.decided",
-                        actor="operator",
-                        content=json.dumps(action_payload.model_dump(exclude_unset=True)),
-                        metadata={
-                            "action": validated_envelope.action,
-                            "decided_by": "operator",
-                                "decision": (
-                                    "rejected"
-                                if validated_envelope.action in {"reject_pending", "retry_skip", "recovery_discard"}
-                                else "approved"
-                            ),
-                        },
-                        created_at=now,
-                    )
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (now, conversation_id),
-                        )
-                duplicate = inserted_event is None
-                if inserted_event is None:
-                    inserted_event = _event__row(validated_envelope.action_id)
-                return CoordinationActionResult(
-                    conversation_id=conversation_id,
-                    action_id=validated_envelope.action_id,
-                    action=validated_envelope.action,
-                    accepted=True,
-                    duplicate=duplicate,
-                    event=inserted_event,
-                )
-
-            if validated_envelope.action == "delegate_tasks":
-                proposal = action_payload
-                task_entries = [
-                    self._delegation_task_metadata(task, status="proposed")
-                    for task in proposal.tasks
-                ]
-                delegation_evt = delegation_event(
-                    kind="delegation.proposed",
-                    proposal_id=validated_envelope.action_id,
-                    conversation_id=conversation_id,
-                    tasks=task_entries,
-                    created_at=now,
-                    content=proposal.title or "Delegation proposal",
-                    origin_transport_ref=str(proposal.origin_transport_ref or ""),
-                    authorized_actor_key=str(proposal.authorized_actor_key or ""),
-                )
-                inserted_event = self._insert_event(
-                    conn,
-                    event_id=delegation_evt["event_id"],
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind=delegation_evt["kind"],
-                    actor="operator",
-                    content=delegation_evt["content"],
-                    metadata=delegation_evt["metadata"],
-                    created_at=delegation_evt["created_at"],
-                )
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (now, conversation_id),
-                    )
-                duplicate = inserted_event is None
-                if inserted_event is None:
-                    inserted_event = _event__row(delegation_evt["event_id"])
-                return CoordinationActionResult(
-                    conversation_id=conversation_id,
-                    action_id=validated_envelope.action_id,
-                    action=validated_envelope.action,
-                    accepted=True,
-                    duplicate=duplicate,
-                    proposal_id=validated_envelope.action_id,
-                    event=inserted_event,
-                )
-
-            if validated_envelope.action == "delegation_approve":
-                proposal_id = action_payload.proposal_id
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        SELECT * FROM {_SCHEMA}.events
-                        WHERE conversation_id = %s
-                          AND kind = %s
-                          AND metadata_json->>'proposal_id' = %s
-                        ORDER BY seq DESC
-                        LIMIT 1
-                        """,
-                        (conversation_id, "delegation.proposed", proposal_id),
-                    )
-                    proposal_row = cur.fetchone()
-                if proposal_row is None:
-                    raise ValueError(f"Unknown delegation proposal: {proposal_id}")
-                proposal_metadata = decode_json_field(proposal_row["metadata_json"], {})
-                proposal_origin_transport_ref = str(
-                    proposal_metadata.get("origin_transport_ref", "") or ""
-                )
-                proposal_authorized_actor_key = str(
-                    proposal_metadata.get("authorized_actor_key", "") or ""
-                )
-                task_entries = list(proposal_metadata.get("tasks", []))
-                if not task_entries:
-                    raise ValueError(f"Delegation proposal {proposal_id} has no tasks")
-                for index, entry in enumerate(task_entries):
-                    draft = DelegationTaskDraft.model_validate(
-                        {
-                            "draft_id": entry.get("draft_id", f"draft-{index + 1}"),
-                            "selector": {
-                                "kind": entry.get("selector_kind", "agent"),
-                                "value": entry.get("selector_value", entry.get("target", "")),
-                                "preferred_agent_id": entry.get("target", ""),
-                            },
-                            "title": entry.get("title", ""),
-                            "instructions": entry.get("instructions", ""),
-                            "priority": entry.get("priority", "normal"),
-                            "requested_skills": entry.get("requested_skills", []),
-                            "context": entry.get("context", {}),
-                        }
-                    )
-                    requested_skills = normalized_requested_skills(
-                        entry.get("requested_skills", []),
-                        selector=draft.selector,
-                    )
-                    resolved_target = self._resolve_selector(conn, draft.selector)
-                    request = {
-                        "routed_task_id": stable_routed_task_id(conversation_id, validated_envelope.action_id, index),
-                        "parent_conversation_id": conversation_id,
-                        "origin_transport_ref": (
-                            proposal_origin_transport_ref
-                            or str(conversation["external_conversation_ref"] or "")
-                        ),
-                        "authorized_actor_key": proposal_authorized_actor_key,
-                        "external_conversation_ref": routed_task_external_conversation_ref(
-                            stable_routed_task_id(conversation_id, validated_envelope.action_id, index)
-                        ),
-                        "origin_agent_id": conversation["target_agent_id"],
-                        "target_agent_id": resolved_target["agent_id"],
-                        "title": draft.title,
-                        "instructions": draft.instructions,
-                        "context": dict(draft.context),
-                        "requested_skills": requested_skills,
-                        "priority": draft.priority,
-                        "created_at": now,
-                    }
-                    self._create_routed_task_in_tx(conn, request, now=now)
-                    routed_tasks.append({
-                        "routed_task_id": request["routed_task_id"],
-                        "target_agent_id": resolved_target["agent_id"],
-                        "authority_ref": "",
-                        "title": draft.title,
-                        "status": "queued",
-                    })
-                submitted_event = delegation_event(
-                    kind="delegation.submitted",
-                    proposal_id=proposal_id,
-                    conversation_id=conversation_id,
-                    tasks=[
-                        {
-                            **entry,
-                            "status": "submitted",
-                            "routed_task_id": routed_tasks[index]["routed_task_id"],
-                            "target": routed_tasks[index]["target_agent_id"],
-                        }
-                        for index, entry in enumerate(task_entries)
-                    ],
-                    created_at=now,
-                    content="Delegated work submitted",
-                    origin_transport_ref=proposal_origin_transport_ref,
-                    authorized_actor_key=proposal_authorized_actor_key,
-                )
-                inserted_event = self._insert_event(
-                    conn,
-                    event_id=f"delegation.submitted:{validated_envelope.action_id}",
-                    conversation_id=conversation_id,
-                    agent_id="",
-                    kind=submitted_event["kind"],
-                    actor="operator",
-                    content=submitted_event["content"],
-                    metadata=submitted_event["metadata"],
-                    created_at=submitted_event["created_at"],
-                )
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (now, conversation_id),
-                    )
-                duplicate = inserted_event is None
-                if inserted_event is None:
-                    inserted_event = _event__row(f"delegation.submitted:{validated_envelope.action_id}")
-                return CoordinationActionResult(
-                    conversation_id=conversation_id,
-                    action_id=validated_envelope.action_id,
-                    action=validated_envelope.action,
-                    accepted=True,
-                    duplicate=duplicate,
-                    proposal_id=proposal_id,
-                    routed_tasks=routed_tasks,
-                    event=inserted_event,
-                )
-
-            if validated_envelope.action == "direct_assign":
-                assignment = action_payload
-                routed_task_id = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
-                resolved_target = self._resolve_selector(conn, assignment.selector)
-                requested_skills = normalized_requested_skills(
-                    assignment.requested_skills,
-                    selector=assignment.selector,
-                )
-                inserted_events: list[EventRecord] = []
-                parent_event_id = str(assignment.parent_event_id or "").strip()
-                message_metadata = {
-                    "source_action": "direct_assign",
-                    "action_id": validated_envelope.action_id,
-                    "selector_kind": assignment.selector.kind,
-                    "selector_value": assignment.selector.value,
-                    "routed_task_id": routed_task_id,
-                    "requested_skills": requested_skills,
-                }
-                if parent_event_id:
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"""
-                            UPDATE {_SCHEMA}.events
-                            SET metadata_json = COALESCE(metadata_json, '{{}}'::jsonb) || %s
-                            WHERE conversation_id = %s
-                              AND event_id = %s
-                              AND kind = 'message.user'
-                            """,
-                            (_jsonb(message_metadata), conversation_id, parent_event_id),
-                        )
-                request = {
-                    "routed_task_id": routed_task_id,
-                    "parent_conversation_id": conversation_id,
-                    "origin_transport_ref": (
-                        str(assignment.origin_transport_ref or "")
-                        or str(conversation["external_conversation_ref"] or "")
-                    ),
-                    "authorized_actor_key": str(assignment.authorized_actor_key or ""),
-                    "external_conversation_ref": routed_task_external_conversation_ref(routed_task_id),
-                    "origin_agent_id": conversation["target_agent_id"],
-                    "target_agent_id": resolved_target["agent_id"],
-                    "title": assignment.title,
-                    "instructions": assignment.instructions,
-                    "context": dict(assignment.context),
-                    "requested_skills": requested_skills,
-                    "priority": assignment.priority,
-                    "created_at": now,
-                }
-                created = self._create_routed_task_in_tx(conn, request, now=now)
-                inserted_event = created.get("event")
-                if inserted_event is not None:
-                    inserted_events.append(inserted_event)
-                routed_tasks.append({
-                    "routed_task_id": request["routed_task_id"],
-                    "target_agent_id": resolved_target["agent_id"],
-                    "authority_ref": "",
-                    "title": assignment.title,
-                    "status": "queued",
-                })
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (now, conversation_id),
-                    )
-                if inserted_event is None:
-                    inserted_event = _event__row(f"routed-task:{routed_task_id}:queued")
-                duplicate = created.get("event") is None
-                return CoordinationActionResult(
-                    conversation_id=conversation_id,
-                    action_id=validated_envelope.action_id,
-                    action=validated_envelope.action,
-                    accepted=True,
-                    duplicate=duplicate,
-                    proposal_id=validated_envelope.action_id,
-                    routed_tasks=routed_tasks,
-                    inserted_events=inserted_events,
-                    event=inserted_event,
-                )
-
-            if validated_envelope.action in {"cancel_task", "retry_task", "delegation_cancel"}:
-                if validated_envelope.action == "delegation_cancel":
-                    inserted_event = self._insert_event(
-                        conn,
-                        event_id=validated_envelope.action_id,
-                        conversation_id=conversation_id,
-                        agent_id="",
-                        kind="approval.decided",
-                        actor="operator",
-                        content="",
-                        metadata={
-                            "action": validated_envelope.action,
-                            "decided_by": "operator",
-                            "decision": "rejected",
-                        },
-                        created_at=now,
-                    )
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                            (now, conversation_id),
-                        )
-                    duplicate = inserted_event is None
-                    if inserted_event is None:
-                        inserted_event = _event__row(validated_envelope.action_id)
-                    return CoordinationActionResult(
-                        conversation_id=conversation_id,
-                        action_id=validated_envelope.action_id,
-                        action=validated_envelope.action,
-                        accepted=True,
-                        duplicate=duplicate,
-                        proposal_id=action_payload.proposal_id,
-                        event=inserted_event,
-                    )
-
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s AND parent_conversation_id = %s",
-                        (action_payload.routed_task_id, conversation_id),
-                    )
-                    task_row = cur.fetchone()
-                if task_row is None:
-                    raise ValueError(f"Unknown task {action_payload.routed_task_id} for conversation {conversation_id}")
-                if validated_envelope.action == "retry_task":
-                    request = decode_json_field(task_row["request_json"], {})
-                    request["routed_task_id"] = stable_routed_task_id(conversation_id, validated_envelope.action_id, 0)
-                    request["created_at"] = now
-                    request["parent_conversation_id"] = conversation_id
-                    created = self._create_routed_task_in_tx(conn, request, now=now)
-                    routed_tasks.append({
-                        "routed_task_id": request["routed_task_id"],
-                        "target_agent_id": request["target_agent_id"],
-                        "authority_ref": "",
-                        "title": request["title"],
-                        "status": "queued",
-                    })
-                    inserted_event = created.get("event")
-                else:
-                    decision = apply_task_transition(
-                        self._task_snapshot__row(task_row),
-                        TaskTransitionRequest(
-                            transition="cancel",
-                            actor_role="operator",
-                            transition_id=validated_envelope.action_id,
-                            occurred_at=now,
-                        ),
-                    )
-                    if not decision.ok:
-                        raise ValueError(decision.reason or f"Task {action_payload.routed_task_id} cannot be cancelled")
-                    with _cur(conn) as cur:
-                        cur.execute(
-                            f"UPDATE {_SCHEMA}.routed_tasks SET status = %s, summary = %s, updated_at = %s WHERE routed_task_id = %s",
-                            ("cancelled", "Cancelled by operator.", now, action_payload.routed_task_id),
-                        )
-                    inserted_event = self._insert_event(
-                        conn,
-                        event_id=validated_envelope.action_id,
-                        conversation_id=conversation_id,
-                        agent_id="",
-                        kind="task.status",
-                        actor="operator",
-                        content="Cancelled by operator.",
-                        metadata={
-                            "routed_task_id": action_payload.routed_task_id,
-                            "status": "cancelled",
-                            "transition_id": validated_envelope.action_id,
-                        },
-                        created_at=now,
-                    )
-                    routed_tasks.append({
-                        "routed_task_id": action_payload.routed_task_id,
-                        "target_agent_id": str(task_row["target_agent_id"] or ""),
-                        "authority_ref": "",
-                        "title": str(task_row["title"] or ""),
-                        "status": "cancelled",
-                    })
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"UPDATE {_SCHEMA}.conversations SET updated_at = %s WHERE conversation_id = %s",
-                        (now, conversation_id),
-                    )
-                duplicate = inserted_event is None
-                if inserted_event is None:
-                    inserted_event = _event__row(validated_envelope.action_id)
-                return CoordinationActionResult(
-                    conversation_id=conversation_id,
-                    action_id=validated_envelope.action_id,
-                    action=validated_envelope.action,
-                    accepted=True,
-                    duplicate=duplicate,
-                    routed_tasks=routed_tasks,
-                    event=inserted_event,
-                )
-
-            raise ValueError(f"Unsupported action: {validated_envelope.action}")
+            return shared_add_conversation_action(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                create_delivery=lambda inner_conn, **kwargs: shared_create_delivery(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    json_param=_jsonb,
+                    **kwargs,
+                ),
+                create_routed_task_in_tx=self._create_routed_task_in_tx,
+                resolve_selector=self._resolve_selector,
+                json_param=_jsonb,
+                conversation_id=conversation_id,
+                envelope=envelope,
+                now=now,
+            )
 
     def list_tasks(
         self,
@@ -2253,76 +1087,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 raise PermissionError(f"Unknown conversation: {conversation_id}")
             if conversation["target_agent_id"] != agent_id:
                 raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
-            inserted = 0
-            skipped = 0
-            inserted_ids: set[str] = set()
-            inserted_events: list[EventRecord] = []
-            for event_model in events:
-                event = (
-                    event_model.model_dump(mode="json")
-                    if hasattr(event_model, "model_dump")
-                    else event_model
-                )
-                serialized = json.dumps(event)
-                if len(serialized) >= 256 * 1024:
-                    raise ValueError("Event exceeds 256KB size limit")
-                event_id = str(event.get("event_id", "") or "")
-                if not event_id.strip():
-                    raise ValueError("event_id is required")
-                kind = str(event.get("kind", "") or "")
-                if not kind.strip():
-                    raise ValueError("kind is required")
-                created_at = str(event.get("created_at", "") or "") or utcnow_iso()
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.events (event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT(event_id) DO NOTHING
-                        """,
-                        (
-                            event_id,
-                            conversation_id,
-                            agent_id,
-                            kind,
-                            str(event.get("actor", "") or ""),
-                            str(event.get("content", "") or ""),
-                            _jsonb(event.get("metadata", {})),
-                            created_at,
-                        ),
-                    )
-                    if cur.rowcount > 0:
-                        inserted += 1
-                        inserted_ids.add(event_id)
-                        cur.execute(
-                            f"SELECT seq, event_id, conversation_id, agent_id, kind, actor, content, metadata_json, created_at FROM {_SCHEMA}.events WHERE event_id = %s",
-                            (event_id,),
-                        )
-                        ev_row = cur.fetchone()
-                        if ev_row:
-                            meta = ev_row["metadata_json"]
-                            inserted_events.append(_record(EventRecord, {
-                                "seq": ev_row["seq"],
-                                "event_id": ev_row["event_id"],
-                                "conversation_id": ev_row["conversation_id"],
-                                "agent_id": ev_row["agent_id"],
-                                "kind": ev_row["kind"],
-                                "actor": ev_row["actor"],
-                                "content": ev_row["content"],
-                                "metadata": meta if isinstance(meta, dict) else json.loads(meta) if meta else {},
-                                "created_at": str(ev_row["created_at"]),
-                            }))
-                    else:
-                        skipped += 1
-        return _record(
-            PublishEventsResult,
-            {
-                "inserted": inserted,
-                "skipped": skipped,
-                "inserted_ids": list(inserted_ids),
-                "inserted_events": inserted_events,
-            },
-        )
+            return shared_publish_events(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                json_param=_jsonb,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                events=events,
+            )
 
     def list_events(
         self,
@@ -2333,102 +1105,26 @@ class RegistryPostgresStore(AbstractRegistryStore):
         after_seq: int = 0,
         limit: int = 50,
     ) -> EventPageRecord:
-        if before_seq and after_seq:
-            raise ValueError("before_seq and after_seq cannot both be set")
-        kinds = [item.strip() for item in kind.split(",") if item.strip()]
-        clauses = ["conversation_id = %s"]
-        params: list[object] = [conversation_id]
-        if kinds:
-            placeholders = ", ".join(["%s"] * len(kinds))
-            clauses.append(f"kind IN ({placeholders})")
-            params.extend(kinds)
-        if before_seq:
-            clauses.append("seq < %s")
-            params.append(before_seq)
-            order_sql = "ORDER BY seq DESC"
-        elif after_seq:
-            clauses.append("seq > %s")
-            params.append(after_seq)
-            order_sql = "ORDER BY seq ASC"
-        else:
-            order_sql = "ORDER BY seq DESC"
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {_SCHEMA}.events
-                    WHERE {' AND '.join(clauses)}
-                    {order_sql}
-                    LIMIT %s
-                    """,
-                    (*params, limit + 1),
-                )
-                rows = cur.fetchall()
-        has_more_before = False
-        if before_seq or not after_seq:
-            has_more_before = len(rows) > limit
-            if has_more_before:
-                rows = rows[:limit]
-            rows = list(reversed(rows))
-        else:
-            if len(rows) > limit:
-                rows = rows[:limit]
-        events_list = [
-            {
-                "seq": row["seq"],
-                "event_id": row["event_id"],
-                "conversation_id": row["conversation_id"],
-                "agent_id": row["agent_id"],
-                "kind": row["kind"],
-                "actor": row["actor"],
-                "content": row["content"],
-                "metadata": decode_json_field(row["metadata_json"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
-        return _record(
-            EventPageRecord,
-            {
-                "events": _records(EventRecord, events_list),
-                "has_more_before": has_more_before,
-                "next_before_seq": events_list[0]["seq"] if has_more_before and events_list else None,
-                "next_after_seq": events_list[-1]["seq"] if events_list else None,
-            },
-        )
+            return shared_list_events(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                conversation_id=conversation_id,
+                kind=kind,
+                before_seq=before_seq,
+                after_seq=after_seq,
+                limit=limit,
+            )
 
     def list_messages(self, conversation_id: str, *, cursor: int = 0, limit: int = 50) -> MessagePageRecord:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT * FROM {_SCHEMA}.events
-                    WHERE conversation_id = %s AND kind IN ('message.user', 'message.bot') AND seq > %s
-                    ORDER BY seq ASC
-                    LIMIT %s
-                    """,
-                    (conversation_id, cursor, limit),
-                )
-                rows = cur.fetchall()
-        events_list = [
-            {
-                "seq": row["seq"],
-                "event_id": row["event_id"],
-                "conversation_id": row["conversation_id"],
-                "agent_id": row["agent_id"],
-                "kind": row["kind"],
-                "actor": row["actor"],
-                "content": row["content"],
-                "metadata": decode_json_field(row["metadata_json"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
-        next_cursor = events_list[-1]["seq"] if events_list else 0
-        return _record(
-            MessagePageRecord,
-            {"events": _records(EventRecord, events_list), "next_cursor": next_cursor},
-        )
+            return shared_list_messages(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                conversation_id=conversation_id,
+                cursor=cursor,
+                limit=limit,
+            )
 
     def list_agent_conversations(self, agent_id: str, *, for_agent_id: str | None = None, cursor: int = 0, limit: int = 50, conversation_type: str = "") -> list[ConversationRecord]:
         with self._connect() as conn:
@@ -2448,8 +1144,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_id=agent_id,
-                row_to_agent=self._row_to_agent,
-                runtime_worker_rows=self._runtime_worker_rows,
+                row_to_agent=shared_row_to_agent,
+                runtime_worker_rows=lambda inner_conn, inner_agent_id: shared_runtime_worker_rows(
+                    inner_conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    agent_id=inner_agent_id,
+                ),
             )
 
     def get_usage(self, *, agent_id: str = "", conversation_id: str = "", since: str = "", until: str = "") -> list[UsageSummaryRecord]:

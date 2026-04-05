@@ -288,6 +288,24 @@ function renderSkillCatalog(container) {
         );
     }
 
+    function _resetStudioSelection() {
+        selectedSkillName = '';
+        selectedSkillOrigin = 'local';
+        selectedLocalDetail = null;
+        selectedLifecycle = null;
+        selectionLoading = false;
+        _clearDraftState();
+        _writeState();
+        renderList();
+    }
+
+    function _beginStudioDialog(openDialog) {
+        _runWithDraftGuard(async () => {
+            _resetStudioSelection();
+            openDialog();
+        });
+    }
+
     function _visibleLocalSkills() {
         const queryText = _queryText().toLowerCase();
         const base = currentMode === 'studio'
@@ -1079,13 +1097,13 @@ function renderSkillCatalog(container) {
         createBtn.type = 'button';
         createBtn.className = 'btn btn-sm btn-primary';
         createBtn.textContent = 'New draft';
-        createBtn.addEventListener('click', () => _openCreateDraftDialog());
+        createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
         actions.appendChild(createBtn);
         const importBtn = document.createElement('button');
         importBtn.type = 'button';
         importBtn.className = 'btn btn-sm';
         importBtn.textContent = 'Import package';
-        importBtn.addEventListener('click', () => _openImportDialog());
+        importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
         actions.appendChild(importBtn);
         wrap.appendChild(actions);
         return wrap;
@@ -1123,13 +1141,13 @@ function renderSkillCatalog(container) {
         createBtn.type = 'button';
         createBtn.className = 'btn btn-primary';
         createBtn.textContent = 'Create draft';
-        createBtn.addEventListener('click', () => _openCreateDraftDialog());
+        createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
         actions.appendChild(createBtn);
         const importBtn = document.createElement('button');
         importBtn.type = 'button';
         importBtn.className = 'btn';
         importBtn.textContent = 'Import package';
-        importBtn.addEventListener('click', () => _openImportDialog());
+        importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
         actions.appendChild(importBtn);
         intro.appendChild(actions);
 

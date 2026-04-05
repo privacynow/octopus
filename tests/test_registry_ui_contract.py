@@ -142,7 +142,7 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
     assert "_invalidateGuidanceCache();" in guidance_editor
 
 
-def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> None:
+def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actions() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
@@ -157,6 +157,14 @@ def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> 
     assert "Choose a bot to browse the skills available there." in skill_catalog
     assert "label: 'Bot catalog'" in skill_catalog
     assert "label: 'Studio'" in skill_catalog
+    assert "currentStudioTab = _readStudioTab()" in skill_catalog
+    assert "label: 'Studio workspace'" in skill_catalog
+    assert "label: 'Write'" in skill_catalog
+    assert "label: 'Setup'" in skill_catalog
+    assert "label: 'Review'" in skill_catalog
+    assert "label: 'Advanced'" in skill_catalog
+    assert "skill_tab: currentMode === 'studio' ? currentStudioTab : ''" in skill_catalog
+    assert "currentStudioTab !== 'review'" in skill_catalog
     assert "'Available on this bot'" in skill_catalog
     assert "'Skill store'" in skill_catalog
     assert "'Create custom draft'" in skill_catalog
@@ -172,6 +180,8 @@ def test_skill_catalog_exposes_shared_three_layer_model_and_studio_actions() -> 
     assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
     assert "How skills work" not in skill_catalog
     assert "Open this bot’s conversations" not in skill_catalog
+    assert "1. Basics" not in skill_catalog
+    assert "6. Review" not in skill_catalog
     assert "activate_skill" in skill_catalog
     assert "Active in this conversation" in conversation_detail
     assert "Available on this bot" in conversation_detail

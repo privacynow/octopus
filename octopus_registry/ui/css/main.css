@@ -1303,6 +1303,10 @@ select {
     align-items: start;
 }
 
+.dashboard-board-stacked {
+    grid-template-columns: 1fr;
+}
+
 .dashboard-column {
     display: grid;
     gap: var(--space-3);

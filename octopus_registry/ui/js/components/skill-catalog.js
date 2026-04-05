@@ -61,6 +61,7 @@ function renderSkillCatalog(container) {
                     selectionLoading = false;
                     _clearDraftState();
                 }
+                _syncWorkspaceLayout();
                 _writeState();
                 _renderAgentOptions();
                 await loadSkills({ forceCatalog: true });
@@ -115,6 +116,10 @@ function renderSkillCatalog(container) {
     const detailEl = document.createElement('section');
     detailEl.className = 'editor-shell';
     workspace.appendChild(detailEl);
+
+    function _syncWorkspaceLayout() {
+        workspace.classList.toggle('dashboard-board-stacked', currentMode === 'studio');
+    }
 
     function _readMode() {
         const value = UI.readQueryParam('skills_view', 'catalog');
@@ -2047,6 +2052,7 @@ function renderSkillCatalog(container) {
     };
     window.addEventListener('beforeunload', beforeUnload);
 
+    _syncWorkspaceLayout();
     container.__routeReady = loadAgents();
     modeControl.setActive(currentMode);
 

@@ -473,6 +473,7 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
         name="release-notes",
         display_name="Release Notes",
         description="Summarize releases",
+        skill_kind="prompt",
         source_label="Custom",
         visibility="private",
         body="body",

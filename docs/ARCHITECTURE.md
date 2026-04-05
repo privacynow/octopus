@@ -768,3 +768,5 @@ carries structured delegation intent. Direct assignment from the UI uses
 11. Realtime topics are explicit. No wildcard subscriptions.
 12. Live registry identity comes from runtime state, not startup config snapshots.
 13. Postgres-backed seams pass the shared contract tests and deploy through one startup path.
+14. New or extended features use **one coherent code path** — no parallel implementations, backward-compatibility shims, or redundant ways to do the same thing.
+15. **File/module size and LOC** are not primary constraints for feature work; clarity and a single pipeline matter more than keeping files small.

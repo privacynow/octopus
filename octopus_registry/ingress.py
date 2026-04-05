@@ -36,8 +36,12 @@ from octopus_sdk.registry.management import (
     DiffCatalogSkillResult,
     EditCatalogSkillDraftRequest,
     EditCatalogSkillDraftResult,
+    ExportCatalogSkillPackageRequest,
+    ExportCatalogSkillPackageResult,
     EditProviderGuidanceDraftRequest,
     EditProviderGuidanceDraftResult,
+    ImportCatalogSkillPackageRequest,
+    ImportCatalogSkillPackageResult,
     InstallCatalogSkillRequest,
     InstallCatalogSkillResult,
     ListCatalogSkillsRequest,
@@ -311,6 +315,7 @@ async def edit_catalog_skill_draft(
     body: str | None = None,
     display_name: str | None = None,
     description: str | None = None,
+    skill_kind: str | None = None,
     requirements=None,
     provider_config=None,
     files=None,
@@ -325,6 +330,7 @@ async def edit_catalog_skill_draft(
             body=body,
             display_name=display_name,
             description=description,
+            skill_kind=skill_kind,
             requirements=requirements,
             provider_config=provider_config,
             files=files,
@@ -332,6 +338,52 @@ async def edit_catalog_skill_draft(
         ),
     )
     assert isinstance(payload, EditCatalogSkillDraftResult)
+    _raise_for_lifecycle(payload.result)
+    _invalidate_skill_cache(agent_id)
+    return _mutation_payload(payload.result)
+
+
+async def export_catalog_skill_package(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    skill_name: str,
+    *,
+    revision_scope: str = "draft",
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=ExportCatalogSkillPackageRequest(
+            skill_name=skill_name,
+            revision_scope="published" if str(revision_scope or "").strip().lower() == "published" else "draft",
+        ),
+    )
+    assert isinstance(payload, ExportCatalogSkillPackageResult)
+    if payload.artifact is None:
+        raise RegistryIngressError(404, f"Unknown custom skill: {skill_name}")
+    return payload.artifact.model_dump(mode="json", by_alias=True)
+
+
+async def import_catalog_skill_package(
+    store: AbstractRegistryStore,
+    agent_id: str,
+    *,
+    actor_key: str,
+    package_base64: str,
+    file_name: str = "",
+    target_skill_name: str = "",
+) -> dict[str, object]:
+    payload = await _send(
+        store,
+        agent_id=agent_id,
+        payload=ImportCatalogSkillPackageRequest(
+            actor_key=actor_key,
+            target_skill_name=target_skill_name,
+            file_name=file_name,
+            package_base64=package_base64,
+        ),
+    )
+    assert isinstance(payload, ImportCatalogSkillPackageResult)
     _raise_for_lifecycle(payload.result)
     _invalidate_skill_cache(agent_id)
     return _mutation_payload(payload.result)

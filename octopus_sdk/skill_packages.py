@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import io
 from pathlib import Path, PurePosixPath
+import zipfile
 
 import frontmatter
 import yaml
@@ -20,12 +22,12 @@ SKILL_PROVIDER_FILES = {
     "claude": "claude.yaml",
     "codex": "codex.yaml",
 }
-SKILL_RESERVED_FILES = frozenset(
-    {SKILL_MARKDOWN_FILE, SKILL_REQUIRES_FILE, *SKILL_PROVIDER_FILES.values()}
-)
+SKILL_PROVIDER_FILE_SUFFIX = ".provider.yaml"
+SKILL_RESERVED_FILES = frozenset({SKILL_MARKDOWN_FILE, SKILL_REQUIRES_FILE, *SKILL_PROVIDER_FILES.values()})
 MAX_SKILL_FILE_COUNT = 16
 MAX_SKILL_FILE_BYTES = 64 * 1024
 MAX_SKILL_TOTAL_FILE_BYTES = 256 * 1024
+MAX_SKILL_PACKAGE_BYTES = 512 * 1024
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,18 @@ class SkillValidationProblem:
     message: str
     field_path: str = ""
     severity: str = "error"
+
+
+@dataclass(frozen=True)
+class SkillPackageRecord:
+    skill_name: str
+    display_name: str
+    description: str
+    body: str
+    skill_kind: str
+    requirements: tuple[SkillRequirement, ...] = ()
+    provider_config: ProviderConfigRecord = ProviderConfigRecord()
+    files: tuple[SkillFileRecord, ...] = ()
 
 
 def default_skill_display_name(skill_name: str) -> str:
@@ -101,6 +115,32 @@ def skill_content_type(relative_path: str | Path) -> str:
     return "text/plain"
 
 
+def skill_provider_filename(provider_name: str) -> str:
+    normalized = str(provider_name or "").strip().lower()
+    if not normalized:
+        return ""
+    return SKILL_PROVIDER_FILES.get(normalized, f"{normalized}{SKILL_PROVIDER_FILE_SUFFIX}")
+
+
+def skill_provider_name_for_path(relative_path: str | Path) -> str:
+    normalized = str(relative_path or "").strip().replace("\\", "/")
+    if not normalized or "/" in normalized:
+        return ""
+    for provider_name, filename in SKILL_PROVIDER_FILES.items():
+        if filename == normalized:
+            return provider_name
+    if normalized.endswith(SKILL_PROVIDER_FILE_SUFFIX):
+        return normalized[: -len(SKILL_PROVIDER_FILE_SUFFIX)].strip().lower()
+    return ""
+
+
+def is_reserved_skill_file_path(relative_path: str | Path) -> bool:
+    normalized = str(relative_path or "").strip().replace("\\", "/")
+    if not normalized or "/" in normalized:
+        return False
+    return normalized in SKILL_RESERVED_FILES or bool(skill_provider_name_for_path(normalized))
+
+
 def load_skill_markdown(path: Path) -> tuple[dict[str, object], str]:
     post = frontmatter.load(str(path))
     return dict(post.metadata), post.content.strip()
@@ -163,6 +203,24 @@ def load_provider_config(path: Path) -> dict[str, JsonValue]:
     return parse_provider_config_text(path.read_text(encoding="utf-8"))
 
 
+def load_skill_provider_configs(path: Path) -> ProviderConfigRecord:
+    configs: dict[str, JsonValue] = {}
+    for provider_name, filename in sorted(SKILL_PROVIDER_FILES.items()):
+        config = load_provider_config(path / filename)
+        if config:
+            configs[provider_name] = config
+    for child in sorted(path.iterdir()):
+        if not child.is_file():
+            continue
+        provider_name = skill_provider_name_for_path(child.name)
+        if not provider_name or provider_name in configs:
+            continue
+        config = load_provider_config(child)
+        if config:
+            configs[provider_name] = config
+    return coerce_provider_config(configs)
+
+
 def normalize_skill_file(file_record: SkillFileRecord) -> SkillFileRecord:
     relative_path = str(file_record.relative_path or "").strip().replace("\\", "/")
     content_type = str(file_record.content_type or "").strip() or skill_content_type(relative_path)
@@ -203,7 +261,7 @@ def coerce_skill_files(values: tuple[SkillFileRecord, ...] | list[SkillFileRecor
 def load_skill_files(path: Path) -> tuple[SkillFileRecord, ...]:
     files: list[SkillFileRecord] = []
     for child in sorted(path.iterdir()):
-        if not child.is_file() or child.name in SKILL_RESERVED_FILES:
+        if not child.is_file() or is_reserved_skill_file_path(child.name):
             continue
         files.append(
             normalize_skill_file(
@@ -236,12 +294,86 @@ def build_skill_virtual_files(track: RuntimeSkillTrackRecord) -> dict[str, str]:
         )
     for provider_name, config in sorted(track.revision.provider_config.items()):
         if isinstance(config, dict) and config:
-            provider_file = SKILL_PROVIDER_FILES.get(provider_name)
+            provider_file = skill_provider_filename(provider_name)
             if provider_file:
                 files[provider_file] = yaml.safe_dump(config, sort_keys=False)
     for item in track.revision.files:
         files[item.relative_path] = item.content_text
     return files
+
+
+def parse_skill_virtual_files(files: Mapping[str, str]) -> SkillPackageRecord:
+    virtual_files = {str(path or "").strip().replace("\\", "/"): str(content or "") for path, content in files.items()}
+    skill_markdown = virtual_files.get(SKILL_MARKDOWN_FILE, "")
+    if not skill_markdown.strip():
+        raise ValueError("Skill package must include skill.md.")
+    post = frontmatter.loads(skill_markdown)
+    metadata = dict(post.metadata)
+    skill_name = str(metadata.get("name") or "").strip().lower()
+    if not skill_name:
+        raise ValueError("Skill package skill.md must declare a skill name.")
+    requirements = coerce_skill_requirements(
+        parse_skill_requirements_text(virtual_files.get(SKILL_REQUIRES_FILE, ""))
+    )
+    provider_config: dict[str, JsonValue] = {}
+    for relative_path, content in sorted(virtual_files.items()):
+        provider_name = skill_provider_name_for_path(relative_path)
+        if not provider_name:
+            continue
+        config = parse_provider_config_text(content)
+        if config:
+            provider_config[provider_name] = config
+    files_payload = coerce_skill_files(
+        [
+            {
+                "relative_path": relative_path,
+                "content_text": content,
+                "content_type": skill_content_type(relative_path),
+                "executable": str(relative_path).endswith(".sh"),
+            }
+            for relative_path, content in sorted(virtual_files.items())
+            if relative_path and not is_reserved_skill_file_path(relative_path)
+        ]
+    )
+    return SkillPackageRecord(
+        skill_name=skill_name,
+        display_name=str(metadata.get("display_name") or metadata.get("name") or default_skill_display_name(skill_name)).strip(),
+        description=str(metadata.get("description") or ""),
+        body=post.content.strip(),
+        skill_kind=normalize_skill_kind(str(metadata.get("skill_kind") or metadata.get("kind") or "prompt")),
+        requirements=requirements,
+        provider_config=coerce_provider_config(provider_config),
+        files=files_payload,
+    )
+
+
+def build_skill_package_archive(track: RuntimeSkillTrackRecord) -> bytes:
+    payload = build_skill_virtual_files(track)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for relative_path, content in sorted(payload.items()):
+            archive.writestr(relative_path, content)
+    return buffer.getvalue()
+
+
+def parse_skill_package_archive(content: bytes) -> SkillPackageRecord:
+    if not content:
+        raise ValueError("Skill package file is empty.")
+    if len(content) > MAX_SKILL_PACKAGE_BYTES:
+        raise ValueError(f"Skill package archive exceeds the {MAX_SKILL_PACKAGE_BYTES // 1024} KB limit.")
+    virtual_files: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                relative_path = str(info.filename or "").strip().replace("\\", "/")
+                if not _safe_relative_path(relative_path):
+                    raise ValueError(f"Skill package file path '{relative_path or '<blank>'}' is invalid.")
+                virtual_files[relative_path] = archive.read(info).decode("utf-8")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Skill package archive is not a valid ZIP file.") from exc
+    return parse_skill_virtual_files(virtual_files)
 
 
 def _safe_relative_path(relative_path: str) -> bool:

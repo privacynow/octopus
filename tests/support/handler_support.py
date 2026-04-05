@@ -332,7 +332,8 @@ class FakeMessage:
         _append_simulator_output_log("reply", kwargs.get("caption") or "[photo]")
 
     async def reply_document(self, **kwargs):
-        self.replies.append({"document": True, **kwargs})
+        document = kwargs.get("document")
+        self.replies.append({**kwargs, "document": document, "document_sent": True})
         _append_simulator_output_log("reply", kwargs.get("caption") or "[document]")
 
     async def edit_message_reply_markup(self, **kwargs):
@@ -719,8 +720,8 @@ def load_session_disk(data_dir, chat_id, provider):
     return load_session(data_dir, chat_id, provider.name, provider.new_provider_state, "off")
 
 
-async def send_command(handler, chat, user, text, args=None):
-    msg = FakeMessage(chat=chat, text=text)
+async def send_command(handler, chat, user, text, args=None, message=None):
+    msg = message or FakeMessage(chat=chat, text=text)
     upd = FakeUpdate(message=msg, user=user, chat=chat)
     await handler(upd, FakeContext(args=args or []))
     return msg

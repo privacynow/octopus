@@ -13,6 +13,7 @@ from octopus_sdk.content_models import SkillFileRecord
 from octopus_sdk.identity import telegram_actor_key
 from octopus_sdk.providers import ProviderConfigRecord, ProviderStateRecord
 from octopus_sdk.sessions import session_from_dict
+from octopus_sdk.skill_packages import parse_skill_package_archive
 from octopus_sdk.skill_types import SkillRequirement
 from app.runtime import composition
 from app.storage import close_db, default_session, ensure_data_dirs
@@ -163,6 +164,7 @@ def test_runtime_skill_draft_package_roundtrip_and_validation(tmp_path: Path):
             display_name="Package Skill",
             description="Structured package draft",
             body="Use the package-aware draft.",
+            skill_kind="executable",
             requirements=(
                 SkillRequirement(key="API_TOKEN", prompt="Enter API token"),
             ),
@@ -176,9 +178,33 @@ def test_runtime_skill_draft_package_roundtrip_and_validation(tmp_path: Path):
         assert edited.detail is not None
         assert edited.detail.publish_ready is True
         assert edited.detail.display_name == "Package Skill"
+        assert edited.detail.skill_kind == "executable"
         assert edited.detail.requirements[0].key == "API_TOKEN"
         assert edited.detail.provider_config["claude"]["allowed_tools"] == ["bash"]
         assert edited.detail.files[0].relative_path == "helper.sh"
+
+        artifact = authoring.export_package("package-skill")
+        assert artifact is not None
+        assert artifact.file_name == "package-skill-draft.skill.zip"
+        exported = parse_skill_package_archive(artifact.content_bytes)
+        assert exported.skill_name == "package-skill"
+        assert exported.skill_kind == "executable"
+        assert exported.provider_config["claude"]["allowed_tools"] == ["bash"]
+
+        imported = authoring.import_package(
+            actor_key=actor_key,
+            package_bytes=artifact.content_bytes,
+            file_name=artifact.file_name,
+            target_skill_name="package-copy",
+        )
+        assert imported.ok is True
+        assert imported.detail is not None
+        assert imported.detail.name == "package-copy"
+        assert imported.detail.display_name == "Package Skill"
+        copied_track = composition.workflows().runtime_skills.catalog.get_skill("package-copy")
+        assert copied_track is not None
+        assert copied_track.skill_kind == "executable"
+        assert copied_track.files[0].relative_path == "helper.sh"
     finally:
         close_db(data_dir)
         runtime_backend.reset_for_test()

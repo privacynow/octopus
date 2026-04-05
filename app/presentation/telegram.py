@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import json
 import re
 from dataclasses import dataclass
 from dataclasses import asdict, is_dataclass
@@ -631,14 +630,19 @@ def runtime_skill_history_message(detail: RuntimeSkillLifecycleDetail) -> Telegr
     return _html_message("\n".join(lines))
 
 
-def runtime_skill_package_message(name: str, payload: dict[str, object]) -> TelegramRenderedMessage:
-    rendered = json.dumps(payload, indent=2, sort_keys=True)
-    if len(rendered) > 3500:
-        rendered = rendered[:3500] + "\n... (truncated)"
+def runtime_skill_package_export_message(name: str, revision_scope: str) -> TelegramRenderedMessage:
+    scope = "published" if str(revision_scope or "").strip().lower() == "published" else "draft"
     return _html_message(
-        f"<b>Draft package · {html.escape(name)}</b>\n"
-        f"Use <code>/skills package {html.escape(name)} &lt;json&gt;</code> to replace the draft package.\n\n"
-        f"<pre>{html.escape(rendered)}</pre>"
+        f"Exported the <code>{html.escape(scope)}</code> package for <code>{html.escape(name)}</code>.\n"
+        "Send a ZIP package with the caption <code>/skills import</code>, or reply to a package with "
+        "<code>/skills import &lt;target-name&gt;</code> to replace a specific custom draft."
+    )
+
+
+def runtime_skill_import_usage_message() -> TelegramRenderedMessage:
+    return _html_message(
+        "Attach or reply to a skill package ZIP, then use <code>/skills import</code>.\n"
+        "Optionally add a target draft name: <code>/skills import &lt;target-name&gt;</code>."
     )
 
 
@@ -1056,8 +1060,8 @@ HELP_SKILLS = (
     "/skills clear — deactivate all skills in this conversation\n"
     "/skills create &lt;name&gt; — create a custom draft skill on this bot\n"
     "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
-    "/skills package &lt;name&gt; — show the full custom draft package as JSON\n"
-    "/skills package &lt;name&gt; &lt;json&gt; — replace the full custom draft package\n"
+    "/skills export &lt;name&gt; [draft|published] — export a custom skill package ZIP\n"
+    "/skills import [&lt;target-name&gt;] — import a package ZIP from the attached or replied document\n"
     "/skills history &lt;name&gt; — show revision and approval history\n"
     "/skills submit &lt;name&gt; — submit the draft for review\n"
     "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"
@@ -1412,7 +1416,7 @@ def admin_sessions_summary_message(
 
 def skills_usage_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(
-        text="Usage: /skills [list|add|remove|setup|create|edit|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]"
+        text="Usage: /skills [list|add|remove|setup|create|edit|export|import|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]"
     )
 
 

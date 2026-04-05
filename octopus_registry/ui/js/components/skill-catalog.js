@@ -21,7 +21,6 @@ function renderSkillCatalog(container) {
     let selectedLocalDetail = null;
     let selectedLifecycle = null;
     let selectionLoading = false;
-    let studioTab = _readStudioTab();
     let draftBuffer = null;
     let draftDirty = false;
     let draftStatus = 'idle';
@@ -54,8 +53,13 @@ function renderSkillCatalog(container) {
             _runWithDraftGuard(async () => {
                 currentMode = nextMode;
                 searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
-                if (currentMode !== 'studio') {
-                    studioTab = 'overview';
+                if (currentMode === 'studio') {
+                    selectedSkillName = '';
+                    selectedSkillOrigin = 'local';
+                    selectedLocalDetail = null;
+                    selectedLifecycle = null;
+                    selectionLoading = false;
+                    _clearDraftState();
                 }
                 _writeState();
                 _renderAgentOptions();
@@ -126,20 +130,13 @@ function renderSkillCatalog(container) {
         return value === 'store' ? 'store' : 'local';
     }
 
-    function _readStudioTab() {
-        const value = UI.readQueryParam('skill_tab', 'overview');
-        return ['overview', 'instructions', 'requirements', 'providers', 'files', 'review'].includes(value)
-            ? value
-            : 'overview';
-    }
-
     function _writeState() {
         UI.updateQueryParams({
             agent_id: currentAgentId || '',
             skills_view: currentMode === 'studio' ? 'studio' : '',
             skill: selectedSkillName || '',
             skill_source: selectedSkillName && selectedSkillOrigin === 'store' ? 'store' : '',
-            skill_tab: currentMode === 'studio' && selectedSkillName ? studioTab : '',
+            skill_tab: '',
         });
     }
 
@@ -336,6 +333,12 @@ function renderSkillCatalog(container) {
         const current = _findSelectedSkill();
         if (current) {
             selectedSkillOrigin = current.origin;
+            return;
+        }
+        if (currentMode === 'studio') {
+            selectedSkillName = '';
+            selectedSkillOrigin = 'local';
+            _writeState();
             return;
         }
         if (local.length) {
@@ -776,17 +779,23 @@ function renderSkillCatalog(container) {
             selectedOrigin: selected?.origin || '',
             skillName: selected?.skill?.name || '',
             loading: selectionLoading,
+            detailLoaded: Boolean(selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name),
             skillKind: String(lifecycle?.skill_kind || detail?.skill_kind || ''),
             lifecycleStatus: String(lifecycle?.lifecycle_status || detail?.lifecycle_status || ''),
             revisionId: String(lifecycle?.active_revision_id || ''),
-            studioTab,
             draftStatus,
             draftDirty,
         }, (state) => {
-            if (!state.skillName || state.selectedOrigin === 'store' || !_isSelectedCustom(summary, detail)) {
-                return [_buildStudioHome(state.agentLabel, selected)];
+            if (!state.skillName) {
+                return _buildStudioHome(state.agentLabel);
             }
-            return [_buildStudioWorkspace(summary, detail, lifecycle, { loading: Boolean(state.loading) })];
+            if (state.selectedOrigin === 'store' || !_isSelectedCustom(summary, detail)) {
+                return _buildStudioHome(state.agentLabel, selected);
+            }
+            if (state.loading && !state.detailLoaded) {
+                return _buildStudioLoading(detail);
+            }
+            return _buildStudioWorkspace(summary, detail, lifecycle, { loading: Boolean(state.loading) });
         });
     }
 
@@ -1082,22 +1091,32 @@ function renderSkillCatalog(container) {
         return wrap;
     }
 
-    function _buildStudioHome(agentLabel, selected) {
-        const shell = document.createElement('div');
-        shell.className = 'studio-shell';
+    function _buildStudioLoading(detail) {
+        const panel = document.createElement('section');
+        panel.className = 'editor-panel';
+        panel.dataset.key = `studio-loading:${detail?.name || ''}`;
+        const title = document.createElement('div');
+        title.className = 'editor-section-title';
+        title.textContent = detail?.display_name || detail?.name || 'Custom skill';
+        panel.appendChild(title);
+        panel.appendChild(UI.renderEmptyState('Loading draft…', true));
+        return [panel];
+    }
 
-        const main = document.createElement('section');
-        main.className = 'editor-panel';
+    function _buildStudioHome(agentLabel, selected) {
+        const intro = document.createElement('section');
+        intro.className = 'editor-panel';
+        intro.dataset.key = 'studio-home';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
         title.textContent = 'Custom skill studio';
-        main.appendChild(title);
+        intro.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = selected && selected.origin === 'store'
-            ? 'Studio edits only mutable custom skills. Install store skills in Bot catalog, or start a new draft here.'
-            : `Create or import a custom draft for ${agentLabel}. Publish it before using it in conversations.`;
-        main.appendChild(note);
+            ? 'Studio edits only mutable custom skills. Install store skills in Bot catalog, or create a new custom draft here.'
+            : `Select a custom skill for ${agentLabel}, or create and import a draft from here.`;
+        intro.appendChild(note);
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         const createBtn = document.createElement('button');
@@ -1112,20 +1131,18 @@ function renderSkillCatalog(container) {
         importBtn.textContent = 'Import package';
         importBtn.addEventListener('click', () => _openImportDialog());
         actions.appendChild(importBtn);
-        main.appendChild(actions);
-        shell.appendChild(main);
+        intro.appendChild(actions);
 
-        const rail = document.createElement('aside');
-        rail.className = 'studio-rail';
-        const railPanel = document.createElement('section');
-        railPanel.className = 'editor-panel';
-        railPanel.innerHTML = [
-            '<div class="editor-section-title">Workflow</div>',
-            '<p class="quiet-note">Draft → submit → approve → publish. Export packages from draft or published revisions, and import them into a new or existing custom draft.</p>',
-        ].join('');
-        rail.appendChild(railPanel);
-        shell.appendChild(rail);
-        return shell;
+        const workflow = document.createElement('section');
+        workflow.className = 'editor-panel';
+        workflow.dataset.key = 'studio-workflow';
+        workflow.appendChild(UI.renderMetadataGrid([
+            { label: '1', value: 'Create or import a custom draft' },
+            { label: '2', value: 'Edit instructions, requirements, config, and files' },
+            { label: '3', value: 'Submit, approve, then publish' },
+            { label: '4', value: 'Export draft or published packages when needed' },
+        ], { compact: true }));
+        return [intro, workflow];
     }
 
     function _openCreateDraftDialog() {
@@ -1168,7 +1185,6 @@ function renderSkillCatalog(container) {
                 });
                 _invalidateSkillCaches(currentAgentId, skillName);
                 currentMode = 'studio';
-                studioTab = 'overview';
                 view.close();
                 await loadSkills({ soft: true, forceCatalog: true });
                 await _selectSkill(skillName, 'local');
@@ -1251,7 +1267,6 @@ function renderSkillCatalog(container) {
                 const nextSkillName = result.detail?.name || String(targetInput.value || '').trim() || selectedSkillName || '';
                 _invalidateSkillCaches(currentAgentId, nextSkillName);
                 currentMode = 'studio';
-                studioTab = 'review';
                 view.close();
                 await loadSkills({ soft: true, forceCatalog: true });
                 if (nextSkillName) {
@@ -1271,15 +1286,11 @@ function renderSkillCatalog(container) {
         const packageState = _packageState(detail, lifecycle);
         const lifecycleStatus = String(packageState.lifecycle_status || detail.lifecycle_status || 'draft');
         const lifecycleLabel = lifecycleStatus.replace(/_/g, ' ');
-        const shell = document.createElement('div');
-        shell.className = 'studio-shell';
-
-        const main = document.createElement('div');
-        main.className = 'studio-main';
-        shell.appendChild(main);
+        const nodes = [];
 
         const header = document.createElement('section');
         header.className = 'editor-panel';
+        header.dataset.key = `studio-header:${detail.name || ''}`;
         const headerRow = document.createElement('div');
         headerRow.className = 'workspace-header-main';
         const titleWrap = document.createElement('div');
@@ -1291,7 +1302,7 @@ function renderSkillCatalog(container) {
         const subtitle = document.createElement('p');
         subtitle.className = 'quiet-note';
         subtitle.textContent = loading
-            ? 'Loading draft…'
+            ? 'Refreshing draft…'
             : (packageState.publish_ready
                 ? 'Ready for the next lifecycle step.'
                 : 'Finish the draft and fix validation issues before publishing.');
@@ -1302,22 +1313,18 @@ function renderSkillCatalog(container) {
         badge.textContent = lifecycleLabel;
         headerRow.appendChild(badge);
         header.appendChild(headerRow);
-
-        const statusRow = document.createElement('div');
-        statusRow.className = 'metadata-grid';
-        statusRow.appendChild(UI.renderMetadataGrid([
+        header.appendChild(UI.renderMetadataGrid([
             { label: 'Status', value: lifecycleLabel },
             { label: 'Kind', value: String(packageState.skill_kind || detail.skill_kind || 'prompt') },
             { label: 'Runtime', value: packageState.runtime_available ? 'Published on this bot' : 'Draft only' },
             { label: 'Save state', value: draftStatusMessage || (draftDirty ? 'Unsaved changes' : 'All changes saved') },
         ], { compact: true }));
-        header.appendChild(statusRow);
 
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         const refreshChrome = () => {
             saveBtn.disabled = loading || draftStatus === 'saving';
-            saveBtn.textContent = draftStatus === 'saving' ? 'Saving…' : (draftDirty ? 'Save draft' : 'Save draft');
+            saveBtn.textContent = draftStatus === 'saving' ? 'Saving…' : 'Save draft';
             submitBtn.hidden = lifecycleStatus !== 'draft';
             submitBtn.disabled = loading || draftStatus === 'saving' || !packageState.publish_ready;
             approveBtn.hidden = lifecycleStatus !== 'review';
@@ -1355,32 +1362,7 @@ function renderSkillCatalog(container) {
         archiveBtn.textContent = 'Archive';
         [saveBtn, submitBtn, approveBtn, rejectBtn, publishBtn, archiveBtn].forEach((button) => actions.appendChild(button));
         header.appendChild(actions);
-        main.appendChild(header);
-
-        const tabControl = UI.createSegmentedControl(
-            [
-                { key: 'overview', value: 'overview', label: 'Overview' },
-                { key: 'instructions', value: 'instructions', label: 'Instructions' },
-                { key: 'requirements', value: 'requirements', label: 'Requirements' },
-                { key: 'providers', value: 'providers', label: 'Provider config' },
-                { key: 'files', value: 'files', label: 'Files' },
-                { key: 'review', value: 'review', label: 'Review' },
-            ],
-            (nextTab) => {
-                studioTab = nextTab;
-                _writeState();
-                renderDetail();
-            },
-            {
-                label: 'Studio tabs',
-                value: studioTab,
-            },
-        );
-        main.appendChild(tabControl.element);
-
-        const bodyPanel = document.createElement('section');
-        bodyPanel.className = 'editor-panel';
-        main.appendChild(bodyPanel);
+        nodes.push(header);
 
         const markDirty = () => {
             draftDirty = true;
@@ -1690,109 +1672,160 @@ function renderSkillCatalog(container) {
             container.appendChild(addBtn);
         };
 
-        if (studioTab === 'overview') {
-            const metadata = UI.renderMetadataGrid([
-                { label: 'Visibility', value: detail.visibility || 'private' },
-                { label: 'Draft revision', value: lifecycle?.active_revision_id || '(none)' },
-                { label: 'Published revision', value: lifecycle?.published_revision_id || '(none)' },
-            ]);
-            bodyPanel.appendChild(metadata);
-            const displayNameInput = document.createElement('input');
-            displayNameInput.className = 'input';
-            displayNameInput.placeholder = 'Display name';
-            displayNameInput.value = draftBuffer.display_name || '';
-            displayNameInput.addEventListener('input', () => {
-                draftBuffer.display_name = displayNameInput.value;
-                markDirty();
+        const basicsPanel = document.createElement('section');
+        basicsPanel.className = 'editor-panel';
+        basicsPanel.dataset.key = `studio-basics:${detail.name || ''}`;
+        const basicsTitle = document.createElement('div');
+        basicsTitle.className = 'editor-section-title';
+        basicsTitle.textContent = '1. Basics';
+        basicsPanel.appendChild(basicsTitle);
+        basicsPanel.appendChild(UI.renderMetadataGrid([
+            { label: 'Skill slug', value: detail.name || '(unnamed)' },
+            { label: 'Visibility', value: detail.visibility || 'private' },
+            { label: 'Draft revision', value: lifecycle?.active_revision_id || '(none)' },
+            { label: 'Published revision', value: lifecycle?.published_revision_id || '(none)' },
+        ]));
+        const displayNameInput = document.createElement('input');
+        displayNameInput.className = 'input';
+        displayNameInput.placeholder = 'Display name';
+        displayNameInput.value = draftBuffer.display_name || '';
+        displayNameInput.addEventListener('input', () => {
+            draftBuffer.display_name = displayNameInput.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(displayNameInput);
+        const descriptionInput = document.createElement('input');
+        descriptionInput.className = 'input';
+        descriptionInput.placeholder = 'Short description';
+        descriptionInput.value = draftBuffer.description || '';
+        descriptionInput.addEventListener('input', () => {
+            draftBuffer.description = descriptionInput.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(descriptionInput);
+        const kindSelect = document.createElement('select');
+        kindSelect.className = 'input';
+        [['prompt', 'Prompt skill'], ['executable', 'Executable skill']].forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.selected = draftBuffer.skill_kind === value;
+            kindSelect.appendChild(option);
+        });
+        kindSelect.addEventListener('change', () => {
+            draftBuffer.skill_kind = kindSelect.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(kindSelect);
+        const changelogInput = document.createElement('input');
+        changelogInput.className = 'input';
+        changelogInput.placeholder = 'Changelog (optional)';
+        changelogInput.value = draftBuffer.changelog || '';
+        changelogInput.addEventListener('input', () => {
+            draftBuffer.changelog = changelogInput.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(changelogInput);
+        nodes.push(basicsPanel);
+
+        const instructionsPanel = document.createElement('section');
+        instructionsPanel.className = 'editor-panel';
+        instructionsPanel.dataset.key = `studio-instructions:${detail.name || ''}`;
+        const instructionsTitle = document.createElement('div');
+        instructionsTitle.className = 'editor-section-title';
+        instructionsTitle.textContent = '2. Instructions';
+        instructionsPanel.appendChild(instructionsTitle);
+        const instructionsNote = document.createElement('p');
+        instructionsNote.className = 'quiet-note';
+        instructionsNote.textContent = 'Write the skill instructions that will be published for runtime use.';
+        instructionsPanel.appendChild(instructionsNote);
+        const bodyInput = document.createElement('textarea');
+        bodyInput.className = 'guidance-textarea';
+        bodyInput.rows = 20;
+        bodyInput.value = draftBuffer.body || '';
+        bodyInput.placeholder = 'Draft instructions';
+        bodyInput.addEventListener('input', () => {
+            draftBuffer.body = bodyInput.value;
+            markDirty();
+        });
+        instructionsPanel.appendChild(bodyInput);
+        nodes.push(instructionsPanel);
+
+        const requirementsPanel = document.createElement('section');
+        requirementsPanel.className = 'editor-panel';
+        requirementsPanel.dataset.key = `studio-requirements:${detail.name || ''}`;
+        const requirementsTitle = document.createElement('div');
+        requirementsTitle.className = 'editor-section-title';
+        requirementsTitle.textContent = '3. Requirements';
+        requirementsPanel.appendChild(requirementsTitle);
+        renderRequirementsEditor(requirementsPanel);
+        nodes.push(requirementsPanel);
+
+        const providersPanel = document.createElement('section');
+        providersPanel.className = 'editor-panel';
+        providersPanel.dataset.key = `studio-providers:${detail.name || ''}`;
+        const providersTitle = document.createElement('div');
+        providersTitle.className = 'editor-section-title';
+        providersTitle.textContent = '4. Provider config';
+        providersPanel.appendChild(providersTitle);
+        renderProviderEditor(providersPanel);
+        nodes.push(providersPanel);
+
+        const filesPanel = document.createElement('section');
+        filesPanel.className = 'editor-panel';
+        filesPanel.dataset.key = `studio-files:${detail.name || ''}`;
+        const filesTitle = document.createElement('div');
+        filesTitle.className = 'editor-section-title';
+        filesTitle.textContent = '5. Files';
+        filesPanel.appendChild(filesTitle);
+        renderFilesEditor(filesPanel);
+        nodes.push(filesPanel);
+
+        const reviewPanel = document.createElement('section');
+        reviewPanel.className = 'editor-panel';
+        reviewPanel.dataset.key = `studio-review:${detail.name || ''}`;
+        const reviewTitle = document.createElement('div');
+        reviewTitle.className = 'editor-section-title';
+        reviewTitle.textContent = '6. Review';
+        reviewPanel.appendChild(reviewTitle);
+        reviewPanel.appendChild(UI.renderMetadataGrid([
+            { label: 'Runtime available', value: packageState.runtime_available ? 'Yes' : 'No' },
+            { label: 'Publish ready', value: packageState.publish_ready ? 'Yes' : 'No' },
+            { label: 'Requirements', value: String((draftBuffer.requirements || []).length) },
+            { label: 'Files', value: String((draftBuffer.files || []).length) },
+        ], { compact: true }));
+        const previewLabel = document.createElement('div');
+        previewLabel.className = 'detail-label';
+        previewLabel.textContent = 'Instructions preview';
+        reviewPanel.appendChild(previewLabel);
+        const preview = document.createElement('div');
+        preview.className = 'task-item-summary';
+        preview.innerHTML = UI.renderContent(draftBuffer.body || '');
+        reviewPanel.appendChild(preview);
+        if (Array.isArray(packageState.validation_problems) && packageState.validation_problems.length) {
+            const validationLabel = document.createElement('div');
+            validationLabel.className = 'detail-label';
+            validationLabel.textContent = 'Validation problems';
+            reviewPanel.appendChild(validationLabel);
+            const problems = document.createElement('ul');
+            problems.className = 'change-list';
+            packageState.validation_problems.forEach((problem) => {
+                const item = document.createElement('li');
+                item.innerHTML = [
+                    `<strong>${UI.esc(problem.field_path || problem.code || 'problem')}</strong>`,
+                    `<div>${UI.esc(problem.message || '')}</div>`,
+                ].join('');
+                problems.appendChild(item);
             });
-            bodyPanel.appendChild(displayNameInput);
-            const descriptionInput = document.createElement('input');
-            descriptionInput.className = 'input';
-            descriptionInput.placeholder = 'Short description';
-            descriptionInput.value = draftBuffer.description || '';
-            descriptionInput.addEventListener('input', () => {
-                draftBuffer.description = descriptionInput.value;
-                markDirty();
-            });
-            bodyPanel.appendChild(descriptionInput);
-            const kindSelect = document.createElement('select');
-            kindSelect.className = 'input';
-            [['prompt', 'Prompt skill'], ['executable', 'Executable skill']].forEach(([value, label]) => {
-                const option = document.createElement('option');
-                option.value = value;
-                option.textContent = label;
-                option.selected = draftBuffer.skill_kind === value;
-                kindSelect.appendChild(option);
-            });
-            kindSelect.addEventListener('change', () => {
-                draftBuffer.skill_kind = kindSelect.value;
-                markDirty();
-            });
-            bodyPanel.appendChild(kindSelect);
-            const changelogInput = document.createElement('input');
-            changelogInput.className = 'input';
-            changelogInput.placeholder = 'Changelog (optional)';
-            changelogInput.value = draftBuffer.changelog || '';
-            changelogInput.addEventListener('input', () => {
-                draftBuffer.changelog = changelogInput.value;
-                markDirty();
-            });
-            bodyPanel.appendChild(changelogInput);
-        } else if (studioTab === 'instructions') {
-            const bodyInput = document.createElement('textarea');
-            bodyInput.className = 'guidance-textarea';
-            bodyInput.rows = 20;
-            bodyInput.value = draftBuffer.body || '';
-            bodyInput.placeholder = 'Draft instructions';
-            bodyInput.addEventListener('input', () => {
-                draftBuffer.body = bodyInput.value;
-                markDirty();
-            });
-            bodyPanel.appendChild(bodyInput);
-        } else if (studioTab === 'requirements') {
-            renderRequirementsEditor(bodyPanel);
-        } else if (studioTab === 'providers') {
-            renderProviderEditor(bodyPanel);
-        } else if (studioTab === 'files') {
-            renderFilesEditor(bodyPanel);
+            reviewPanel.appendChild(problems);
         } else {
-            const previewLabel = document.createElement('div');
-            previewLabel.className = 'detail-label';
-            previewLabel.textContent = 'Instructions preview';
-            bodyPanel.appendChild(previewLabel);
-            const preview = document.createElement('div');
-            preview.className = 'task-item-summary';
-            preview.innerHTML = UI.renderContent(draftBuffer.body || '');
-            bodyPanel.appendChild(preview);
-            if (Array.isArray(packageState.validation_problems) && packageState.validation_problems.length) {
-                const validationLabel = document.createElement('div');
-                validationLabel.className = 'detail-label';
-                validationLabel.textContent = 'Validation problems';
-                bodyPanel.appendChild(validationLabel);
-                const problems = document.createElement('ul');
-                problems.className = 'change-list';
-                packageState.validation_problems.forEach((problem) => {
-                    const item = document.createElement('li');
-                    item.innerHTML = [
-                        `<strong>${UI.esc(problem.field_path || problem.code || 'problem')}</strong>`,
-                        `<div>${UI.esc(problem.message || '')}</div>`,
-                    ].join('');
-                    problems.appendChild(item);
-                });
-                bodyPanel.appendChild(problems);
-            } else {
-                bodyPanel.appendChild(UI.renderEmptyState('No validation problems. This draft is ready for the next lifecycle step.', true));
-            }
+            reviewPanel.appendChild(UI.renderEmptyState('No validation problems. This draft is ready for the next lifecycle step.', true));
         }
-
-        refreshChrome();
-
-        const rail = document.createElement('aside');
-        rail.className = 'studio-rail';
-        shell.appendChild(rail);
+        nodes.push(reviewPanel);
 
         const exportPanel = document.createElement('section');
         exportPanel.className = 'editor-panel';
+        exportPanel.dataset.key = `studio-package:${detail.name || ''}`;
         exportPanel.innerHTML = '<div class="editor-section-title">Package</div><p class="quiet-note">Export the draft you are editing, or the published revision currently active on this bot.</p>';
         const exportActions = document.createElement('div');
         exportActions.className = 'editor-actions';
@@ -1831,21 +1864,12 @@ function renderSkillCatalog(container) {
         importBtn.addEventListener('click', () => _openImportDialog());
         exportActions.appendChild(importBtn);
         exportPanel.appendChild(exportActions);
-        rail.appendChild(exportPanel);
-
-        const statusPanel = document.createElement('section');
-        statusPanel.className = 'editor-panel';
-        statusPanel.appendChild(UI.renderMetadataGrid([
-            { label: 'Runtime available', value: packageState.runtime_available ? 'Yes' : 'No' },
-            { label: 'Publish ready', value: packageState.publish_ready ? 'Yes' : 'No' },
-            { label: 'Requirements', value: String((draftBuffer.requirements || []).length) },
-            { label: 'Files', value: String((draftBuffer.files || []).length) },
-        ], { compact: true }));
-        rail.appendChild(statusPanel);
+        nodes.push(exportPanel);
 
         if (lifecycle) {
             const history = document.createElement('section');
             history.className = 'editor-panel';
+            history.dataset.key = `studio-history:${detail.name || ''}`;
             history.innerHTML = '<div class="editor-section-title">Revision history</div>';
             if ((lifecycle.revisions || []).length) {
                 const revisions = document.createElement('ul');
@@ -1881,9 +1905,11 @@ function renderSkillCatalog(container) {
                 });
                 history.appendChild(approvals);
             }
-            rail.appendChild(history);
+            nodes.push(history);
         }
-        return shell;
+
+        refreshChrome();
+        return nodes;
     }
 
     async function loadSkills({ soft = false, forceCatalog = false } = {}) {

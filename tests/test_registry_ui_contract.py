@@ -175,6 +175,8 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
+    assert "await persistDraft({ quiet: true })" in skill_catalog
+    assert "function _editableDraftState(detail, lifecycle)" in skill_catalog
     assert "workspace.className = 'dashboard-board';" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
     assert "allowEmpty: true" in skill_catalog
@@ -192,6 +194,26 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
     assert "Available on this bot" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
+
+
+def test_guidance_editor_exposes_progressive_draft_and_review_workspace() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    guidance_editor = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
+    ).read_text(encoding="utf-8")
+
+    assert "currentGuidanceTab = _readGuidanceTab()" in guidance_editor
+    assert "label: 'Guidance workspace'" in guidance_editor
+    assert "label: 'Write'" in guidance_editor
+    assert "label: 'Review'" in guidance_editor
+    assert "label: 'Advanced'" in guidance_editor
+    assert "await persistGuidanceDraft({ quiet: true })" in guidance_editor
+    assert "body: guidanceDraftBody" in guidance_editor
+    assert "Preview runtime" in guidance_editor
+    assert "Next step" in guidance_editor
+    assert "Discard unsaved guidance changes?" in guidance_editor
+    assert "renderGuidanceContent(currentGuidance, currentPreview)" in guidance_editor
+    assert "textarea.value = state.guidanceDraftBody || ''" in guidance_editor
 
 
 def test_skills_surface_does_not_reintroduce_skills_only_layout_classes() -> None:

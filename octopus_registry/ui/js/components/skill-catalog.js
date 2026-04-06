@@ -235,20 +235,45 @@ function renderSkillCatalog(container) {
         return lifecycle || detail || {};
     }
 
+    function _editableDraftState(detail, lifecycle) {
+        const primary = detail || {};
+        const fallback = lifecycle || {};
+        return {
+            skill_kind: String(primary.skill_kind || fallback.skill_kind || 'prompt'),
+            body: String(primary.body || fallback.body || ''),
+            requirements: Array.isArray(primary.requirements)
+                ? primary.requirements
+                : (Array.isArray(fallback.requirements) ? fallback.requirements : []),
+            provider_config: (
+                primary.provider_config && typeof primary.provider_config === 'object'
+            )
+                ? primary.provider_config
+                : (
+                    fallback.provider_config && typeof fallback.provider_config === 'object'
+                        ? fallback.provider_config
+                        : {}
+                ),
+            files: Array.isArray(primary.files)
+                ? primary.files
+                : (Array.isArray(fallback.files) ? fallback.files : []),
+        };
+    }
+
     function _draftSnapshot(detail, lifecycle) {
         const packageState = _packageState(detail, lifecycle);
+        const editableState = _editableDraftState(detail, lifecycle);
         return JSON.stringify({
             name: detail?.name || '',
             display_name: detail?.display_name || '',
             description: detail?.description || '',
-            skill_kind: String(packageState.skill_kind || detail?.skill_kind || 'prompt'),
-            body: String(packageState.body || detail?.body || ''),
+            skill_kind: editableState.skill_kind,
+            body: editableState.body,
             lifecycle_status: String(packageState.lifecycle_status || detail?.lifecycle_status || ''),
             active_revision_id: String(lifecycle?.active_revision_id || ''),
             published_revision_id: String(lifecycle?.published_revision_id || ''),
-            requirements: Array.isArray(packageState.requirements) ? packageState.requirements : [],
-            provider_config: packageState.provider_config || {},
-            files: Array.isArray(packageState.files) ? packageState.files : [],
+            requirements: editableState.requirements,
+            provider_config: editableState.provider_config,
+            files: editableState.files,
         });
     }
 
@@ -257,16 +282,16 @@ function renderSkillCatalog(container) {
     }
 
     function _resetDraftState(detail, lifecycle) {
-        const packageState = _packageState(detail, lifecycle);
+        const editableState = _editableDraftState(detail, lifecycle);
         draftBuffer = {
             name: detail?.name || '',
             display_name: detail?.display_name || '',
             description: detail?.description || '',
-            skill_kind: String(packageState.skill_kind || detail?.skill_kind || 'prompt'),
-            body: packageState.body || detail?.body || '',
+            skill_kind: editableState.skill_kind,
+            body: editableState.body,
             changelog: '',
-            requirements: Array.isArray(packageState.requirements)
-                ? packageState.requirements.map((item) => ({
+            requirements: Array.isArray(editableState.requirements)
+                ? editableState.requirements.map((item) => ({
                     key: item.key || '',
                     prompt: item.prompt || '',
                     help_url: item.help_url || '',
@@ -274,12 +299,12 @@ function renderSkillCatalog(container) {
                 }))
                 : [],
             provider_config: _cloneValue(
-                packageState.provider_config && typeof packageState.provider_config === 'object'
-                    ? packageState.provider_config
+                editableState.provider_config && typeof editableState.provider_config === 'object'
+                    ? editableState.provider_config
                     : {}
             ),
-            files: Array.isArray(packageState.files)
-                ? packageState.files.map((item) => ({
+            files: Array.isArray(editableState.files)
+                ? editableState.files.map((item) => ({
                     relative_path: item.relative_path || '',
                     content_text: item.content_text || '',
                     content_type: item.content_type || '',
@@ -1419,24 +1444,7 @@ function renderSkillCatalog(container) {
             refreshChrome();
         };
 
-        const lifecycleAction = async (op, successLabel) => {
-            draftStatus = 'saving';
-            draftStatusMessage = successLabel;
-            refreshChrome();
-            try {
-                await op();
-                _invalidateSkillCaches(currentAgentId, detail.name);
-                await loadSkills({ soft: true, forceCatalog: true });
-                await loadSelectionData({ soft: true });
-            } catch (err) {
-                draftStatus = 'error';
-                draftStatusMessage = 'Action failed';
-                refreshChrome();
-                UI.reportError(`Failed to ${successLabel.toLowerCase()}`, err, { context: `Skill studio ${successLabel.toLowerCase()} failed` });
-            }
-        };
-
-        saveBtn.addEventListener('click', async () => {
+        const persistDraft = async ({ quiet = false } = {}) => {
             draftStatus = 'saving';
             draftStatusMessage = 'Saving draft…';
             refreshChrome();
@@ -1454,12 +1462,45 @@ function renderSkillCatalog(container) {
                 _invalidateSkillCaches(currentAgentId, detail.name);
                 await loadSkills({ soft: true, forceCatalog: true });
                 await loadSelectionData({ soft: true });
+                return true;
             } catch (err) {
                 draftStatus = 'error';
                 draftStatusMessage = 'Save failed';
                 refreshChrome();
-                UI.reportError('Failed to save the draft', err, { context: 'Skill draft save failed' });
+                if (!quiet) {
+                    UI.reportError('Failed to save the draft', err, { context: 'Skill draft save failed' });
+                } else {
+                    UI.reportError('Failed to save the draft before continuing', err, { context: 'Skill draft pre-save failed' });
+                }
+                return false;
             }
+        };
+
+        const lifecycleAction = async (op, successLabel) => {
+            if (draftDirty) {
+                const saved = await persistDraft({ quiet: true });
+                if (!saved) {
+                    return;
+                }
+            }
+            draftStatus = 'saving';
+            draftStatusMessage = successLabel;
+            refreshChrome();
+            try {
+                await op();
+                _invalidateSkillCaches(currentAgentId, detail.name);
+                await loadSkills({ soft: true, forceCatalog: true });
+                await loadSelectionData({ soft: true });
+            } catch (err) {
+                draftStatus = 'error';
+                draftStatusMessage = 'Action failed';
+                refreshChrome();
+                UI.reportError(`Failed to ${successLabel.toLowerCase()}`, err, { context: `Skill studio ${successLabel.toLowerCase()} failed` });
+            }
+        };
+
+        saveBtn.addEventListener('click', async () => {
+            await persistDraft();
         });
         submitBtn.addEventListener('click', async () => lifecycleAction(
             () => API.submitSkillDraft(currentAgentId, detail.name, {}),

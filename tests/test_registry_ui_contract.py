@@ -165,6 +165,8 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
     assert "label: 'Advanced'" in skill_catalog
     assert "skill_tab: currentMode === 'studio' ? currentStudioTab : ''" in skill_catalog
     assert "currentStudioTab !== 'review'" in skill_catalog
+    assert "studio-workflow" not in skill_catalog
+    assert "Next step" in skill_catalog
     assert "'Available on this bot'" in skill_catalog
     assert "'Skill store'" in skill_catalog
     assert "'Create custom draft'" in skill_catalog

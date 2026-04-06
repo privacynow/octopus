@@ -1170,7 +1170,7 @@ function renderSkillCatalog(container) {
         note.className = 'quiet-note';
         note.textContent = selected && selected.origin === 'store'
             ? 'Studio edits only mutable custom skills. Install store skills in Bot catalog, or create a new custom draft here.'
-            : `Select a custom skill for ${agentLabel}, or create and import a draft from here.`;
+            : `Select a custom skill for ${agentLabel}, or start a new draft here.`;
         intro.appendChild(note);
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
@@ -1187,17 +1187,7 @@ function renderSkillCatalog(container) {
         importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
         actions.appendChild(importBtn);
         intro.appendChild(actions);
-
-        const workflow = document.createElement('section');
-        workflow.className = 'editor-panel';
-        workflow.dataset.key = 'studio-workflow';
-        workflow.appendChild(UI.renderMetadataGrid([
-            { label: '1', value: 'Create or import a custom draft' },
-            { label: '2', value: 'Write the title, description, and instructions people actually see' },
-            { label: '3', value: 'Use Setup and Review to finish validation and move the draft through lifecycle' },
-            { label: '4', value: 'Open Advanced only for package export, files, provider config, and revision details' },
-        ], { compact: true }));
-        return [intro, workflow];
+        return [intro];
     }
 
     function _openCreateDraftDialog() {
@@ -1398,11 +1388,11 @@ function renderSkillCatalog(container) {
         saveBtn.textContent = 'Save draft';
         const submitBtn = document.createElement('button');
         submitBtn.type = 'button';
-        submitBtn.className = 'btn';
+        submitBtn.className = 'btn btn-primary';
         submitBtn.textContent = 'Submit';
         const approveBtn = document.createElement('button');
         approveBtn.type = 'button';
-        approveBtn.className = 'btn';
+        approveBtn.className = 'btn btn-primary';
         approveBtn.textContent = 'Approve';
         const rejectBtn = document.createElement('button');
         rejectBtn.type = 'button';
@@ -1410,13 +1400,13 @@ function renderSkillCatalog(container) {
         rejectBtn.textContent = 'Reject';
         const publishBtn = document.createElement('button');
         publishBtn.type = 'button';
-        publishBtn.className = 'btn';
+        publishBtn.className = 'btn btn-primary';
         publishBtn.textContent = 'Publish';
         const archiveBtn = document.createElement('button');
         archiveBtn.type = 'button';
         archiveBtn.className = 'btn btn-danger';
         archiveBtn.textContent = 'Archive';
-        [saveBtn, submitBtn, approveBtn, rejectBtn, publishBtn, archiveBtn].forEach((button) => actions.appendChild(button));
+        actions.appendChild(saveBtn);
         header.appendChild(actions);
         const workspaceTabs = UI.createSegmentedControl(
             [
@@ -1907,6 +1897,30 @@ function renderSkillCatalog(container) {
             });
             reviewPanel.appendChild(approvals);
         }
+        const nextStepLabel = document.createElement('div');
+        nextStepLabel.className = 'detail-label';
+        nextStepLabel.textContent = 'Next step';
+        reviewPanel.appendChild(nextStepLabel);
+        const nextStepNote = document.createElement('p');
+        nextStepNote.className = 'quiet-note';
+        if (lifecycleStatus === 'draft') {
+            nextStepNote.textContent = packageState.publish_ready
+                ? 'Submit this draft for review when you are ready.'
+                : 'Fix the validation issues above, then submit this draft for review.';
+        } else if (lifecycleStatus === 'review') {
+            nextStepNote.textContent = 'Approve this draft to make it publishable, or reject it if it still needs changes.';
+        } else if (lifecycleStatus === 'approved') {
+            nextStepNote.textContent = 'Publish this approved draft when you are ready for it to become active on the bot.';
+        } else if (lifecycleStatus === 'archived') {
+            nextStepNote.textContent = 'This draft is archived.';
+        } else {
+            nextStepNote.textContent = 'This revision is already live. Archive it only if you want to retire it.';
+        }
+        reviewPanel.appendChild(nextStepNote);
+        const reviewActions = document.createElement('div');
+        reviewActions.className = 'editor-actions';
+        [submitBtn, approveBtn, rejectBtn, publishBtn, archiveBtn].forEach((button) => reviewActions.appendChild(button));
+        reviewPanel.appendChild(reviewActions);
 
         const advancedPanel = document.createElement('section');
         advancedPanel.className = 'editor-panel';

@@ -181,6 +181,8 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
     assert "agentId: currentAgentId" in skill_catalog
     assert "agentLabel: _currentAgentLabel()" in skill_catalog
     assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
+    assert "selectedSkillName = local[0].name || ''" not in skill_catalog
+    assert "selectedSkillName = store[0].name || ''" not in skill_catalog
     assert "How skills work" not in skill_catalog
     assert "Open this bot’s conversations" not in skill_catalog
     assert "1. Basics" not in skill_catalog

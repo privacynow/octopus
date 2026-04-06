@@ -379,29 +379,13 @@ function renderSkillCatalog(container) {
     }
 
     function _ensureSelection() {
-        const local = _visibleLocalSkills();
-        const store = _visibleStoreSkills();
         const current = _findSelectedSkill();
         if (current) {
             selectedSkillOrigin = current.origin;
             return;
         }
-        if (currentMode === 'studio') {
-            selectedSkillName = '';
-            selectedSkillOrigin = 'local';
-            _writeState();
-            return;
-        }
-        if (local.length) {
-            selectedSkillName = local[0].name || '';
-            selectedSkillOrigin = 'local';
-        } else if (store.length) {
-            selectedSkillName = store[0].name || '';
-            selectedSkillOrigin = 'store';
-        } else {
-            selectedSkillName = '';
-            selectedSkillOrigin = 'local';
-        }
+        selectedSkillName = '';
+        selectedSkillOrigin = 'local';
         _writeState();
     }
 

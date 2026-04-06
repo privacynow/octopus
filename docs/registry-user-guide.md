@@ -161,11 +161,13 @@ You can:
 ### Author A Custom Skill
 
 1. open `Skills`
-2. switch to `Studio`
-3. create a draft
-4. edit the package
-5. validate
-6. submit / approve / publish
+2. choose the target bot
+3. switch to `Studio`
+4. create a draft or import a package
+5. use `Write` for title, description, and instructions
+6. use `Setup` for credential requirements
+7. use `Review` for validation and lifecycle actions
+8. use `Advanced` only for package import/export, provider config, files, and revision history
 
 For the full skills workflow, use
 [skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).

@@ -868,9 +868,6 @@ function renderSkillCatalog(container) {
             if (state.mode === 'catalog') {
                 nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
             }
-            if (String(state.summary.source_kind || '') === 'custom' || state.mode === 'studio') {
-                nodes.push(_buildStudioPanel(state.summary, state.detail, state.lifecycle));
-            }
             return nodes;
         }, {
             signatureFn(state) {

@@ -73,16 +73,20 @@ Typical skill operations in chat include:
 - inspect skills
 - add or remove a skill from the conversation
 - install store skills
-- inspect or replace a custom skill package
+- export a custom skill package
+- import a custom skill package into a draft
 
 Examples you may use:
 
 ```text
 /skills
+/skills list
 /skills add <name>
 /skills remove <name>
-/skills package <name>
-/skills package <name> <json>
+/skills export <name>
+/skills export <name> published
+/skills import
+/skills import <target-name>
 ```
 
 The exact subcommands may evolve, so use `/help` or `/skills` to see the live

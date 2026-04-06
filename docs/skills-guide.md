@@ -100,14 +100,17 @@ flow more comfortably, but the underlying rules are the same.
 
 Custom skills are authored from the registry `Skills -> Studio` flow.
 
+The studio is still bot-scoped, so you choose the target bot first. Drafts,
+publish state, and package export/import all belong to that bot's mutable skill
+catalog.
+
 Typical flow:
 
 1. create a draft
-2. edit the draft package
-3. validate
-4. submit
-5. approve
-6. publish
+2. use `Write` for title, description, and instructions
+3. use `Setup` for credential requirements
+4. use `Review` to fix validation problems and move the draft through lifecycle
+5. use `Advanced` only for package import/export, provider config, files, and revision details
 
 The shared draft package can include:
 
@@ -165,8 +168,9 @@ The registry and Telegram are peer clients over the same backend operations.
 The registry is the richer wrapper:
 
 - easier editing
-- validation panels
-- lifecycle history
+- `Write`, `Setup`, `Review`, and `Advanced` workspace stages
+- validation panels and lifecycle actions in `Review`
+- package import/export and low-level package details in `Advanced`
 
 Telegram exposes smaller text-oriented operations against the same model.
 

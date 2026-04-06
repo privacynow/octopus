@@ -218,6 +218,10 @@ shared backend workflow:
 - only `.sh` files may be marked executable
 - package limits are 16 attached files, 64 KB per file, 256 KB total
 
+The current registry studio is still agent-scoped because the mutable draft and
+lifecycle state live on one bot's skill catalog. The UI can present that as a
+progressive editor, but the owning bot remains part of the request identity.
+
 ### Realtime model
 
 WebSocket topics:

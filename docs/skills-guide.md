@@ -98,9 +98,10 @@ flow more comfortably, but the underlying rules are the same.
 
 ## Author A Custom Skill
 
-Custom skills are authored from the registry `Skills -> Studio` flow.
+Custom skills are authored from the unified registry `Skills` page.
 
-The studio is still bot-scoped, so you choose the target bot first. Drafts,
+The workspace is still bot-scoped, so you choose the target bot first unless
+you opened `Skills` from an agent page and the bot is already bound. Drafts,
 publish state, and package export/import all belong to that bot's mutable skill
 catalog.
 

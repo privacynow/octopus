@@ -218,6 +218,11 @@ shared backend workflow:
 - only `.sh` files may be marked executable
 - package limits are 16 attached files, 64 KB per file, 256 KB total
 
+The registry UI now keeps one bot-scoped `Skills` workspace for installed,
+store-backed, and custom skills. Conversation activation remains a separate,
+conversation-scoped flow. The agent page can launch into either surface, but it
+does not own a second skill-management model.
+
 The current registry studio is still agent-scoped because the mutable draft and
 lifecycle state live on one bot's skill catalog. The UI can present that as a
 progressive editor, but the owning bot remains part of the request identity.

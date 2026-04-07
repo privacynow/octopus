@@ -2203,6 +2203,29 @@ select {
     gap: var(--space-3);
 }
 
+.skills-drawer-overlay {
+    justify-content: flex-end;
+    align-items: stretch;
+    padding: 0;
+}
+
+.skills-drawer-dialog {
+    width: min(44rem, 100vw);
+    max-width: min(44rem, 100vw) !important;
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border-right: 0;
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+}
+
+.skills-drawer-dialog .studio-stack {
+    min-height: 0;
+    overflow: auto;
+    align-content: start;
+}
+
 .session-card-actions {
     display: flex;
     gap: var(--space-2);

@@ -1,5 +1,186 @@
 /**
- * Skills hub — bot-scoped skill catalog plus custom skill studio.
+ * Shared skill hub helpers used by the unified Skills page and agent launchers.
+ */
+const RegistrySkillHub = (() => {
+    const SEARCHABLE_LOCAL_FIELDS = ['name', 'display_name', 'description', 'source_kind', 'lifecycle_status'];
+
+    function supportsCapability(agent, capability) {
+        const capabilities = Array.isArray(agent?.management_capabilities) ? agent.management_capabilities : [];
+        return capabilities.includes(capability);
+    }
+
+    function eligibleAgents(agents) {
+        return (agents || []).filter((agent) => {
+            const connectivity = String(agent?.connectivity_state || '').trim();
+            return ['connected', 'degraded'].includes(connectivity)
+                && (supportsCapability(agent, 'skill_catalog') || supportsCapability(agent, 'skill_lifecycle'));
+        });
+    }
+
+    function canCreateCustom(agent) {
+        return supportsCapability(agent, 'skill_lifecycle');
+    }
+
+    function canSearchStore(agent) {
+        return supportsCapability(agent, 'skill_catalog');
+    }
+
+    function isCustomSkill(skill) {
+        return String(skill?.source_kind || '') === 'custom';
+    }
+
+    function _matchesLocalQuery(skill, queryText) {
+        const haystack = SEARCHABLE_LOCAL_FIELDS
+            .map((field) => String(skill?.[field] || ''))
+            .join(' ')
+            .toLowerCase();
+        return haystack.includes(queryText);
+    }
+
+    function visibleLocalSkills(skills, queryText = '') {
+        const normalized = String(queryText || '').trim().toLowerCase();
+        if (!normalized) {
+            return Array.isArray(skills) ? skills : [];
+        }
+        return (skills || []).filter((skill) => _matchesLocalQuery(skill, normalized));
+    }
+
+    function visibleStoreSkills(skills, queryText = '') {
+        const normalized = String(queryText || '').trim();
+        if (normalized.length < 2) {
+            return [];
+        }
+        return Array.isArray(skills) ? skills : [];
+    }
+
+    function buildSections(localSkills, storeSkills, queryText = '') {
+        const visibleLocal = visibleLocalSkills(localSkills, queryText);
+        const custom = visibleLocal.filter((skill) => isCustomSkill(skill));
+        const installed = visibleLocal.filter((skill) => !isCustomSkill(skill));
+        const visibleStore = visibleStoreSkills(storeSkills, queryText);
+        return [
+            { key: 'custom', label: 'Custom', items: custom, origin: 'local' },
+            { key: 'installed', label: 'Installed on this bot', items: installed, origin: 'local' },
+            { key: 'store', label: 'Store', items: visibleStore, origin: 'store' },
+        ].filter((section) => section.items.length > 0);
+    }
+
+    function findSelectedSkill(localSkills, storeSkills, selectedSkillName) {
+        const local = (localSkills || []).find((item) => item && item.name === selectedSkillName);
+        if (local) {
+            return { origin: 'local', skill: local };
+        }
+        const store = (storeSkills || []).find((item) => item && item.name === selectedSkillName);
+        if (store) {
+            return { origin: 'store', skill: store };
+        }
+        return null;
+    }
+
+    function localRowMeta(skill) {
+        const fragments = [];
+        if (skill?.description) fragments.push(String(skill.description));
+        if (skill?.runtime_available === false) fragments.push('not active until published');
+        if (skill?.requires_credentials) fragments.push('setup required on activation');
+        if (skill?.default_for_new_conversations) fragments.push('default for new conversations');
+        if (skill?.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
+        if (skill?.has_unpublished_changes) fragments.push('unpublished changes');
+        return {
+            label: skill?.display_name || skill?.name || '',
+            sublabel: fragments.join(' • ') || 'Available on this bot',
+            badgeText: String(skill?.source_label || skill?.source_kind || 'Skill'),
+        };
+    }
+
+    function storeRowMeta(skill) {
+        const fragments = [];
+        if (skill?.description) fragments.push(String(skill.description));
+        if (skill?.publisher) fragments.push(`by ${String(skill.publisher)}`);
+        if (skill?.version) fragments.push(`v${String(skill.version)}`);
+        return {
+            label: skill?.display_name || skill?.name || '',
+            sublabel: fragments.join(' • ') || 'Available from the skill store',
+            badgeText: String(skill?.source_label || 'Store'),
+        };
+    }
+
+    function listCacheKey(agentId) {
+        return `skills:list:${String(agentId || '').trim()}`;
+    }
+
+    function searchCacheKey(agentId, queryText) {
+        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
+    }
+
+    function detailCacheKey(agentId, skillName) {
+        return `skills:detail:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
+    }
+
+    function lifecycleCacheKey(agentId, skillName) {
+        return `skills:lifecycle:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
+    }
+
+    function skillWorkspaceHref(agentId, skillName = '', { origin = 'local', tab = '' } = {}) {
+        const url = new URL('/ui/skills', window.location.origin);
+        if (agentId) {
+            url.searchParams.set('agent_id', String(agentId));
+        }
+        if (skillName) {
+            url.searchParams.set('skill', String(skillName));
+        }
+        if (origin === 'store' && skillName) {
+            url.searchParams.set('skill_source', 'store');
+        }
+        if (tab && origin === 'local') {
+            url.searchParams.set('skill_tab', String(tab));
+        }
+        return `${url.pathname}${url.search}`;
+    }
+
+    function conversationActivationHref(conversationId, skillName) {
+        const url = new URL(`/ui/conversations/${encodeURIComponent(conversationId)}`, window.location.origin);
+        url.searchParams.set('manage', 'skills');
+        if (skillName) {
+            url.searchParams.set('activate_skill', String(skillName));
+        }
+        return `${url.pathname}${url.search}`;
+    }
+
+    async function openConversationForSkill(agentId, skillName, { agentLabel = '' } = {}) {
+        const label = String(agentLabel || 'this bot');
+        const conversation = await API.openConversationForAgent(agentId, {
+            title: `Conversation with ${label}`,
+        });
+        Router.navigate(conversationActivationHref(conversation.conversation_id, skillName));
+        return conversation;
+    }
+
+    return {
+        supportsCapability,
+        eligibleAgents,
+        canCreateCustom,
+        canSearchStore,
+        isCustomSkill,
+        visibleLocalSkills,
+        visibleStoreSkills,
+        buildSections,
+        findSelectedSkill,
+        localRowMeta,
+        storeRowMeta,
+        listCacheKey,
+        searchCacheKey,
+        detailCacheKey,
+        lifecycleCacheKey,
+        skillWorkspaceHref,
+        conversationActivationHref,
+        openConversationForSkill,
+    };
+})();
+
+window.RegistrySkillHub = RegistrySkillHub;
+
+/**
+ * Skills hub — unified bot-scoped skill management.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
@@ -10,7 +191,6 @@ function renderSkillCatalog(container) {
 
     let searchTimeout = null;
     let currentQ = '';
-    let currentMode = _readMode();
     let currentAgentId = '';
     let selectedSkillName = _readSkillName();
     let selectedSkillOrigin = _readSkillOrigin();
@@ -33,7 +213,7 @@ function renderSkillCatalog(container) {
     header.innerHTML = [
         '<h2>Skills</h2>',
         '<p class="quiet-note">',
-        'Choose a bot to browse the skills available there. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
+        'Manage a bot’s installed, custom, and store-backed skills here. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -45,37 +225,6 @@ function renderSkillCatalog(container) {
     const controlsPanel = document.createElement('section');
     controlsPanel.className = 'workbench-panel';
     shell.appendChild(controlsPanel);
-
-    const modeControl = UI.createSegmentedControl(
-        [
-            { key: 'catalog', value: 'catalog', label: 'Bot catalog' },
-            { key: 'studio', value: 'studio', label: 'Studio' },
-        ],
-        (nextMode) => {
-            _runWithDraftGuard(async () => {
-                currentMode = nextMode;
-                searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
-                if (currentMode === 'studio') {
-                    selectedSkillName = '';
-                    selectedSkillOrigin = 'local';
-                    currentStudioTab = 'write';
-                    selectedLocalDetail = null;
-                    selectedLifecycle = null;
-                    selectionLoading = false;
-                    _clearDraftState();
-                }
-                _syncWorkspaceLayout();
-                _writeState();
-                _renderAgentOptions();
-                await loadSkills({ forceCatalog: true });
-            });
-        },
-        {
-            label: 'Skills view',
-            value: currentMode,
-        },
-    );
-    controlsPanel.appendChild(modeControl.element);
 
     const controls = document.createElement('div');
     controls.className = 'route-controls';
@@ -99,13 +248,29 @@ function renderSkillCatalog(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
+    searchInput.placeholder = 'Search installed or store skills';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search skills');
     controls.appendChild(searchInput);
 
+    const controlsActions = document.createElement('div');
+    controlsActions.className = 'editor-actions';
+    const createDraftBtn = document.createElement('button');
+    createDraftBtn.type = 'button';
+    createDraftBtn.className = 'btn btn-sm btn-primary';
+    createDraftBtn.textContent = 'New custom skill';
+    createDraftBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
+    controlsActions.appendChild(createDraftBtn);
+    const importBtn = document.createElement('button');
+    importBtn.type = 'button';
+    importBtn.className = 'btn btn-sm';
+    importBtn.textContent = 'Import';
+    importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
+    controlsActions.appendChild(importBtn);
+    controls.appendChild(controlsActions);
+
     const workspace = document.createElement('section');
-    workspace.className = 'dashboard-board';
+    workspace.className = 'dashboard-board dashboard-board-stacked';
     shell.appendChild(workspace);
 
     const listWrap = document.createElement('section');
@@ -119,15 +284,6 @@ function renderSkillCatalog(container) {
     const detailEl = document.createElement('section');
     detailEl.className = 'editor-shell';
     workspace.appendChild(detailEl);
-
-    function _syncWorkspaceLayout() {
-        workspace.classList.toggle('dashboard-board-stacked', currentMode === 'studio');
-    }
-
-    function _readMode() {
-        const value = UI.readQueryParam('skills_view', 'catalog');
-        return value === 'studio' ? 'studio' : 'catalog';
-    }
 
     function _readSkillName() {
         return UI.readQueryParam('skill', '');
@@ -146,10 +302,12 @@ function renderSkillCatalog(container) {
     function _writeState() {
         UI.updateQueryParams({
             agent_id: currentAgentId || '',
-            skills_view: currentMode === 'studio' ? 'studio' : '',
+            skills_view: '',
             skill: selectedSkillName || '',
             skill_source: selectedSkillName && selectedSkillOrigin === 'store' ? 'store' : '',
-            skill_tab: currentMode === 'studio' ? currentStudioTab : '',
+            skill_tab: selectedSkillName && selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(_findSelectedSkill()?.skill)
+                ? currentStudioTab
+                : '',
         });
     }
 
@@ -164,8 +322,7 @@ function renderSkillCatalog(container) {
     }
 
     function _eligibleAgents() {
-        const needed = currentMode === 'studio' ? 'skill_lifecycle' : 'skill_catalog';
-        return UI.filterManagedAgents(availableAgents, needed);
+        return RegistrySkillHub.eligibleAgents(availableAgents);
     }
 
     function _renderAgentOptions() {
@@ -180,9 +337,13 @@ function renderSkillCatalog(container) {
             return;
         }
         if (!agents.some((agent) => agent.agent_id === currentAgentId)) {
-            currentAgentId = '';
+            currentAgentId = agents.length === 1 ? String(agents[0].agent_id || '') : '';
         }
         agentDropdown.update(agents, currentAgentId);
+        const agent = _currentAgent();
+        const lifecycleCapable = RegistrySkillHub.canCreateCustom(agent);
+        createDraftBtn.hidden = !lifecycleCapable;
+        importBtn.hidden = !lifecycleCapable;
         _writeState();
     }
 
@@ -190,32 +351,16 @@ function renderSkillCatalog(container) {
         return String(currentQ || '').trim();
     }
 
-    function _skillCacheKey(agentId) {
-        return `skills:list:${String(agentId || '').trim()}`;
-    }
-
-    function _skillSearchCacheKey(agentId, queryText) {
-        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
-    }
-
-    function _skillDetailCacheKey(agentId, skillName) {
-        return `skills:detail:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
-    }
-
-    function _skillLifecycleCacheKey(agentId, skillName) {
-        return `skills:lifecycle:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
-    }
-
     function _invalidateSkillCaches(agentId = currentAgentId, skillName = '') {
         const normalizedAgentId = String(agentId || '').trim();
         if (!normalizedAgentId) return;
         const prefixes = [
-            _skillCacheKey(normalizedAgentId),
+            RegistrySkillHub.listCacheKey(normalizedAgentId),
             `skills:search:${normalizedAgentId}:`,
         ];
         if (skillName) {
-            prefixes.push(_skillDetailCacheKey(normalizedAgentId, skillName));
-            prefixes.push(_skillLifecycleCacheKey(normalizedAgentId, skillName));
+            prefixes.push(RegistrySkillHub.detailCacheKey(normalizedAgentId, skillName));
+            prefixes.push(RegistrySkillHub.lifecycleCacheKey(normalizedAgentId, skillName));
         } else {
             prefixes.push(`skills:detail:${normalizedAgentId}:`);
             prefixes.push(`skills:lifecycle:${normalizedAgentId}:`);
@@ -327,7 +472,7 @@ function renderSkillCatalog(container) {
     }
 
     function _hasUnsavedDraft() {
-        return currentMode === 'studio' && draftDirty && Boolean(draftBuffer && draftBuffer.name);
+        return draftDirty && Boolean(draftBuffer && draftBuffer.name);
     }
 
     function _runWithDraftGuard(action) {
@@ -365,42 +510,18 @@ function renderSkillCatalog(container) {
     }
 
     function _visibleLocalSkills() {
-        const queryText = _queryText().toLowerCase();
-        const base = currentMode === 'studio'
-            ? (allSkills || []).filter((skill) => String(skill.source_kind || '') === 'custom')
-            : allSkills;
-        if (!queryText) {
-            return base;
-        }
-        return base.filter((skill) => {
-            const haystack = [
-                skill.name || '',
-                skill.display_name || '',
-                skill.description || '',
-                skill.source_kind || '',
-                skill.lifecycle_status || '',
-            ].join(' ').toLowerCase();
-            return haystack.includes(queryText);
-        });
+        return RegistrySkillHub.visibleLocalSkills(allSkills, _queryText());
     }
 
     function _visibleStoreSkills() {
-        if (currentMode !== 'catalog' || _queryText().length < 2) {
+        if (!RegistrySkillHub.canSearchStore(_currentAgent()) || _queryText().length < 2) {
             return [];
         }
-        return registrySkills;
+        return RegistrySkillHub.visibleStoreSkills(registrySkills, _queryText());
     }
 
     function _findSelectedSkill() {
-        const local = _visibleLocalSkills().find((item) => item && item.name === selectedSkillName);
-        if (local) {
-            return { origin: 'local', skill: local };
-        }
-        const store = _visibleStoreSkills().find((item) => item && item.name === selectedSkillName);
-        if (store) {
-            return { origin: 'store', skill: store };
-        }
-        return null;
+        return RegistrySkillHub.findSelectedSkill(_visibleLocalSkills(), _visibleStoreSkills(), selectedSkillName);
     }
 
     function _ensureSelection() {
@@ -422,7 +543,8 @@ function renderSkillCatalog(container) {
     async function _selectSkill(skillName, origin) {
         selectedSkillName = String(skillName || '').trim();
         selectedSkillOrigin = origin === 'store' ? 'store' : 'local';
-        if (currentMode === 'studio' && selectedSkillOrigin === 'local') {
+        const selected = _findSelectedSkill();
+        if (selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(selected?.skill)) {
             currentStudioTab = 'write';
         }
         selectedLocalDetail = null;
@@ -445,12 +567,8 @@ function renderSkillCatalog(container) {
             UI.reconcileChildren(listEl, [
                 UI.renderEmptyState(
                     hasEligibleAgents
-                        ? (currentMode === 'studio'
-                            ? 'Choose a bot to create or edit custom skills.'
-                            : 'Choose a bot to browse available skills.')
-                        : (currentMode === 'studio'
-                            ? 'No connected bot advertises custom skill lifecycle management.'
-                            : 'No connected bot advertises skill catalog management.'),
+                        ? 'Choose a bot to manage its skills.'
+                        : 'No connected bot advertises skill management.',
                     true,
                 ),
             ]);
@@ -459,47 +577,39 @@ function renderSkillCatalog(container) {
         }
         const visibleLocal = _visibleLocalSkills();
         const visibleStore = _visibleStoreSkills();
+        const sections = RegistrySkillHub.buildSections(visibleLocal, visibleStore, _queryText());
         _ensureSelection();
 
-        if (!visibleLocal.length && !visibleStore.length) {
+        if (!sections.length) {
             UI.clearMemoizedRender(listEl);
-            const message = currentMode === 'studio'
-                ? (_queryText()
-                    ? 'No custom skills match this filter.'
-                    : 'No custom skills yet for this bot. Create a draft to get started.')
-                : (allSkills.length ? 'No available or store skills match this search.' : 'No skills are available on this bot yet.');
+            const message = _queryText()
+                ? 'No installed or store skills match this search.'
+                : 'No skills are available on this bot yet. Create a custom skill or import one to get started.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
             renderDetail();
             return;
         }
 
         UI.memoizedRender(listEl, {
-            mode: currentMode,
             selectedSkillName,
             selectedSkillOrigin,
-            local: visibleLocal,
-            store: visibleStore,
+            sections,
             registryError,
         }, (state) => {
             const nodes = [];
-            if (state.mode === 'studio') {
-                nodes.push(_renderStudioListActions());
-            }
-            if (state.mode === 'catalog') {
-                nodes.push(_sectionLabel('Available on this bot', 'skills-available-heading'));
-            } else {
-                nodes.push(_sectionLabel('Custom skills', 'skills-studio-heading'));
-            }
-            nodes.push(...(state.local || []).map((skill) => _renderLocalSkillRow(skill, {
-                selected: state.selectedSkillOrigin === 'local' && state.selectedSkillName === skill.name,
-            })));
-            if (state.mode === 'catalog' && (state.store || []).length) {
-                nodes.push(_sectionLabel('Skill store', 'skills-store-heading'));
-                nodes.push(...state.store.map((skill) => _renderRegistrySkillRow(skill, {
-                    selected: state.selectedSkillOrigin === 'store' && state.selectedSkillName === skill.name,
-                })));
-            }
-            if (state.mode === 'catalog' && state.registryError && _queryText().length >= 2) {
+            (state.sections || []).forEach((section) => {
+                nodes.push(_sectionLabel(section.label, `skills-${section.key}-heading`));
+                nodes.push(...section.items.map((skill) => (
+                    section.origin === 'store'
+                        ? _renderRegistrySkillRow(skill, {
+                            selected: state.selectedSkillOrigin === 'store' && state.selectedSkillName === skill.name,
+                        })
+                        : _renderLocalSkillRow(skill, {
+                            selected: state.selectedSkillOrigin === 'local' && state.selectedSkillName === skill.name,
+                        })
+                )));
+            });
+            if (state.registryError && _queryText().length >= 2) {
                 const notice = UI.renderEmptyState(`Store search unavailable. ${state.registryError}`, true);
                 notice.dataset.key = 'skill-store-error';
                 nodes.push(notice);
@@ -508,21 +618,19 @@ function renderSkillCatalog(container) {
         }, {
             signatureFn(state) {
                 return {
-                    mode: String(state.mode || ''),
                     selectedSkillName: String(state.selectedSkillName || ''),
                     selectedSkillOrigin: String(state.selectedSkillOrigin || ''),
-                    local: (state.local || []).map((skill) => ({
-                        name: String(skill.name || ''),
-                        source: String(skill.source_label || skill.source_kind || ''),
-                        lifecycle: String(skill.lifecycle_status || ''),
-                        runtime: Boolean(skill.runtime_available),
-                        defaultForNewConversations: Boolean(skill.default_for_new_conversations),
-                        install: Boolean(skill.can_update || skill.can_uninstall || skill.can_activate),
-                    })),
-                    store: (state.store || []).map((skill) => ({
-                        name: String(skill.name || ''),
-                        publisher: String(skill.publisher || ''),
-                        version: String(skill.version || ''),
+                    sections: (state.sections || []).map((section) => ({
+                        key: String(section.key || ''),
+                        label: String(section.label || ''),
+                        items: (section.items || []).map((skill) => ({
+                            name: String(skill.name || ''),
+                            source: String(skill.source_label || skill.source_kind || ''),
+                            lifecycle: String(skill.lifecycle_status || ''),
+                            runtime: Boolean(skill.runtime_available),
+                            publisher: String(skill.publisher || ''),
+                            version: String(skill.version || ''),
+                        })),
                     })),
                     registryError: String(state.registryError || ''),
                 };
@@ -547,18 +655,11 @@ function renderSkillCatalog(container) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
         shellRow.dataset.key = `local:${skill.name || ''}`;
-
-        const fragments = [];
-        if (skill.description) fragments.push(String(skill.description));
-        if (skill.runtime_available === false) fragments.push('not active until published');
-        if (skill.requires_credentials) fragments.push('setup required on activation');
-        if (skill.default_for_new_conversations) fragments.push('default for new conversations');
-        if (skill.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
-        if (skill.has_unpublished_changes) fragments.push('unpublished changes');
+        const meta = RegistrySkillHub.localRowMeta(skill);
         const row = UI.renderListRow({
-            label: skill.display_name || skill.name || '',
-            sublabel: fragments.join(' • ') || 'Available on this bot',
-            badgeText: _sourceBadgeText(skill),
+            label: meta.label,
+            sublabel: meta.sublabel,
+            badgeText: meta.badgeText,
             onClick: () => {
                 _runWithDraftGuard(async () => {
                     await _selectSkill(skill.name || '', 'local');
@@ -597,14 +698,11 @@ function renderSkillCatalog(container) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
         shellRow.dataset.key = `store:${skill.name || ''}`;
-        const fragments = [];
-        if (skill.description) fragments.push(String(skill.description));
-        if (skill.publisher) fragments.push(`by ${String(skill.publisher)}`);
-        if (skill.version) fragments.push(`v${String(skill.version)}`);
+        const meta = RegistrySkillHub.storeRowMeta(skill);
         const row = UI.renderListRow({
-            label: skill.display_name || skill.name || '',
-            sublabel: fragments.join(' • ') || 'Available from the skill store',
-            badgeText: String(skill.source_label || 'Store'),
+            label: meta.label,
+            sublabel: meta.sublabel,
+            badgeText: meta.badgeText,
             onClick: () => {
                 _runWithDraftGuard(async () => {
                     await _selectSkill(skill.name || '', 'store');
@@ -670,9 +768,9 @@ function renderSkillCatalog(container) {
         }
         const skillName = selected.skill.name || '';
         const hadVisibleState = detailEl.childElementCount > 0;
-        const cachedDetail = UI.peekCachedData(_skillDetailCacheKey(currentAgentId, skillName));
-        const cachedLifecycle = currentMode === 'studio'
-            ? UI.peekCachedData(_skillLifecycleCacheKey(currentAgentId, skillName))
+        const cachedDetail = UI.peekCachedData(RegistrySkillHub.detailCacheKey(currentAgentId, skillName));
+        const cachedLifecycle = RegistrySkillHub.isCustomSkill(selected.skill)
+            ? UI.peekCachedData(RegistrySkillHub.lifecycleCacheKey(currentAgentId, skillName))
             : null;
         const hasCachedView = Boolean(cachedDetail) || Boolean(cachedLifecycle);
         if (cachedDetail) {
@@ -685,7 +783,7 @@ function renderSkillCatalog(container) {
         renderDetail();
         try {
             const detailPromise = UI.loadCachedData(
-                _skillDetailCacheKey(currentAgentId, skillName),
+                RegistrySkillHub.detailCacheKey(currentAgentId, skillName),
                 () => API.getSkillDetail(currentAgentId, skillName),
                 {
                     ttlMs: SKILL_DETAIL_CACHE_TTL_MS,
@@ -693,9 +791,9 @@ function renderSkillCatalog(container) {
                     forceRefresh: hasCachedView,
                 },
             );
-            const lifecyclePromise = currentMode === 'studio' && String(selected.skill.source_kind || '') === 'custom'
+            const lifecyclePromise = RegistrySkillHub.isCustomSkill(selected.skill)
                 ? UI.loadCachedData(
-                    _skillLifecycleCacheKey(currentAgentId, skillName),
+                    RegistrySkillHub.lifecycleCacheKey(currentAgentId, skillName),
                     () => API.getSkillLifecycle(currentAgentId, skillName),
                     {
                         ttlMs: SKILL_DETAIL_CACHE_TTL_MS,
@@ -706,7 +804,7 @@ function renderSkillCatalog(container) {
                 : Promise.resolve(null);
             selectedLocalDetail = await detailPromise;
             selectedLifecycle = await lifecyclePromise;
-            if (currentMode === 'studio' && _isSelectedCustom(selected.skill, selectedLocalDetail || selected.skill)) {
+            if (_isSelectedCustom(selected.skill, selectedLocalDetail || selected.skill)) {
                 _resetDraftState(selectedLocalDetail || selected.skill, selectedLifecycle);
             } else {
                 _clearDraftState();
@@ -732,19 +830,19 @@ function renderSkillCatalog(container) {
             return;
         }
         const selected = _findSelectedSkill();
-        if (currentMode === 'studio') {
-            renderStudioDetail(selected);
-            return;
-        }
         if (!selected) {
             UI.clearMemoizedRender(detailEl);
             UI.reconcileChildren(detailEl, [
-                UI.renderEmptyState('Select an available skill or a store match to inspect it.', true),
+                ..._buildStudioHome(_currentAgentLabel()),
             ]);
             return;
         }
         if (selected.origin === 'store') {
             renderStoreDetail(selected.skill);
+            return;
+        }
+        if (RegistrySkillHub.isCustomSkill(selected.skill)) {
+            renderStudioDetail(selected);
             return;
         }
         const detail = selectedLocalDetail && selectedLocalDetail.name === selected.skill.name
@@ -758,7 +856,6 @@ function renderSkillCatalog(container) {
 
     function renderStoreDetail(skill) {
         UI.memoizedRender(detailEl, {
-            mode: currentMode,
             origin: 'store',
             skill,
         }, (state) => {
@@ -865,7 +962,6 @@ function renderSkillCatalog(container) {
 
     function renderLocalDetail(summary, detail, lifecycle) {
         UI.memoizedRender(detailEl, {
-            mode: currentMode,
             agentId: currentAgentId,
             agentLabel: _currentAgentLabel(),
             summary,
@@ -874,14 +970,11 @@ function renderSkillCatalog(container) {
         }, (state) => {
             const nodes = [];
             nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
-            if (state.mode === 'catalog') {
-                nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
-            }
+            nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
             return nodes;
         }, {
             signatureFn(state) {
                 return {
-                    mode: String(state.mode || ''),
                     agentId: String(state.agentId || ''),
                     agentLabel: String(state.agentLabel || ''),
                     name: String((state.summary && state.summary.name) || ''),
@@ -1112,11 +1205,10 @@ function renderSkillCatalog(container) {
             openBtn.addEventListener('click', async () => {
                 openBtn.disabled = true;
                 try {
-                    const conversation = await API.openConversationForAgent(currentAgentId, {
-                        title: `Conversation with ${label}`,
-                    });
-                    Router.navigate(
-                        `/ui/conversations/${encodeURIComponent(conversation.conversation_id)}?manage=skills&activate_skill=${encodeURIComponent(detail.name || summary.name || '')}`,
+                    await RegistrySkillHub.openConversationForSkill(
+                        currentAgentId,
+                        detail.name || summary.name || '',
+                        { agentLabel: label },
                     );
                 } catch (err) {
                     UI.reportError('Failed to open a conversation for skill activation', err, {
@@ -1128,28 +1220,6 @@ function renderSkillCatalog(container) {
             panel.appendChild(openBtn);
         }
         return panel;
-    }
-
-    function _renderStudioListActions() {
-        const wrap = document.createElement('div');
-        wrap.className = 'workbench-panel';
-        wrap.dataset.key = 'studio-list-actions';
-        const actions = document.createElement('div');
-        actions.className = 'editor-actions';
-        const createBtn = document.createElement('button');
-        createBtn.type = 'button';
-        createBtn.className = 'btn btn-sm btn-primary';
-        createBtn.textContent = 'New draft';
-        createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
-        actions.appendChild(createBtn);
-        const importBtn = document.createElement('button');
-        importBtn.type = 'button';
-        importBtn.className = 'btn btn-sm';
-        importBtn.textContent = 'Import package';
-        importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
-        actions.appendChild(importBtn);
-        wrap.appendChild(actions);
-        return wrap;
     }
 
     function _buildStudioLoading(detail) {
@@ -1170,26 +1240,28 @@ function renderSkillCatalog(container) {
         intro.dataset.key = 'studio-home';
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = 'Custom skill studio';
+        title.textContent = 'Skills';
         intro.appendChild(title);
         const note = document.createElement('p');
         note.className = 'quiet-note';
         note.textContent = selected && selected.origin === 'store'
-            ? 'Studio edits only mutable custom skills. Install store skills in Bot catalog, or create a new custom draft here.'
-            : `Select a custom skill for ${agentLabel}, or start a new draft here.`;
+            ? `Install this skill on ${agentLabel}, or pick a custom skill to edit it here.`
+            : `Select a skill for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
         intro.appendChild(note);
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
         const createBtn = document.createElement('button');
         createBtn.type = 'button';
         createBtn.className = 'btn btn-primary';
-        createBtn.textContent = 'Create draft';
+        createBtn.textContent = 'New custom skill';
+        createBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
         createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
         actions.appendChild(createBtn);
         const importBtn = document.createElement('button');
         importBtn.type = 'button';
         importBtn.className = 'btn';
-        importBtn.textContent = 'Import package';
+        importBtn.textContent = 'Import';
+        importBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
         importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
         actions.appendChild(importBtn);
         intro.appendChild(actions);
@@ -1235,7 +1307,6 @@ function renderSkillCatalog(container) {
                     changelog: 'Initial draft',
                 });
                 _invalidateSkillCaches(currentAgentId, skillName);
-                currentMode = 'studio';
                 view.close();
                 await loadSkills({ soft: true, forceCatalog: true });
                 await _selectSkill(skillName, 'local');
@@ -1317,7 +1388,6 @@ function renderSkillCatalog(container) {
                 });
                 const nextSkillName = result.detail?.name || String(targetInput.value || '').trim() || selectedSkillName || '';
                 _invalidateSkillCaches(currentAgentId, nextSkillName);
-                currentMode = 'studio';
                 view.close();
                 await loadSkills({ soft: true, forceCatalog: true });
                 if (nextSkillName) {
@@ -1427,7 +1497,7 @@ function renderSkillCatalog(container) {
                 renderDetail();
             },
             {
-                label: 'Studio workspace',
+                label: 'Skill workspace',
                 value: currentStudioTab,
             },
         );
@@ -2064,15 +2134,15 @@ function renderSkillCatalog(container) {
         const hadVisibleState = listEl.childElementCount > 0;
         let hasCachedView = false;
         if (shouldLoadCatalog) {
-            const cachedCatalog = UI.peekCachedData(_skillCacheKey(currentAgentId));
+            const cachedCatalog = UI.peekCachedData(RegistrySkillHub.listCacheKey(currentAgentId));
             if (cachedCatalog) {
                 const data = Array.isArray(cachedCatalog) ? cachedCatalog : (cachedCatalog.skills || []);
                 allSkills = Array.isArray(data) ? data : [];
                 hasCachedView = true;
             }
         }
-        if (currentMode === 'catalog' && queryText.length >= 2) {
-            const cachedSearch = UI.peekCachedData(_skillSearchCacheKey(currentAgentId, queryText));
+        if (RegistrySkillHub.canSearchStore(_currentAgent()) && queryText.length >= 2) {
+            const cachedSearch = UI.peekCachedData(RegistrySkillHub.searchCacheKey(currentAgentId, queryText));
             if (cachedSearch) {
                 registrySkills = Array.isArray(cachedSearch.registry) ? cachedSearch.registry : [];
                 registryError = String(cachedSearch.registry_error || '');
@@ -2086,13 +2156,13 @@ function renderSkillCatalog(container) {
             renderList();
             void loadSelectionData({ soft: true });
         }
-        if (!soft && !hasCachedView && (shouldLoadCatalog || (currentMode === 'catalog' && queryText.length >= 2))) {
-            renderLoadingState(currentMode === 'catalog' && queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
+        if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
+            renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
         }
         try {
             if (shouldLoadCatalog) {
                 const data = await UI.loadCachedData(
-                    _skillCacheKey(currentAgentId),
+                    RegistrySkillHub.listCacheKey(currentAgentId),
                     () => API.listSkills(currentAgentId),
                     {
                         ttlMs: SKILL_CACHE_TTL_MS,
@@ -2102,9 +2172,9 @@ function renderSkillCatalog(container) {
                 );
                 allSkills = Array.isArray(data) ? data : (data.skills || []);
             }
-            if (currentMode === 'catalog' && queryText.length >= 2) {
+            if (RegistrySkillHub.canSearchStore(_currentAgent()) && queryText.length >= 2) {
                 const search = await UI.loadCachedData(
-                    _skillSearchCacheKey(currentAgentId, queryText),
+                    RegistrySkillHub.searchCacheKey(currentAgentId, queryText),
                     () => API.searchCatalogSkills(currentAgentId, queryText),
                     {
                         ttlMs: SKILL_SEARCH_CACHE_TTL_MS,
@@ -2152,9 +2222,6 @@ function renderSkillCatalog(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
-            if (selectedSkillOrigin === 'store' && currentMode !== 'catalog') {
-                selectedSkillOrigin = 'local';
-            }
             void loadSkills({ soft: true });
         }, 250);
     });
@@ -2166,9 +2233,7 @@ function renderSkillCatalog(container) {
     };
     window.addEventListener('beforeunload', beforeUnload);
 
-    _syncWorkspaceLayout();
     container.__routeReady = loadAgents();
-    modeControl.setActive(currentMode);
 
     cleanups.add(() => clearTimeout(searchTimeout));
     cleanups.add(() => window.removeEventListener('beforeunload', beforeUnload));

@@ -204,7 +204,7 @@ Registry and chat are peers here:
 
 Current client exposure over the same backend operations:
 
-- registry `Skills -> Studio`
+- registry `Skills`
   - progressive draft editing through `Write`, `Setup`, `Review`, and `Advanced`
   - validation/readiness display in `Review`
   - lifecycle actions in `Review`
@@ -219,8 +219,8 @@ client.
 
 ## Product Rules
 
-- Store listings feed the same `Catalog -> Available on this bot` flow. The store is
-  a source, not a separate product concept.
+- Store listings feed the same unified `Skills` workspace. The store is a
+  source, not a separate product concept.
 - Custom skills use the same install and activation model after they are
   published.
 - Core, Store, and Custom skills share one logical package model even if their

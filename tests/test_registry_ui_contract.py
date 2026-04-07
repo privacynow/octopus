@@ -109,7 +109,7 @@ def test_management_views_do_not_block_route_readiness_on_slow_management_fetche
     assert "void loadGuidance({ soft: soft && !agentChanged });" in guidance_editor
     assert "await loadGuidance({ soft: soft && !agentChanged });" not in guidance_editor
     assert "renderLoadingState(message = 'Loading skills…')" in skill_catalog
-    assert "renderLoadingState(currentMode === 'catalog' && queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
+    assert "renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');" in skill_catalog
     assert "renderLoadingState(message = 'Loading guidance…')" in guidance_editor
     assert "renderLoadingState('Loading guidance…');" in guidance_editor
 
@@ -133,7 +133,7 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
     assert "loadCachedData," in helper
     assert "invalidateCachedData," in helper
 
-    assert "UI.peekCachedData(_skillCacheKey(currentAgentId))" in skill_catalog
+    assert "UI.peekCachedData(RegistrySkillHub.listCacheKey(currentAgentId))" in skill_catalog
     assert "UI.loadCachedData(" in skill_catalog
     assert "function _invalidateSkillCaches(agentId = currentAgentId, skillName = '') {" in skill_catalog
     assert "_invalidateSkillCaches(currentAgentId, skill.name);" in skill_catalog
@@ -142,7 +142,7 @@ def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -
     assert "_invalidateGuidanceCache();" in guidance_editor
 
 
-def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actions() -> None:
+def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_progressive() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     skill_catalog = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
@@ -154,35 +154,36 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
         repo_root / "octopus_registry" / "ui" / "js" / "api.js"
     ).read_text(encoding="utf-8")
 
-    assert "Choose a bot to browse the skills available there." in skill_catalog
-    assert "label: 'Bot catalog'" in skill_catalog
-    assert "label: 'Studio'" in skill_catalog
+    assert "Manage a bot’s installed, custom, and store-backed skills here." in skill_catalog
+    assert "label: 'Bot catalog'" not in skill_catalog
+    assert "label: 'Studio'" not in skill_catalog
     assert "currentStudioTab = _readStudioTab()" in skill_catalog
-    assert "label: 'Studio workspace'" in skill_catalog
+    assert "label: 'Skill workspace'" in skill_catalog
     assert "label: 'Write'" in skill_catalog
     assert "label: 'Setup'" in skill_catalog
     assert "label: 'Review'" in skill_catalog
     assert "label: 'Advanced'" in skill_catalog
-    assert "skill_tab: currentMode === 'studio' ? currentStudioTab : ''" in skill_catalog
+    assert "skills_view: ''" in skill_catalog
     assert "currentStudioTab !== 'review'" in skill_catalog
     assert "studio-workflow" not in skill_catalog
     assert "Next step" in skill_catalog
     assert "_buildStudioPanel(" not in skill_catalog
-    assert "'Available on this bot'" in skill_catalog
-    assert "'Skill store'" in skill_catalog
-    assert "'Create custom draft'" in skill_catalog
-    assert "'No custom skills yet for this bot. Create a draft to get started.'" in skill_catalog
+    assert "'Custom'" in skill_catalog
+    assert "'Installed on this bot'" in skill_catalog
+    assert "'Store'" in skill_catalog
+    assert "'New custom skill'" in skill_catalog
+    assert "'No skills are available on this bot yet. Create a custom skill or import one to get started.'" in skill_catalog
     assert "_renderRegistrySkillRow" in skill_catalog
     assert "API.getSkillLifecycle(currentAgentId, skillName)" in skill_catalog
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
     assert "await persistDraft({ quiet: true })" in skill_catalog
     assert "function _editableDraftState(detail, lifecycle)" in skill_catalog
-    assert "workspace.className = 'dashboard-board';" in skill_catalog
+    assert "workspace.className = 'dashboard-board dashboard-board-stacked';" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
     assert "allowEmpty: true" in skill_catalog
     assert "agentId: currentAgentId" in skill_catalog
     assert "agentLabel: _currentAgentLabel()" in skill_catalog
-    assert "currentAgentId = agents[0].agent_id || ''" not in skill_catalog
+    assert "currentAgentId = agents.length === 1 ? String(agents[0].agent_id || '') : '';" in skill_catalog
     assert "selectedSkillName = local[0].name || ''" not in skill_catalog
     assert "selectedSkillName = store[0].name || ''" not in skill_catalog
     assert "How skills work" not in skill_catalog
@@ -194,6 +195,32 @@ def test_skill_catalog_exposes_progressive_studio_workspace_and_sdk_backed_actio
     assert "Available on this bot" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
+
+
+def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_detail = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "agent-detail.js"
+    ).read_text(encoding="utf-8")
+    skill_catalog = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "skill-catalog.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        repo_root / "octopus_registry" / "ui" / "css" / "main.css"
+    ).read_text(encoding="utf-8")
+
+    assert "window.RegistrySkillHub = RegistrySkillHub;" in skill_catalog
+    assert "function buildSkillsCard(agent) {" in agent_detail
+    assert "Manage skills" in agent_detail
+    assert "Open Skills page" in agent_detail
+    assert "Open in Skills" in agent_detail
+    assert "Use in conversation" in agent_detail
+    assert "Quick actions live here." in agent_detail
+    assert "Advertised for routing" in agent_detail
+    assert "buildSkillsCard(agent)," in agent_detail
+    assert "quickstart-chip static" in agent_detail
+    assert "skills-drawer-dialog" in css
+    assert "skills-drawer-overlay" in css
 
 
 def test_guidance_editor_exposes_progressive_draft_and_review_workspace() -> None:

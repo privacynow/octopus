@@ -270,7 +270,7 @@ function renderSkillCatalog(container) {
     controls.appendChild(controlsActions);
 
     const workspace = document.createElement('section');
-    workspace.className = 'dashboard-board dashboard-board-stacked';
+    workspace.className = 'dashboard-board';
     shell.appendChild(workspace);
 
     const listWrap = document.createElement('section');

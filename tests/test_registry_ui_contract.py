@@ -178,7 +178,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
     assert "await persistDraft({ quiet: true })" in skill_catalog
     assert "function _editableDraftState(detail, lifecycle)" in skill_catalog
-    assert "workspace.className = 'dashboard-board dashboard-board-stacked';" in skill_catalog
+    assert "workspace.className = 'dashboard-board';" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
     assert "allowEmpty: true" in skill_catalog
     assert "agentId: currentAgentId" in skill_catalog
@@ -193,6 +193,13 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "activate_skill" in skill_catalog
     assert "Active in this conversation" in conversation_detail
     assert "Available on this bot" in conversation_detail
+    assert "requestedActivationSkill && requestedManagementMode === 'closed'" in conversation_detail
+    assert "function clearRequestedActivationSkill()" in conversation_detail
+    assert "await requestConversationSkillActivation(skillName);" in conversation_detail
+    assert "Activated ${normalizedSkill}." in conversation_detail
+    assert "is already active in this conversation." in conversation_detail
+    assert "active-skills-inline" in conversation_detail
+    assert "selectedActivationSkill = requestedActivationSkill;" in conversation_detail
     assert "getSkillLifecycle: (agentId, name) =>" in api_js
     assert "saveSkillDraft: (agentId, name, body = {}) =>" in api_js
 
@@ -214,7 +221,7 @@ def test_agent_detail_launches_shared_skills_workspace_instead_of_passive_pills(
     assert "Manage skills" in agent_detail
     assert "Open Skills page" in agent_detail
     assert "Open in Skills" in agent_detail
-    assert "Use in conversation" in agent_detail
+    assert "Open conversation and activate" in agent_detail
     assert "Quick actions live here." in agent_detail
     assert "Advertised for routing" in agent_detail
     assert "buildSkillsCard(agent)," in agent_detail
@@ -478,6 +485,8 @@ def test_conversation_management_surfaces_are_dismissible_and_auto_close() -> No
     assert "openManagement('skills')" in detail
     assert "openManagement('settings'" in detail
     assert "&& !pendingSkillSetup" in detail
+    assert "clearRequestedActivationSkill();" in detail
+    assert "requestConversationSkillActivation(" in detail
     assert ".conversation-management-close {" in css
 
 

@@ -468,6 +468,27 @@ def test_parse_skill_question_handles_common_paraphrase() -> None:
     assert intent.status_focus == "available"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "which skill is active here",
+        "which skill is active in this conversation",
+        "what skill is active",
+        "what skill am I using in this conversation",
+        "I activated a skill for this conversation, which one is it?",
+    ],
+)
+def test_parse_skill_question_handles_active_skill_meta_questions(text: str) -> None:
+    intent = parse_skill_question(
+        text,
+        known_skill_names=("architecture", "wisdom"),
+    )
+
+    assert intent is not None
+    assert intent.kind == "skill_list"
+    assert intent.status_focus == "active"
+
+
 @dataclass
 class _FakeSkillInspector:
     response: SkillInspectionResponse
@@ -531,6 +552,55 @@ async def test_bot_runtime_skill_questions_use_inspection_without_provider_execu
     await runtime._dispatch_claimed_message(event, item, cancel_event=None)
 
     egress = runtime.transport.egresses["stub:conversation:1"]
+    assert egress.sent_texts == ["Active in this conversation: architecture"]
+    assert provider.run_calls == 0
+    assert len(inspector.calls) == 1
+
+
+async def test_bot_runtime_active_skill_paraphrase_uses_inspection_without_provider_execution(tmp_path) -> None:
+    harness = make_sdk_harness(tmp_path)
+    workflows = harness.composer.build_for_testing()
+    runtime = harness.build_runtime(workflows)
+    provider = _FailIfCalledProvider()
+    runtime.provider = provider
+    inspector = _FakeSkillInspector(
+        response=SkillInspectionResponse(
+            status="ok",
+            intent=SkillQuestionIntent(kind="skill_list", status_focus="active"),
+            active_skill_names=("architecture",),
+        ),
+        calls=[],
+    )
+    runtime.execution_services = ExecutionServices(
+        guidance=runtime.execution_services.guidance,
+        skill_activation=runtime.execution_services.skill_activation,
+        runtime_skill_setup=runtime.workflows.runtime_skills.setup,
+        sessions=runtime.sessions,
+        artifacts=runtime.execution_services.artifacts,
+        skill_inspection=inspector,
+        execution_faults=runtime.execution_services.execution_faults,
+        agent_directory=runtime.execution_services.agent_directory,
+        conversation_projection=runtime.execution_services.conversation_projection,
+    )
+
+    event = InboundMessage(
+        user=InboundUser(id="stub:user:1", username="sdk"),
+        conversation_key="stub:conversation:2",
+        text="I activated a skill for this conversation, which one is it?",
+        source="stub",
+        conversation_ref="stub:conversation:2",
+    )
+    item = WorkItemRecord(
+        id="item-2",
+        event_id="evt-2",
+        conversation_key="stub:conversation:2",
+        actor_key="stub:user:1",
+        kind="message",
+    )
+
+    await runtime._dispatch_claimed_message(event, item, cancel_event=None)
+
+    egress = runtime.transport.egresses["stub:conversation:2"]
     assert egress.sent_texts == ["Active in this conversation: architecture"]
     assert provider.run_calls == 0
     assert len(inspector.calls) == 1

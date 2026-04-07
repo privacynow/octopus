@@ -371,7 +371,7 @@ function renderAgentDetail(container, params) {
                             const useBtn = document.createElement('button');
                             useBtn.type = 'button';
                             useBtn.className = 'btn btn-sm btn-primary list-row-action';
-                            useBtn.textContent = 'Use in conversation';
+                            useBtn.textContent = 'Open conversation and activate';
                             useBtn.addEventListener('click', async (event) => {
                                 event.stopPropagation();
                                 useBtn.disabled = true;

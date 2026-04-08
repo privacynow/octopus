@@ -91,7 +91,7 @@ async def test_credential_capture(monkeypatch):
         assert session.get("awaiting_skill_setup") is None
         assert "github-integration" in session.get("active_skills", [])
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
         assert "github-integration" in creds
         assert creds["github-integration"].get("GITHUB_TOKEN") == "ghp_fake_token_12345"
@@ -147,7 +147,7 @@ async def test_credential_validation_failure(monkeypatch):
         assert setup is not None
         assert len(setup["remaining"]) == 1
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
         assert not creds.get("github-integration", {}).get("GITHUB_TOKEN")
 
@@ -269,7 +269,7 @@ async def test_multi_credential():
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is None
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
         assert creds.get("my-skill", {}).get("API_KEY") == "my-api-key-123"
         assert creds.get("my-skill", {}).get("SECRET") == "super-secret-value"
@@ -282,7 +282,7 @@ async def test_credential_env_in_context():
         prov.run_results = [RunResult(text="used token")]
         setup_globals(cfg, prov)
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         save_user_credential(data_dir, telegram_actor_key(42), "github-integration", "GITHUB_TOKEN", "ghp_real_token", key)
 
         chat = FakeChat(12345)
@@ -440,7 +440,7 @@ async def test_cross_user_credential_isolation():
         prov.run_results = [RunResult(text="Done with github")]
         setup_globals(cfg, prov)
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "ghp_alice_token", key)
         save_user_credential(data_dir, telegram_actor_key(200), "github-integration", "GITHUB_TOKEN", "ghp_bob_token", key)
 
@@ -518,7 +518,7 @@ async def test_group_chat_setup_isolation(monkeypatch):
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is None
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         alice_creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
         bob_creds = load_user_credentials(data_dir, telegram_actor_key(200), key)
         assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "ghp_alice_real_token"
@@ -778,7 +778,7 @@ async def test_handler_credential_activation_and_capture():
             assert session.get("awaiting_skill_setup") is None
             assert "alpha" in session.get("active_skills", [])
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
             assert creds.get("alpha", {}).get("ALPHA_TOKEN") == "my-secret-token"
     finally:
@@ -804,7 +804,7 @@ async def test_handler_provider_context_has_skill_and_creds():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
@@ -842,7 +842,7 @@ async def test_handler_second_skill_changes_prompt():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
@@ -886,7 +886,7 @@ async def test_handler_skills_remove_drops_cred_env():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha", "beta"]
@@ -929,7 +929,7 @@ async def test_handler_skills_clear_preserves_credentials():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
@@ -964,7 +964,7 @@ async def test_handler_new_resets_state_not_credentials():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
             session["active_skills"] = ["alpha"]
@@ -1001,7 +1001,7 @@ async def test_regression_readd_after_new_skips_setup():
             chat = FakeChat(1001)
             alice = FakeUser(uid=100, username="alice")
 
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(100), "alpha", "ALPHA_TOKEN", "tok-123", key)
             save_session(data_dir, telegram_conversation_key(1001), default_session(prov.name, prov.new_provider_state("tg:test"), "off"))
 
@@ -1215,7 +1215,7 @@ async def test_clear_credentials_confirm_flow():
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(42), "cred-test", "API_TOKEN", "old-value", key)
 
             session = default_session(prov.name, prov.new_provider_state("tg:test"), "off")
@@ -1277,7 +1277,7 @@ async def test_clear_credentials_cancel():
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(42), "cred-test", "API_TOKEN", "old-value", key)
 
             # Step 1: Command shows confirmation
@@ -1326,7 +1326,7 @@ async def test_clear_credentials_all_confirm():
 
             chat = FakeChat(12345)
             user = FakeUser(42)
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(42), "skill-a", "TOKEN_SKILL_A", "val-a", key)
             save_user_credential(data_dir, telegram_actor_key(42), "skill-b", "TOKEN_SKILL_B", "val-b", key)
 
@@ -1399,7 +1399,7 @@ async def test_clear_credentials_cross_user_rejected():
             chat = FakeChat(12345)
             alice = FakeUser(42)
             bob = FakeUser(99)
-            key = derive_encryption_key(cfg.telegram_token)
+            key = derive_encryption_key(cfg.credential_key)
             save_user_credential(data_dir, telegram_actor_key(42), "cred-test", "API_TOKEN", "alice-token", key)
             save_user_credential(data_dir, telegram_actor_key(99), "cred-test", "API_TOKEN", "bob-token", key)
 

@@ -52,15 +52,11 @@ def test_init_credential_store_for_config_with_explicit_key_emits_no_fallback_er
     with caplog.at_level("ERROR"):
         credential_store.init_credential_store_for_config(cfg)
 
-    assert not any(
-        "Credential encryption is using TELEGRAM_BOT_TOKEN" in record.message
-        for record in caplog.records
-    )
+    assert caplog.records == []
 
 
-def test_init_credential_store_for_config_falls_back_to_telegram_token_and_logs_error_guidance(
+def test_init_credential_store_for_config_requires_explicit_bot_credential_key(
     tmp_path: Path,
-    caplog,
     postgres_db_url: str,
 ):
     cfg = make_config(
@@ -70,27 +66,13 @@ def test_init_credential_store_for_config_falls_back_to_telegram_token_and_logs_
         database_url=postgres_db_url,
     )
 
-    with caplog.at_level("ERROR"):
-        store = credential_store.init_credential_store_for_config(cfg)
-        store.save("tg:42", "alpha", "API_TOKEN", "secret-value")
-        credential_store.reset_for_test()
-        reloaded = credential_store.init_credential_store_for_config(cfg)
+    with pytest.raises(RuntimeError) as exc:
+        credential_store.init_credential_store_for_config(cfg)
 
-    warnings = [
-        record.message
-        for record in caplog.records
-        if "Credential encryption is using TELEGRAM_BOT_TOKEN" in record.message
-    ]
-    assert len(warnings) == 2
-    assert all(
-        "Set BOT_CREDENTIAL_KEY in the bot env file before rotating the Telegram bot token."
-        in message
-        for message in warnings
-    )
-    assert reloaded.load("tg:42") == {"alpha": {"API_TOKEN": "secret-value"}}
+    assert "BOT_CREDENTIAL_KEY is required before using the credential store" in str(exc.value)
 
 
-def test_get_credential_store_requires_credential_key_or_telegram_token(monkeypatch):
+def test_get_credential_store_requires_credential_key(monkeypatch):
     monkeypatch.delenv("BOT_CREDENTIAL_KEY", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("BOT_DATA_DIR", "/tmp/credential-store-test")
@@ -98,7 +80,7 @@ def test_get_credential_store_requires_credential_key_or_telegram_token(monkeypa
     with pytest.raises(RuntimeError) as exc:
         credential_store.get_credential_store()
 
-    assert "BOT_CREDENTIAL_KEY or TELEGRAM_BOT_TOKEN is required" in str(exc.value)
+    assert "BOT_CREDENTIAL_KEY is required before using the credential store" in str(exc.value)
 
 
 def test_credential_store_logs_recovery_hint_on_decrypt_failure(
@@ -124,6 +106,6 @@ def test_credential_store_logs_recovery_hint_on_decrypt_failure(
 
     assert loaded == {}
     assert any(
-        "set BOT_CREDENTIAL_KEY to the previous key material to recover" in record.message
+        "Set BOT_CREDENTIAL_KEY to the previous key material to recover." in record.message
         for record in caplog.records
     )

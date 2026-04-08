@@ -16,8 +16,8 @@ state:
 6. verifies registry health, bot connectivity, and rebuilt images
 
 Defaults:
-  source-repo-dir  /Users/tinker/octopus
-  backup-root      /Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups
+  source-repo-dir  current checkout
+  backup-root      <source-repo-dir>/.tmp/octopus-refresh-backups
 
 Environment:
   RUN_PYTHON       Python runtime used to invoke app.octopus_cli
@@ -25,9 +25,9 @@ EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_REPO="/Users/tinker/octopus"
-BACKUP_ROOT="/Users/tinker/output/bots/telegram-agent-bot/.tmp/octopus-refresh-backups"
-RUN_PYTHON="${RUN_PYTHON:-/Users/tinker/output/bots/telegram-agent-bot/.venv/bin/python}"
+SOURCE_REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+BACKUP_ROOT=""
+RUN_PYTHON="${RUN_PYTHON:-}"
 RUN_ID="$(date +%s)"
 
 case "${1:-}" in
@@ -49,6 +49,14 @@ if [ "$#" -gt 2 ]; then
   echo "Too many arguments" >&2
   usage >&2
   exit 1
+fi
+
+if [ -z "${BACKUP_ROOT}" ]; then
+  BACKUP_ROOT="${SOURCE_REPO}/.tmp/octopus-refresh-backups"
+fi
+
+if [ -z "${RUN_PYTHON}" ]; then
+  RUN_PYTHON="${SOURCE_REPO}/.venv/bin/python"
 fi
 
 BACKUP_DIR="${BACKUP_ROOT}/${RUN_ID}"

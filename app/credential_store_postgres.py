@@ -119,8 +119,7 @@ class PostgresCredentialStore(AbstractCredentialStore):
         if saw_decrypt_failure:
             log.error(
                 "Could not decrypt one or more stored credentials for %s. "
-                "If TELEGRAM_BOT_TOKEN recently changed, set BOT_CREDENTIAL_KEY "
-                "to the previous key material to recover.",
+                "Set BOT_CREDENTIAL_KEY to the previous key material to recover.",
                 actor_key,
             )
         return result

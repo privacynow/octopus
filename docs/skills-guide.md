@@ -192,4 +192,4 @@ Telegram exposes smaller text-oriented operations against the same model.
 ## If You Need The Lower-Level Model
 
 For the technical package/lifecycle model, use
-[skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md).
+[skills-model.md](skills-model.md).

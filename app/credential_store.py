@@ -16,8 +16,6 @@ log = logging.getLogger(__name__)
 
 _store: AbstractCredentialStore | None = None
 _store_key: tuple[str, str, str, int, int, int] | None = None
-_fallback_warning_emitted = False
-
 _HKDF_SALT = b"telegram-agent-bot.credentials.v1"
 _HKDF_INFO = b"telegram-agent-bot.fernet-key"
 
@@ -89,25 +87,13 @@ def resolve_credential_secret_material(
     credential_key: str,
     telegram_token: str,
 ) -> str:
-    """Return the credential-store key material with backwards-compatible fallback."""
-    global _fallback_warning_emitted
+    """Return the explicit credential-store key material."""
     explicit_key = credential_key.strip()
     if explicit_key:
         return explicit_key
 
-    fallback = telegram_token.strip()
-    if not fallback:
-        raise RuntimeError(
-            "BOT_CREDENTIAL_KEY or TELEGRAM_BOT_TOKEN is required before using the credential store"
-        )
-
-    if not _fallback_warning_emitted:
-        log.error(
-            "Credential encryption is using TELEGRAM_BOT_TOKEN as the key material. "
-            "Set BOT_CREDENTIAL_KEY in the bot env file before rotating the Telegram bot token."
-        )
-        _fallback_warning_emitted = True
-    return fallback
+    del telegram_token
+    raise RuntimeError("BOT_CREDENTIAL_KEY is required before using the credential store")
 
 
 def init_credential_store_for_config(config) -> AbstractCredentialStore:
@@ -147,10 +133,9 @@ def get_credential_store() -> AbstractCredentialStore:
 
 
 def reset_for_test() -> None:
-    global _store, _store_key, _fallback_warning_emitted
+    global _store, _store_key
     _store = None
     _store_key = None
-    _fallback_warning_emitted = False
     try:
         from app.db.postgres import close_pools
 

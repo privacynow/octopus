@@ -95,6 +95,7 @@ def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("BOT_DATA_DIR", str(data_dir))
     monkeypatch.setenv("BOT_WORKING_DIR", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-test-token")
+    monkeypatch.setenv("BOT_CREDENTIAL_KEY", "registry-test-credential-key")
     reset_handler_test_runtime()
     ingress.reset_for_test()
     database_url = os.environ["OCTOPUS_DATABASE_URL"]

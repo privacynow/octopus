@@ -22,6 +22,13 @@ class ContentStorePort(Protocol):
         scope_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None: ...
 
+    def resolve_provider_guidance(
+        self,
+        provider_name: str,
+        *,
+        instance_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None: ...
+
     def list_provider_guidance_revisions(
         self,
         provider_name: str,

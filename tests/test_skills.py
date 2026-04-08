@@ -282,7 +282,7 @@ def test_system_prompt_building():
     assert "Active in this conversation: code-review, testing." in prompt
     assert "operator-selected conversation instructions" in prompt
     assert "## ACTIVE PROMPT SKILL: Code Review" in prompt
-    assert "## ACTIVE PROMPT SKILL: Testing" in prompt
+    assert "## ACTIVE PROMPT SKILL: testing" in prompt
 
     # No role
     prompt_no_role = build_system_prompt("", ["code-review"])

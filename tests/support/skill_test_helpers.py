@@ -22,6 +22,7 @@ from app.credential_service import get_credential_service
 from app.credential_store import derive_credential_encryption_key
 from app.credential_store_postgres import PostgresCredentialStore
 from app.credential_validation import validate_credential
+from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillFileRecord, SkillRevisionRecord
 from octopus_sdk.identity import filesystem_component_for_key, parse_actor_key
 
 from octopus_sdk.providers import (
@@ -29,6 +30,10 @@ from octopus_sdk.providers import (
     PreflightContext,
     ProviderConfigRecord,
     RunContext,
+)
+from octopus_sdk.provider_guidance_service import (
+    PROMPT_SIZE_WARNING_THRESHOLD,
+    ProviderGuidanceService as SdkProviderGuidanceService,
 )
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
 from octopus_sdk.skill_packages import (
@@ -346,227 +351,127 @@ def build_provider_config(
     skill_names: list[str],
     credential_env: dict[str, str],
 ) -> dict:
-    """Read provider YAML for each active skill, merge, resolve placeholders.
-
-    Claude: {mcp_servers: {...}, allowed_tools: [...], disallowed_tools: [...]}
-    Codex:  {sandbox: "...", scripts: [...], config_overrides: [...]}
-    """
-    if provider == "claude":
-        mcp_servers: dict = {}
-        allowed_tools: list[str] = []
-        disallowed_tools: list[str] = []
-        for name in skill_names:
-            raw = load_provider_yaml(name, "claude")
-            if not raw:
-                continue
-            if "mcp_servers" in raw and isinstance(raw["mcp_servers"], dict):
-                mcp_servers.update(raw["mcp_servers"])
-            if "allowed_tools" in raw and isinstance(raw["allowed_tools"], list):
-                allowed_tools.extend(raw["allowed_tools"])
-            if "disallowed_tools" in raw and isinstance(raw["disallowed_tools"], list):
-                disallowed_tools.extend(raw["disallowed_tools"])
-        config: dict = {}
-        if mcp_servers:
-            config["mcp_servers"] = mcp_servers
-        if allowed_tools:
-            config["allowed_tools"] = allowed_tools
-        if disallowed_tools:
-            config["disallowed_tools"] = disallowed_tools
-        return _resolve_placeholders(config, credential_env) if config else {}
-
-    elif provider == "codex":
-        sandbox: str = ""
-        scripts: list = []
-        config_overrides: list[str] = []
-        for name in skill_names:
-            raw = load_provider_yaml(name, "codex")
-            if not raw:
-                continue
-            if "sandbox" in raw and not sandbox:
-                sandbox = str(raw["sandbox"])
-            if "scripts" in raw and isinstance(raw["scripts"], list):
-                scripts.extend(raw["scripts"])
-            if "config_overrides" in raw and isinstance(raw["config_overrides"], list):
-                config_overrides.extend(raw["config_overrides"])
-        config = {}
-        if sandbox:
-            config["sandbox"] = sandbox
-        if scripts:
-            config["scripts"] = scripts
-        if config_overrides:
-            config["config_overrides"] = config_overrides
-        return _resolve_placeholders(config, credential_env) if config else {}
-
-    return {}
+    return _compat_guidance_service().provider_config(
+        provider,
+        skill_names,
+        CredentialEnvRecord(dict(credential_env or {})),
+    ).to_dict()
 
 
 def build_capability_summary(provider: str, skill_names: list[str]) -> str:
     """Build a human-readable summary of provider-specific capabilities for PreflightContext."""
-    lines: list[str] = []
-    for name in skill_names:
-        raw = load_provider_yaml(name, provider)
-        if not raw:
+    return _compat_guidance_service().capability_summary(provider, skill_names)
+
+
+def _compat_track_files(skill_dir: Path) -> tuple[SkillFileRecord, ...]:
+    files: list[SkillFileRecord] = []
+    for child in sorted(skill_dir.rglob("*")):
+        if not child.is_file():
             continue
-        if provider == "claude":
-            if "mcp_servers" in raw:
-                servers = raw["mcp_servers"]
-                if isinstance(servers, dict):
-                    for sname in servers:
-                        lines.append(f"MCP server: {sname} ({name})")
-            if "allowed_tools" in raw:
-                for t in raw["allowed_tools"]:
-                    lines.append(f"Allowed tool: {t}")
-        elif provider == "codex":
-            if "scripts" in raw:
-                for s in raw["scripts"]:
-                    sname = s if isinstance(s, str) else s.get("name", "?")
-                    lines.append(f"Script: {sname} ({name})")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# System prompt composition
-# ---------------------------------------------------------------------------
-
-def build_system_prompt(role: str, skill_names: list[str]) -> str:
-    """Compose role + skill instructions into a single text block."""
-    parts: list[str] = []
-
-    if role:
-        # Short noun phrases (e.g. "senior Python engineer") get wrapped.
-        # Rich content (multi-line, or already a sentence/instruction) is used verbatim.
-        stripped = role.strip()
-        lower = stripped.lower()
-        is_sentence = any(lower.startswith(p) for p in ("you are", "you're", "act as", "as a"))
-        if "\n" in stripped or is_sentence:
-            parts.append(stripped + "\n")
-        else:
-            parts.append(f"You are a {stripped}.\n")
-
-    catalog = load_catalog()
-    available = ", ".join(sorted(catalog)) or "none"
-    active = ", ".join(skill_names) or "none"
-    if catalog or skill_names:
-        state_lines = [
-            "## Octopus Runtime Skill State",
-            "",
-            "This state is authoritative for the current bot and conversation.",
-            f"Available on this bot: {available}.",
-            f"Active in this conversation: {active}.",
-        ]
-        if skill_names:
-            state_lines.append(
-                "Prompt skills listed as active below are operator-selected conversation instructions. "
-                "Apply them in this conversation until they are deactivated."
-            )
-        state_lines.append("")
-        parts.append("\n".join(state_lines))
-    for name in skill_names:
-        instructions = get_skill_instructions(name)
-        if not instructions:
+        relative_path = child.relative_to(skill_dir).as_posix()
+        if relative_path in {"skill.md", "requires.yaml", "claude.yaml", "codex.yaml"}:
             continue
-        meta = catalog.get(name)
-        display = meta.display_name if meta else name
-        parts.append(
-            "\n".join(
-                [
-                    f"## ACTIVE PROMPT SKILL: {display}",
-                    "",
-                    "Status: active in this conversation",
-                    "Authority: operator-selected conversation state",
-                    "Skill kind: prompt",
-                    "Semantics: Apply the following instructions throughout this conversation until the skill is deactivated.",
-                    "",
-                    instructions,
-                    "",
-                ]
+        content_type = "text/x-shellscript" if child.suffix == ".sh" else "text/plain"
+        files.append(
+            SkillFileRecord(
+                relative_path=relative_path,
+                content_text=child.read_text(encoding="utf-8"),
+                content_type=content_type,
+                executable=os.access(child, os.X_OK),
             )
         )
-
-    if not parts:
-        return ""
-
-    return "\n".join(parts)
+    return tuple(files)
 
 
-def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
-    """Compose a sanitized preflight prompt without raw skill instructions."""
-    parts: list[str] = []
-
-    if role:
-        stripped = role.strip()
-        lower = stripped.lower()
-        is_sentence = any(lower.startswith(p) for p in ("you are", "you're", "act as", "as a"))
-        if "\n" in stripped or is_sentence:
-            parts.append(stripped + "\n")
-        else:
-            parts.append(f"You are a {stripped}.\n")
-
-    catalog = load_catalog()
-    labels: list[str] = []
-    for name in skill_names:
-        meta = catalog.get(name)
-        labels.append(f"{meta.display_name if meta else name} (prompt)")
-    if labels:
-        parts.append(f"Active runtime skills: {', '.join(labels)}.\n")
-        parts.append("Prompt skills will be applied as operator-selected conversation instructions.\n")
-
-    return "\n".join(parts) if parts else ""
-
-
-PROMPT_SIZE_WARNING_THRESHOLD = 8000
-
-
-def _provider_semantics_note(provider_name: str) -> str:
-    if provider_name != "codex":
-        return ""
-    return (
-        "## Octopus Skill Semantics\n\n"
-        "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
-        "default-for-new-conversations settings, and per-conversation activation. "
-        "Treat active prompt skills as operator-selected conversation instructions, and active "
-        "executable skills as runtime-orchestrated conversation state. "
-        "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
-        "other non-Octopus skill system. If a user asks how skills work, describe which skills "
-        "are available on this bot, which are defaults for new conversations, and which are "
-        "active in this conversation. If a user asks who is answering, say the current bot in "
-        "this conversation is answering; do not describe yourself as a main assistant, primary "
-        "assistant, or coordinator."
+def _compat_runtime_track(name: str) -> RuntimeSkillTrackRecord | None:
+    resolved = _resolve_skill(name)
+    if resolved is None:
+        return None
+    skill_dir, source = resolved
+    try:
+        meta, body = _load_skill_md(skill_dir / "skill.md")
+    except ValueError:
+        return None
+    provider_config = {}
+    for provider in ("claude", "codex"):
+        config = load_provider_yaml(name, provider)
+        if config:
+            provider_config[provider] = config
+    return RuntimeSkillTrackRecord(
+        slug=name,
+        display_name=str(meta.get("display_name", name) or name),
+        description=str(meta.get("description", "") or ""),
+        source_kind="custom" if source == "custom" else "builtin",
+        source_uri=str(skill_dir),
+        revision=SkillRevisionRecord(
+            instruction_body=body,
+            skill_kind=str(meta.get("skill_kind", "prompt") or "prompt"),
+            requirements=get_skill_requirements(name),
+            provider_config=provider_config,
+            files=_compat_track_files(skill_dir),
+        ),
+        visibility="private" if source == "custom" else "shared",
+        is_mutable=(source == "custom"),
     )
 
 
-def _apply_provider_semantics(system_prompt: str, provider_name: str) -> str:
-    note = _provider_semantics_note(provider_name)
-    if not note:
-        return system_prompt
-    if system_prompt:
-        return f"{system_prompt}\n\n{note}"
-    return note
+class _CompatCatalogService:
+    def catalog(self) -> dict[str, SkillMeta]:
+        return load_catalog()
+
+    def resolve_runtime_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None:
+        return _compat_runtime_track(skill_name)
+
+    def filter_resolvable(self, names: list[str]) -> list[str]:
+        return [name for name in names if self.resolve_runtime_track(name) is not None]
+
+
+class _CompatContentStore:
+    def get_provider_guidance(
+        self,
+        provider_name: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ):
+        del provider_name, scope_kind, scope_key
+        return None
+
+    def resolve_provider_guidance(
+        self,
+        provider_name: str,
+        *,
+        instance_key: str = "",
+    ):
+        del provider_name, instance_key
+        return None
+
+
+def _compat_guidance_service() -> SdkProviderGuidanceService:
+    from app.storage import list_sessions, load_session
+
+    return SdkProviderGuidanceService(
+        catalog_service=_CompatCatalogService(),
+        content_store=_CompatContentStore(),
+        list_sessions=list_sessions,
+        load_session=load_session,
+    )
+
+
+def build_system_prompt(role: str, skill_names: list[str]) -> str:
+    return _compat_guidance_service().system_prompt(role, skill_names)
+
+
+def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
+    return _compat_guidance_service().preflight_prompt(role, skill_names)
 
 
 def check_prompt_size(role: str, active_skills: list[str]) -> str | None:
-    """Check if composed prompt exceeds the warning threshold.
-
-    Returns a warning message string if over threshold, None otherwise.
-    """
-    prompt = build_system_prompt(role, active_skills)
-    if len(prompt) > PROMPT_SIZE_WARNING_THRESHOLD:
-        return (
-            f"Composed prompt is {len(prompt):,} chars "
-            f"(threshold: {PROMPT_SIZE_WARNING_THRESHOLD:,}). "
-            f"Quality may degrade. Consider removing some skills."
-        )
-    return None
+    return _compat_guidance_service().prompt_size_warning(role, active_skills)
 
 
 def estimate_prompt_size(role: str, current_skills: list[str], new_skill: str) -> tuple[int, bool]:
-    """Estimate prompt size if new_skill were added.
-
-    Returns (projected_size, over_threshold).
-    """
-    projected = current_skills + ([new_skill] if new_skill not in current_skills else [])
-    prompt = build_system_prompt(role, projected)
-    return len(prompt), len(prompt) > PROMPT_SIZE_WARNING_THRESHOLD
+    return _compat_guidance_service().estimate_prompt_size(role, current_skills, new_skill)
 
 
 def check_prompt_size_cross_chat(
@@ -576,26 +481,13 @@ def check_prompt_size_cross_chat(
     provider_state_factory,
     approval_mode: str,
 ) -> list[str]:
-    """Return prompt-size warnings for chats where the named skill is active."""
-    from app.storage import list_sessions, load_session
-
-    warnings: list[str] = []
-    for info in list_sessions(data_dir):
-        active = filter_resolvable_skills(info.get("active_skills", []))
-        if skill_name not in active:
-            continue
-        session_data = load_session(
-            data_dir,
-            info["conversation_key"],
-            provider_name,
-            provider_state_factory,
-            approval_mode,
-        )
-        role = session_data.get("role", "")
-        warning = check_prompt_size(role, active)
-        if warning:
-            warnings.append(f"  Conversation {info['conversation_key']}: {warning}")
-    return warnings
+    return _compat_guidance_service().check_prompt_size_cross_chat(
+        data_dir,
+        skill_name,
+        provider_name,
+        provider_state_factory,
+        approval_mode,
+    )
 
 # ---------------------------------------------------------------------------
 # Context builders
@@ -611,19 +503,12 @@ def build_run_context(
     file_policy: str = "",
     effective_model: str = "",
 ) -> RunContext:
-    """Convenience builder for RunContext."""
     cred_env = CredentialEnvRecord(dict(credential_env or {}))
-    provider_config = (
-        ProviderConfigRecord(build_provider_config(provider_name, active_skills, cred_env.to_dict()))
-        if provider_name
-        else ProviderConfigRecord()
-    )
-    cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
-    return RunContext(
-        extra_dirs=extra_dirs,
-        system_prompt=_apply_provider_semantics(build_system_prompt(role, active_skills), provider_name),
-        capability_summary=cap_summary,
-        provider_config=provider_config,
+    return _compat_guidance_service().build_run_context(
+        role,
+        active_skills,
+        extra_dirs,
+        provider_name=provider_name,
         credential_env=cred_env,
         working_dir=working_dir,
         file_policy=file_policy,
@@ -640,12 +525,11 @@ def build_preflight_context(
     file_policy: str = "",
     effective_model: str = "",
 ) -> PreflightContext:
-    """Convenience builder for PreflightContext."""
-    cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
-    return PreflightContext(
-        extra_dirs=extra_dirs,
-        system_prompt=_apply_provider_semantics(build_preflight_system_prompt(role, active_skills), provider_name),
-        capability_summary=cap_summary,
+    return _compat_guidance_service().build_preflight_context(
+        role,
+        active_skills,
+        extra_dirs,
+        provider_name=provider_name,
         working_dir=working_dir,
         file_policy=file_policy,
         effective_model=effective_model,
@@ -661,66 +545,15 @@ def stage_codex_scripts(
     conversation_key: str,
     active_skills: list[str],
 ) -> Path | None:
-    """Stage helper scripts codex.yaml into a conversation-scoped directory.
-
-    Returns the scripts directory path if any scripts were staged, None otherwise.
-    Syncs scripts to match active skills — removes stale, adds new.
-    """
-    scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
-
-    # Collect all scripts active skills
-    all_scripts: dict[str, list[dict]] = {}  # skill_name → list of script defs
-    for name in active_skills:
-        raw = load_provider_yaml(name, "codex")
-        if raw and "scripts" in raw and isinstance(raw["scripts"], list):
-            all_scripts[name] = raw["scripts"]
-
-    if not all_scripts:
-        # No scripts needed — clean up if dir exists
-        if scripts_dir.is_dir():
-            shutil.rmtree(scripts_dir, ignore_errors=True)
-        return None
-
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-
-    # Remove stale skill script dirs
-    for existing in scripts_dir.iterdir():
-        if existing.is_dir() and existing.name not in all_scripts:
-            shutil.rmtree(existing, ignore_errors=True)
-
-    # Stage scripts for each active skill (clean first to remove stale files)
-    for skill_name, script_defs in all_scripts.items():
-        skill = _skill_dir(skill_name)
-        if not skill:
-            continue
-        skill_scripts_dir = scripts_dir / skill_name
-        if skill_scripts_dir.is_dir():
-            shutil.rmtree(skill_scripts_dir, ignore_errors=True)
-        skill_scripts_dir.mkdir(parents=True, exist_ok=True)
-        for script_def in script_defs:
-            if isinstance(script_def, dict):
-                source = script_def.get("source", "")
-                sname = script_def.get("name", Path(source).name if source else "")
-            elif isinstance(script_def, str):
-                source = script_def
-                sname = Path(script_def).name
-            else:
-                continue
-            if not source or not sname:
-                continue
-            src_path = skill / source
-            dst_path = skill_scripts_dir / sname
-            if src_path.is_file():
-                shutil.copy2(src_path, dst_path)
-
-    return scripts_dir
+    return _compat_guidance_service().stage_codex_scripts(
+        data_dir,
+        str(conversation_key),
+        active_skills,
+    )
 
 
 def cleanup_codex_scripts(data_dir: Path, conversation_key: str) -> None:
-    """Remove all staged scripts for a conversation (called on /new)."""
-    scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
-    if scripts_dir.is_dir():
-        shutil.rmtree(scripts_dir, ignore_errors=True)
+    _compat_guidance_service().cleanup_codex_scripts(data_dir, str(conversation_key))
 
 
 # ---------------------------------------------------------------------------

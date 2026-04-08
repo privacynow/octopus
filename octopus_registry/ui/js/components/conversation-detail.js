@@ -493,6 +493,26 @@ function renderConversationDetail(container, params) {
         );
     }
 
+    function skillSemanticsLabel(skill) {
+        return String(skill?.skill_kind || '').trim() === 'executable'
+            ? 'executable workflow'
+            : 'prompt instructions';
+    }
+
+    function activeSkillSemanticsNote(skills) {
+        const items = Array.isArray(skills) ? skills : [];
+        if (!items.length) return '';
+        const hasExecutable = items.some((skill) => String(skill?.skill_kind || '').trim() === 'executable');
+        const hasPrompt = items.some((skill) => String(skill?.skill_kind || '').trim() !== 'executable');
+        if (hasPrompt && hasExecutable) {
+            return 'Prompt skills apply as operator-selected instructions here. Executable skills run through Octopus runtime orchestration.';
+        }
+        if (hasExecutable) {
+            return 'Executable skills run through Octopus runtime orchestration for this conversation.';
+        }
+        return 'Prompt skills apply as operator-selected instructions for this conversation until they are deactivated.';
+    }
+
     async function refreshConversationSkillState({ soft = true } = {}) {
         await loadConversationSkills({ soft });
         if (meta) {
@@ -730,7 +750,7 @@ function renderConversationDetail(container, params) {
 
             const explainer = document.createElement('p');
             explainer.className = 'quiet-note';
-            explainer.textContent = 'Use this panel to choose what is active in this conversation. To install, update, or edit skills for this bot, open the Skills page.';
+            explainer.textContent = 'Use this panel to choose what is active in this conversation. Prompt skills apply as conversation instructions here; executable skills run through runtime orchestration. To install, update, or edit skills for this bot, open the Skills page.';
             nodes.push(explainer);
 
             if (state.pendingSetup) {
@@ -861,6 +881,7 @@ function renderConversationDetail(container, params) {
                     const row = document.createElement('div');
                     row.className = 'settings-row';
                     const summaryBits = [
+                        skillSemanticsLabel(skill),
                         skill.description || '',
                         skill.source_label || skill.source_kind || '',
                         skill.requires_credentials ? 'setup required' : '',
@@ -1725,6 +1746,13 @@ function renderConversationDetail(container, params) {
             chips.appendChild(chip);
         });
         activeRow.appendChild(chips);
+        const semantics = activeSkillSemanticsNote(activeSkills);
+        if (semantics) {
+            const note = document.createElement('p');
+            note.className = 'quiet-note';
+            note.textContent = semantics;
+            activeRow.appendChild(note);
+        }
         return [titleRow, metaRow, activeRow, toolbar];
         });
     }

@@ -447,19 +447,41 @@ def build_system_prompt(role: str, skill_names: list[str]) -> str:
     available = ", ".join(sorted(catalog)) or "none"
     active = ", ".join(skill_names) or "none"
     if catalog or skill_names:
-        parts.append(
-            "## Octopus Runtime Skill State\n\n"
-            "This state is authoritative for the current bot and conversation.\n"
-            f"Available on this bot: {available}.\n"
-            f"Active in this conversation: {active}.\n"
-        )
+        state_lines = [
+            "## Octopus Runtime Skill State",
+            "",
+            "This state is authoritative for the current bot and conversation.",
+            f"Available on this bot: {available}.",
+            f"Active in this conversation: {active}.",
+        ]
+        if skill_names:
+            state_lines.append(
+                "Prompt skills listed as active below are operator-selected conversation instructions. "
+                "Apply them in this conversation until they are deactivated."
+            )
+        state_lines.append("")
+        parts.append("\n".join(state_lines))
     for name in skill_names:
         instructions = get_skill_instructions(name)
         if not instructions:
             continue
         meta = catalog.get(name)
         display = meta.display_name if meta else name
-        parts.append(f"## {display}\n\n{instructions}\n")
+        parts.append(
+            "\n".join(
+                [
+                    f"## ACTIVE PROMPT SKILL: {display}",
+                    "",
+                    "Status: active in this conversation",
+                    "Authority: operator-selected conversation state",
+                    "Skill kind: prompt",
+                    "Semantics: Apply the following instructions throughout this conversation until the skill is deactivated.",
+                    "",
+                    instructions,
+                    "",
+                ]
+            )
+        )
 
     if not parts:
         return ""
@@ -484,9 +506,10 @@ def build_preflight_system_prompt(role: str, skill_names: list[str]) -> str:
     labels: list[str] = []
     for name in skill_names:
         meta = catalog.get(name)
-        labels.append(meta.display_name if meta else name)
+        labels.append(f"{meta.display_name if meta else name} (prompt)")
     if labels:
         parts.append(f"Active runtime skills: {', '.join(labels)}.\n")
+        parts.append("Prompt skills will be applied as operator-selected conversation instructions.\n")
 
     return "\n".join(parts) if parts else ""
 
@@ -501,6 +524,8 @@ def _provider_semantics_note(provider_name: str) -> str:
         "## Octopus Skill Semantics\n\n"
         "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
         "default-for-new-conversations settings, and per-conversation activation. "
+        "Treat active prompt skills as operator-selected conversation instructions, and active "
+        "executable skills as runtime-orchestrated conversation state. "
         "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
         "other non-Octopus skill system. If a user asks how skills work, describe which skills "
         "are available on this bot, which are defaults for new conversations, and which are "

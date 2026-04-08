@@ -9,7 +9,7 @@ import time
 
 from .management_client import ManagementClientError, RegistryManagementClient
 from .store_base import AbstractRegistryStore
-from octopus_sdk.identity import conversation_key_for_ref
+from octopus_sdk.identity import conversation_key_for_ref, is_qualified_transport_ref
 from octopus_sdk.registry.management import (
     ActivateConversationSkillRequest,
     ActivateConversationSkillResult,
@@ -233,7 +233,13 @@ def _conversation_management_key(
     conversation_id: str,
 ) -> str:
     conversation = store.get_conversation(conversation_id)
-    transport_ref = str(conversation.external_conversation_ref or conversation.conversation_id or "").strip()
+    origin_channel = str(conversation.origin_channel or "").strip().lower()
+    external_ref = str(conversation.external_conversation_ref or "").strip()
+    if origin_channel == "registry":
+        return f"registry:conversation:{conversation_id}"
+    transport_ref = external_ref if external_ref and is_qualified_transport_ref(external_ref) else ""
+    if not transport_ref:
+        transport_ref = str(conversation.conversation_id or "").strip()
     if not transport_ref:
         raise RegistryIngressError(404, f"Unknown conversation: {conversation_id}")
     return conversation_key_for_ref(transport_ref)

@@ -194,6 +194,11 @@ window.RegistrySkillHub = RegistrySkillHub;
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
+    const contentInner = container.closest('.content-inner');
+    if (contentInner) {
+        contentInner.classList.add('workspace-route-wide');
+        cleanups.add(() => contentInner.classList.remove('workspace-route-wide'));
+    }
     const SKILL_CACHE_TTL_MS = 60000;
     const SKILL_SEARCH_CACHE_TTL_MS = 30000;
     const SKILL_DETAIL_CACHE_TTL_MS = 60000;
@@ -284,7 +289,7 @@ function renderSkillCatalog(container) {
     shell.appendChild(workspace);
 
     const listWrap = document.createElement('section');
-    listWrap.className = 'list-shell';
+    listWrap.className = 'list-shell dashboard-column';
     workspace.appendChild(listWrap);
 
     const listEl = document.createElement('div');
@@ -292,7 +297,7 @@ function renderSkillCatalog(container) {
     listWrap.appendChild(listEl);
 
     const detailEl = document.createElement('section');
-    detailEl.className = 'editor-shell';
+    detailEl.className = 'editor-shell dashboard-column';
     workspace.appendChild(detailEl);
 
     function _readSkillName() {

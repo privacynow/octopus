@@ -13,6 +13,7 @@ from app.content_seed import default_provider_guidance_tracks
 from octopus_sdk.identity import filesystem_component_for_key
 from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, ProviderConfigRecord, RunContext
 from octopus_sdk.registry.models import DiscoveredAgentRef
+from octopus_sdk.runtime.skills import normalize_skill_kind
 from app.skill_catalog_service import get_skill_catalog_service
 
 _COMPACT_RESPONSE_SUFFIX = (
@@ -56,6 +57,73 @@ class ProviderGuidanceService:
                 tracks.append(record)
         return tracks
 
+    @staticmethod
+    def _skill_kind(record: RuntimeSkillTrackRecord) -> str:
+        return normalize_skill_kind(str(record.revision.skill_kind or "prompt"))
+
+    @staticmethod
+    def _skill_label(record: RuntimeSkillTrackRecord) -> str:
+        display_name = str(record.display_name or "").strip()
+        slug = str(record.slug or "").strip()
+        if not display_name or display_name.lower() == slug.lower():
+            return slug or display_name
+        return f"{display_name} ({slug})"
+
+    def _runtime_skill_state_block(
+        self,
+        *,
+        available_tracks: list[RuntimeSkillTrackRecord],
+        active_tracks: list[RuntimeSkillTrackRecord],
+    ) -> str:
+        available_labels = ", ".join(record.slug for record in available_tracks) or "none"
+        active_labels = ", ".join(record.slug for record in active_tracks) or "none"
+        lines = [
+            "## Octopus Runtime Skill State",
+            "",
+            "This state is authoritative for the current bot and conversation.",
+            f"Available on this bot: {available_labels}.",
+            f"Active in this conversation: {active_labels}.",
+        ]
+        prompt_tracks = [record for record in active_tracks if self._skill_kind(record) == "prompt"]
+        executable_tracks = [record for record in active_tracks if self._skill_kind(record) == "executable"]
+        if prompt_tracks:
+            lines.append(
+                "Prompt skills listed as active below are operator-selected conversation instructions. "
+                "Apply them in this conversation until they are deactivated."
+            )
+        if executable_tracks:
+            lines.append(
+                "Executable skills listed as active below are enabled through Octopus runtime orchestration. "
+                "Treat that activation as real conversation state, not a hypothetical suggestion."
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    def _active_skill_prompt_sections(self, tracks: list[RuntimeSkillTrackRecord]) -> list[str]:
+        sections: list[str] = []
+        for record in tracks:
+            kind = self._skill_kind(record)
+            heading = f"## ACTIVE {kind.upper()} SKILL: {self._skill_label(record)}"
+            semantics = (
+                "Apply the following instructions throughout this conversation until the skill is deactivated."
+                if kind == "prompt"
+                else "This skill is enabled through Octopus runtime orchestration. Follow any instructions below and "
+                "treat its activation as real conversation state."
+            )
+            body = str(record.revision.instruction_body or "").strip()
+            section = [
+                heading,
+                "",
+                "Status: active in this conversation",
+                "Authority: operator-selected conversation state",
+                f"Skill kind: {kind}",
+                f"Semantics: {semantics}",
+            ]
+            if body:
+                section.extend(["", body])
+            sections.append("\n".join(section) + "\n")
+        return sections
+
     def system_prompt(
         self,
         role: str,
@@ -83,16 +151,13 @@ class ProviderGuidanceService:
         available_tracks = self._available_runtime_tracks()
         tracks = self._tracks(active_skills)
         if available_tracks or tracks:
-            available_labels = ", ".join(record.slug for record in available_tracks) or "none"
-            active_labels = ", ".join(record.slug for record in tracks) or "none"
             parts.append(
-                "## Octopus Runtime Skill State\n\n"
-                "This state is authoritative for the current bot and conversation.\n"
-                f"Available on this bot: {available_labels}.\n"
-                f"Active in this conversation: {active_labels}.\n"
+                self._runtime_skill_state_block(
+                    available_tracks=available_tracks,
+                    active_tracks=tracks,
+                )
             )
-        for record in tracks:
-            parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
+        parts.extend(self._active_skill_prompt_sections(tracks))
         if available_agents:
             parts.append(self._format_agent_discovery_section(available_agents))
         return "\n".join(parts) if parts else ""
@@ -144,8 +209,15 @@ class ProviderGuidanceService:
             parts.append(guidance_text + "\n")
         tracks = self._tracks(active_skills)
         if tracks:
-            labels = ", ".join(record.display_name for record in tracks)
+            labels = ", ".join(
+                f"{record.display_name} ({self._skill_kind(record)})"
+                for record in tracks
+            )
             parts.append(f"Active runtime skills: {labels}.\n")
+            if any(self._skill_kind(record) == "prompt" for record in tracks):
+                parts.append("Prompt skills will be applied as operator-selected conversation instructions.\n")
+            if any(self._skill_kind(record) == "executable" for record in tracks):
+                parts.append("Executable skills are enabled through Octopus runtime orchestration.\n")
         return "\n".join(parts) if parts else ""
 
     @staticmethod
@@ -158,7 +230,9 @@ class ProviderGuidanceService:
             "default-for-new-conversations settings, and per-conversation activation. Use the "
             "canonical terms 'available on this bot', 'active in this conversation', and "
             "'advertised for routing' precisely. Use the runtime skill state section in this prompt "
-            "as authoritative for the current bot and conversation. "
+            "as authoritative for the current bot and conversation. Treat active prompt skills as "
+            "operator-selected conversation instructions, and active executable skills as runtime-"
+            "orchestrated conversation state. "
             "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
             "other non-Octopus skill system. Do not infer factual skill availability, current "
             "conversation activation, or prior skill usage from routing tables alone. If a user "

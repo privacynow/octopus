@@ -29,7 +29,7 @@ from app.runtime_health import (
     WorkerHeartbeat,
     report_to_dict,
 )
-from app.storage import default_session, ensure_data_dirs, save_session
+from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
@@ -801,12 +801,20 @@ def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monke
 
 def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
-    _configure_runtime_surface(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
     _install_management_loopback(monkeypatch)
     client = TestClient(app)
     agent_id, token = _enroll_and_register(client, "Registry Bot", "registry-bot")
 
-    conv = _create_conversation(client, token, agent_id, "conv-runtime-1", title="Registry runtime conversation")
+    conv = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "conv-runtime-1",
+        title="Registry runtime conversation",
+        origin_channel="registry",
+        external_conversation_ref="ui-runtime-1",
+    )
     conversation_id = conv["conversation_id"]
 
     listed = client.get(
@@ -823,6 +831,47 @@ def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypa
     )
     assert activate.status_code == 200
     assert activate.json()["status"] == "activated"
+
+    listed = client.get(
+        f"/v1/agents/{agent_id}/conversations/{conversation_id}/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
+    canonical_key = f"registry:conversation:{conversation_id}"
+    stored = load_session(
+        data_dir,
+        canonical_key,
+        "claude",
+        lambda _conversation_key="": {"session_id": "test", "started": False},
+        "on",
+    )
+    assert stored["active_skills"] == ["code-review"]
+    assert session_exists(data_dir, canonical_key) is True
+    assert session_exists(data_dir, "ui-runtime-1") is False
+
+
+def test_registry_conversation_skill_state_uses_canonical_registry_key(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    _install_management_loopback(monkeypatch)
+    client = TestClient(app)
+    agent_id, token = _enroll_and_register(client, "Registry Bot", "registry-bot")
+
+    conv = _create_conversation(
+        client,
+        token,
+        agent_id,
+        "conv-runtime-2",
+        title="Registry runtime conversation",
+        origin_channel="registry",
+        external_conversation_ref="ui-runtime-2",
+    )
+    conversation_id = conv["conversation_id"]
+    canonical_key = f"registry:conversation:{conversation_id}"
+    session = default_session("claude", ProviderStateRecord({"session_id": "test", "started": False}), "on")
+    session["active_skills"] = ["code-review"]
+    save_session(data_dir, canonical_key, session)
 
     listed = client.get(
         f"/v1/agents/{agent_id}/conversations/{conversation_id}/skills",

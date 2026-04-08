@@ -187,8 +187,10 @@ def test_preflight_context_excludes_raw_skill_instruction_bodies(tmp_path: Path)
         )
 
         assert track.revision.instruction_body in run_ctx.system_prompt
+        assert "## ACTIVE PROMPT SKILL: Code Review" in run_ctx.system_prompt
+        assert "operator-selected conversation instructions" in run_ctx.system_prompt
         assert track.revision.instruction_body not in preflight_ctx.system_prompt
-        assert track.display_name in preflight_ctx.system_prompt
+        assert f"{track.display_name} (prompt)" in preflight_ctx.system_prompt
         assert "Senior engineer" in preflight_ctx.system_prompt
     finally:
         close_db(data_dir)

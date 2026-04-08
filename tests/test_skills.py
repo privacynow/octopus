@@ -280,14 +280,15 @@ def test_system_prompt_building():
     assert "## Octopus Runtime Skill State" in prompt
     assert "Available on this bot:" in prompt
     assert "Active in this conversation: code-review, testing." in prompt
-    assert "## Code Review" in prompt
-    assert "## Testing" in prompt
+    assert "operator-selected conversation instructions" in prompt
+    assert "## ACTIVE PROMPT SKILL: Code Review" in prompt
+    assert "## ACTIVE PROMPT SKILL: testing" in prompt
 
     # No role
     prompt_no_role = build_system_prompt("", ["code-review"])
     assert "You are a" not in prompt_no_role
     assert "Active in this conversation: code-review." in prompt_no_role
-    assert "## Code Review" in prompt_no_role
+    assert "## ACTIVE PROMPT SKILL: Code Review" in prompt_no_role
 
     # No skills
     prompt_no_skills = build_system_prompt("engineer", [])
@@ -312,6 +313,7 @@ def test_context_builders():
     assert "## Octopus Runtime Skill State" in run_ctx.system_prompt
     assert "Available on this bot:" in run_ctx.system_prompt
     assert "Active in this conversation: code-review." in run_ctx.system_prompt
+    assert "## ACTIVE PROMPT SKILL: Code Review" in run_ctx.system_prompt
     assert run_ctx.capability_summary == ""
     assert run_ctx.provider_config == {}
     assert run_ctx.credential_env == {}
@@ -320,8 +322,9 @@ def test_context_builders():
     assert isinstance(pf_ctx, PreflightContext)
     assert not isinstance(pf_ctx, RunContext)
     assert pf_ctx.extra_dirs == ["/tmp/uploads/123"]
-    assert "Active runtime skills: Code Review." in pf_ctx.system_prompt
-    assert "## Code Review" not in pf_ctx.system_prompt
+    assert "Active runtime skills: Code Review (prompt)." in pf_ctx.system_prompt
+    assert "Prompt skills will be applied as operator-selected conversation instructions." in pf_ctx.system_prompt
+    assert "## ACTIVE PROMPT SKILL: Code Review" not in pf_ctx.system_prompt
 
 
 # =====================================================================

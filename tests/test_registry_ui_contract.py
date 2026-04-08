@@ -155,6 +155,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     ).read_text(encoding="utf-8")
 
     assert "Manage a bot’s installed, custom, and store-backed skills here." in skill_catalog
+    assert "contentInner.classList.add('workspace-route-wide');" in skill_catalog
     assert "label: 'Bot catalog'" not in skill_catalog
     assert "label: 'Studio'" not in skill_catalog
     assert "currentStudioTab = _readStudioTab()" in skill_catalog
@@ -179,6 +180,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "await persistDraft({ quiet: true })" in skill_catalog
     assert "function _editableDraftState(detail, lifecycle)" in skill_catalog
     assert "workspace.className = 'dashboard-board';" in skill_catalog
+    assert "listWrap.className = 'list-shell dashboard-column';" in skill_catalog
+    assert "detailEl.className = 'editor-shell dashboard-column';" in skill_catalog
     assert "UI.showTextDialog(" in skill_catalog
     assert "allowEmpty: true" in skill_catalog
     assert "agentId: currentAgentId" in skill_catalog
@@ -194,6 +197,8 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, { confirm: true })" in skill_catalog
     assert "Active in this conversation" in conversation_detail
     assert "Available on this bot" in conversation_detail
+    assert "prompt instructions" in conversation_detail
+    assert "runtime orchestration" in conversation_detail
     assert "requestedActivationSkill && requestedManagementMode === 'closed'" in conversation_detail
     assert "function clearRequestedActivationSkill()" in conversation_detail
     assert "await requestConversationSkillActivation(skillName);" in conversation_detail
@@ -237,6 +242,7 @@ def test_guidance_editor_exposes_progressive_draft_and_review_workspace() -> Non
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "guidance-editor.js"
     ).read_text(encoding="utf-8")
 
+    assert "contentInner.classList.add('workspace-route-wide');" in guidance_editor
     assert "currentGuidanceTab = _readGuidanceTab()" in guidance_editor
     assert "label: 'Guidance workspace'" in guidance_editor
     assert "label: 'Write'" in guidance_editor

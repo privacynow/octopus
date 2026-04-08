@@ -650,6 +650,22 @@ class StubContentStore(ContentStorePort):
     ) -> ProviderGuidanceTrackRecord | None:
         return self._guidance.get((provider_name, scope_kind, scope_key))
 
+    def resolve_provider_guidance(
+        self,
+        provider_name: str,
+        *,
+        instance_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        if instance_key:
+            match = self.get_provider_guidance(
+                provider_name,
+                scope_kind="instance",
+                scope_key=instance_key,
+            )
+            if match is not None:
+                return match
+        return self.get_provider_guidance(provider_name, scope_kind="system", scope_key="")
+
     def list_provider_guidance_revisions(
         self,
         provider_name: str,

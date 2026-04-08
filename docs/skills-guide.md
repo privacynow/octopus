@@ -51,6 +51,20 @@ Installed from the remote skill store onto a bot.
 Authored inside Octopus and managed through the draft / review / publish
 lifecycle.
 
+## Skill Kinds
+
+Skills also have an execution kind:
+
+- `prompt`
+  active in a conversation as operator-selected instructions composed into the
+  provider run context
+- `executable`
+  active in a conversation as runtime-orchestrated behavior, not only extra
+  prompt text
+
+Both kinds use the same bot-level availability and conversation-level
+activation model. The difference is how the runtime applies them once active.
+
 ## Add A Store Or Core Skill To A Bot
 
 Use the registry UI:

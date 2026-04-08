@@ -76,6 +76,13 @@ Typical skill operations in chat include:
 - export a custom skill package
 - import a custom skill package into a draft
 
+Permission and capability gating still matters:
+
+- `list`, `add`, `remove`, `clear`, `export`, and `import` are the normal
+  conversation and draft-oriented operations when the bot exposes them
+- store install, uninstall, and update actions are admin-only
+- custom-skill approve, reject, publish, and archive actions are admin-only
+
 Examples you may use:
 
 ```text
@@ -102,6 +109,12 @@ Telegram can expose guidance flows such as:
 - edit a draft
 - preview the composed runtime prompt
 - publish the draft
+
+In the shipped Telegram surface:
+
+- `show`, `preview`, `history`, `edit`, and `submit` use the shared backend
+  lifecycle directly
+- `approve`, `reject`, `publish`, and `archive` are admin-only
 
 Typical examples:
 

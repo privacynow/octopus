@@ -2,9 +2,10 @@
 
 Octopus is a multi-agent bot platform. Operators deploy bot runtimes that
 connect to a shared registry. The registry is the management plane — it
-handles enrollment, status, task routing, skill/guidance management, and
-an operator dashboard. Bots handle user conversations, provider execution,
-and delegation. The SDK defines the contracts between them.
+handles enrollment, status, task routing, skill/guidance management, browser
+conversations, and an operator dashboard. Bots handle user conversations,
+provider execution, and delegation. The SDK defines the contracts between
+them.
 
 Three packages, three clean boundaries:
 
@@ -28,14 +29,38 @@ flowchart LR
     Deploy --> Registry["Registry server<br/>(octopus_registry/ + octopus_sdk/)"]
 
     TG <--> Bot
-    Browser --> Registry
+    Browser <--> Registry
     Bot <--> Registry
     Bot --> Provider["Claude / Codex"]
-    Registry -.-> Postgres["Postgres"]
+    Bot <--> BotDb["Bot Postgres<br/>(runtime/content/credentials)"]
+    Registry <--> RegistryDb["Registry Postgres<br/>(agent_registry)"]
 ```
 
 `octopus_sdk/` is a shared library embedded in both Bot and Registry at
 build time. It is not a separately deployed system.
+
+Two views matter:
+
+- **Shipped local deployment topology**
+  `./octopus` starts one compose project for the registry and one compose
+  project per bot. By default each stack gets its own Postgres container and
+  its own `OCTOPUS_DATABASE_URL`.
+- **Logical platform model**
+  the codebase defines four durable schema families — `bot_runtime`,
+  `bot_content`, `bot_credentials`, and `agent_registry` — and can host them in
+  one external Postgres instance if the deployment points multiple processes at
+  the same database. That logical model is useful for contracts and schema
+  ownership, but it is not the default local topology.
+
+```mermaid
+flowchart LR
+    subgraph LocalDeploy["Shipped local deployment managed by ./octopus"]
+        Browser["Browser"] <--> Registry["Registry service"]
+        Tg["Telegram"] <--> Bot["Bot runtime"]
+        Registry <--> RegistryPg["registry-postgres"]
+        Bot <--> BotPg["<bot>-postgres"]
+    end
+```
 
 ---
 
@@ -48,7 +73,8 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 
 - Agent enrollment, heartbeat, connectivity state, deregistration
 - Mirrored runtime-health state, including execution-fault status
-- Conversation storage, event timeline, message/action APIs
+- Conversation storage, event timeline, message/action APIs, and browser-origin
+  operator messages
 - Routed task lifecycle (create, status, result, recipient projection)
 - Skill catalog and provider guidance management (via management protocol)
 - Skill-derived routing projection and global routing policy
@@ -182,6 +208,24 @@ sequenceDiagram
 Management responses are cached server-side in `ingress.py` with TTL and
 in-flight deduplication. Mutations (make available, publish, archive) invalidate
 the cache. Client-side stale-while-revalidate provides instant revisits.
+
+Browser-origin conversations are also real runtime traffic, not just registry
+inspection:
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Registry
+    participant Bot
+    participant Provider
+
+    Browser->>Registry: POST /v1/conversations/{id}/messages
+    Registry->>Bot: Deliver registry conversation work
+    Bot->>Provider: execute_request(...)
+    Provider-->>Bot: Response
+    Bot->>Registry: Publish reply + events
+    Registry-->>Browser: HTTP response + realtime updates
+```
 
 `ingress.py` and `management_client.py` have different jobs:
 
@@ -325,16 +369,20 @@ construction time by the application layer.
 Every messaging platform implements `TransportImplementation`:
 
 ```python
-class TransportImplementation(Protocol):
+class TransportImplementation(ABC):
+    @property
+    def transport_id(self) -> str: ...
     @property
     def descriptor(self) -> TransportDescriptor: ...
     @property
-    def identity(self) -> TransportIdentityResolver: ...
-    async def start(self, *, runtime, stop_event) -> None: ...
-    async def stop(self) -> None: ...
+    def identity(self) -> TransportIdentityResolver | None: ...
+    def ref_prefix(self) -> str: ...
     def can_build_egress(self, *, conversation_ref, config, **kw) -> bool: ...
     def build_egress(self, *, conversation_ref, config, **kw) -> TransportEgress: ...
     def worker_egress_kwargs(self, *, conversation_ref) -> dict: ...
+    def descriptor_for_ref(self, conversation_ref) -> TransportDescriptor | None: ...
+    async def start(self, *, runtime, stop_event) -> None: ...
+    async def stop(self) -> None: ...
 ```
 
 The runtime calls `transport.start()` to begin receiving messages. The
@@ -419,9 +467,14 @@ explicitly through the round-trip.
 All metadata models use `extra="forbid"` — unknown fields are rejected.
 
 `provider.request` metadata now carries a bounded `skill_manifest` alongside
-the human-readable prompt content. Skill-factual questions must resolve from
-that manifest plus runtime/session/catalog inspection, not from prompt
-fragments or model memory. Canonical skill terms are:
+the human-readable prompt content. In the shipped runtime, normal model
+awareness of skills comes from the shared provider-guidance composition in
+`octopus_sdk/provider_guidance_service.py`, which injects authoritative
+available/active skill state and active skill bodies into the run context.
+`skill_manifest` remains an execution/event artifact and an input for
+debug/admin inspection. `SkillInspectionService` is currently a deterministic
+debug/admin service, not a normal chat interception path. Canonical skill terms
+are:
 
 - available on this bot
 - active in this conversation
@@ -493,12 +546,13 @@ flowchart TD
     runtime_build -.-> launch
 ```
 
-`app/runtime/composition.py` is the only place that should wire the
-process-wide provider-guidance singleton into the workflow graph.
-`app/runtime/bot_services.py` then injects that already-owned guidance service
-into `ExecutionServices`. Runtime handlers should consume injected
-`BotServices` / `ExecutionServices` ports and must not call
-`get_provider_guidance_service()` directly.
+`app/runtime/composition.py` wires the process-wide provider-guidance singleton
+into workflow composition, and `app/runtime/bot_services.py` currently injects
+that same singleton into `ExecutionServices`. The implementation core now lives in
+`octopus_sdk/provider_guidance_service.py`; `app/provider_guidance_service.py`
+is a thin app-side wrapper that binds the SDK service to app factories.
+Runtime handlers should still consume injected `BotServices` /
+`ExecutionServices` ports rather than perform ad-hoc singleton lookups.
 
 1. `services.py` calls `bot_services.py` which internally uses
    `composition.py` to wire the `WorkflowComposer` with app-side port
@@ -739,8 +793,11 @@ Actor identity uses `actor_key` everywhere — not `user_id`, not
 
 ### Persistence seams
 
-The shipped product uses one logical Postgres database per deployment, exposed
-through `OCTOPUS_DATABASE_URL`.
+Logically, the platform defines four durable schema families. A deployment can
+host them in one external Postgres instance, or split them across multiple
+Postgres instances by giving different processes different
+`OCTOPUS_DATABASE_URL` values. The shipped local deployment uses separate
+compose stacks and separate Postgres containers by default.
 
 | Schema | Owns | Notes |
 |--------|------|-------|

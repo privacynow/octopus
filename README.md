@@ -1,8 +1,10 @@
 # Octopus Agent Platform
 
-Octopus runs Claude or Codex behind Telegram and adds a local registry UI for
-operators. You use Telegram to talk to bots, and you use the registry to view
-conversations, review approvals, manage skills, and inspect agent health.
+Octopus runs Claude or Codex behind bot runtimes and adds a local registry UI
+for operators. In the shipped product you can talk to bots from Telegram or
+from registry-origin browser conversations, and you use the registry to inspect
+conversations, review approvals, manage skills and guidance, and inspect agent
+health.
 
 The main entrypoint is:
 
@@ -17,12 +19,16 @@ to wire the database manually.
 
 ## Prerequisites
 
-Before you start:
+Before you start, for the standard local Telegram-enabled setup:
 
 - Docker Desktop is running
 - you have a Telegram bot token from `@BotFather`
 - you have provider auth available for Claude or Codex
 - you cloned the repo into a persistent checkout
+
+The shipped runtime can also run in registry-only mode when no Telegram token
+is configured, but this README walks through the standard Telegram-enabled
+deployment.
 
 ## Quick Start
 
@@ -65,6 +71,7 @@ Use the registry to:
 
 - inspect agents
 - open conversations
+- send operator messages in registry-origin conversations
 - review approvals
 - manage skills
 - manage provider guidance
@@ -74,7 +81,7 @@ If you want the browser workflow in detail, use
 
 ## Use The Telegram Bot
 
-After the stack is up:
+If Telegram is configured, after the stack is up:
 
 1. open Telegram
 2. find your bot

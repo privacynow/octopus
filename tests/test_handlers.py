@@ -2265,7 +2265,7 @@ async def test_new_preserves_default_skills():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         save_user_credential(data_dir, _actor(42), "github-integration", "GITHUB_TOKEN", "ghp_test", key)
 
         session = default_session("claude", prov.new_provider_state("tg:test"), "off")

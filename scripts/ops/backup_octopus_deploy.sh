@@ -10,7 +10,7 @@ Usage:
 Copies <source>/.deploy into <target>/.deploy.
 
 Defaults:
-  source-repo-dir  /Users/tinker/octopus
+  source-repo-dir  current checkout
 
 Notes:
   - backup-dir is required
@@ -18,7 +18,8 @@ Notes:
 EOF
 }
 
-SOURCE_REPO="/Users/tinker/octopus"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TARGET_DIR=""
 POSITIONAL=()
 

@@ -170,7 +170,7 @@ You can:
 7. use `Advanced` only for package import/export, provider config, files, and revision history
 
 For the full skills workflow, use
-[skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).
+[skills-guide.md](skills-guide.md).
 
 ### Update Provider Guidance
 

@@ -255,7 +255,7 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
         assert outcome.status == "ready"
         assert "github-integration" in session.active_skills
 
-        creds = load_user_credentials(data_dir, actor_key, derive_encryption_key(cfg.telegram_token))
+        creds = load_user_credentials(data_dir, actor_key, derive_encryption_key(cfg.credential_key))
         assert creds["github-integration"]["GITHUB_TOKEN"] == "ghp_test_token"
     finally:
         close_db(data_dir)

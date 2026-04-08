@@ -31,7 +31,7 @@ An Octopus bot is composed from:
 - shared workflows
 - registry participant implementation
 
-Use [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/docs/ARCHITECTURE.md)
+Use [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full system view.
 
 ## Development Principles
@@ -104,10 +104,10 @@ If you are extending skills:
 - treat registry and chat as peer clients
 
 For practical skills behavior, use
-[skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).
+[skills-guide.md](skills-guide.md).
 
 For the lower-level model, use
-[skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md).
+[skills-model.md](skills-model.md).
 
 ## Guidance
 
@@ -159,5 +159,5 @@ actual invariant you need.
 
 ## Recommended Reading
 
-- [ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/docs/ARCHITECTURE.md)
-- [docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [skills-model.md](skills-model.md)

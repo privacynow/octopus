@@ -134,9 +134,9 @@ def check_credentials(name: str, user_credentials: dict[str, dict[str, str]]) ->
 # Per-user credential storage (using cryptography.fernet)
 # ---------------------------------------------------------------------------
 
-def derive_fernet_key(telegram_token: str) -> bytes:
-    """Derive a Fernet-compatible key the bot token using HKDF."""
-    return derive_credential_encryption_key(telegram_token)
+def derive_fernet_key(secret_material: str) -> bytes:
+    """Derive a Fernet-compatible key from credential secret material using HKDF."""
+    return derive_credential_encryption_key(secret_material)
 
 
 # Keep old name as alias for backward compatibility in tests/handlers

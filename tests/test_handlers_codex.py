@@ -64,7 +64,7 @@ async def test_codex_script_staging():
         prov.run_results = [RunResult(text="ok")]
         setup_globals(cfg, prov)
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "ghp_test", key)
 
         chat = FakeChat(12345)
@@ -366,7 +366,7 @@ async def test_scripts_dir_in_run_context():
         prov.run_results = [RunResult(text="ok")]
         setup_globals(cfg, prov)
 
-        key = derive_encryption_key(cfg.telegram_token)
+        key = derive_encryption_key(cfg.credential_key)
         save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "ghp_test", key)
 
         chat = FakeChat(12345)

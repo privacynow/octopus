@@ -77,7 +77,7 @@ Use the registry to:
 - manage provider guidance
 
 If you want the browser workflow in detail, use
-[docs/registry-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-user-guide.md).
+[docs/registry-user-guide.md](docs/registry-user-guide.md).
 
 ## Use The Telegram Bot
 
@@ -96,7 +96,7 @@ Useful Telegram commands:
 - `/guidance ...`
 
 If you want the Telegram workflow in detail, use
-[docs/telegram-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/telegram-user-guide.md).
+[docs/telegram-user-guide.md](docs/telegram-user-guide.md).
 
 ## Common Commands
 
@@ -130,10 +130,16 @@ Skills can come from:
 - `Custom`
 
 For the practical guide to installing, activating, configuring, and authoring
-skills, use [docs/skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).
+skills, use [docs/skills-guide.md](docs/skills-guide.md).
 
 For the lower-level shared model, use
-[docs/skills-model.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-model.md).
+[docs/skills-model.md](docs/skills-model.md).
+
+`./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
+
+- present in each bot `.env`
+- stable across restarts and redeploys
+- independent from `TELEGRAM_BOT_TOKEN`
 
 ## Troubleshooting
 
@@ -151,15 +157,15 @@ fault state.
 
 ## Further Reading
 
-- [docs/registry-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-user-guide.md)
+- [docs/registry-user-guide.md](docs/registry-user-guide.md)
   Browser/operator guide
-- [docs/telegram-user-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/telegram-user-guide.md)
+- [docs/telegram-user-guide.md](docs/telegram-user-guide.md)
   Telegram user guide
-- [docs/skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md)
+- [docs/skills-guide.md](docs/skills-guide.md)
   Core, store, and custom skills
-- [docs/sdk-bot-development.md](/Users/tinker/output/bots/telegram-agent-bot/docs/sdk-bot-development.md)
+- [docs/sdk-bot-development.md](docs/sdk-bot-development.md)
   SDK-oriented bot development guide
-- [docs/ARCHITECTURE.md](/Users/tinker/output/bots/telegram-agent-bot/docs/ARCHITECTURE.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   System architecture and runtime boundaries
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

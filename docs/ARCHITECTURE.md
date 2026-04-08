@@ -218,6 +218,15 @@ shared backend workflow:
 - only `.sh` files may be marked executable
 - package limits are 16 attached files, 64 KB per file, 256 KB total
 
+The registry UI now keeps one bot-scoped `Skills` workspace for installed,
+store-backed, and custom skills. Conversation activation remains a separate,
+conversation-scoped flow. The agent page can launch into either surface, but it
+does not own a second skill-management model.
+
+The current registry studio is still agent-scoped because the mutable draft and
+lifecycle state live on one bot's skill catalog. The UI can present that as a
+progressive editor, but the owning bot remains part of the request identity.
+
 ### Realtime model
 
 WebSocket topics:
@@ -768,3 +777,5 @@ carries structured delegation intent. Direct assignment from the UI uses
 11. Realtime topics are explicit. No wildcard subscriptions.
 12. Live registry identity comes from runtime state, not startup config snapshots.
 13. Postgres-backed seams pass the shared contract tests and deploy through one startup path.
+14. New or extended features use **one coherent code path** — no parallel implementations, backward-compatibility shims, or redundant ways to do the same thing.
+15. **File/module size and LOC** are not primary constraints for feature work; clarity and a single pipeline matter more than keeping files small.

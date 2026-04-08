@@ -204,22 +204,23 @@ Registry and chat are peers here:
 
 Current client exposure over the same backend operations:
 
-- registry `Skills -> Studio`
-  - package-aware draft editing
-  - validation/readiness display
-  - lifecycle actions
-- Telegram `/skills package <name>`
-  - inspect the full draft package JSON
-- Telegram `/skills package <name> <json>`
-  - replace the full draft package
+- registry `Skills`
+  - progressive draft editing through `Write`, `Setup`, `Review`, and `Advanced`
+  - validation/readiness display in `Review`
+  - lifecycle actions in `Review`
+  - package import/export and low-level package fields in `Advanced`
+- Telegram `/skills export <name> [draft|published]`
+  - export a custom skill package ZIP
+- Telegram `/skills import [target-name]`
+  - import a custom skill package ZIP into a new or existing draft
 
 The registry is the richer wrapper, not the authority. Chat remains a peer
 client.
 
 ## Product Rules
 
-- Store listings feed the same `Catalog -> Available on this bot` flow. The store is
-  a source, not a separate product concept.
+- Store listings feed the same unified `Skills` workspace. The store is a
+  source, not a separate product concept.
 - Custom skills use the same install and activation model after they are
   published.
 - Core, Store, and Custom skills share one logical package model even if their

@@ -37,6 +37,7 @@ function renderConversationDetail(container, params) {
     let conversationSkills = null;
     let conversationSettings = null;
     let availableConversationSkills = [];
+    let selectedActivationSkill = requestedActivationSkill;
     let managementReloadDebounce = null;
     let pendingSkillSetup = null;
     let managementMode = 'closed';
@@ -344,6 +345,12 @@ function renderConversationDetail(container, params) {
         });
     }
 
+    function clearRequestedActivationSkill() {
+        if (!requestedActivationSkill) return;
+        requestedActivationSkill = '';
+        syncManagementQueryParams();
+    }
+
     function clearManagementTimers() {
         clearTimeout(managementIdleTimer);
         clearTimeout(managementSuccessTimer);
@@ -436,6 +443,7 @@ function renderConversationDetail(container, params) {
         managementMode = 'closed';
         requestedManagementMode = 'closed';
         requestedActivationSkill = '';
+        selectedActivationSkill = '';
         syncManagementQueryParams();
         if (clearStatus) {
             skillsStatusMessage = '';
@@ -469,6 +477,151 @@ function renderConversationDetail(container, params) {
         syncManagementControls();
         renderSkillsPanel();
         renderSettingsPanel();
+    }
+
+    function activeConversationSkillDetails() {
+        return Array.isArray(conversationSkills?.active_skill_details)
+            ? conversationSkills.active_skill_details
+            : [];
+    }
+
+    function activeConversationSkillNames() {
+        return new Set(
+            activeConversationSkillDetails()
+                .map((item) => String(item?.name || '').trim())
+                .filter(Boolean),
+        );
+    }
+
+    async function refreshConversationSkillState({ soft = true } = {}) {
+        await loadConversationSkills({ soft });
+        if (meta) {
+            renderMetaCard(meta);
+        }
+    }
+
+    async function requestConversationSkillActivation(skillName, { fromRoute = false } = {}) {
+        const normalizedSkill = String(skillName || '').trim();
+        const agentId = managementAgentId();
+        if (!normalizedSkill || !agentId) return;
+
+        openManagement('skills');
+        selectedActivationSkill = normalizedSkill;
+        clearRequestedActivationSkill();
+
+        const activeNames = activeConversationSkillNames();
+        if (activeNames.has(normalizedSkill)) {
+            skillsStatusMessage = `${normalizedSkill} is already active in this conversation.`;
+            await refreshConversationSkillState();
+            renderSkillsPanel();
+            scheduleManagementIdleClose(12000);
+            return;
+        }
+
+        const available = (availableConversationSkills || []).some((item) => item && item.can_activate && item.name === normalizedSkill);
+        if (!available) {
+            skillsStatusMessage = `${normalizedSkill} is not available to activate on this bot.`;
+            renderSkillsPanel();
+            scheduleManagementIdleClose(12000);
+            return;
+        }
+
+        const runActivation = async (confirm) => API.activateConversationSkill(
+            agentId,
+            managementConversationPath(),
+            normalizedSkill,
+            confirm ? { confirm: true } : {},
+        );
+
+        const finalizeActivation = async (result) => {
+            pendingSkillSetup = null;
+            selectedActivationSkill = '';
+            skillsStatusMessage = result.status === 'activated'
+                ? `Activated ${normalizedSkill}.`
+                : `${normalizedSkill} is already active in this conversation.`;
+            await refreshConversationSkillState();
+            renderSkillsPanel();
+            scheduleManagementIdleClose(12000);
+        };
+
+        try {
+            const result = await runManagementRequest(() => runActivation(false));
+            if (result.status === 'needs_confirmation') {
+                skillsStatusMessage = `Confirm activation for ${normalizedSkill}.`;
+                renderSkillsPanel();
+                UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
+                    try {
+                        const confirmed = await runManagementRequest(() => runActivation(true));
+                        if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
+                            pendingSkillSetup = {
+                                skillName: normalizedSkill,
+                                ownerActor: 'reg:registry-ui',
+                                requirement: confirmed.first_requirement,
+                                validationError: '',
+                            };
+                            skillsStatusMessage = `Setup required for ${normalizedSkill}.`;
+                            renderSkillsPanel();
+                            scheduleManagementIdleClose(12000);
+                            return;
+                        }
+                        if (confirmed.status === 'foreign_setup') {
+                            pendingSkillSetup = {
+                                skillName: normalizedSkill,
+                                ownerActor: String(confirmed.foreign_setup_user || ''),
+                                requirement: null,
+                                validationError: '',
+                            };
+                            skillsStatusMessage = `Setup already in progress for ${normalizedSkill}.`;
+                            renderSkillsPanel();
+                            scheduleManagementIdleClose(12000);
+                            return;
+                        }
+                        await finalizeActivation(confirmed);
+                    } catch (err) {
+                        UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activation confirm failed' });
+                    }
+                });
+                return;
+            }
+            if (result.status === 'needs_setup' && result.first_requirement) {
+                pendingSkillSetup = {
+                    skillName: normalizedSkill,
+                    ownerActor: 'reg:registry-ui',
+                    requirement: result.first_requirement,
+                    validationError: '',
+                };
+                skillsStatusMessage = `Setup required for ${normalizedSkill}.`;
+                renderSkillsPanel();
+                scheduleManagementIdleClose(12000);
+                return;
+            }
+            if (result.status === 'foreign_setup') {
+                pendingSkillSetup = {
+                    skillName: normalizedSkill,
+                    ownerActor: String(result.foreign_setup_user || ''),
+                    requirement: null,
+                    validationError: '',
+                };
+                skillsStatusMessage = `Setup already in progress for ${normalizedSkill}.`;
+                renderSkillsPanel();
+                scheduleManagementIdleClose(12000);
+                return;
+            }
+            await finalizeActivation(result);
+        } catch (err) {
+            if (fromRoute) {
+                selectedActivationSkill = normalizedSkill;
+            }
+            UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activate failed' });
+        }
+    }
+
+    async function handleRequestedSkillActivation() {
+        const normalizedSkill = String(requestedActivationSkill || '').trim();
+        if (!normalizedSkill || !managementAvailable() || pendingSkillSetup) {
+            return;
+        }
+        await requestConversationSkillActivation(normalizedSkill, { fromRoute: true });
     }
 
     function syncPendingSetupFromState(skillsState) {
@@ -550,8 +703,10 @@ function renderConversationDetail(container, params) {
                         const result = await runManagementRequest(() => API.clearConversationSkills(agentId, managementConversationPath()));
                         skillsStatusMessage = result.status === 'cleared' ? 'Cleared active skills.' : String(result.status || 'Updated');
                         pendingSkillSetup = null;
-                        scheduleConversationManagementRefresh();
-                        scheduleManagementSuccessClose();
+                        selectedActivationSkill = '';
+                        await refreshConversationSkillState();
+                        renderSkillsPanel();
+                        scheduleManagementIdleClose(12000);
                     } catch (err) {
                         UI.reportError('Failed to clear conversation skills', err, { context: 'Conversation skill clear failed' });
                     }
@@ -626,8 +781,10 @@ function renderConversationDetail(container, params) {
                             await runManagementRequest(() => API.conversationAction(convoId, 'cancel_conversation'));
                             pendingSkillSetup = null;
                             skillsStatusMessage = 'Cancelled pending credential setup.';
-                            scheduleConversationManagementRefresh();
-                            scheduleManagementSuccessClose();
+                            selectedActivationSkill = '';
+                            await refreshConversationSkillState();
+                            renderSkillsPanel();
+                            scheduleManagementIdleClose(12000);
                         } catch (err) {
                             UI.reportError('Failed to cancel the setup', err, { context: 'Conversation skill setup cancel failed' });
                         }
@@ -674,8 +831,10 @@ function renderConversationDetail(container, params) {
                             skillsStatusMessage = result.status === 'ready'
                                 ? `Finished setup for ${result.skill_name || state.pendingSetup.skillName || 'the skill'}.`
                                 : String(result.status || 'Updated');
-                            scheduleConversationManagementRefresh();
-                            scheduleManagementSuccessClose();
+                            selectedActivationSkill = '';
+                            await refreshConversationSkillState();
+                            renderSkillsPanel();
+                            scheduleManagementIdleClose(12000);
                         } catch (err) {
                             UI.reportError('Failed to submit the credential value', err, { context: 'Conversation skill credential submit failed' });
                         }
@@ -721,8 +880,10 @@ function renderConversationDetail(container, params) {
                                 ? `Deactivated ${skill.display_name || skill.name}.`
                                 : String(result.status || 'Updated');
                             pendingSkillSetup = null;
-                            scheduleConversationManagementRefresh();
-                            scheduleManagementSuccessClose();
+                            selectedActivationSkill = '';
+                            await refreshConversationSkillState();
+                            renderSkillsPanel();
+                            scheduleManagementIdleClose(12000);
                         } catch (err) {
                             UI.reportError('Failed to deactivate the skill', err, { context: 'Conversation skill deactivate failed' });
                         }
@@ -760,98 +921,26 @@ function renderConversationDetail(container, params) {
                     option.textContent = `${skill.display_name || skill.name}${setupLabel}`;
                     select.appendChild(option);
                 });
-                if (requestedActivationSkill) {
-                    if (state.activatable.some((skill) => skill.name === requestedActivationSkill)) {
-                        select.value = requestedActivationSkill;
-                        requestedActivationSkill = '';
-                        syncManagementQueryParams();
-                    } else if (activeNames.has(requestedActivationSkill)) {
-                        requestedActivationSkill = '';
-                        syncManagementQueryParams();
-                    }
+                if (selectedActivationSkill && state.activatable.some((skill) => skill.name === selectedActivationSkill)) {
+                    select.value = selectedActivationSkill;
                 }
+                select.addEventListener('change', () => {
+                    selectedActivationSkill = String(select.value || '').trim();
+                });
                 controls.appendChild(select);
                 const activateBtn = document.createElement('button');
                 activateBtn.className = 'btn btn-sm btn-primary';
                 activateBtn.type = 'button';
                 activateBtn.textContent = 'Activate';
-                        activateBtn.addEventListener('click', async () => {
-                            const skillName = select.value;
-                            if (!skillName) return;
-                            activateBtn.disabled = true;
-                            try {
-                        const runActivation = async (confirm) => API.activateConversationSkill(
-                            agentId,
-                            managementConversationPath(),
-                            skillName,
-                            confirm ? { confirm: true } : {},
-                        );
-                        let result = await runManagementRequest(() => runActivation(false));
-                        if (result.status === 'needs_confirmation') {
-                            activateBtn.disabled = false;
-                            UI.showConfirm('Activate Skill', 'This skill may increase prompt size. Continue?', async () => {
-                                try {
-                                    const confirmed = await runManagementRequest(() => runActivation(true));
-                                    if (confirmed.status === 'needs_setup' && confirmed.first_requirement) {
-                                        pendingSkillSetup = {
-                                            skillName,
-                                            ownerActor: 'reg:registry-ui',
-                                            requirement: confirmed.first_requirement,
-                                            validationError: '',
-                                        };
-                                        skillsStatusMessage = `Setup required for ${skillName}.`;
-                                        renderSkillsPanel();
-                                        return;
-                                    }
-                                    pendingSkillSetup = null;
-                                    requestedActivationSkill = '';
-                                    syncManagementQueryParams();
-                                    skillsStatusMessage = confirmed.status === 'activated'
-                                        ? `Activated ${skillName}.`
-                                        : String(confirmed.status || 'Updated');
-                                    scheduleConversationManagementRefresh();
-                                    scheduleManagementSuccessClose();
-                                } catch (err) {
-                                    UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activation confirm failed' });
-                                }
-                            });
-                            return;
-                        }
-                        if (result.status === 'needs_setup' && result.first_requirement) {
-                            pendingSkillSetup = {
-                                skillName,
-                                ownerActor: 'reg:registry-ui',
-                                requirement: result.first_requirement,
-                                validationError: '',
-                            };
-                            skillsStatusMessage = `Setup required for ${skillName}.`;
-                            activateBtn.disabled = false;
-                            renderSkillsPanel();
-                            return;
-                        }
-                        if (result.status === 'foreign_setup') {
-                            pendingSkillSetup = {
-                                skillName,
-                                ownerActor: String(result.foreign_setup_user || ''),
-                                requirement: null,
-                                validationError: '',
-                            };
-                            activateBtn.disabled = false;
-                            renderSkillsPanel();
-                            return;
-                        }
-                        pendingSkillSetup = null;
-                        requestedActivationSkill = '';
-                        syncManagementQueryParams();
-                        skillsStatusMessage = result.status === 'activated'
-                            ? `Activated ${skillName}.`
-                            : String(result.status || 'Updated');
-                        scheduleConversationManagementRefresh();
-                        scheduleManagementSuccessClose();
-                    } catch (err) {
-                        UI.reportError('Failed to activate the skill', err, { context: 'Conversation skill activate failed' });
+                activateBtn.addEventListener('click', async () => {
+                    const skillName = select.value;
+                    if (!skillName) return;
+                    activateBtn.disabled = true;
+                    try {
+                        await requestConversationSkillActivation(skillName);
+                    } finally {
+                        activateBtn.disabled = false;
                     }
-                    activateBtn.disabled = false;
                 });
                 controls.appendChild(activateBtn);
                 activateSection.appendChild(controls);
@@ -1114,7 +1203,13 @@ function renderConversationDetail(container, params) {
             availableConversationSkills = catalogData.skills || catalogData || [];
             managementSupport.skills = true;
             syncPendingSetupFromState(skillState);
+            if (meta) {
+                renderMetaCard(meta);
+            }
             renderSkillsPanel();
+            if (requestedActivationSkill) {
+                void handleRequestedSkillActivation();
+            }
         } catch (err) {
             if (isCapabilityUnavailableError(err)) {
                 managementSupport.skills = false;
@@ -1502,6 +1597,9 @@ function renderConversationDetail(container, params) {
             origin: String(data.origin_channel || 'registry'),
             type: String(data.conversation_type || 'conversation'),
             updatedLabel: data.updated_at ? UI.relativeTime(data.updated_at) : '',
+            activeSkills: activeConversationSkillDetails()
+                .map((item) => String(item?.name || '').trim())
+                .filter(Boolean),
         }, () => {
         const title = data.title || convoId;
         const isTaskThread = String(data.conversation_type || 'conversation') === 'task_thread';
@@ -1607,8 +1705,27 @@ function renderConversationDetail(container, params) {
         if (actions.childElementCount) {
             metaRow.appendChild(actions);
         }
-
-        return [titleRow, metaRow, toolbar];
+        const activeSkills = activeConversationSkillDetails();
+        if (!activeSkills.length) {
+            return [titleRow, metaRow, toolbar];
+        }
+        const activeRow = document.createElement('div');
+        activeRow.className = 'conversation-meta-row';
+        activeRow.dataset.key = 'active-skills-inline';
+        const label = document.createElement('span');
+        label.className = 'detail-label';
+        label.textContent = activeSkills.length === 1 ? 'Active skill' : 'Active skills';
+        activeRow.appendChild(label);
+        const chips = document.createElement('div');
+        chips.className = 'chip-row';
+        activeSkills.forEach((skill) => {
+            const chip = document.createElement('span');
+            chip.className = 'quickstart-chip static';
+            chip.textContent = UI.visibleLabel(skill.display_name, skill.name, 'Skill');
+            chips.appendChild(chip);
+        });
+        activeRow.appendChild(chips);
+        return [titleRow, metaRow, activeRow, toolbar];
         });
     }
 
@@ -1772,7 +1889,9 @@ function renderConversationDetail(container, params) {
             const data = await API.getConversation(convoId);
             renderMetaCard(data);
             syncManagementControls();
-            if (requestedManagementMode === 'skills' || requestedManagementMode === 'settings') {
+            if (requestedActivationSkill && requestedManagementMode === 'closed') {
+                openManagement('skills');
+            } else if (requestedManagementMode === 'skills' || requestedManagementMode === 'settings') {
                 openManagement(requestedManagementMode);
             }
             void loadConversationSkills({ soft: true });

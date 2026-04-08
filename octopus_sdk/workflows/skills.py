@@ -434,6 +434,7 @@ class RuntimeSkillLifecycleDetail:
     name: str
     display_name: str
     description: str
+    skill_kind: str
     source_label: str
     visibility: str
     body: str
@@ -458,6 +459,17 @@ class RuntimeSkillLifecycleMutation:
     detail: RuntimeSkillLifecycleDetail | None = None
 
 
+@dataclass(frozen=True)
+class RuntimeSkillPackageArtifact:
+    name: str
+    display_name: str
+    file_name: str
+    content_type: str
+    content_bytes: bytes
+    revision_scope: str = "draft"
+    revision_id: str = ""
+
+
 class RuntimeSkillAuthoringPort(Protocol):
     def detail(self, skill_name: str) -> RuntimeSkillLifecycleDetail | None: ...
     def create_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillLifecycleMutation: ...
@@ -469,10 +481,25 @@ class RuntimeSkillAuthoringPort(Protocol):
         body: str | None = None,
         display_name: str | None = None,
         description: str | None = None,
+        skill_kind: str | None = None,
         requirements: tuple[SkillRequirement, ...] | None = None,
         provider_config: ProviderConfigRecord | None = None,
         files: tuple[SkillFileRecord, ...] | None = None,
         changelog: str = "",
+    ) -> RuntimeSkillLifecycleMutation: ...
+    def export_package(
+        self,
+        skill_name: str,
+        *,
+        revision_scope: str = "draft",
+    ) -> RuntimeSkillPackageArtifact | None: ...
+    def import_package(
+        self,
+        *,
+        actor_key: str,
+        package_bytes: bytes,
+        file_name: str = "",
+        target_skill_name: str = "",
     ) -> RuntimeSkillLifecycleMutation: ...
     def submit(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
     def publish(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...

@@ -1,5 +1,196 @@
 /**
- * Skills hub — bot-scoped skill catalog plus custom skill studio.
+ * Shared skill hub helpers used by the unified Skills page and agent launchers.
+ */
+const RegistrySkillHub = (() => {
+    const SEARCHABLE_LOCAL_FIELDS = ['name', 'display_name', 'description', 'source_kind', 'lifecycle_status'];
+
+    function supportsCapability(agent, capability) {
+        const capabilities = Array.isArray(agent?.management_capabilities) ? agent.management_capabilities : [];
+        return capabilities.includes(capability);
+    }
+
+    function eligibleAgents(agents) {
+        return (agents || []).filter((agent) => {
+            const connectivity = String(agent?.connectivity_state || '').trim();
+            return ['connected', 'degraded'].includes(connectivity)
+                && (supportsCapability(agent, 'skill_catalog') || supportsCapability(agent, 'skill_lifecycle'));
+        });
+    }
+
+    function canCreateCustom(agent) {
+        return supportsCapability(agent, 'skill_lifecycle');
+    }
+
+    function canSearchStore(agent) {
+        return supportsCapability(agent, 'skill_catalog');
+    }
+
+    function isCustomSkill(skill) {
+        return String(skill?.source_kind || '') === 'custom';
+    }
+
+    function _matchesLocalQuery(skill, queryText) {
+        const haystack = SEARCHABLE_LOCAL_FIELDS
+            .map((field) => String(skill?.[field] || ''))
+            .join(' ')
+            .toLowerCase();
+        return haystack.includes(queryText);
+    }
+
+    function visibleLocalSkills(skills, queryText = '') {
+        const normalized = String(queryText || '').trim().toLowerCase();
+        if (!normalized) {
+            return Array.isArray(skills) ? skills : [];
+        }
+        return (skills || []).filter((skill) => _matchesLocalQuery(skill, normalized));
+    }
+
+    function visibleStoreSkills(skills, queryText = '') {
+        const normalized = String(queryText || '').trim();
+        if (normalized.length < 2) {
+            return [];
+        }
+        return Array.isArray(skills) ? skills : [];
+    }
+
+    function buildSections(localSkills, storeSkills, queryText = '') {
+        const visibleLocal = visibleLocalSkills(localSkills, queryText);
+        const custom = visibleLocal.filter((skill) => isCustomSkill(skill));
+        const installed = visibleLocal.filter((skill) => !isCustomSkill(skill));
+        const visibleStore = visibleStoreSkills(storeSkills, queryText);
+        return [
+            { key: 'custom', label: 'Custom', items: custom, origin: 'local' },
+            { key: 'installed', label: 'Installed on this bot', items: installed, origin: 'local' },
+            { key: 'store', label: 'Store', items: visibleStore, origin: 'store' },
+        ].filter((section) => section.items.length > 0);
+    }
+
+    function findSelectedSkill(localSkills, storeSkills, selectedSkillName) {
+        const local = (localSkills || []).find((item) => item && item.name === selectedSkillName);
+        if (local) {
+            return { origin: 'local', skill: local };
+        }
+        const store = (storeSkills || []).find((item) => item && item.name === selectedSkillName);
+        if (store) {
+            return { origin: 'store', skill: store };
+        }
+        return null;
+    }
+
+    function localRowMeta(skill) {
+        const fragments = [];
+        if (skill?.description) fragments.push(String(skill.description));
+        if (skill?.runtime_available === false) fragments.push('not active until published');
+        if (skill?.requires_credentials) fragments.push('setup required on activation');
+        if (skill?.default_for_new_conversations) fragments.push('default for new conversations');
+        if (skill?.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
+        if (skill?.has_unpublished_changes) fragments.push('unpublished changes');
+        return {
+            label: skill?.display_name || skill?.name || '',
+            sublabel: fragments.join(' • ') || 'Available on this bot',
+            badgeText: String(skill?.source_label || skill?.source_kind || 'Skill'),
+        };
+    }
+
+    function storeRowMeta(skill) {
+        const fragments = [];
+        if (skill?.description) fragments.push(String(skill.description));
+        if (skill?.publisher) fragments.push(`by ${String(skill.publisher)}`);
+        if (skill?.version) fragments.push(`v${String(skill.version)}`);
+        return {
+            label: skill?.display_name || skill?.name || '',
+            sublabel: fragments.join(' • ') || 'Available from the skill store',
+            badgeText: String(skill?.source_label || 'Store'),
+        };
+    }
+
+    function listCacheKey(agentId) {
+        return `skills:list:${String(agentId || '').trim()}`;
+    }
+
+    function searchCacheKey(agentId, queryText) {
+        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
+    }
+
+    function detailCacheKey(agentId, skillName) {
+        return `skills:detail:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
+    }
+
+    function lifecycleCacheKey(agentId, skillName) {
+        return `skills:lifecycle:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
+    }
+
+    function skillWorkspaceHref(agentId, skillName = '', { origin = 'local', tab = '' } = {}) {
+        const url = new URL('/ui/skills', window.location.origin);
+        if (agentId) {
+            url.searchParams.set('agent_id', String(agentId));
+        }
+        if (skillName) {
+            url.searchParams.set('skill', String(skillName));
+        }
+        if (origin === 'store' && skillName) {
+            url.searchParams.set('skill_source', 'store');
+        }
+        if (tab && origin === 'local') {
+            url.searchParams.set('skill_tab', String(tab));
+        }
+        return `${url.pathname}${url.search}`;
+    }
+
+    function conversationActivationHref(conversationId, skillName) {
+        const url = new URL(`/ui/conversations/${encodeURIComponent(conversationId)}`, window.location.origin);
+        url.searchParams.set('manage', 'skills');
+        if (skillName) {
+            url.searchParams.set('activate_skill', String(skillName));
+        }
+        return `${url.pathname}${url.search}`;
+    }
+
+    async function openConversationForSkill(agentId, skillName, { agentLabel = '' } = {}) {
+        const label = String(agentLabel || 'this bot');
+        const conversation = await API.openConversationForAgent(agentId, {
+            title: `Conversation with ${label}`,
+        });
+        const normalizedSkill = String(skillName || '').trim();
+        if (!normalizedSkill) {
+            Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
+            return conversation;
+        }
+        const activation = await API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, { confirm: true });
+        if (activation.status === 'activated' || activation.status === 'already_active') {
+            Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
+            return conversation;
+        }
+        Router.navigate(conversationActivationHref(conversation.conversation_id, normalizedSkill));
+        return conversation;
+    }
+
+    return {
+        supportsCapability,
+        eligibleAgents,
+        canCreateCustom,
+        canSearchStore,
+        isCustomSkill,
+        visibleLocalSkills,
+        visibleStoreSkills,
+        buildSections,
+        findSelectedSkill,
+        localRowMeta,
+        storeRowMeta,
+        listCacheKey,
+        searchCacheKey,
+        detailCacheKey,
+        lifecycleCacheKey,
+        skillWorkspaceHref,
+        conversationActivationHref,
+        openConversationForSkill,
+    };
+})();
+
+window.RegistrySkillHub = RegistrySkillHub;
+
+/**
+ * Skills hub — unified bot-scoped skill management.
  */
 function renderSkillCatalog(container) {
     const cleanups = UI.beginCleanupScope();
@@ -10,23 +201,29 @@ function renderSkillCatalog(container) {
 
     let searchTimeout = null;
     let currentQ = '';
-    let currentMode = _readMode();
     let currentAgentId = '';
     let selectedSkillName = _readSkillName();
     let selectedSkillOrigin = _readSkillOrigin();
+    let currentStudioTab = _readStudioTab();
     let availableAgents = [];
     let allSkills = [];
     let registrySkills = [];
     let registryError = '';
     let selectedLocalDetail = null;
     let selectedLifecycle = null;
+    let selectionLoading = false;
+    let draftBuffer = null;
+    let draftDirty = false;
+    let draftStatus = 'idle';
+    let draftStatusMessage = '';
+    let draftSnapshotKey = '';
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
     header.innerHTML = [
         '<h2>Skills</h2>',
         '<p class="quiet-note">',
-        'Choose a bot to browse the skills available there. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
+        'Manage a bot’s installed, custom, and store-backed skills here. Skills affect prompt context only when they are active in a conversation or set as defaults for new conversations.',
         '</p>',
     ].join('');
     container.appendChild(header);
@@ -39,35 +236,20 @@ function renderSkillCatalog(container) {
     controlsPanel.className = 'workbench-panel';
     shell.appendChild(controlsPanel);
 
-    const modeControl = UI.createSegmentedControl(
-        [
-            { key: 'catalog', value: 'catalog', label: 'Bot catalog' },
-            { key: 'studio', value: 'studio', label: 'Studio' },
-        ],
-        (nextMode) => {
-            currentMode = nextMode;
-            searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
-            _writeState();
-            _renderAgentOptions();
-            void loadSkills({ forceCatalog: true });
-        },
-        {
-            label: 'Skills view',
-            value: currentMode,
-        },
-    );
-    controlsPanel.appendChild(modeControl.element);
-
     const controls = document.createElement('div');
     controls.className = 'route-controls';
     controlsPanel.appendChild(controls);
 
     const agentDropdown = UI.createAgentManagementDropdown([], '', (nextAgentId) => {
-        currentAgentId = nextAgentId;
-        selectedLocalDetail = null;
-        selectedLifecycle = null;
-        _writeState();
-        void loadSkills({ forceCatalog: true });
+        _runWithDraftGuard(async () => {
+            currentAgentId = nextAgentId;
+            selectedLocalDetail = null;
+            selectedLifecycle = null;
+            selectionLoading = false;
+            _clearDraftState();
+            _writeState();
+            await loadSkills({ forceCatalog: true });
+        });
     }, {
         allowEmpty: true,
         emptyLabel: 'Choose a bot',
@@ -76,10 +258,26 @@ function renderSkillCatalog(container) {
 
     const searchInput = document.createElement('input');
     searchInput.className = 'search-input';
-    searchInput.placeholder = currentMode === 'studio' ? 'Filter custom skills' : 'Search available skills or store';
+    searchInput.placeholder = 'Search installed or store skills';
     searchInput.type = 'text';
     searchInput.setAttribute('aria-label', 'Search skills');
     controls.appendChild(searchInput);
+
+    const controlsActions = document.createElement('div');
+    controlsActions.className = 'editor-actions';
+    const createDraftBtn = document.createElement('button');
+    createDraftBtn.type = 'button';
+    createDraftBtn.className = 'btn btn-sm btn-primary';
+    createDraftBtn.textContent = 'New custom skill';
+    createDraftBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
+    controlsActions.appendChild(createDraftBtn);
+    const importBtn = document.createElement('button');
+    importBtn.type = 'button';
+    importBtn.className = 'btn btn-sm';
+    importBtn.textContent = 'Import';
+    importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
+    controlsActions.appendChild(importBtn);
+    controls.appendChild(controlsActions);
 
     const workspace = document.createElement('section');
     workspace.className = 'dashboard-board';
@@ -97,11 +295,6 @@ function renderSkillCatalog(container) {
     detailEl.className = 'editor-shell';
     workspace.appendChild(detailEl);
 
-    function _readMode() {
-        const value = UI.readQueryParam('skills_view', 'catalog');
-        return value === 'studio' ? 'studio' : 'catalog';
-    }
-
     function _readSkillName() {
         return UI.readQueryParam('skill', '');
     }
@@ -111,12 +304,20 @@ function renderSkillCatalog(container) {
         return value === 'store' ? 'store' : 'local';
     }
 
+    function _readStudioTab() {
+        const value = UI.readQueryParam('skill_tab', 'write');
+        return ['write', 'setup', 'review', 'advanced'].includes(value) ? value : 'write';
+    }
+
     function _writeState() {
         UI.updateQueryParams({
             agent_id: currentAgentId || '',
-            skills_view: currentMode === 'studio' ? 'studio' : '',
+            skills_view: '',
             skill: selectedSkillName || '',
             skill_source: selectedSkillName && selectedSkillOrigin === 'store' ? 'store' : '',
+            skill_tab: selectedSkillName && selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(_findSelectedSkill()?.skill)
+                ? currentStudioTab
+                : '',
         });
     }
 
@@ -131,8 +332,7 @@ function renderSkillCatalog(container) {
     }
 
     function _eligibleAgents() {
-        const needed = currentMode === 'studio' ? 'skill_lifecycle' : 'skill_catalog';
-        return UI.filterManagedAgents(availableAgents, needed);
+        return RegistrySkillHub.eligibleAgents(availableAgents);
     }
 
     function _renderAgentOptions() {
@@ -147,9 +347,13 @@ function renderSkillCatalog(container) {
             return;
         }
         if (!agents.some((agent) => agent.agent_id === currentAgentId)) {
-            currentAgentId = '';
+            currentAgentId = agents.length === 1 ? String(agents[0].agent_id || '') : '';
         }
         agentDropdown.update(agents, currentAgentId);
+        const agent = _currentAgent();
+        const lifecycleCapable = RegistrySkillHub.canCreateCustom(agent);
+        createDraftBtn.hidden = !lifecycleCapable;
+        importBtn.hidden = !lifecycleCapable;
         _writeState();
     }
 
@@ -157,32 +361,16 @@ function renderSkillCatalog(container) {
         return String(currentQ || '').trim();
     }
 
-    function _skillCacheKey(agentId) {
-        return `skills:list:${String(agentId || '').trim()}`;
-    }
-
-    function _skillSearchCacheKey(agentId, queryText) {
-        return `skills:search:${String(agentId || '').trim()}:${String(queryText || '').trim().toLowerCase()}`;
-    }
-
-    function _skillDetailCacheKey(agentId, skillName) {
-        return `skills:detail:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
-    }
-
-    function _skillLifecycleCacheKey(agentId, skillName) {
-        return `skills:lifecycle:${String(agentId || '').trim()}:${String(skillName || '').trim()}`;
-    }
-
     function _invalidateSkillCaches(agentId = currentAgentId, skillName = '') {
         const normalizedAgentId = String(agentId || '').trim();
         if (!normalizedAgentId) return;
         const prefixes = [
-            _skillCacheKey(normalizedAgentId),
+            RegistrySkillHub.listCacheKey(normalizedAgentId),
             `skills:search:${normalizedAgentId}:`,
         ];
         if (skillName) {
-            prefixes.push(_skillDetailCacheKey(normalizedAgentId, skillName));
-            prefixes.push(_skillLifecycleCacheKey(normalizedAgentId, skillName));
+            prefixes.push(RegistrySkillHub.detailCacheKey(normalizedAgentId, skillName));
+            prefixes.push(RegistrySkillHub.lifecycleCacheKey(normalizedAgentId, skillName));
         } else {
             prefixes.push(`skills:detail:${normalizedAgentId}:`);
             prefixes.push(`skills:lifecycle:${normalizedAgentId}:`);
@@ -190,69 +378,196 @@ function renderSkillCatalog(container) {
         UI.invalidateCachedData(prefixes);
     }
 
-    function _visibleLocalSkills() {
-        const queryText = _queryText().toLowerCase();
-        const base = currentMode === 'studio'
-            ? (allSkills || []).filter((skill) => String(skill.source_kind || '') === 'custom')
-            : allSkills;
-        if (!queryText) {
-            return base;
+    function _cloneValue(value) {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return value;
         }
-        return base.filter((skill) => {
-            const haystack = [
-                skill.name || '',
-                skill.display_name || '',
-                skill.description || '',
-                skill.source_kind || '',
-                skill.lifecycle_status || '',
-            ].join(' ').toLowerCase();
-            return haystack.includes(queryText);
+    }
+
+    function _packageState(detail, lifecycle) {
+        return lifecycle || detail || {};
+    }
+
+    function _editableDraftState(detail, lifecycle) {
+        const primary = detail || {};
+        const fallback = lifecycle || {};
+        return {
+            skill_kind: String(primary.skill_kind || fallback.skill_kind || 'prompt'),
+            body: String(primary.body || fallback.body || ''),
+            requirements: Array.isArray(primary.requirements)
+                ? primary.requirements
+                : (Array.isArray(fallback.requirements) ? fallback.requirements : []),
+            provider_config: (
+                primary.provider_config && typeof primary.provider_config === 'object'
+            )
+                ? primary.provider_config
+                : (
+                    fallback.provider_config && typeof fallback.provider_config === 'object'
+                        ? fallback.provider_config
+                        : {}
+                ),
+            files: Array.isArray(primary.files)
+                ? primary.files
+                : (Array.isArray(fallback.files) ? fallback.files : []),
+        };
+    }
+
+    function _draftSnapshot(detail, lifecycle) {
+        const packageState = _packageState(detail, lifecycle);
+        const editableState = _editableDraftState(detail, lifecycle);
+        return JSON.stringify({
+            name: detail?.name || '',
+            display_name: detail?.display_name || '',
+            description: detail?.description || '',
+            skill_kind: editableState.skill_kind,
+            body: editableState.body,
+            lifecycle_status: String(packageState.lifecycle_status || detail?.lifecycle_status || ''),
+            active_revision_id: String(lifecycle?.active_revision_id || ''),
+            published_revision_id: String(lifecycle?.published_revision_id || ''),
+            requirements: editableState.requirements,
+            provider_config: editableState.provider_config,
+            files: editableState.files,
         });
     }
 
+    function _isSelectedCustom(summary, detail) {
+        return String(summary?.source_kind || detail?.source_kind || '') === 'custom';
+    }
+
+    function _resetDraftState(detail, lifecycle) {
+        const editableState = _editableDraftState(detail, lifecycle);
+        draftBuffer = {
+            name: detail?.name || '',
+            display_name: detail?.display_name || '',
+            description: detail?.description || '',
+            skill_kind: editableState.skill_kind,
+            body: editableState.body,
+            changelog: '',
+            requirements: Array.isArray(editableState.requirements)
+                ? editableState.requirements.map((item) => ({
+                    key: item.key || '',
+                    prompt: item.prompt || '',
+                    help_url: item.help_url || '',
+                    validate: item.validate || null,
+                }))
+                : [],
+            provider_config: _cloneValue(
+                editableState.provider_config && typeof editableState.provider_config === 'object'
+                    ? editableState.provider_config
+                    : {}
+            ),
+            files: Array.isArray(editableState.files)
+                ? editableState.files.map((item) => ({
+                    relative_path: item.relative_path || '',
+                    content_text: item.content_text || '',
+                    content_type: item.content_type || '',
+                    executable: Boolean(item.executable),
+                }))
+                : [],
+        };
+        draftDirty = false;
+        draftStatus = 'idle';
+        draftStatusMessage = '';
+        draftSnapshotKey = _draftSnapshot(detail, lifecycle);
+    }
+
+    function _clearDraftState() {
+        draftBuffer = null;
+        draftDirty = false;
+        draftStatus = 'idle';
+        draftStatusMessage = '';
+        draftSnapshotKey = '';
+    }
+
+    function _hasUnsavedDraft() {
+        return draftDirty && Boolean(draftBuffer && draftBuffer.name);
+    }
+
+    function _runWithDraftGuard(action) {
+        if (!_hasUnsavedDraft()) {
+            void action();
+            return;
+        }
+        UI.showConfirm(
+            'Discard unsaved changes?',
+            'The current draft has unsaved changes. Discard them and continue?',
+            async () => {
+                _clearDraftState();
+                await action();
+            },
+        );
+    }
+
+    function _resetStudioSelection() {
+        selectedSkillName = '';
+        selectedSkillOrigin = 'local';
+        currentStudioTab = 'write';
+        selectedLocalDetail = null;
+        selectedLifecycle = null;
+        selectionLoading = false;
+        _clearDraftState();
+        _writeState();
+        renderList();
+    }
+
+    function _beginStudioDialog(openDialog) {
+        _runWithDraftGuard(async () => {
+            _resetStudioSelection();
+            openDialog();
+        });
+    }
+
+    function _visibleLocalSkills() {
+        return RegistrySkillHub.visibleLocalSkills(allSkills, _queryText());
+    }
+
     function _visibleStoreSkills() {
-        if (currentMode !== 'catalog' || _queryText().length < 2) {
+        if (!RegistrySkillHub.canSearchStore(_currentAgent()) || _queryText().length < 2) {
             return [];
         }
-        return registrySkills;
+        return RegistrySkillHub.visibleStoreSkills(registrySkills, _queryText());
     }
 
     function _findSelectedSkill() {
-        const local = _visibleLocalSkills().find((item) => item && item.name === selectedSkillName);
-        if (local) {
-            return { origin: 'local', skill: local };
-        }
-        const store = _visibleStoreSkills().find((item) => item && item.name === selectedSkillName);
-        if (store) {
-            return { origin: 'store', skill: store };
-        }
-        return null;
+        return RegistrySkillHub.findSelectedSkill(_visibleLocalSkills(), _visibleStoreSkills(), selectedSkillName);
     }
 
     function _ensureSelection() {
-        const local = _visibleLocalSkills();
-        const store = _visibleStoreSkills();
         const current = _findSelectedSkill();
         if (current) {
             selectedSkillOrigin = current.origin;
             return;
         }
-        if (local.length) {
-            selectedSkillName = local[0].name || '';
-            selectedSkillOrigin = 'local';
-        } else if (store.length) {
-            selectedSkillName = store[0].name || '';
-            selectedSkillOrigin = 'store';
-        } else {
-            selectedSkillName = '';
-            selectedSkillOrigin = 'local';
-        }
+        selectedSkillName = '';
+        selectedSkillOrigin = 'local';
         _writeState();
     }
 
     function renderLoadingState(message = 'Loading skills…') {
         UI.clearMemoizedRender(listEl);
         UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
+    }
+
+    async function _selectSkill(skillName, origin) {
+        selectedSkillName = String(skillName || '').trim();
+        selectedSkillOrigin = origin === 'store' ? 'store' : 'local';
+        const selected = _findSelectedSkill();
+        if (selectedSkillOrigin === 'local' && RegistrySkillHub.isCustomSkill(selected?.skill)) {
+            currentStudioTab = 'write';
+        }
+        selectedLocalDetail = null;
+        selectedLifecycle = null;
+        selectionLoading = selectedSkillOrigin === 'local' && Boolean(selectedSkillName);
+        if (selectedSkillOrigin !== 'local') {
+            _clearDraftState();
+        }
+        _writeState();
+        renderList();
+        if (selectedSkillOrigin === 'local') {
+            await loadSelectionData();
+        }
     }
 
     function renderList() {
@@ -262,12 +577,8 @@ function renderSkillCatalog(container) {
             UI.reconcileChildren(listEl, [
                 UI.renderEmptyState(
                     hasEligibleAgents
-                        ? (currentMode === 'studio'
-                            ? 'Choose a bot to create or edit custom skills.'
-                            : 'Choose a bot to browse available skills.')
-                        : (currentMode === 'studio'
-                            ? 'No connected bot advertises custom skill lifecycle management.'
-                            : 'No connected bot advertises skill catalog management.'),
+                        ? 'Choose a bot to manage its skills.'
+                        : 'No connected bot advertises skill management.',
                     true,
                 ),
             ]);
@@ -276,44 +587,39 @@ function renderSkillCatalog(container) {
         }
         const visibleLocal = _visibleLocalSkills();
         const visibleStore = _visibleStoreSkills();
+        const sections = RegistrySkillHub.buildSections(visibleLocal, visibleStore, _queryText());
         _ensureSelection();
 
-        if (!visibleLocal.length && !visibleStore.length) {
+        if (!sections.length) {
             UI.clearMemoizedRender(listEl);
-            const message = currentMode === 'studio'
-                ? (_queryText()
-                    ? 'No custom skills match this filter.'
-                    : 'No custom skills yet for this bot. Create a draft to get started.')
-                : (allSkills.length ? 'No available or store skills match this search.' : 'No skills are available on this bot yet.');
+            const message = _queryText()
+                ? 'No installed or store skills match this search.'
+                : 'No skills are available on this bot yet. Create a custom skill or import one to get started.';
             UI.reconcileChildren(listEl, [UI.renderEmptyState(message, true)]);
             renderDetail();
             return;
         }
 
         UI.memoizedRender(listEl, {
-            mode: currentMode,
             selectedSkillName,
             selectedSkillOrigin,
-            local: visibleLocal,
-            store: visibleStore,
+            sections,
             registryError,
         }, (state) => {
             const nodes = [];
-            if (state.mode === 'catalog') {
-                nodes.push(_sectionLabel('Available on this bot', 'skills-available-heading'));
-            } else {
-                nodes.push(_sectionLabel('Custom skills', 'skills-studio-heading'));
-            }
-            nodes.push(...(state.local || []).map((skill) => _renderLocalSkillRow(skill, {
-                selected: state.selectedSkillOrigin === 'local' && state.selectedSkillName === skill.name,
-            })));
-            if (state.mode === 'catalog' && (state.store || []).length) {
-                nodes.push(_sectionLabel('Skill store', 'skills-store-heading'));
-                nodes.push(...state.store.map((skill) => _renderRegistrySkillRow(skill, {
-                    selected: state.selectedSkillOrigin === 'store' && state.selectedSkillName === skill.name,
-                })));
-            }
-            if (state.mode === 'catalog' && state.registryError && _queryText().length >= 2) {
+            (state.sections || []).forEach((section) => {
+                nodes.push(_sectionLabel(section.label, `skills-${section.key}-heading`));
+                nodes.push(...section.items.map((skill) => (
+                    section.origin === 'store'
+                        ? _renderRegistrySkillRow(skill, {
+                            selected: state.selectedSkillOrigin === 'store' && state.selectedSkillName === skill.name,
+                        })
+                        : _renderLocalSkillRow(skill, {
+                            selected: state.selectedSkillOrigin === 'local' && state.selectedSkillName === skill.name,
+                        })
+                )));
+            });
+            if (state.registryError && _queryText().length >= 2) {
                 const notice = UI.renderEmptyState(`Store search unavailable. ${state.registryError}`, true);
                 notice.dataset.key = 'skill-store-error';
                 nodes.push(notice);
@@ -322,21 +628,19 @@ function renderSkillCatalog(container) {
         }, {
             signatureFn(state) {
                 return {
-                    mode: String(state.mode || ''),
                     selectedSkillName: String(state.selectedSkillName || ''),
                     selectedSkillOrigin: String(state.selectedSkillOrigin || ''),
-                    local: (state.local || []).map((skill) => ({
-                        name: String(skill.name || ''),
-                        source: String(skill.source_label || skill.source_kind || ''),
-                        lifecycle: String(skill.lifecycle_status || ''),
-                        runtime: Boolean(skill.runtime_available),
-                        defaultForNewConversations: Boolean(skill.default_for_new_conversations),
-                        install: Boolean(skill.can_update || skill.can_uninstall || skill.can_activate),
-                    })),
-                    store: (state.store || []).map((skill) => ({
-                        name: String(skill.name || ''),
-                        publisher: String(skill.publisher || ''),
-                        version: String(skill.version || ''),
+                    sections: (state.sections || []).map((section) => ({
+                        key: String(section.key || ''),
+                        label: String(section.label || ''),
+                        items: (section.items || []).map((skill) => ({
+                            name: String(skill.name || ''),
+                            source: String(skill.source_label || skill.source_kind || ''),
+                            lifecycle: String(skill.lifecycle_status || ''),
+                            runtime: Boolean(skill.runtime_available),
+                            publisher: String(skill.publisher || ''),
+                            version: String(skill.version || ''),
+                        })),
                     })),
                     registryError: String(state.registryError || ''),
                 };
@@ -361,26 +665,15 @@ function renderSkillCatalog(container) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
         shellRow.dataset.key = `local:${skill.name || ''}`;
-
-        const fragments = [];
-        if (skill.description) fragments.push(String(skill.description));
-        if (skill.runtime_available === false) fragments.push('not active until published');
-        if (skill.requires_credentials) fragments.push('setup required on activation');
-        if (skill.default_for_new_conversations) fragments.push('default for new conversations');
-        if (skill.lifecycle_status) fragments.push(String(skill.lifecycle_status).replace(/_/g, ' '));
-        if (skill.has_unpublished_changes) fragments.push('unpublished changes');
+        const meta = RegistrySkillHub.localRowMeta(skill);
         const row = UI.renderListRow({
-            label: skill.display_name || skill.name || '',
-            sublabel: fragments.join(' • ') || 'Available on this bot',
-            badgeText: _sourceBadgeText(skill),
+            label: meta.label,
+            sublabel: meta.sublabel,
+            badgeText: meta.badgeText,
             onClick: () => {
-                selectedSkillName = skill.name || '';
-                selectedSkillOrigin = 'local';
-                selectedLocalDetail = null;
-                selectedLifecycle = null;
-                _writeState();
-                void loadSelectionData({ soft: true });
-                renderList();
+                _runWithDraftGuard(async () => {
+                    await _selectSkill(skill.name || '', 'local');
+                });
             },
             className: selected ? 'is-selected' : '',
         });
@@ -415,21 +708,15 @@ function renderSkillCatalog(container) {
         const shellRow = document.createElement('div');
         shellRow.className = 'list-row-shell';
         shellRow.dataset.key = `store:${skill.name || ''}`;
-        const fragments = [];
-        if (skill.description) fragments.push(String(skill.description));
-        if (skill.publisher) fragments.push(`by ${String(skill.publisher)}`);
-        if (skill.version) fragments.push(`v${String(skill.version)}`);
+        const meta = RegistrySkillHub.storeRowMeta(skill);
         const row = UI.renderListRow({
-            label: skill.display_name || skill.name || '',
-            sublabel: fragments.join(' • ') || 'Available from the skill store',
-            badgeText: String(skill.source_label || 'Store'),
+            label: meta.label,
+            sublabel: meta.sublabel,
+            badgeText: meta.badgeText,
             onClick: () => {
-                selectedSkillName = skill.name || '';
-                selectedSkillOrigin = 'store';
-                selectedLocalDetail = null;
-                selectedLifecycle = null;
-                _writeState();
-                renderList();
+                _runWithDraftGuard(async () => {
+                    await _selectSkill(skill.name || '', 'store');
+                });
             },
             className: selected ? 'is-selected' : '',
         });
@@ -484,14 +771,16 @@ function renderSkillCatalog(container) {
         if (!currentAgentId || !selected || selected.origin !== 'local') {
             selectedLocalDetail = null;
             selectedLifecycle = null;
+            selectionLoading = false;
+            _clearDraftState();
             renderDetail();
             return;
         }
         const skillName = selected.skill.name || '';
         const hadVisibleState = detailEl.childElementCount > 0;
-        const cachedDetail = UI.peekCachedData(_skillDetailCacheKey(currentAgentId, skillName));
-        const cachedLifecycle = currentMode === 'studio'
-            ? UI.peekCachedData(_skillLifecycleCacheKey(currentAgentId, skillName))
+        const cachedDetail = UI.peekCachedData(RegistrySkillHub.detailCacheKey(currentAgentId, skillName));
+        const cachedLifecycle = RegistrySkillHub.isCustomSkill(selected.skill)
+            ? UI.peekCachedData(RegistrySkillHub.lifecycleCacheKey(currentAgentId, skillName))
             : null;
         const hasCachedView = Boolean(cachedDetail) || Boolean(cachedLifecycle);
         if (cachedDetail) {
@@ -500,15 +789,11 @@ function renderSkillCatalog(container) {
         if (cachedLifecycle) {
             selectedLifecycle = cachedLifecycle;
         }
-        if (hasCachedView) {
-            renderDetail();
-        } else if (!soft) {
-            UI.clearMemoizedRender(detailEl);
-            UI.reconcileChildren(detailEl, [UI.renderEmptyState('Loading skill details…', true)]);
-        }
+        selectionLoading = true;
+        renderDetail();
         try {
-            selectedLocalDetail = await UI.loadCachedData(
-                _skillDetailCacheKey(currentAgentId, skillName),
+            const detailPromise = UI.loadCachedData(
+                RegistrySkillHub.detailCacheKey(currentAgentId, skillName),
                 () => API.getSkillDetail(currentAgentId, skillName),
                 {
                     ttlMs: SKILL_DETAIL_CACHE_TTL_MS,
@@ -516,23 +801,31 @@ function renderSkillCatalog(container) {
                     forceRefresh: hasCachedView,
                 },
             );
-            if (currentMode === 'studio' && String(selected.skill.source_kind || '') === 'custom') {
-                selectedLifecycle = await UI.loadCachedData(
-                    _skillLifecycleCacheKey(currentAgentId, skillName),
+            const lifecyclePromise = RegistrySkillHub.isCustomSkill(selected.skill)
+                ? UI.loadCachedData(
+                    RegistrySkillHub.lifecycleCacheKey(currentAgentId, skillName),
                     () => API.getSkillLifecycle(currentAgentId, skillName),
                     {
                         ttlMs: SKILL_DETAIL_CACHE_TTL_MS,
                         errorTtlMs: CACHE_ERROR_TTL_MS,
                         forceRefresh: hasCachedView,
                     },
-                );
+                )
+                : Promise.resolve(null);
+            selectedLocalDetail = await detailPromise;
+            selectedLifecycle = await lifecyclePromise;
+            if (_isSelectedCustom(selected.skill, selectedLocalDetail || selected.skill)) {
+                _resetDraftState(selectedLocalDetail || selected.skill, selectedLifecycle);
             } else {
-                selectedLifecycle = null;
+                _clearDraftState();
             }
+            selectionLoading = false;
             renderDetail();
         } catch (err) {
+            selectionLoading = false;
             if (hasCachedView || hadVisibleState) {
                 UI.reportError('Failed to refresh skill details', err, { context: 'Skill detail refresh failed' });
+                renderDetail();
                 return;
             }
             UI.clearMemoizedRender(detailEl);
@@ -549,17 +842,17 @@ function renderSkillCatalog(container) {
         const selected = _findSelectedSkill();
         if (!selected) {
             UI.clearMemoizedRender(detailEl);
-            if (currentMode === 'studio') {
-                UI.reconcileChildren(detailEl, [_buildStudioPanel({}, {}, null)]);
-            } else {
-                UI.reconcileChildren(detailEl, [
-                    UI.renderEmptyState('Select an available skill or a store match to inspect it.', true),
-                ]);
-            }
+            UI.reconcileChildren(detailEl, [
+                ..._buildStudioHome(_currentAgentLabel()),
+            ]);
             return;
         }
         if (selected.origin === 'store') {
             renderStoreDetail(selected.skill);
+            return;
+        }
+        if (RegistrySkillHub.isCustomSkill(selected.skill)) {
+            renderStudioDetail(selected);
             return;
         }
         const detail = selectedLocalDetail && selectedLocalDetail.name === selected.skill.name
@@ -573,7 +866,6 @@ function renderSkillCatalog(container) {
 
     function renderStoreDetail(skill) {
         UI.memoizedRender(detailEl, {
-            mode: currentMode,
             origin: 'store',
             skill,
         }, (state) => {
@@ -643,9 +935,43 @@ function renderSkillCatalog(container) {
         });
     }
 
+    function renderStudioDetail(selected) {
+        const summary = selected && selected.origin === 'local' ? selected.skill : {};
+        const detail = selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name
+            ? selectedLocalDetail
+            : summary;
+        const lifecycle = selectedLifecycle && selected && selectedLifecycle.name === selected.skill.name
+            ? selectedLifecycle
+            : null;
+        UI.memoizedRender(detailEl, {
+            agentId: currentAgentId,
+            agentLabel: _currentAgentLabel(),
+            selectedOrigin: selected?.origin || '',
+            skillName: selected?.skill?.name || '',
+            loading: selectionLoading,
+            detailLoaded: Boolean(selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name),
+            skillKind: String(lifecycle?.skill_kind || detail?.skill_kind || ''),
+            lifecycleStatus: String(lifecycle?.lifecycle_status || detail?.lifecycle_status || ''),
+            revisionId: String(lifecycle?.active_revision_id || ''),
+            draftStatus,
+            draftDirty,
+            studioTab: currentStudioTab,
+        }, (state) => {
+            if (!state.skillName) {
+                return _buildStudioHome(state.agentLabel);
+            }
+            if (state.selectedOrigin === 'store' || !_isSelectedCustom(summary, detail)) {
+                return _buildStudioHome(state.agentLabel, selected);
+            }
+            if (state.loading && !state.detailLoaded) {
+                return _buildStudioLoading(detail);
+            }
+            return _buildStudioWorkspace(summary, detail, lifecycle, { loading: Boolean(state.loading) });
+        });
+    }
+
     function renderLocalDetail(summary, detail, lifecycle) {
         UI.memoizedRender(detailEl, {
-            mode: currentMode,
             agentId: currentAgentId,
             agentLabel: _currentAgentLabel(),
             summary,
@@ -654,17 +980,11 @@ function renderSkillCatalog(container) {
         }, (state) => {
             const nodes = [];
             nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
-            if (state.mode === 'catalog') {
-                nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
-            }
-            if (String(state.summary.source_kind || '') === 'custom' || state.mode === 'studio') {
-                nodes.push(_buildStudioPanel(state.summary, state.detail, state.lifecycle));
-            }
+            nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
             return nodes;
         }, {
             signatureFn(state) {
                 return {
-                    mode: String(state.mode || ''),
                     agentId: String(state.agentId || ''),
                     agentLabel: String(state.agentLabel || ''),
                     name: String((state.summary && state.summary.name) || ''),
@@ -895,11 +1215,10 @@ function renderSkillCatalog(container) {
             openBtn.addEventListener('click', async () => {
                 openBtn.disabled = true;
                 try {
-                    const conversation = await API.openConversationForAgent(currentAgentId, {
-                        title: `Conversation with ${label}`,
-                    });
-                    Router.navigate(
-                        `/ui/conversations/${encodeURIComponent(conversation.conversation_id)}?manage=skills&activate_skill=${encodeURIComponent(detail.name || summary.name || '')}`,
+                    await RegistrySkillHub.openConversationForSkill(
+                        currentAgentId,
+                        detail.name || summary.name || '',
+                        { agentLabel: label },
                     );
                 } catch (err) {
                     UI.reportError('Failed to open a conversation for skill activation', err, {
@@ -913,74 +1232,82 @@ function renderSkillCatalog(container) {
         return panel;
     }
 
-    function _buildStudioPanel(summary, detail, lifecycle) {
+    function _buildStudioLoading(detail) {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
-        panel.dataset.key = `skill-studio:${detail.name || summary.name || ''}`;
-
-        const heading = document.createElement('div');
-        heading.className = 'editor-section-title';
-        heading.textContent = String(summary.source_kind || detail.source_kind) === 'custom'
-            ? 'Skill studio'
-            : 'Custom skill studio';
-        panel.appendChild(heading);
-
-        if (!detail || !detail.name) {
-            const note = document.createElement('p');
-            note.className = 'quiet-note';
-            note.textContent = `Create a custom draft for ${_currentAgentLabel()}. Publish it before activating it in a conversation.`;
-            panel.appendChild(note);
-            panel.appendChild(_buildDraftCreateForm());
-            return panel;
-        }
-
-        if (String(summary.source_kind || detail.source_kind) !== 'custom') {
-            const note = document.createElement('p');
-            note.className = 'quiet-note';
-            note.textContent = 'Studio is available for custom skills. Create a draft below or select an existing custom skill.';
-            panel.appendChild(note);
-            panel.appendChild(_buildDraftCreateForm());
-            return panel;
-        }
-
-        panel.appendChild(_buildDraftCreateForm());
-        panel.appendChild(_buildDraftEditor(detail, lifecycle));
-        if (lifecycle) {
-            panel.appendChild(_buildLifecycleHistory(lifecycle));
-        }
-        return panel;
-    }
-
-    function _buildDraftCreateForm() {
-        const section = document.createElement('section');
-        section.className = 'editor-panel';
-        section.dataset.key = 'skill-draft-create';
-
+        panel.dataset.key = `studio-loading:${detail?.name || ''}`;
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = 'Create custom draft';
-        section.appendChild(title);
+        title.textContent = detail?.display_name || detail?.name || 'Custom skill';
+        panel.appendChild(title);
+        panel.appendChild(UI.renderEmptyState('Loading draft…', true));
+        return [panel];
+    }
 
-        const form = document.createElement('form');
-        form.className = 'route-controls';
+    function _buildStudioHome(agentLabel, selected) {
+        const intro = document.createElement('section');
+        intro.className = 'editor-panel';
+        intro.dataset.key = 'studio-home';
+        const title = document.createElement('div');
+        title.className = 'editor-section-title';
+        title.textContent = 'Skills';
+        intro.appendChild(title);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = selected && selected.origin === 'store'
+            ? `Install this skill on ${agentLabel}, or pick a custom skill to edit it here.`
+            : `Select a skill for ${agentLabel}, create a new custom skill, or import a package to start editing.`;
+        intro.appendChild(note);
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        const createBtn = document.createElement('button');
+        createBtn.type = 'button';
+        createBtn.className = 'btn btn-primary';
+        createBtn.textContent = 'New custom skill';
+        createBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
+        createBtn.addEventListener('click', () => _beginStudioDialog(_openCreateDraftDialog));
+        actions.appendChild(createBtn);
+        const importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'btn';
+        importBtn.textContent = 'Import';
+        importBtn.hidden = !RegistrySkillHub.canCreateCustom(_currentAgent());
+        importBtn.addEventListener('click', () => _beginStudioDialog(_openImportDialog));
+        actions.appendChild(importBtn);
+        intro.appendChild(actions);
+        return [intro];
+    }
+
+    function _openCreateDraftDialog() {
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
         const nameInput = document.createElement('input');
         nameInput.className = 'input';
         nameInput.placeholder = 'skill-slug';
-        nameInput.required = true;
         form.appendChild(nameInput);
         const descriptionInput = document.createElement('input');
         descriptionInput.className = 'input';
         descriptionInput.placeholder = 'Short description';
         form.appendChild(descriptionInput);
         const createBtn = document.createElement('button');
-        createBtn.type = 'submit';
-        createBtn.className = 'btn btn-sm btn-primary';
+        createBtn.type = 'button';
+        createBtn.className = 'btn btn-primary';
         createBtn.textContent = 'Create draft';
-        form.appendChild(createBtn);
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const view = UI.showDialog('Create custom draft', form, {
+            actions: [cancelBtn, createBtn],
+            maxWidth: '520px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        createBtn.addEventListener('click', async () => {
             const skillName = String(nameInput.value || '').trim();
-            if (!skillName) return;
+            if (!skillName) {
+                nameInput.focus();
+                return;
+            }
             createBtn.disabled = true;
             try {
                 await API.saveSkillDraft(currentAgentId, skillName, {
@@ -990,395 +1317,788 @@ function renderSkillCatalog(container) {
                     changelog: 'Initial draft',
                 });
                 _invalidateSkillCaches(currentAgentId, skillName);
-                currentMode = 'studio';
-                selectedSkillName = skillName;
-                selectedSkillOrigin = 'local';
-                _writeState();
+                view.close();
                 await loadSkills({ soft: true, forceCatalog: true });
+                await _selectSkill(skillName, 'local');
             } catch (err) {
                 UI.reportError('Failed to create the custom draft', err, { context: 'Custom skill draft create failed' });
             }
             createBtn.disabled = false;
         });
-        section.appendChild(form);
-
-        const note = document.createElement('p');
-        note.className = 'quiet-note';
-        note.textContent = `Custom drafts become available on ${_currentAgentLabel()} conversations only after submit, approval, and publish.`;
-        section.appendChild(note);
-        return section;
     }
 
-    function _buildDraftEditor(detail, lifecycle) {
-        const section = document.createElement('section');
-        section.className = 'editor-panel';
-        section.dataset.key = `skill-draft-editor:${detail.name || ''}`;
+    async function _readFileBase64(file) {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        bytes.forEach((value) => {
+            binary += String.fromCharCode(value);
+        });
+        return window.btoa(binary);
+    }
 
-        const packageState = lifecycle || detail;
-        const requirements = Array.isArray(packageState.requirements)
-            ? packageState.requirements.map((item) => ({
-                key: item.key || '',
-                prompt: item.prompt || '',
-                help_url: item.help_url || '',
-                validate: item.validate || {},
-            }))
-            : [];
-        const providerConfig = packageState.provider_config || {};
-        const files = Array.isArray(packageState.files)
-            ? packageState.files.map((item) => ({
-                relative_path: item.relative_path || '',
-                content_text: item.content_text || '',
-                content_type: item.content_type || '',
-                executable: Boolean(item.executable),
-            }))
-            : [];
-
-        const status = document.createElement('div');
-        status.className = 'workspace-header-main';
-        status.innerHTML = `<div class="workspace-title-group"><strong>${UI.esc(detail.display_name || detail.name || 'Custom skill')}</strong></div>`;
-        const badge = document.createElement('span');
-        badge.className = `badge badge-${String((lifecycle && lifecycle.lifecycle_status) || detail.lifecycle_status || 'draft')}`;
-        badge.textContent = String((lifecycle && lifecycle.lifecycle_status) || detail.lifecycle_status || 'draft').replace(/_/g, ' ');
-        status.appendChild(badge);
-        section.appendChild(status);
-
-        const readiness = document.createElement('p');
-        readiness.className = 'quiet-note';
-        readiness.textContent = packageState.publish_ready
-            ? 'This draft is structurally ready for submit and publish.'
-            : 'This draft still has validation problems. Fix them before submitting or publishing.';
-        section.appendChild(readiness);
-
-        const displayNameInput = document.createElement('input');
-        displayNameInput.className = 'input';
-        displayNameInput.value = detail.display_name || '';
-        displayNameInput.placeholder = 'Display name';
-        section.appendChild(displayNameInput);
-
-        const descriptionInput = document.createElement('input');
-        descriptionInput.className = 'input';
-        descriptionInput.value = detail.description || '';
-        descriptionInput.placeholder = 'Short description';
-        section.appendChild(descriptionInput);
-
-        const changelogInput = document.createElement('input');
-        changelogInput.className = 'input';
-        changelogInput.placeholder = 'Changelog (optional)';
-        section.appendChild(changelogInput);
-
-        const bodyInput = document.createElement('textarea');
-        bodyInput.className = 'guidance-textarea';
-        bodyInput.rows = 14;
-        bodyInput.value = detail.body || '';
-        section.appendChild(bodyInput);
-
-        const requirementsLabel = document.createElement('div');
-        requirementsLabel.className = 'detail-label';
-        requirementsLabel.textContent = 'Setup requirements';
-        section.appendChild(requirementsLabel);
-        const requirementsList = document.createElement('div');
-        requirementsList.className = 'list-shell';
-        section.appendChild(requirementsList);
-
-        function addRequirementRow(requirement = {}) {
-            const card = document.createElement('div');
-            card.className = 'editor-panel';
-            const inputs = document.createElement('div');
-            inputs.className = 'route-controls';
-
-            const keyInput = document.createElement('input');
-            keyInput.className = 'input';
-            keyInput.placeholder = 'Credential key';
-            keyInput.value = requirement.key || '';
-            inputs.appendChild(keyInput);
-
-            const promptInput = document.createElement('input');
-            promptInput.className = 'input';
-            promptInput.placeholder = 'Prompt shown during setup';
-            promptInput.value = requirement.prompt || '';
-            inputs.appendChild(promptInput);
-            card.appendChild(inputs);
-
-            const helpUrlInput = document.createElement('input');
-            helpUrlInput.className = 'input';
-            helpUrlInput.placeholder = 'Help URL (optional)';
-            helpUrlInput.value = requirement.help_url || '';
-            card.appendChild(helpUrlInput);
-
-            const validationInput = document.createElement('textarea');
-            validationInput.className = 'guidance-textarea';
-            validationInput.rows = 4;
-            validationInput.placeholder = 'Validation JSON (optional)';
-            validationInput.value = requirement.validate && Object.keys(requirement.validate).length
-                ? JSON.stringify(requirement.validate, null, 2)
-                : '';
-            card.appendChild(validationInput);
-
-            const remove = _dangerActionButton('Remove requirement', async () => {
-                card.remove();
-            });
-            const actionsRow = document.createElement('div');
-            actionsRow.className = 'editor-actions';
-            actionsRow.appendChild(remove);
-            card.appendChild(actionsRow);
-            requirementsList.appendChild(card);
+    function _downloadPackageArtifact(artifact) {
+        const binary = window.atob(String(artifact.package_base64 || ''));
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
         }
+        const blob = new Blob([bytes], { type: artifact.content_type || 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = artifact.file_name || `${UI.safeFilename(artifact.name || 'skill')}.skill.zip`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
 
-        requirements.forEach((item) => addRequirementRow(item));
-        const addRequirement = _actionButton('Add requirement', async () => addRequirementRow());
-        section.appendChild(addRequirement);
-
-        const providerLabel = document.createElement('div');
-        providerLabel.className = 'detail-label';
-        providerLabel.textContent = 'Provider config';
-        section.appendChild(providerLabel);
-        const providerEditors = new Map();
-        const providerList = document.createElement('div');
-        providerList.className = 'list-shell';
-        section.appendChild(providerList);
-
-        function ensureProviderEditor(providerName, initialValue = {}) {
-            const normalized = String(providerName || '').trim();
-            if (!normalized || providerEditors.has(normalized)) {
+    function _openImportDialog() {
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.className = 'input';
+        fileInput.accept = '.zip,application/zip';
+        form.appendChild(fileInput);
+        const targetInput = document.createElement('input');
+        targetInput.className = 'input';
+        targetInput.placeholder = 'Replace existing draft (optional)';
+        targetInput.value = _isSelectedCustom(_findSelectedSkill()?.skill, selectedLocalDetail) ? (selectedSkillName || '') : '';
+        form.appendChild(targetInput);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'Leave the target blank to import using the package skill name. Set a target to replace or create a specific custom draft.';
+        form.appendChild(note);
+        const importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'btn btn-primary';
+        importBtn.textContent = 'Import package';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const view = UI.showDialog('Import skill package', form, {
+            actions: [cancelBtn, importBtn],
+            maxWidth: '560px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        importBtn.addEventListener('click', async () => {
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) {
+                fileInput.focus();
                 return;
             }
-            const card = document.createElement('div');
-            card.className = 'editor-panel';
-            card.dataset.provider = normalized;
-            const heading = document.createElement('div');
-            heading.className = 'editor-section-title';
-            heading.textContent = normalized;
-            card.appendChild(heading);
-            const textarea = document.createElement('textarea');
-            textarea.className = 'guidance-textarea';
-            textarea.rows = 6;
-            textarea.value = initialValue && Object.keys(initialValue).length
-                ? JSON.stringify(initialValue, null, 2)
-                : '';
-            card.appendChild(textarea);
-            const actionsRow = document.createElement('div');
-            actionsRow.className = 'editor-actions';
-            actionsRow.appendChild(_dangerActionButton('Remove provider config', async () => {
-                providerEditors.delete(normalized);
-                card.remove();
-            }));
-            card.appendChild(actionsRow);
-            providerList.appendChild(card);
-            providerEditors.set(normalized, textarea);
-        }
-
-        ['claude', 'codex'].forEach((providerName) => ensureProviderEditor(providerName, providerConfig[providerName] || {}));
-        Object.keys(providerConfig).sort().forEach((providerName) => ensureProviderEditor(providerName, providerConfig[providerName] || {}));
-        const providerControls = document.createElement('div');
-        providerControls.className = 'route-controls';
-        const providerInput = document.createElement('input');
-        providerInput.className = 'input';
-        providerInput.placeholder = 'Provider name';
-        providerControls.appendChild(providerInput);
-        const addProvider = _actionButton('Add provider config', async () => {
-            ensureProviderEditor(providerInput.value, {});
-            providerInput.value = '';
-        });
-        providerControls.appendChild(addProvider);
-        section.appendChild(providerControls);
-
-        const filesLabel = document.createElement('div');
-        filesLabel.className = 'detail-label';
-        filesLabel.textContent = 'Attached files';
-        section.appendChild(filesLabel);
-        const filesList = document.createElement('div');
-        filesList.className = 'list-shell';
-        section.appendChild(filesList);
-
-        function addFileRow(fileState = {}) {
-            const card = document.createElement('div');
-            card.className = 'editor-panel';
-
-            const pathInput = document.createElement('input');
-            pathInput.className = 'input';
-            pathInput.placeholder = 'relative/path.ext';
-            pathInput.value = fileState.relative_path || '';
-            card.appendChild(pathInput);
-
-            const fileMeta = document.createElement('div');
-            fileMeta.className = 'route-controls';
-            const typeInput = document.createElement('input');
-            typeInput.className = 'input';
-            typeInput.placeholder = 'Content type';
-            typeInput.value = fileState.content_type || '';
-            fileMeta.appendChild(typeInput);
-            const execWrap = document.createElement('label');
-            execWrap.className = 'toggle-switch';
-            const execInput = document.createElement('input');
-            execInput.type = 'checkbox';
-            execInput.checked = Boolean(fileState.executable);
-            const execSlider = document.createElement('span');
-            execSlider.className = 'slider';
-            execWrap.appendChild(execInput);
-            execWrap.appendChild(execSlider);
-            fileMeta.appendChild(execWrap);
-            card.appendChild(fileMeta);
-
-            const contentInput = document.createElement('textarea');
-            contentInput.className = 'guidance-textarea';
-            contentInput.rows = 8;
-            contentInput.placeholder = 'File contents';
-            contentInput.value = fileState.content_text || '';
-            card.appendChild(contentInput);
-
-            const actionsRow = document.createElement('div');
-            actionsRow.className = 'editor-actions';
-            actionsRow.appendChild(_dangerActionButton('Remove file', async () => {
-                card.remove();
-            }));
-            card.appendChild(actionsRow);
-
-            card.__stateInputs = { pathInput, typeInput, execInput, contentInput };
-            filesList.appendChild(card);
-        }
-
-        files.forEach((item) => addFileRow(item));
-        const addFile = _actionButton('Add file', async () => addFileRow());
-        section.appendChild(addFile);
-
-        function collectRequirements() {
-            return Array.from(requirementsList.children).map((card) => {
-                const inputs = card.querySelectorAll('input, textarea');
-                const key = String(inputs[0]?.value || '').trim();
-                const prompt = String(inputs[1]?.value || '').trim();
-                const helpUrl = String(inputs[2]?.value || '').trim();
-                const validationText = String(inputs[3]?.value || '').trim();
-                let validate = null;
-                if (validationText) {
-                    try {
-                        validate = JSON.parse(validationText);
-                    } catch (error) {
-                        throw new Error(`Requirement '${key || 'credential'}' has invalid validation JSON.`);
-                    }
+            importBtn.disabled = true;
+            try {
+                const packageBase64 = await _readFileBase64(file);
+                const result = await API.importSkillPackage(currentAgentId, {
+                    file_name: file.name,
+                    target_skill_name: String(targetInput.value || '').trim(),
+                    package_base64: packageBase64,
+                });
+                const nextSkillName = result.detail?.name || String(targetInput.value || '').trim() || selectedSkillName || '';
+                _invalidateSkillCaches(currentAgentId, nextSkillName);
+                view.close();
+                await loadSkills({ soft: true, forceCatalog: true });
+                if (nextSkillName) {
+                    await _selectSkill(nextSkillName, 'local');
                 }
-                return {
-                    key,
-                    prompt,
-                    help_url: helpUrl,
-                    validate,
-                };
-            });
-        }
-
-        function collectProviderConfig() {
-            const nextConfig = {};
-            for (const [providerName, textarea] of providerEditors.entries()) {
-                const text = String(textarea.value || '').trim();
-                if (!text) continue;
-                let parsed;
-                try {
-                    parsed = JSON.parse(text);
-                } catch (error) {
-                    throw new Error(`Provider config for '${providerName}' must be valid JSON.`);
-                }
-                if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-                    throw new Error(`Provider config for '${providerName}' must be a JSON object.`);
-                }
-                nextConfig[providerName] = parsed;
+            } catch (err) {
+                UI.reportError('Failed to import the skill package', err, { context: 'Skill package import failed' });
             }
-            return nextConfig;
-        }
+            importBtn.disabled = false;
+        });
+    }
 
-        function collectFiles() {
-            return Array.from(filesList.children).map((card) => {
-                const state = card.__stateInputs || {};
-                return {
-                    relative_path: String(state.pathInput?.value || '').trim(),
-                    content_type: String(state.typeInput?.value || '').trim(),
-                    executable: Boolean(state.execInput?.checked),
-                    content_text: String(state.contentInput?.value || ''),
-                };
-            });
+    function _buildStudioWorkspace(summary, detail, lifecycle, { loading = false } = {}) {
+        const packageState = _packageState(detail, lifecycle);
+        const nextDraftSnapshot = _draftSnapshot(detail, lifecycle);
+        if (!draftBuffer || draftBuffer.name !== detail.name || (!draftDirty && draftSnapshotKey !== nextDraftSnapshot)) {
+            _resetDraftState(detail, lifecycle);
         }
+        const lifecycleStatus = String(packageState.lifecycle_status || detail.lifecycle_status || 'draft');
+        const lifecycleLabel = lifecycleStatus.replace(/_/g, ' ');
+        const validationProblems = Array.isArray(packageState.validation_problems) ? packageState.validation_problems : [];
+        const nodes = [];
+
+        const header = document.createElement('section');
+        header.className = 'editor-panel';
+        header.dataset.key = `studio-header:${detail.name || ''}`;
+        const headerRow = document.createElement('div');
+        headerRow.className = 'workspace-header-main';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'workspace-title-group';
+        const title = document.createElement('h3');
+        title.className = 'editor-section-title';
+        title.textContent = detail.display_name || detail.name || 'Custom skill';
+        titleWrap.appendChild(title);
+        const subtitle = document.createElement('p');
+        subtitle.className = 'quiet-note';
+        subtitle.textContent = loading
+            ? 'Refreshing draft…'
+            : (packageState.publish_ready
+                ? 'Ready for the next lifecycle step.'
+                : 'Finish the draft and use Review before publishing.');
+        titleWrap.appendChild(subtitle);
+        headerRow.appendChild(titleWrap);
+        const badge = document.createElement('span');
+        badge.className = `badge badge-${lifecycleStatus}`;
+        badge.textContent = lifecycleLabel;
+        headerRow.appendChild(badge);
+        header.appendChild(headerRow);
+        header.appendChild(UI.renderMetadataGrid([
+            { label: 'Save state', value: draftStatusMessage || (draftDirty ? 'Unsaved changes' : 'All changes saved') },
+            { label: 'Publish readiness', value: packageState.publish_ready ? 'Ready' : 'Needs review' },
+            { label: 'Validation', value: validationProblems.length ? `${validationProblems.length} issue${validationProblems.length === 1 ? '' : 's'}` : 'No open issues' },
+        ], { compact: true }));
 
         const actions = document.createElement('div');
         actions.className = 'editor-actions';
-        actions.appendChild(_actionButton('Save draft', async () => {
-            const requirementsPayload = collectRequirements();
-            const providerConfigPayload = collectProviderConfig();
-            const filesPayload = collectFiles();
-            await API.saveSkillDraft(currentAgentId, detail.name, {
-                body: bodyInput.value,
-                display_name: displayNameInput.value,
-                description: descriptionInput.value,
-                requirements: requirementsPayload,
-                provider_config: providerConfigPayload,
-                files: filesPayload,
-                changelog: changelogInput.value,
-            });
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }, 'Saving…'));
-        actions.appendChild(_actionButton('Submit', async () => {
-            await API.submitSkillDraft(currentAgentId, detail.name, {});
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }));
-        actions.appendChild(_actionButton('Approve', async () => {
-            await API.approveSkillDraft(currentAgentId, detail.name, {});
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }));
-        actions.appendChild(_actionButton('Reject', async () => {
-            await API.rejectSkillDraft(currentAgentId, detail.name, {});
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }));
-        actions.appendChild(_actionButton('Publish', async () => {
-            await API.publishSkillDraft(currentAgentId, detail.name, {});
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }));
-        actions.appendChild(_dangerActionButton('Archive', async () => {
-            await API.archiveSkillDraft(currentAgentId, detail.name, {});
-            _invalidateSkillCaches(currentAgentId, detail.name);
-            await loadSelectionData({ soft: true });
-            await loadSkills({ soft: true, forceCatalog: true });
-        }));
-        section.appendChild(actions);
+        const refreshChrome = () => {
+            saveBtn.disabled = loading || draftStatus === 'saving';
+            saveBtn.textContent = draftStatus === 'saving' ? 'Saving…' : 'Save draft';
+            submitBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'draft';
+            submitBtn.disabled = loading || draftStatus === 'saving' || !packageState.publish_ready;
+            approveBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'review';
+            approveBtn.disabled = loading || draftStatus === 'saving';
+            rejectBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'review';
+            rejectBtn.disabled = loading || draftStatus === 'saving';
+            publishBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus !== 'approved';
+            publishBtn.disabled = loading || draftStatus === 'saving';
+            archiveBtn.hidden = currentStudioTab !== 'review' || lifecycleStatus === 'archived';
+            archiveBtn.disabled = loading || draftStatus === 'saving';
+        };
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'btn btn-primary';
+        saveBtn.textContent = 'Save draft';
+        const submitBtn = document.createElement('button');
+        submitBtn.type = 'button';
+        submitBtn.className = 'btn btn-primary';
+        submitBtn.textContent = 'Submit';
+        const approveBtn = document.createElement('button');
+        approveBtn.type = 'button';
+        approveBtn.className = 'btn btn-primary';
+        approveBtn.textContent = 'Approve';
+        const rejectBtn = document.createElement('button');
+        rejectBtn.type = 'button';
+        rejectBtn.className = 'btn';
+        rejectBtn.textContent = 'Reject';
+        const publishBtn = document.createElement('button');
+        publishBtn.type = 'button';
+        publishBtn.className = 'btn btn-primary';
+        publishBtn.textContent = 'Publish';
+        const archiveBtn = document.createElement('button');
+        archiveBtn.type = 'button';
+        archiveBtn.className = 'btn btn-danger';
+        archiveBtn.textContent = 'Archive';
+        actions.appendChild(saveBtn);
+        header.appendChild(actions);
+        const workspaceTabs = UI.createSegmentedControl(
+            [
+                { key: 'write', value: 'write', label: 'Write' },
+                { key: 'setup', value: 'setup', label: 'Setup' },
+                { key: 'review', value: 'review', label: 'Review' },
+                { key: 'advanced', value: 'advanced', label: 'Advanced' },
+            ],
+            (nextTab) => {
+                currentStudioTab = nextTab;
+                _writeState();
+                renderDetail();
+            },
+            {
+                label: 'Skill workspace',
+                value: currentStudioTab,
+            },
+        );
+        const tabRow = document.createElement('div');
+        tabRow.className = 'route-controls';
+        tabRow.appendChild(workspaceTabs.element);
+        header.appendChild(tabRow);
+        nodes.push(header);
 
-        if (Array.isArray(packageState.validation_problems) && packageState.validation_problems.length) {
+        const markDirty = () => {
+            draftDirty = true;
+            draftStatus = 'dirty';
+            draftStatusMessage = 'Unsaved changes';
+            refreshChrome();
+        };
+
+        const persistDraft = async ({ quiet = false } = {}) => {
+            draftStatus = 'saving';
+            draftStatusMessage = 'Saving draft…';
+            refreshChrome();
+            try {
+                await API.saveSkillDraft(currentAgentId, detail.name, {
+                    body: draftBuffer.body,
+                    display_name: draftBuffer.display_name,
+                    description: draftBuffer.description,
+                    skill_kind: draftBuffer.skill_kind,
+                    requirements: draftBuffer.requirements,
+                    provider_config: draftBuffer.provider_config,
+                    files: draftBuffer.files,
+                    changelog: draftBuffer.changelog,
+                });
+                _invalidateSkillCaches(currentAgentId, detail.name);
+                await loadSkills({ soft: true, forceCatalog: true });
+                await loadSelectionData({ soft: true });
+                return true;
+            } catch (err) {
+                draftStatus = 'error';
+                draftStatusMessage = 'Save failed';
+                refreshChrome();
+                if (!quiet) {
+                    UI.reportError('Failed to save the draft', err, { context: 'Skill draft save failed' });
+                } else {
+                    UI.reportError('Failed to save the draft before continuing', err, { context: 'Skill draft pre-save failed' });
+                }
+                return false;
+            }
+        };
+
+        const lifecycleAction = async (op, successLabel) => {
+            if (draftDirty) {
+                const saved = await persistDraft({ quiet: true });
+                if (!saved) {
+                    return;
+                }
+            }
+            draftStatus = 'saving';
+            draftStatusMessage = successLabel;
+            refreshChrome();
+            try {
+                await op();
+                _invalidateSkillCaches(currentAgentId, detail.name);
+                await loadSkills({ soft: true, forceCatalog: true });
+                await loadSelectionData({ soft: true });
+            } catch (err) {
+                draftStatus = 'error';
+                draftStatusMessage = 'Action failed';
+                refreshChrome();
+                UI.reportError(`Failed to ${successLabel.toLowerCase()}`, err, { context: `Skill studio ${successLabel.toLowerCase()} failed` });
+            }
+        };
+
+        saveBtn.addEventListener('click', async () => {
+            await persistDraft();
+        });
+        submitBtn.addEventListener('click', async () => lifecycleAction(
+            () => API.submitSkillDraft(currentAgentId, detail.name, {}),
+            'Submitting',
+        ));
+        approveBtn.addEventListener('click', async () => lifecycleAction(
+            () => API.approveSkillDraft(currentAgentId, detail.name, {}),
+            'Approving',
+        ));
+        rejectBtn.addEventListener('click', async () => lifecycleAction(
+            () => API.rejectSkillDraft(currentAgentId, detail.name, {}),
+            'Rejecting',
+        ));
+        publishBtn.addEventListener('click', async () => lifecycleAction(
+            () => API.publishSkillDraft(currentAgentId, detail.name, {}),
+            'Publishing',
+        ));
+        archiveBtn.addEventListener('click', async () => lifecycleAction(
+            () => API.archiveSkillDraft(currentAgentId, detail.name, {}),
+            'Archiving',
+        ));
+
+        const renderRequirementsEditor = (container) => {
+            const list = document.createElement('div');
+            list.className = 'studio-stack';
+            container.appendChild(list);
+            const renderRows = () => {
+                list.replaceChildren(...draftBuffer.requirements.map((item, index) => {
+                    const card = document.createElement('section');
+                    card.className = 'editor-panel';
+                    const keyInput = document.createElement('input');
+                    keyInput.className = 'input';
+                    keyInput.placeholder = 'Credential key';
+                    keyInput.value = item.key || '';
+                    keyInput.addEventListener('input', () => {
+                        draftBuffer.requirements[index].key = keyInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(keyInput);
+                    const promptInput = document.createElement('input');
+                    promptInput.className = 'input';
+                    promptInput.placeholder = 'Prompt shown during setup';
+                    promptInput.value = item.prompt || '';
+                    promptInput.addEventListener('input', () => {
+                        draftBuffer.requirements[index].prompt = promptInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(promptInput);
+                    const helpInput = document.createElement('input');
+                    helpInput.className = 'input';
+                    helpInput.placeholder = 'Help URL (optional)';
+                    helpInput.value = item.help_url || '';
+                    helpInput.addEventListener('input', () => {
+                        draftBuffer.requirements[index].help_url = helpInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(helpInput);
+                    const validationInput = document.createElement('textarea');
+                    validationInput.className = 'guidance-textarea';
+                    validationInput.rows = 4;
+                    validationInput.placeholder = 'Validation JSON (optional)';
+                    validationInput.value = item.validate ? JSON.stringify(item.validate, null, 2) : '';
+                    validationInput.addEventListener('change', () => {
+                        const text = String(validationInput.value || '').trim();
+                        if (!text) {
+                            draftBuffer.requirements[index].validate = null;
+                            markDirty();
+                            return;
+                        }
+                        try {
+                            draftBuffer.requirements[index].validate = JSON.parse(text);
+                            markDirty();
+                        } catch (err) {
+                            UI.reportError('Requirement validation JSON must be valid', err, { context: 'Skill requirement validation JSON failed' });
+                        }
+                    });
+                    card.appendChild(validationInput);
+                    const actionsRow = document.createElement('div');
+                    actionsRow.className = 'editor-actions';
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.className = 'btn btn-danger btn-sm';
+                    removeBtn.textContent = 'Remove requirement';
+                    removeBtn.addEventListener('click', () => {
+                        draftBuffer.requirements.splice(index, 1);
+                        markDirty();
+                        renderRows();
+                    });
+                    actionsRow.appendChild(removeBtn);
+                    card.appendChild(actionsRow);
+                    return card;
+                }));
+            };
+            renderRows();
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'btn btn-sm';
+            addBtn.textContent = 'Add requirement';
+            addBtn.addEventListener('click', () => {
+                draftBuffer.requirements.push({ key: '', prompt: '', help_url: '', validate: null });
+                markDirty();
+                renderRows();
+            });
+            container.appendChild(addBtn);
+        };
+
+        const renderProviderEditor = (container) => {
+            const list = document.createElement('div');
+            list.className = 'studio-stack';
+            container.appendChild(list);
+            const renderProviders = () => {
+                list.replaceChildren(...Object.keys(draftBuffer.provider_config || {}).sort().map((providerName) => {
+                    const card = document.createElement('section');
+                    card.className = 'editor-panel';
+                    const titleEl = document.createElement('div');
+                    titleEl.className = 'editor-section-title';
+                    titleEl.textContent = providerName;
+                    card.appendChild(titleEl);
+                    const textarea = document.createElement('textarea');
+                    textarea.className = 'guidance-textarea';
+                    textarea.rows = 8;
+                    textarea.value = JSON.stringify(draftBuffer.provider_config[providerName] || {}, null, 2);
+                    textarea.addEventListener('change', () => {
+                        const text = String(textarea.value || '').trim();
+                        if (!text) {
+                            delete draftBuffer.provider_config[providerName];
+                            markDirty();
+                            renderProviders();
+                            return;
+                        }
+                        try {
+                            const parsed = JSON.parse(text);
+                            if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+                                throw new Error('Provider config must be an object.');
+                            }
+                            draftBuffer.provider_config[providerName] = parsed;
+                            markDirty();
+                        } catch (err) {
+                            UI.reportError(`Provider config for '${providerName}' must be valid JSON`, err, { context: 'Skill provider config JSON failed' });
+                        }
+                    });
+                    card.appendChild(textarea);
+                    const actionsRow = document.createElement('div');
+                    actionsRow.className = 'editor-actions';
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.className = 'btn btn-danger btn-sm';
+                    removeBtn.textContent = 'Remove provider config';
+                    removeBtn.addEventListener('click', () => {
+                        delete draftBuffer.provider_config[providerName];
+                        markDirty();
+                        renderProviders();
+                    });
+                    actionsRow.appendChild(removeBtn);
+                    card.appendChild(actionsRow);
+                    return card;
+                }));
+            };
+            renderProviders();
+            const controls = document.createElement('div');
+            controls.className = 'route-controls';
+            const input = document.createElement('input');
+            input.className = 'input';
+            input.placeholder = 'Provider name';
+            controls.appendChild(input);
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'btn btn-sm';
+            addBtn.textContent = 'Add provider config';
+            addBtn.addEventListener('click', () => {
+                const normalized = String(input.value || '').trim();
+                if (!normalized) return;
+                if (!draftBuffer.provider_config[normalized]) {
+                    draftBuffer.provider_config[normalized] = {};
+                    markDirty();
+                    renderProviders();
+                }
+                input.value = '';
+            });
+            controls.appendChild(addBtn);
+            container.appendChild(controls);
+        };
+
+        const renderFilesEditor = (container) => {
+            const list = document.createElement('div');
+            list.className = 'studio-stack';
+            container.appendChild(list);
+            const renderFiles = () => {
+                list.replaceChildren(...draftBuffer.files.map((item, index) => {
+                    const card = document.createElement('section');
+                    card.className = 'editor-panel';
+                    const pathInput = document.createElement('input');
+                    pathInput.className = 'input';
+                    pathInput.placeholder = 'relative/path.ext';
+                    pathInput.value = item.relative_path || '';
+                    pathInput.addEventListener('input', () => {
+                        draftBuffer.files[index].relative_path = pathInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(pathInput);
+                    const typeInput = document.createElement('input');
+                    typeInput.className = 'input';
+                    typeInput.placeholder = 'Content type';
+                    typeInput.value = item.content_type || '';
+                    typeInput.addEventListener('input', () => {
+                        draftBuffer.files[index].content_type = typeInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(typeInput);
+                    const execLabel = document.createElement('label');
+                    execLabel.className = 'quiet-note';
+                    const execInput = document.createElement('input');
+                    execInput.type = 'checkbox';
+                    execInput.checked = Boolean(item.executable);
+                    execInput.addEventListener('change', () => {
+                        draftBuffer.files[index].executable = Boolean(execInput.checked);
+                        markDirty();
+                    });
+                    execLabel.appendChild(execInput);
+                    execLabel.appendChild(document.createTextNode(' Executable'));
+                    card.appendChild(execLabel);
+                    const contentInput = document.createElement('textarea');
+                    contentInput.className = 'guidance-textarea';
+                    contentInput.rows = 10;
+                    contentInput.placeholder = 'File contents';
+                    contentInput.value = item.content_text || '';
+                    contentInput.addEventListener('input', () => {
+                        draftBuffer.files[index].content_text = contentInput.value;
+                        markDirty();
+                    });
+                    card.appendChild(contentInput);
+                    const actionsRow = document.createElement('div');
+                    actionsRow.className = 'editor-actions';
+                    const removeBtn = document.createElement('button');
+                    removeBtn.type = 'button';
+                    removeBtn.className = 'btn btn-danger btn-sm';
+                    removeBtn.textContent = 'Remove file';
+                    removeBtn.addEventListener('click', () => {
+                        draftBuffer.files.splice(index, 1);
+                        markDirty();
+                        renderFiles();
+                    });
+                    actionsRow.appendChild(removeBtn);
+                    card.appendChild(actionsRow);
+                    return card;
+                }));
+            };
+            renderFiles();
+            const addBtn = document.createElement('button');
+            addBtn.type = 'button';
+            addBtn.className = 'btn btn-sm';
+            addBtn.textContent = 'Add file';
+            addBtn.addEventListener('click', () => {
+                draftBuffer.files.push({ relative_path: '', content_text: '', content_type: '', executable: false });
+                markDirty();
+                renderFiles();
+            });
+            container.appendChild(addBtn);
+        };
+
+        const basicsPanel = document.createElement('section');
+        basicsPanel.className = 'editor-panel';
+        basicsPanel.dataset.key = `studio-basics:${detail.name || ''}`;
+        const basicsTitle = document.createElement('div');
+        basicsTitle.className = 'editor-section-title';
+        basicsTitle.textContent = 'Write';
+        basicsPanel.appendChild(basicsTitle);
+        const basicsNote = document.createElement('p');
+        basicsNote.className = 'quiet-note';
+        basicsNote.textContent = 'Set the title and short description people will see, then write the instructions this skill should follow at runtime.';
+        basicsPanel.appendChild(basicsNote);
+        const displayNameInput = document.createElement('input');
+        displayNameInput.className = 'input';
+        displayNameInput.placeholder = 'Display name';
+        displayNameInput.value = draftBuffer.display_name || '';
+        displayNameInput.addEventListener('input', () => {
+            draftBuffer.display_name = displayNameInput.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(displayNameInput);
+        const descriptionInput = document.createElement('input');
+        descriptionInput.className = 'input';
+        descriptionInput.placeholder = 'Short description';
+        descriptionInput.value = draftBuffer.description || '';
+        descriptionInput.addEventListener('input', () => {
+            draftBuffer.description = descriptionInput.value;
+            markDirty();
+        });
+        basicsPanel.appendChild(descriptionInput);
+
+        const instructionsPanel = document.createElement('section');
+        instructionsPanel.className = 'editor-panel';
+        instructionsPanel.dataset.key = `studio-instructions:${detail.name || ''}`;
+        const instructionsTitle = document.createElement('div');
+        instructionsTitle.className = 'editor-section-title';
+        instructionsTitle.textContent = 'Instructions';
+        instructionsPanel.appendChild(instructionsTitle);
+        const instructionsNote = document.createElement('p');
+        instructionsNote.className = 'quiet-note';
+        instructionsNote.textContent = 'Write the runtime instructions this skill should follow.';
+        instructionsPanel.appendChild(instructionsNote);
+        const bodyInput = document.createElement('textarea');
+        bodyInput.className = 'guidance-textarea';
+        bodyInput.rows = 20;
+        bodyInput.value = draftBuffer.body || '';
+        bodyInput.placeholder = 'Draft instructions';
+        bodyInput.addEventListener('input', () => {
+            draftBuffer.body = bodyInput.value;
+            markDirty();
+        });
+        instructionsPanel.appendChild(bodyInput);
+
+        const requirementsPanel = document.createElement('section');
+        requirementsPanel.className = 'editor-panel';
+        requirementsPanel.dataset.key = `studio-requirements:${detail.name || ''}`;
+        const requirementsTitle = document.createElement('div');
+        requirementsTitle.className = 'editor-section-title';
+        requirementsTitle.textContent = 'Setup requirements';
+        requirementsPanel.appendChild(requirementsTitle);
+        const requirementsNote = document.createElement('p');
+        requirementsNote.className = 'quiet-note';
+        requirementsNote.textContent = 'Add only the credentials or setup prompts people must satisfy before this skill can run.';
+        requirementsPanel.appendChild(requirementsNote);
+        renderRequirementsEditor(requirementsPanel);
+
+        const providersPanel = document.createElement('section');
+        providersPanel.className = 'editor-panel';
+        providersPanel.dataset.key = `studio-providers:${detail.name || ''}`;
+        const providersTitle = document.createElement('div');
+        providersTitle.className = 'editor-section-title';
+        providersTitle.textContent = 'Provider config';
+        providersPanel.appendChild(providersTitle);
+        const providersNote = document.createElement('p');
+        providersNote.className = 'quiet-note';
+        providersNote.textContent = 'Advanced provider-specific overrides. Leave this empty unless the skill truly needs provider-specific behavior.';
+        providersPanel.appendChild(providersNote);
+        renderProviderEditor(providersPanel);
+
+        const filesPanel = document.createElement('section');
+        filesPanel.className = 'editor-panel';
+        filesPanel.dataset.key = `studio-files:${detail.name || ''}`;
+        const filesTitle = document.createElement('div');
+        filesTitle.className = 'editor-section-title';
+        filesTitle.textContent = 'Attached files';
+        filesPanel.appendChild(filesTitle);
+        const filesNote = document.createElement('p');
+        filesNote.className = 'quiet-note';
+        filesNote.textContent = 'Attach extra runtime files only when the skill depends on them. Most skills should not need this section.';
+        filesPanel.appendChild(filesNote);
+        renderFilesEditor(filesPanel);
+
+        const reviewPanel = document.createElement('section');
+        reviewPanel.className = 'editor-panel';
+        reviewPanel.dataset.key = `studio-review:${detail.name || ''}`;
+        const reviewTitle = document.createElement('div');
+        reviewTitle.className = 'editor-section-title';
+        reviewTitle.textContent = 'Review';
+        reviewPanel.appendChild(reviewTitle);
+        reviewPanel.appendChild(UI.renderMetadataGrid([
+            { label: 'Lifecycle', value: lifecycleLabel },
+            { label: 'Runtime available', value: packageState.runtime_available ? 'Yes' : 'No' },
+            { label: 'Publish ready', value: packageState.publish_ready ? 'Yes' : 'No' },
+            { label: 'Requirements', value: String((draftBuffer.requirements || []).length) },
+        ], { compact: true }));
+        const changelogInput = document.createElement('input');
+        changelogInput.className = 'input';
+        changelogInput.placeholder = 'Release note (optional)';
+        changelogInput.value = draftBuffer.changelog || '';
+        changelogInput.addEventListener('input', () => {
+            draftBuffer.changelog = changelogInput.value;
+            markDirty();
+        });
+        reviewPanel.appendChild(changelogInput);
+        const previewLabel = document.createElement('div');
+        previewLabel.className = 'detail-label';
+        previewLabel.textContent = 'Instructions preview';
+        reviewPanel.appendChild(previewLabel);
+        const preview = document.createElement('div');
+        preview.className = 'task-item-summary';
+        preview.innerHTML = UI.renderContent(draftBuffer.body || '');
+        reviewPanel.appendChild(preview);
+        if (validationProblems.length) {
             const validationLabel = document.createElement('div');
             validationLabel.className = 'detail-label';
             validationLabel.textContent = 'Validation problems';
-            section.appendChild(validationLabel);
-            const list = document.createElement('ul');
-            list.className = 'change-list';
-            packageState.validation_problems.forEach((problem) => {
+            reviewPanel.appendChild(validationLabel);
+            const problems = document.createElement('ul');
+            problems.className = 'change-list';
+            validationProblems.forEach((problem) => {
                 const item = document.createElement('li');
                 item.innerHTML = [
                     `<strong>${UI.esc(problem.field_path || problem.code || 'problem')}</strong>`,
                     `<div>${UI.esc(problem.message || '')}</div>`,
                 ].join('');
-                list.appendChild(item);
+                problems.appendChild(item);
             });
-            section.appendChild(list);
+            reviewPanel.appendChild(problems);
+        } else {
+            reviewPanel.appendChild(UI.renderEmptyState('No validation problems. This draft is ready for the next lifecycle step.', true));
         }
+        if ((lifecycle?.approvals || []).length) {
+            const activityLabel = document.createElement('div');
+            activityLabel.className = 'detail-label';
+            activityLabel.textContent = 'Recent review activity';
+            reviewPanel.appendChild(activityLabel);
+            const approvals = document.createElement('ul');
+            approvals.className = 'change-list';
+            lifecycle.approvals.slice(0, 5).forEach((item) => {
+                const li = document.createElement('li');
+                li.innerHTML = [
+                    `<strong>${UI.esc(item.action || 'update')}</strong>`,
+                    `<div class="quiet-note">${UI.esc(item.actor || 'unknown')}</div>`,
+                    item.note ? `<div>${UI.esc(item.note)}</div>` : '',
+                ].join('');
+                approvals.appendChild(li);
+            });
+            reviewPanel.appendChild(approvals);
+        }
+        const nextStepLabel = document.createElement('div');
+        nextStepLabel.className = 'detail-label';
+        nextStepLabel.textContent = 'Next step';
+        reviewPanel.appendChild(nextStepLabel);
+        const nextStepNote = document.createElement('p');
+        nextStepNote.className = 'quiet-note';
+        if (lifecycleStatus === 'draft') {
+            nextStepNote.textContent = packageState.publish_ready
+                ? 'Submit this draft for review when you are ready.'
+                : 'Fix the validation issues above, then submit this draft for review.';
+        } else if (lifecycleStatus === 'review') {
+            nextStepNote.textContent = 'Approve this draft to make it publishable, or reject it if it still needs changes.';
+        } else if (lifecycleStatus === 'approved') {
+            nextStepNote.textContent = 'Publish this approved draft when you are ready for it to become active on the bot.';
+        } else if (lifecycleStatus === 'archived') {
+            nextStepNote.textContent = 'This draft is archived.';
+        } else {
+            nextStepNote.textContent = 'This revision is already live. Archive it only if you want to retire it.';
+        }
+        reviewPanel.appendChild(nextStepNote);
+        const reviewActions = document.createElement('div');
+        reviewActions.className = 'editor-actions';
+        [submitBtn, approveBtn, rejectBtn, publishBtn, archiveBtn].forEach((button) => reviewActions.appendChild(button));
+        reviewPanel.appendChild(reviewActions);
 
-        return section;
-    }
+        const advancedPanel = document.createElement('section');
+        advancedPanel.className = 'editor-panel';
+        advancedPanel.dataset.key = `studio-advanced:${detail.name || ''}`;
+        const advancedTitle = document.createElement('div');
+        advancedTitle.className = 'editor-section-title';
+        advancedTitle.textContent = 'Advanced';
+        advancedPanel.appendChild(advancedTitle);
+        advancedPanel.appendChild(UI.renderMetadataGrid([
+            { label: 'Skill slug', value: detail.name || '(unnamed)' },
+            { label: 'Visibility', value: detail.visibility || 'private' },
+            { label: 'Draft revision', value: lifecycle?.active_revision_id || '(none)' },
+            { label: 'Published revision', value: lifecycle?.published_revision_id || '(none)' },
+        ]));
+        const kindSelect = document.createElement('select');
+        kindSelect.className = 'input';
+        [['prompt', 'Prompt skill'], ['executable', 'Executable skill']].forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.selected = draftBuffer.skill_kind === value;
+            kindSelect.appendChild(option);
+        });
+        kindSelect.addEventListener('change', () => {
+            draftBuffer.skill_kind = kindSelect.value;
+            markDirty();
+        });
+        advancedPanel.appendChild(kindSelect);
 
-    function _buildLifecycleHistory(lifecycle) {
-        const section = document.createElement('section');
-        section.className = 'editor-panel';
-        section.dataset.key = `skill-history:${lifecycle.name || ''}`;
+        const exportPanel = document.createElement('section');
+        exportPanel.className = 'editor-panel';
+        exportPanel.dataset.key = `studio-package:${detail.name || ''}`;
+        exportPanel.innerHTML = '<div class="editor-section-title">Package</div><p class="quiet-note">Export the draft you are editing, or the published revision currently active on this bot.</p>';
+        const exportActions = document.createElement('div');
+        exportActions.className = 'editor-actions';
+        const exportDraftBtn = document.createElement('button');
+        exportDraftBtn.type = 'button';
+        exportDraftBtn.className = 'btn btn-sm';
+        exportDraftBtn.textContent = 'Export draft';
+        exportDraftBtn.addEventListener('click', async () => {
+            try {
+                const artifact = await API.exportSkillPackage(currentAgentId, detail.name, { revision: 'draft' });
+                _downloadPackageArtifact(artifact);
+            } catch (err) {
+                UI.reportError('Failed to export the draft package', err, { context: 'Skill draft export failed' });
+            }
+        });
+        exportActions.appendChild(exportDraftBtn);
+        if (lifecycle?.published_revision_id) {
+            const exportPublishedBtn = document.createElement('button');
+            exportPublishedBtn.type = 'button';
+            exportPublishedBtn.className = 'btn btn-sm';
+            exportPublishedBtn.textContent = 'Export published';
+            exportPublishedBtn.addEventListener('click', async () => {
+                try {
+                    const artifact = await API.exportSkillPackage(currentAgentId, detail.name, { revision: 'published' });
+                    _downloadPackageArtifact(artifact);
+                } catch (err) {
+                    UI.reportError('Failed to export the published package', err, { context: 'Skill published export failed' });
+                }
+            });
+            exportActions.appendChild(exportPublishedBtn);
+        }
+        const importBtn = document.createElement('button');
+        importBtn.type = 'button';
+        importBtn.className = 'btn btn-sm';
+        importBtn.textContent = 'Import package';
+        importBtn.addEventListener('click', () => _openImportDialog());
+        exportActions.appendChild(importBtn);
+        exportPanel.appendChild(exportActions);
 
-        const revisionsLabel = document.createElement('div');
-        revisionsLabel.className = 'detail-label';
-        revisionsLabel.textContent = 'Revision history';
-        section.appendChild(revisionsLabel);
-
-        if ((lifecycle.revisions || []).length) {
+        const history = document.createElement('section');
+        history.className = 'editor-panel';
+        history.dataset.key = `studio-history:${detail.name || ''}`;
+        history.innerHTML = '<div class="editor-section-title">Revision history</div>';
+        if ((lifecycle?.revisions || []).length) {
             const revisions = document.createElement('ul');
             revisions.className = 'change-list';
             lifecycle.revisions.slice(0, 8).forEach((item) => {
@@ -1390,32 +2110,23 @@ function renderSkillCatalog(container) {
                 ].join('');
                 revisions.appendChild(li);
             });
-            section.appendChild(revisions);
+            history.appendChild(revisions);
         } else {
-            section.appendChild(UI.renderEmptyState('No revisions recorded yet.', true));
+            history.appendChild(UI.renderEmptyState('No revisions recorded yet.', true));
         }
 
-        const approvalsLabel = document.createElement('div');
-        approvalsLabel.className = 'detail-label';
-        approvalsLabel.textContent = 'Lifecycle activity';
-        section.appendChild(approvalsLabel);
-        if ((lifecycle.approvals || []).length) {
-            const approvals = document.createElement('ul');
-            approvals.className = 'change-list';
-            lifecycle.approvals.slice(0, 8).forEach((item) => {
-                const li = document.createElement('li');
-                li.innerHTML = [
-                    `<strong>${UI.esc(item.action || 'update')}</strong>`,
-                    `<div class="quiet-note">${UI.esc(item.actor || 'unknown')}</div>`,
-                    item.note ? `<div>${UI.esc(item.note)}</div>` : '',
-                ].join('');
-                approvals.appendChild(li);
-            });
-            section.appendChild(approvals);
+        if (currentStudioTab === 'write') {
+            nodes.push(basicsPanel, instructionsPanel);
+        } else if (currentStudioTab === 'setup') {
+            nodes.push(requirementsPanel);
+        } else if (currentStudioTab === 'review') {
+            nodes.push(reviewPanel);
         } else {
-            section.appendChild(UI.renderEmptyState('No lifecycle activity yet.', true));
+            nodes.push(advancedPanel, providersPanel, filesPanel, exportPanel, history);
         }
-        return section;
+
+        refreshChrome();
+        return nodes;
     }
 
     async function loadSkills({ soft = false, forceCatalog = false } = {}) {
@@ -1433,15 +2144,15 @@ function renderSkillCatalog(container) {
         const hadVisibleState = listEl.childElementCount > 0;
         let hasCachedView = false;
         if (shouldLoadCatalog) {
-            const cachedCatalog = UI.peekCachedData(_skillCacheKey(currentAgentId));
+            const cachedCatalog = UI.peekCachedData(RegistrySkillHub.listCacheKey(currentAgentId));
             if (cachedCatalog) {
                 const data = Array.isArray(cachedCatalog) ? cachedCatalog : (cachedCatalog.skills || []);
                 allSkills = Array.isArray(data) ? data : [];
                 hasCachedView = true;
             }
         }
-        if (currentMode === 'catalog' && queryText.length >= 2) {
-            const cachedSearch = UI.peekCachedData(_skillSearchCacheKey(currentAgentId, queryText));
+        if (RegistrySkillHub.canSearchStore(_currentAgent()) && queryText.length >= 2) {
+            const cachedSearch = UI.peekCachedData(RegistrySkillHub.searchCacheKey(currentAgentId, queryText));
             if (cachedSearch) {
                 registrySkills = Array.isArray(cachedSearch.registry) ? cachedSearch.registry : [];
                 registryError = String(cachedSearch.registry_error || '');
@@ -1455,13 +2166,13 @@ function renderSkillCatalog(container) {
             renderList();
             void loadSelectionData({ soft: true });
         }
-        if (!soft && !hasCachedView && (shouldLoadCatalog || (currentMode === 'catalog' && queryText.length >= 2))) {
-            renderLoadingState(currentMode === 'catalog' && queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
+        if (!soft && !hasCachedView && (shouldLoadCatalog || queryText.length >= 2)) {
+            renderLoadingState(queryText.length >= 2 ? 'Searching skills…' : 'Loading skills…');
         }
         try {
             if (shouldLoadCatalog) {
                 const data = await UI.loadCachedData(
-                    _skillCacheKey(currentAgentId),
+                    RegistrySkillHub.listCacheKey(currentAgentId),
                     () => API.listSkills(currentAgentId),
                     {
                         ttlMs: SKILL_CACHE_TTL_MS,
@@ -1471,9 +2182,9 @@ function renderSkillCatalog(container) {
                 );
                 allSkills = Array.isArray(data) ? data : (data.skills || []);
             }
-            if (currentMode === 'catalog' && queryText.length >= 2) {
+            if (RegistrySkillHub.canSearchStore(_currentAgent()) && queryText.length >= 2) {
                 const search = await UI.loadCachedData(
-                    _skillSearchCacheKey(currentAgentId, queryText),
+                    RegistrySkillHub.searchCacheKey(currentAgentId, queryText),
                     () => API.searchCatalogSkills(currentAgentId, queryText),
                     {
                         ttlMs: SKILL_SEARCH_CACHE_TTL_MS,
@@ -1521,16 +2232,20 @@ function renderSkillCatalog(container) {
         clearTimeout(searchTimeout);
         searchTimeout = setTimeout(() => {
             currentQ = searchInput.value.trim();
-            if (selectedSkillOrigin === 'store' && currentMode !== 'catalog') {
-                selectedSkillOrigin = 'local';
-            }
             void loadSkills({ soft: true });
         }, 250);
     });
 
+    const beforeUnload = (event) => {
+        if (!_hasUnsavedDraft()) return;
+        event.preventDefault();
+        event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+
     container.__routeReady = loadAgents();
-    modeControl.setActive(currentMode);
 
     cleanups.add(() => clearTimeout(searchTimeout));
+    cleanups.add(() => window.removeEventListener('beforeunload', beforeUnload));
     UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ soft: true }), 600);
 }

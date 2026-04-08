@@ -13,9 +13,8 @@ from octopus_sdk.content_models import (
 from app.content_store_base import AbstractContentStore
 from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
 from octopus_sdk.skill_packages import (
-    SKILL_PROVIDER_FILES,
     default_skill_display_name,
-    load_provider_config,
+    load_skill_provider_configs,
     load_skill_files,
     load_skill_markdown,
     load_skill_requirements,
@@ -55,11 +54,7 @@ def track_from_skill_dir(
             str(meta.get("skill_kind") or meta.get("kind") or "prompt")
         ),
         requirements=load_skill_requirements(path / "requires.yaml"),
-        provider_config={
-            provider: config
-            for provider, filename in SKILL_PROVIDER_FILES.items()
-            if (config := load_provider_config(path / filename))
-        },
+        provider_config=load_skill_provider_configs(path),
         files=load_skill_files(path),
         version_label=version_label,
         created_by=created_by,

@@ -110,14 +110,15 @@ Use `Skills` to manage what bots can do.
 You can:
 
 - see what skills exist
-- see what is available on a specific bot
+- see what is installed on a specific bot
 - install store skills
+- create or import custom skills from the same page
 - manage defaults for new conversations
 - author custom skills
 
 Important distinction:
 
-- `Available on this bot` is bot-level
+- `Installed on this bot` is bot-level
 - `Active in this conversation` is conversation-level
 
 Making a skill available on a bot does not turn it on in every conversation.
@@ -161,11 +162,12 @@ You can:
 ### Author A Custom Skill
 
 1. open `Skills`
-2. switch to `Studio`
-3. create a draft
-4. edit the package
-5. validate
-6. submit / approve / publish
+2. choose the target bot if it is not already implied by the route
+3. create a draft or import a package from the main `Skills` page
+4. use `Write` for title, description, and instructions
+5. use `Setup` for credential requirements
+6. use `Review` for validation and lifecycle actions
+7. use `Advanced` only for package import/export, provider config, files, and revision history
 
 For the full skills workflow, use
 [skills-guide.md](/Users/tinker/output/bots/telegram-agent-bot/docs/skills-guide.md).

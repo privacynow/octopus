@@ -31,6 +31,18 @@ _ACTIVE_LIST_RE = re.compile(
     r"^\s*(?:what|which)\s+skills?\s+are\s+active(?:\s+in\s+this\s+conversation)?(?:\b.*)?$",
     re.IGNORECASE,
 )
+_ACTIVE_SINGLE_RE = re.compile(
+    r"^\s*(?:what|which)\s+skill\s+(?:is\s+active(?:\s+(?:here|right\s+now|in\s+this\s+conversation))?|am\s+i\s+using(?:\s+in\s+this\s+conversation)?)(?:\b.*)?$",
+    re.IGNORECASE,
+)
+_ACTIVE_CONFIRM_RE = re.compile(
+    r"^\s*i\s+(?:have\s+)?activat(?:ed|e)\s+(?:a\s+)?skill(?:\s+for\s+(?:use\s+in\s+)?this\s+conversation)?(?:,)?\s+which\s+one\s+is\s+it(?:\b.*)?$",
+    re.IGNORECASE,
+)
+_ACTIVE_RECENT_RE = re.compile(
+    r"^\s*(?:(?:what|which)\s+skill\s+did\s+i\s+(?:just\s+)?activat(?:e|ed)|what\s+did\s+i\s+(?:just\s+)?activat(?:e|ed)|which\s+one\s+did\s+i\s+(?:just\s+)?activat(?:e|ed))(?:\s+(?:here|in\s+this\s+conversation))?(?:\b.*)?$",
+    re.IGNORECASE,
+)
 _AVAILABLE_LIST_RE = re.compile(
     r"^\s*(?:what|which)\s+skills?\s+are\s+available(?:\s+on\s+this\s+bot)?(?:\b.*)?$",
     re.IGNORECASE,
@@ -174,6 +186,8 @@ def parse_skill_question(
             subject_routed_task_id=str(subject.routed_task_id or "") if used_follow_up and subject is not None else "",
         )
     if _ACTIVE_LIST_RE.match(raw):
+        return SkillQuestionIntent(kind="skill_list", status_focus="active")
+    if _ACTIVE_SINGLE_RE.match(raw) or _ACTIVE_CONFIRM_RE.match(raw) or _ACTIVE_RECENT_RE.match(raw):
         return SkillQuestionIntent(kind="skill_list", status_focus="active")
     if _AVAILABLE_LIST_RE.match(raw):
         return SkillQuestionIntent(kind="skill_list", status_focus="available")

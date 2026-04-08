@@ -53,10 +53,17 @@ class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
     body: str | None = Field(default=None, description="Draft instruction body override")
     display_name: str | None = Field(default=None, description="Optional display name override")
     description: str | None = Field(default=None, description="Optional skill description override")
+    skill_kind: str | None = Field(default=None, description="Optional skill kind override")
     requirements: list[SkillRequirementRecord] | None = Field(default=None, description="Optional requirement list override")
     provider_config: RegistryJsonRecord | None = Field(default=None, description="Optional provider config override")
     files: list[SkillFileRecord] | None = Field(default=None, description="Optional draft file list override")
     changelog: str = Field(default="", description="Optional changelog entry")
+
+
+class RuntimeSkillPackageImportRequest(LifecycleActionRequest):
+    target_skill_name: str = Field(default="", description="Optional existing custom draft to replace")
+    file_name: str = Field(default="", description="Original uploaded file name")
+    package_base64: str = Field(..., min_length=1, description="Base64-encoded skill package archive")
 
 
 class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):

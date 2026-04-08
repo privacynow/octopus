@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from octopus_sdk.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from octopus_sdk.content_store import ContentStorePort
 from octopus_sdk.providers import ProviderConfigRecord, coerce_provider_config
 from octopus_sdk.skill_packages import (
+    build_skill_package_archive,
     coerce_skill_requirements,
     coerce_skill_files,
+    default_skill_display_name,
+    parse_skill_package_archive,
     publish_ready,
     skill_runtime_available,
     validate_skill_package,
 )
+from octopus_sdk.runtime.skills import normalize_skill_kind
 from octopus_sdk.workflows.lifecycle_machine import (
     LifecycleDecision,
     build_lifecycle_snapshot,
@@ -25,6 +30,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleMutation,
+    RuntimeSkillPackageArtifact,
     RuntimeSkillLifecycleRevision,
     RuntimeSkillValidationProblem,
 )
@@ -51,7 +57,13 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             return None
         return track
 
-    def _detail__track(self, track: RuntimeSkillTrackRecord) -> RuntimeSkillLifecycleDetail:
+    def _detail_from_track(
+        self,
+        track: RuntimeSkillTrackRecord,
+        *,
+        revisions: tuple[RuntimeSkillLifecycleRevision, ...] = (),
+        approvals: tuple[RuntimeSkillLifecycleApproval, ...] = (),
+    ) -> RuntimeSkillLifecycleDetail:
         validation_problems = tuple(
             RuntimeSkillValidationProblem(
                 code=item.code,
@@ -68,32 +80,11 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 files=track.revision.files,
             )
         )
-        revisions = tuple(
-            RuntimeSkillLifecycleRevision(
-                revision_id=item.revision_id,
-                version_label=item.version_label,
-                status=item.status,
-                changelog=item.changelog,
-                created_by=item.created_by,
-                created_at=item.created_at,
-                is_published=(item.revision_id == track.published_revision_id),
-            )
-            for item in self._store.list_skill_revisions(track.slug)
-        )
-        approvals = tuple(
-            RuntimeSkillLifecycleApproval(
-                revision_id=item.revision_id,
-                action=item.action,
-                actor=item.actor,
-                note=item.note,
-                created_at=item.created_at,
-            )
-            for item in self._store.list_skill_approvals(track.slug)
-        )
         return RuntimeSkillLifecycleDetail(
             name=track.slug,
             display_name=track.display_name,
             description=track.description,
+            skill_kind=track.revision.skill_kind,
             source_label=skill_source_label(track.source_kind),
             visibility=track.visibility,
             body=track.revision.instruction_body,
@@ -116,6 +107,31 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             revisions=revisions,
             approvals=approvals,
         )
+
+    def _detail__track(self, track: RuntimeSkillTrackRecord) -> RuntimeSkillLifecycleDetail:
+        revisions = tuple(
+            RuntimeSkillLifecycleRevision(
+                revision_id=item.revision_id,
+                version_label=item.version_label,
+                status=item.status,
+                changelog=item.changelog,
+                created_by=item.created_by,
+                created_at=item.created_at,
+                is_published=(item.revision_id == track.published_revision_id),
+            )
+            for item in self._store.list_skill_revisions(track.slug)
+        )
+        approvals = tuple(
+            RuntimeSkillLifecycleApproval(
+                revision_id=item.revision_id,
+                action=item.action,
+                actor=item.actor,
+                note=item.note,
+                created_at=item.created_at,
+            )
+            for item in self._store.list_skill_approvals(track.slug)
+        )
+        return self._detail_from_track(track, revisions=revisions, approvals=approvals)
 
     def _lifecycle_snapshot(self, track: RuntimeSkillTrackRecord):
         return build_lifecycle_snapshot(
@@ -254,6 +270,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         body: str | None = None,
         display_name: str | None = None,
         description: str | None = None,
+        skill_kind: str | None = None,
         requirements: tuple | None = None,
         provider_config: ProviderConfigRecord | None = None,
         files: tuple | None = None,
@@ -269,6 +286,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         text = track.revision.instruction_body if body is None else body.strip()
         next_display_name = track.display_name if display_name is None else str(display_name).strip()
         next_description = track.description if description is None else description
+        next_skill_kind = track.revision.skill_kind if skill_kind is None else normalize_skill_kind(skill_kind)
         next_requirements = (
             tuple(track.revision.requirements)
             if requirements is None
@@ -297,6 +315,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                     source_kind=track.source_kind,
                     revision=SkillRevisionRecord(
                         instruction_body=text,
+                        skill_kind=next_skill_kind,
                         requirements=list(next_requirements),
                         provider_config=next_provider_config,
                         files=next_files,
@@ -327,6 +346,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             source_kind=track.source_kind,
             revision=SkillRevisionRecord(
                 instruction_body=text,
+                skill_kind=next_skill_kind,
                 requirements=list(next_requirements),
                 provider_config=next_provider_config,
                 files=next_files,
@@ -350,6 +370,112 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             message=f"Saved draft for '{skill_name}'.",
             detail=detail,
         )
+
+    def export_package(
+        self,
+        skill_name: str,
+        *,
+        revision_scope: str = "draft",
+    ) -> RuntimeSkillPackageArtifact | None:
+        track = self._mutable_track(skill_name)
+        if track is None:
+            return None
+        normalized_scope = "published" if str(revision_scope or "").strip().lower() == "published" else "draft"
+        export_track = track
+        revision_id = track.active_revision_id
+        if normalized_scope == "published":
+            published_revision_id = str(track.published_revision_id or "").strip()
+            if not published_revision_id:
+                return None
+            published_revision = next(
+                (
+                    item
+                    for item in self._store.list_skill_revisions(track.slug)
+                    if item.revision_id == published_revision_id
+                ),
+                None,
+            )
+            if published_revision is None:
+                return None
+            export_track = RuntimeSkillTrackRecord(
+                slug=track.slug,
+                display_name=track.display_name,
+                description=track.description,
+                source_kind=track.source_kind,
+                revision=published_revision,
+                source_uri=track.source_uri,
+                owner_actor=track.owner_actor,
+                visibility=track.visibility,
+                is_mutable=track.is_mutable,
+                archived=track.archived,
+                active_revision_id=published_revision_id,
+                published_revision_id=published_revision_id,
+            )
+            revision_id = published_revision_id
+        archive_bytes = build_skill_package_archive(export_track)
+        return RuntimeSkillPackageArtifact(
+            name=export_track.slug,
+            display_name=export_track.display_name,
+            file_name=f"{export_track.slug}-{normalized_scope}.skill.zip",
+            content_type="application/zip",
+            content_bytes=archive_bytes,
+            revision_scope=normalized_scope,
+            revision_id=revision_id,
+        )
+
+    def import_package(
+        self,
+        *,
+        actor_key: str,
+        package_bytes: bytes,
+        file_name: str = "",
+        target_skill_name: str = "",
+    ) -> RuntimeSkillLifecycleMutation:
+        try:
+            package = parse_skill_package_archive(package_bytes)
+        except ValueError as exc:
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message=str(exc),
+            )
+        skill_name = str(target_skill_name or package.skill_name or "").strip().lower()
+        if not skill_name:
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message="Skill package does not include a valid skill name.",
+            )
+        track = self._mutable_track(skill_name)
+        if track is None:
+            try:
+                self._catalog.create_custom_draft(skill_name, owner_actor=actor_key)
+            except ValueError as exc:
+                return RuntimeSkillLifecycleMutation(
+                    status="invalid",
+                    ok=False,
+                    message=str(exc),
+                )
+        imported = self.edit_draft(
+            skill_name,
+            actor_key=actor_key,
+            body=package.body,
+            display_name=package.display_name or default_skill_display_name(skill_name),
+            description=package.description,
+            skill_kind=package.skill_kind,
+            requirements=package.requirements,
+            provider_config=package.provider_config,
+            files=package.files,
+            changelog=f"Imported from {Path(str(file_name or 'package')).name}",
+        )
+        if imported.ok:
+            return RuntimeSkillLifecycleMutation(
+                status="imported",
+                ok=True,
+                message=f"Imported skill package into '{skill_name}'.",
+                detail=imported.detail,
+            )
+        return imported
 
     def submit(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
         track = self._mutable_track(skill_name)

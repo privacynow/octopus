@@ -219,6 +219,12 @@ const API = (() => {
             request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/lifecycle`),
         saveSkillDraft: (agentId, name, body = {}) =>
             request('PUT', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/draft`, { body }),
+        exportSkillPackage: (agentId, name, opts = {}) =>
+            request('GET', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/export`, {
+                params: { revision: opts.revision || 'draft' },
+            }),
+        importSkillPackage: (agentId, body = {}) =>
+            request('POST', `${_agentPath(agentId)}/catalog/skills/import`, { body }),
         submitSkillDraft: (agentId, name, body = {}) =>
             request('POST', `${_agentPath(agentId)}/catalog/skills/${encodeURIComponent(name)}/submit`, { body }),
         approveSkillDraft: (agentId, name, body = {}) =>

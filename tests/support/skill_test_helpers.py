@@ -150,26 +150,11 @@ def _decrypt(encoded: str, key: bytes) -> str:
     return f.decrypt(encoded.encode()).decode()
 
 
-def _credential_file(data_dir: Path, actor_key: str) -> Path:
-    normalized = parse_actor_key(actor_key)
-    return data_dir / "credentials" / f"{filesystem_component_for_key(normalized)}.json"
-
-
 def _credential_store(key: bytes) -> PostgresCredentialStore:
     database_url = os.environ.get("OCTOPUS_DATABASE_URL", "").strip()
     if not database_url:
         raise RuntimeError("OCTOPUS_DATABASE_URL must be set for credential compatibility helpers")
     return PostgresCredentialStore(database_url, encryption_key=key)
-
-
-def list_user_credential_skills(data_dir: Path, actor_key: str) -> list[str]:
-    """Return skill names that have stored credentials (no decryption)."""
-    del data_dir
-    sentinel_key = derive_credential_encryption_key("legacy-credential-list")
-    return _credential_store(sentinel_key).list_skill_names(
-        parse_actor_key(actor_key)
-    )
-
 
 def load_user_credentials(data_dir: Path, actor_key: str, key: bytes) -> dict[str, dict[str, str]]:
     """Load and decrypt per-user credentials.
@@ -288,22 +273,6 @@ def get_skill_instructions(name: str) -> str:
     except ValueError:
         return ""
     return body
-
-
-def skill_info_resolved(name: str) -> tuple[dict, str, str, Path] | None:
-    """Return compatibility metadata/body/source/path for a filesystem skill."""
-    _TIER_LABELS = {"custom": "custom", "catalog": "catalog"}
-
-    result = _resolve_skill(name)
-    if result is not None:
-        skill_path, tier = result
-        try:
-            meta, body = _load_skill_md(skill_path / "skill.md")
-        except ValueError:
-            return None
-        return meta, body, _TIER_LABELS[tier], skill_path
-
-    return None
 
 
 def get_provider_config_digest(skill_names: list[str], provider_name: str = "") -> str:
@@ -475,6 +444,15 @@ def build_system_prompt(role: str, skill_names: list[str]) -> str:
             parts.append(f"You are a {stripped}.\n")
 
     catalog = load_catalog()
+    available = ", ".join(sorted(catalog)) or "none"
+    active = ", ".join(skill_names) or "none"
+    if catalog or skill_names:
+        parts.append(
+            "## Octopus Runtime Skill State\n\n"
+            "This state is authoritative for the current bot and conversation.\n"
+            f"Available on this bot: {available}.\n"
+            f"Active in this conversation: {active}.\n"
+        )
     for name in skill_names:
         instructions = get_skill_instructions(name)
         if not instructions:
@@ -757,25 +735,6 @@ def scaffold_skill(name: str) -> Path:
 def filter_resolvable_skills(names: list[str]) -> list[str]:
     """Return only skills that currently resolve to a valid directory."""
     return [n for n in names if _skill_dir(n) is not None]
-
-
-def normalize_active_skills(session, save_fn=None) -> list[str]:
-    """Prune active skills whose runtime catalog entries no longer resolve.
-
-    Mutates session.active_skills.  Calls save_fn(session) if
-    any skills were removed and save_fn is provided.
-    Returns list of pruned skill names.
-    """
-    from app.skill_catalog_service import get_skill_catalog_service
-
-    active = list(session.active_skills)
-    kept = get_skill_catalog_service().filter_resolvable(active)
-    pruned = [name for name in active if name not in kept]
-    if pruned:
-        session.active_skills = kept
-        if save_fn:
-            save_fn(session)
-    return pruned
 
 
 def validate_active_skills(

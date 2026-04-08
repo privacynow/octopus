@@ -29,6 +29,7 @@ from octopus_sdk.workflows.skills import (
     RuntimeSkillDetail,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleMutation,
+    RuntimeSkillPackageArtifact,
     RuntimeSkillValidationProblem,
     RuntimeSkillMutationOutcome,
     RuntimeSkillSearchResults,
@@ -50,6 +51,8 @@ ManagementOperation = Literal[
     "catalog_skill_detail",
     "catalog_skill_lifecycle_detail",
     "edit_catalog_skill_draft",
+    "export_catalog_skill_package",
+    "import_catalog_skill_package",
     "submit_catalog_skill",
     "approve_catalog_skill",
     "reject_catalog_skill",
@@ -213,6 +216,7 @@ class RuntimeSkillLifecycleDetailRecord(RegistryRecordModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    skill_kind: str = "prompt"
     source_label: str = ""
     visibility: str = ""
     body: str = ""
@@ -234,6 +238,16 @@ class RuntimeSkillLifecycleMutationRecord(RegistryRecordModel):
     ok: bool = False
     message: str = ""
     detail: RuntimeSkillLifecycleDetailRecord | None = None
+
+
+class RuntimeSkillPackageArtifactRecord(RegistryRecordModel):
+    name: str = ""
+    display_name: str = ""
+    file_name: str = ""
+    content_type: str = "application/zip"
+    package_base64: str = ""
+    revision_scope: str = "draft"
+    revision_id: str = ""
 
 
 class RuntimeSkillMutationOutcomeRecord(RegistryRecordModel):
@@ -532,6 +546,7 @@ def runtime_skill_lifecycle_detail_record(
         name=detail.name,
         display_name=detail.display_name,
         description=detail.description,
+        skill_kind=detail.skill_kind,
         source_label=detail.source_label,
         visibility=detail.visibility,
         body=detail.body,
@@ -569,6 +584,22 @@ def runtime_skill_lifecycle_detail_record(
             )
             for item in detail.approvals
         ],
+    )
+
+
+def runtime_skill_package_artifact_record(
+    artifact: RuntimeSkillPackageArtifact,
+) -> RuntimeSkillPackageArtifactRecord:
+    import base64
+
+    return RuntimeSkillPackageArtifactRecord(
+        name=artifact.name,
+        display_name=artifact.display_name,
+        file_name=artifact.file_name,
+        content_type=artifact.content_type,
+        package_base64=base64.b64encode(artifact.content_bytes).decode("ascii"),
+        revision_scope=artifact.revision_scope,
+        revision_id=artifact.revision_id,
     )
 
 
@@ -776,10 +807,25 @@ class EditCatalogSkillDraftRequest(RegistryRecordModel):
     body: str | None = None
     display_name: str | None = None
     description: str | None = None
+    skill_kind: str | None = None
     requirements: list[SkillRequirementRecord] | None = None
     provider_config: RegistryJsonRecord | None = None
     files: list[SkillFileRecord] | None = None
     changelog: str = ""
+
+
+class ExportCatalogSkillPackageRequest(RegistryRecordModel):
+    operation: Literal["export_catalog_skill_package"] = "export_catalog_skill_package"
+    skill_name: str
+    revision_scope: Literal["draft", "published"] = "draft"
+
+
+class ImportCatalogSkillPackageRequest(RegistryRecordModel):
+    operation: Literal["import_catalog_skill_package"] = "import_catalog_skill_package"
+    actor_key: str
+    target_skill_name: str = ""
+    file_name: str = ""
+    package_base64: str
 
 
 class SubmitCatalogSkillRequest(RegistryRecordModel):
@@ -980,6 +1026,8 @@ ManagementRequestPayload = Annotated[
     | CatalogSkillDetailRequest
     | CatalogSkillLifecycleDetailRequest
     | EditCatalogSkillDraftRequest
+    | ExportCatalogSkillPackageRequest
+    | ImportCatalogSkillPackageRequest
     | SubmitCatalogSkillRequest
     | ApproveCatalogSkillRequest
     | RejectCatalogSkillRequest
@@ -1032,6 +1080,16 @@ class CatalogSkillLifecycleDetailResult(RegistryRecordModel):
 
 class EditCatalogSkillDraftResult(RegistryRecordModel):
     operation: Literal["edit_catalog_skill_draft"] = "edit_catalog_skill_draft"
+    result: RuntimeSkillLifecycleMutationRecord
+
+
+class ExportCatalogSkillPackageResult(RegistryRecordModel):
+    operation: Literal["export_catalog_skill_package"] = "export_catalog_skill_package"
+    artifact: RuntimeSkillPackageArtifactRecord | None = None
+
+
+class ImportCatalogSkillPackageResult(RegistryRecordModel):
+    operation: Literal["import_catalog_skill_package"] = "import_catalog_skill_package"
     result: RuntimeSkillLifecycleMutationRecord
 
 
@@ -1176,6 +1234,8 @@ ManagementResultPayload = Annotated[
     | CatalogSkillDetailResult
     | CatalogSkillLifecycleDetailResult
     | EditCatalogSkillDraftResult
+    | ExportCatalogSkillPackageResult
+    | ImportCatalogSkillPackageResult
     | SubmitCatalogSkillResult
     | ApproveCatalogSkillResult
     | RejectCatalogSkillResult
@@ -1244,6 +1304,8 @@ MANAGEMENT_OPERATION_CAPABILITIES: dict[ManagementOperation, ManagementCapabilit
     "diff_catalog_skill": "skill_catalog",
     "catalog_skill_lifecycle_detail": "skill_lifecycle",
     "edit_catalog_skill_draft": "skill_lifecycle",
+    "export_catalog_skill_package": "skill_lifecycle",
+    "import_catalog_skill_package": "skill_lifecycle",
     "submit_catalog_skill": "skill_lifecycle",
     "approve_catalog_skill": "skill_lifecycle",
     "reject_catalog_skill": "skill_lifecycle",

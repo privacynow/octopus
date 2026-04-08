@@ -190,20 +190,363 @@ function renderAgentDetail(container, params) {
             body.appendChild(note);
         }
 
+        card.appendChild(body);
+
+        return card;
+    }
+
+    function skillsWorkspaceHref(skillName = '', options = {}) {
+        const hub = window.RegistrySkillHub;
+        if (hub && typeof hub.skillWorkspaceHref === 'function') {
+            return hub.skillWorkspaceHref(agentId, skillName, options);
+        }
+        return `/ui/skills?agent_id=${encodeURIComponent(agentId)}`;
+    }
+
+    function openSkillsDrawer(agent) {
+        const hub = window.RegistrySkillHub;
+        if (!hub) {
+            Router.navigate(skillsWorkspaceHref());
+            return;
+        }
+
+        const shell = document.createElement('div');
+        shell.className = 'studio-stack';
+
+        const intro = document.createElement('p');
+        intro.className = 'quiet-note';
+        intro.textContent = 'Quick actions live here. Open the full Skills page for deep editing, lifecycle review, and package work.';
+        shell.appendChild(intro);
+
+        const controls = document.createElement('div');
+        controls.className = 'route-controls';
+        const search = document.createElement('input');
+        search.type = 'text';
+        search.className = 'search-input';
+        search.placeholder = 'Search installed or store skills';
+        controls.appendChild(search);
+        shell.appendChild(controls);
+
+        const listShell = document.createElement('div');
+        listShell.className = 'list-shell';
+        const list = document.createElement('div');
+        list.className = 'list-container';
+        listShell.appendChild(list);
+        shell.appendChild(listShell);
+
+        const openPageBtn = document.createElement('button');
+        openPageBtn.type = 'button';
+        openPageBtn.className = 'btn';
+        openPageBtn.textContent = 'Open Skills page';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'btn btn-primary';
+        closeBtn.textContent = 'Close';
+        const view = UI.showDialog('Manage skills', shell, {
+            actions: [openPageBtn, closeBtn],
+            maxWidth: '760px',
+        });
+        view.overlay.classList.add('skills-drawer-overlay');
+        view.dialog.classList.add('skills-drawer-dialog');
+        closeBtn.addEventListener('click', () => view.close());
+        openPageBtn.addEventListener('click', () => {
+            view.close();
+            Router.navigate(skillsWorkspaceHref());
+        });
+
+        let currentQ = '';
+        let allSkills = [];
+        let storeSkills = [];
+        let registryError = '';
+
+        function invalidateSkills() {
+            UI.invalidateCachedData([
+                hub.listCacheKey(agentId),
+                `skills:search:${String(agentId || '').trim()}:`,
+                `skills:detail:${String(agentId || '').trim()}:`,
+                `skills:lifecycle:${String(agentId || '').trim()}:`,
+            ]);
+        }
+
+        async function useSkillInConversation(skillName) {
+            view.close();
+            await hub.openConversationForSkill(agentId, skillName, {
+                agentLabel: UI.visibleLabel(agent.display_name, agent.slug, agent.agent_id) || 'this bot',
+            });
+        }
+
+        function renderDrawer(loading = false) {
+            const sections = hub.buildSections(allSkills, storeSkills, currentQ);
+            const appendOpenInSkillsButton = (actions, skill, origin) => {
+                const openBtn = document.createElement('button');
+                openBtn.type = 'button';
+                openBtn.className = 'btn btn-sm list-row-action';
+                openBtn.textContent = 'Open in Skills';
+                openBtn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    view.close();
+                    Router.navigate(skillsWorkspaceHref(skill.name || '', {
+                        origin,
+                        tab: origin === 'local' && hub.isCustomSkill(skill) ? 'write' : '',
+                    }));
+                });
+                actions.appendChild(openBtn);
+            };
+            UI.memoizedRender(list, {
+                loading,
+                q: currentQ,
+                sections,
+                registryError,
+            }, (state) => {
+                if (state.loading && !state.sections.length) {
+                    return [UI.renderEmptyState('Loading skills…', true)];
+                }
+                if (!state.sections.length) {
+                    return [UI.renderEmptyState(
+                        state.q.length >= 2
+                            ? 'No installed or store skills match this search.'
+                            : 'No skills available for this bot.',
+                        true,
+                    )];
+                }
+                const nodes = [];
+                (state.sections || []).forEach((section) => {
+                    const label = document.createElement('div');
+                    label.className = 'list-section-label';
+                    label.dataset.key = `agent-skills-${section.key}`;
+                    label.textContent = section.label;
+                    nodes.push(label);
+                    section.items.forEach((skill) => {
+                        const meta = section.origin === 'store' ? hub.storeRowMeta(skill) : hub.localRowMeta(skill);
+                        const shellRow = document.createElement('div');
+                        shellRow.className = 'list-row-shell';
+                        shellRow.dataset.key = `agent-skill:${section.origin}:${skill.name || ''}`;
+                        shellRow.appendChild(UI.renderListRow({
+                            label: meta.label,
+                            sublabel: meta.sublabel,
+                            badgeText: meta.badgeText,
+                            onClick: () => {
+                                view.close();
+                                Router.navigate(skillsWorkspaceHref(skill.name || '', {
+                                    origin: section.origin,
+                                    tab: section.origin === 'local' && hub.isCustomSkill(skill) ? 'write' : '',
+                                }));
+                            },
+                        }));
+                        const actions = document.createElement('div');
+                        actions.className = 'list-row-actions';
+
+                        if (section.origin === 'store' && skill.can_import) {
+                            const installBtn = document.createElement('button');
+                            installBtn.type = 'button';
+                            installBtn.className = 'btn btn-sm list-row-action';
+                            installBtn.textContent = 'Install';
+                            installBtn.addEventListener('click', async (event) => {
+                                event.stopPropagation();
+                                installBtn.disabled = true;
+                                try {
+                                    await API.installSkill(agentId, skill.name);
+                                    invalidateSkills();
+                                    view.close();
+                                } catch (err) {
+                                    UI.reportError('Failed to install the skill', err, { context: 'Agent drawer skill install failed' });
+                                    installBtn.disabled = false;
+                                }
+                            });
+                            actions.appendChild(installBtn);
+                        } else if (section.origin === 'local' && hub.isCustomSkill(skill)) {
+                            const editBtn = document.createElement('button');
+                            editBtn.type = 'button';
+                            editBtn.className = 'btn btn-sm list-row-action';
+                            editBtn.textContent = 'Edit';
+                            editBtn.addEventListener('click', (event) => {
+                                event.stopPropagation();
+                                view.close();
+                                Router.navigate(skillsWorkspaceHref(skill.name || '', { tab: 'write' }));
+                            });
+                            actions.appendChild(editBtn);
+                        }
+
+                        if (section.origin === 'local' && skill.runtime_available) {
+                            const useBtn = document.createElement('button');
+                            useBtn.type = 'button';
+                            useBtn.className = 'btn btn-sm btn-primary list-row-action';
+                            useBtn.textContent = 'Open conversation and activate';
+                            useBtn.addEventListener('click', async (event) => {
+                                event.stopPropagation();
+                                useBtn.disabled = true;
+                                try {
+                                    await useSkillInConversation(skill.name || '');
+                                } catch (err) {
+                                    UI.reportError('Failed to open a conversation for this skill', err, { context: 'Agent drawer use skill failed' });
+                                    useBtn.disabled = false;
+                                }
+                            });
+                            actions.appendChild(useBtn);
+                        }
+
+                        if (section.origin === 'store' || (section.origin === 'local' && !hub.isCustomSkill(skill))) {
+                            appendOpenInSkillsButton(actions, skill, section.origin);
+                        } else if (!actions.childElementCount) {
+                            appendOpenInSkillsButton(actions, skill, section.origin);
+                        }
+
+                        shellRow.appendChild(actions);
+                        nodes.push(shellRow);
+                    });
+                });
+                if (state.registryError && state.q.length >= 2) {
+                    nodes.push(UI.renderEmptyState(`Store search unavailable. ${state.registryError}`, true));
+                }
+                return nodes;
+            }, {
+                signatureFn(state) {
+                    return {
+                        loading: Boolean(state.loading),
+                        q: String(state.q || ''),
+                        sections: (state.sections || []).map((section) => ({
+                            key: String(section.key || ''),
+                            items: (section.items || []).map((skill) => ({
+                                name: String(skill.name || ''),
+                                runtime: Boolean(skill.runtime_available),
+                                canImport: Boolean(skill.can_import),
+                                source: String(skill.source_kind || ''),
+                                version: String(skill.version || ''),
+                            })),
+                        })),
+                        registryError: String(state.registryError || ''),
+                    };
+                },
+            });
+        }
+
+        async function loadDrawerSkills({ soft = false } = {}) {
+            const queryText = String(currentQ || '').trim();
+            let hasCached = false;
+            const cachedLocal = UI.peekCachedData(hub.listCacheKey(agentId));
+            if (cachedLocal) {
+                allSkills = Array.isArray(cachedLocal) ? cachedLocal : (cachedLocal.skills || []);
+                hasCached = true;
+            }
+            if (hub.canSearchStore(agent) && queryText.length >= 2) {
+                const cachedSearch = UI.peekCachedData(hub.searchCacheKey(agentId, queryText));
+                if (cachedSearch) {
+                    storeSkills = Array.isArray(cachedSearch.registry) ? cachedSearch.registry : [];
+                    registryError = String(cachedSearch.registry_error || '');
+                    hasCached = true;
+                }
+            } else {
+                storeSkills = [];
+                registryError = '';
+            }
+            if (hasCached || !soft) {
+                renderDrawer(true);
+            }
+            try {
+                const localData = await UI.loadCachedData(
+                    hub.listCacheKey(agentId),
+                    () => API.listSkills(agentId),
+                    { ttlMs: 60000, errorTtlMs: 5000, forceRefresh: hasCached },
+                );
+                allSkills = Array.isArray(localData) ? localData : (localData.skills || []);
+                if (hub.canSearchStore(agent) && queryText.length >= 2) {
+                    const searchData = await UI.loadCachedData(
+                        hub.searchCacheKey(agentId, queryText),
+                        () => API.searchCatalogSkills(agentId, queryText),
+                        { ttlMs: 30000, errorTtlMs: 5000, forceRefresh: hasCached },
+                    );
+                    storeSkills = Array.isArray(searchData.registry) ? searchData.registry : [];
+                    registryError = String(searchData.registry_error || '');
+                } else {
+                    storeSkills = [];
+                    registryError = '';
+                }
+                renderDrawer(false);
+            } catch (err) {
+                if (hasCached) {
+                    UI.reportError('Failed to refresh skills', err, { context: 'Agent drawer skills refresh failed' });
+                    renderDrawer(false);
+                    return;
+                }
+                UI.clearMemoizedRender(list);
+                UI.reconcileChildren(list, [UI.createErrorCard('Failed to load skills: ' + err.message, loadDrawerSkills)]);
+            }
+        }
+
+        let searchTimeout = null;
+        search.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                currentQ = String(search.value || '').trim();
+                void loadDrawerSkills({ soft: true });
+            }, 250);
+        });
+
+        void loadDrawerSkills();
+    }
+
+    function buildSkillsCard(agent) {
+        const hub = window.RegistrySkillHub;
+        const manageEnabled = Boolean(hub && (hub.canSearchStore(agent) || hub.canCreateCustom(agent)));
+        const card = document.createElement('section');
+        card.className = 'card workspace-section';
+        card.dataset.key = 'skills';
+
+        const head = document.createElement('div');
+        head.className = 'section-header';
+        head.innerHTML = '<strong>Skills</strong>';
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'list-shell';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = manageEnabled
+            ? 'Manage this bot’s skills from one workspace, then activate a skill inside a conversation when you want it in context.'
+            : 'This bot does not currently advertise registry-backed skill management.';
+        body.appendChild(note);
+
         if ((agent.routing_skills || []).length) {
+            const label = document.createElement('div');
+            label.className = 'detail-label';
+            label.textContent = 'Advertised for routing';
+            body.appendChild(label);
             const chips = document.createElement('div');
             chips.className = 'chip-row';
-            agent.routing_skills.forEach((skillName) => {
+            (agent.routing_skills || []).slice(0, 4).forEach((skillName) => {
                 const chip = document.createElement('span');
                 chip.className = 'quickstart-chip static';
                 chip.textContent = skillName;
                 chips.appendChild(chip);
             });
+            if ((agent.routing_skills || []).length > 4) {
+                const more = document.createElement('span');
+                more.className = 'quiet-note';
+                more.textContent = `+${(agent.routing_skills || []).length - 4} more`;
+                chips.appendChild(more);
+            }
             body.appendChild(chips);
         }
 
-        card.appendChild(body);
+        const actions = document.createElement('div');
+        actions.className = 'editor-actions';
+        const manageBtn = document.createElement('button');
+        manageBtn.type = 'button';
+        manageBtn.className = 'btn btn-sm btn-primary';
+        manageBtn.textContent = 'Manage skills';
+        manageBtn.disabled = !manageEnabled;
+        manageBtn.addEventListener('click', () => openSkillsDrawer(agent));
+        actions.appendChild(manageBtn);
+        const openPageBtn = document.createElement('button');
+        openPageBtn.type = 'button';
+        openPageBtn.className = 'btn btn-sm';
+        openPageBtn.textContent = 'Open Skills page';
+        openPageBtn.disabled = !manageEnabled;
+        openPageBtn.addEventListener('click', () => Router.navigate(skillsWorkspaceHref()));
+        actions.appendChild(openPageBtn);
+        body.appendChild(actions);
 
+        card.appendChild(body);
         return card;
     }
 
@@ -446,6 +789,7 @@ function renderAgentDetail(container, params) {
                     scope: String(agent.registry_scope || ''),
                     version: String(agent.version || ''),
                     routingSkills: (agent.routing_skills || []).map((skillName) => String(skillName || '')),
+                    capabilities: (agent.management_capabilities || []).map((capability) => String(capability || '')),
                 },
                 workers: workers.map((worker) => ({
                     id: String(worker.worker_id || ''),
@@ -460,6 +804,7 @@ function renderAgentDetail(container, params) {
             buildHeader(agent);
             const detailRender = UI.memoizedRender(content, signature, () => [
                 buildOverviewCard(agent),
+                buildSkillsCard(agent),
                 buildWorkersCard(workers),
                 buildConversationsSection(),
             ], {

@@ -177,15 +177,6 @@ def stop_test_postgres_container(worker_id: str = "master", run_id: str | None =
     )
 
 
-def get_test_postgres_base_url() -> str | None:
-    """Return base Postgres URL for tests when using harness-started container only.
-
-    Does NOT read BOT_DATABASE_URL or TEST_POSTGRES_BASE_URL. Postgres is only
-    provided by start_test_postgres_container() so we never truncate dev/staging/prod.
-    """
-    return None  # Only the session fixture provides URL via the container
-
-
 def get_worker_id(config) -> str:
     """Return pytest worker id (e.g. gw0, gw1) or 'master' when not under xdist."""
     try:

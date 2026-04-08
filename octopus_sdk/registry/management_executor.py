@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -39,8 +40,12 @@ from octopus_sdk.registry.management import (
     DiffCatalogSkillResult,
     EditCatalogSkillDraftRequest,
     EditCatalogSkillDraftResult,
+    ExportCatalogSkillPackageRequest,
+    ExportCatalogSkillPackageResult,
     EditProviderGuidanceDraftRequest,
     EditProviderGuidanceDraftResult,
+    ImportCatalogSkillPackageRequest,
+    ImportCatalogSkillPackageResult,
     InstallCatalogSkillRequest,
     InstallCatalogSkillResult,
     ListCatalogSkillsRequest,
@@ -92,6 +97,7 @@ from octopus_sdk.registry.management import (
     runtime_skill_detail_record,
     runtime_skill_lifecycle_detail_record,
     runtime_skill_lifecycle_mutation_record,
+    runtime_skill_package_artifact_record,
     runtime_skill_mutation_outcome_record,
     runtime_skill_search_results_record,
     skill_requirement_record,
@@ -307,6 +313,7 @@ async def execute_management_request(
                 body=payload.body,
                 display_name=payload.display_name,
                 description=payload.description or None,
+                skill_kind=payload.skill_kind,
                 requirements=(
                     tuple(skill_requirement(item) for item in payload.requirements)
                     if payload.requirements is not None
@@ -329,6 +336,42 @@ async def execute_management_request(
                 agent_id=request.agent_id,
                 success=True,
                 payload=EditCatalogSkillDraftResult(
+                    result=runtime_skill_lifecycle_mutation_record(mutation)
+                ),
+            )
+        if isinstance(payload, ExportCatalogSkillPackageRequest):
+            artifact = context.workflows.runtime_skills.authoring.export_package(
+                payload.skill_name,
+                revision_scope=payload.revision_scope,
+            )
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=ExportCatalogSkillPackageResult(
+                    artifact=(
+                        runtime_skill_package_artifact_record(artifact)
+                        if artifact is not None
+                        else None
+                    )
+                ),
+            )
+        if isinstance(payload, ImportCatalogSkillPackageRequest):
+            try:
+                package_bytes = base64.b64decode(payload.package_base64.encode("ascii"))
+            except Exception:
+                package_bytes = b""
+            mutation = context.workflows.runtime_skills.authoring.import_package(
+                actor_key=payload.actor_key,
+                package_bytes=package_bytes,
+                file_name=payload.file_name,
+                target_skill_name=payload.target_skill_name,
+            )
+            return ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=True,
+                payload=ImportCatalogSkillPackageResult(
                     result=runtime_skill_lifecycle_mutation_record(mutation)
                 ),
             )

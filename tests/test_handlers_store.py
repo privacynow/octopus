@@ -10,6 +10,7 @@ from app import work_queue as _work_queue
 from octopus_sdk.identity import telegram_conversation_key
 from tests.support.handler_support import (
     FakeChat,
+    FakeMessage,
     FakeProvider,
     FakeUser,
     drain_one_worker_item,
@@ -408,7 +409,7 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         _cleanup_runtime(data_dir)
 
 
-async def test_handler_skill_package_command_roundtrips_full_draft(monkeypatch, tmp_path: Path):
+async def test_handler_skill_export_import_roundtrips_full_draft(monkeypatch, tmp_path: Path):
     import app.runtime.telegram_ingress as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
@@ -419,30 +420,43 @@ async def test_handler_skill_package_command_roundtrips_full_draft(monkeypatch, 
         created = await send_command(th.cmd_skills, chat, regular, "/skills create pkg-skill", ["create", "pkg-skill"])
         assert "Created custom draft" in last_reply(created)
 
-        shown = await send_command(th.cmd_skills, chat, regular, "/skills package pkg-skill", ["package", "pkg-skill"])
-        assert "Draft package" in last_reply(shown)
-
-        payload = (
-            '{"display_name":"Package Skill","description":"Chat package draft",'
-            '"body":"Use the chat package editor.","requirements":[{"key":"API_TOKEN","prompt":"Enter token"}],'
-            '"provider_config":{"claude":{"allowed_tools":["bash"]}},'
-            '"files":[{"relative_path":"helper.sh","content_type":"text/x-shellscript","executable":true,"content_text":"echo chat"}]}'
-        )
-        saved = await send_command(
+        edited = await send_command(
             th.cmd_skills,
             chat,
             regular,
-            f"/skills package pkg-skill {payload}",
-            ["package", "pkg-skill", payload],
+            "/skills edit pkg-skill Use the chat package editor.",
+            ["edit", "pkg-skill", "Use", "the", "chat", "package", "editor."],
         )
-        assert "Saved draft" in last_reply(saved)
+        assert "Saved draft" in last_reply(edited)
 
-        track = get_skill_catalog_service().resolve_track("pkg-skill")
+        exported = await send_command(
+            th.cmd_skills,
+            chat,
+            regular,
+            "/skills export pkg-skill",
+            ["export", "pkg-skill"],
+        )
+        assert exported.replies
+        export_reply = exported.replies[-1]
+        assert export_reply.get("document") is not None
+        assert "Exported" in (export_reply.get("caption") or "")
+
+        imported_message = exported.replies[-1]["document"]
+        importing = FakeMessage(chat=chat, text="/skills import pkg-copy", user=regular)
+        importing.document = imported_message
+        imported = await send_command(
+            th.cmd_skills,
+            chat,
+            regular,
+            "/skills import pkg-copy",
+            ["import", "pkg-copy"],
+            message=importing,
+        )
+        assert "Imported skill package" in last_reply(imported)
+
+        track = get_skill_catalog_service().resolve_track("pkg-copy")
         assert track is not None
-        assert track.display_name == "Package Skill"
-        assert track.revision.requirements[0].key == "API_TOKEN"
-        assert track.revision.provider_config["claude"]["allowed_tools"] == ["bash"]
-        assert track.revision.files[0].relative_path == "helper.sh"
+        assert track.revision.instruction_body == "Use the chat package editor."
     finally:
         _cleanup_runtime(data_dir)
 

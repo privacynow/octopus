@@ -49,6 +49,13 @@ class ProviderGuidanceService:
                 tracks.append(record)
         return tracks
 
+    def _available_runtime_tracks(self) -> list[RuntimeSkillTrackRecord]:
+        tracks: list[RuntimeSkillTrackRecord] = []
+        for skill_name in sorted(self._catalog.catalog()):
+            if (record := self._catalog.resolve_runtime_track(skill_name)) is not None:
+                tracks.append(record)
+        return tracks
+
     def system_prompt(
         self,
         role: str,
@@ -73,10 +80,17 @@ class ProviderGuidanceService:
             guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
         if guidance_text:
             parts.append(guidance_text + "\n")
+        available_tracks = self._available_runtime_tracks()
         tracks = self._tracks(active_skills)
-        if tracks:
-            labels = ", ".join(record.display_name for record in tracks)
-            parts.append(f"Active Octopus runtime skills in this conversation: {labels}.\n")
+        if available_tracks or tracks:
+            available_labels = ", ".join(record.slug for record in available_tracks) or "none"
+            active_labels = ", ".join(record.slug for record in tracks) or "none"
+            parts.append(
+                "## Octopus Runtime Skill State\n\n"
+                "This state is authoritative for the current bot and conversation.\n"
+                f"Available on this bot: {available_labels}.\n"
+                f"Active in this conversation: {active_labels}.\n"
+            )
         for record in tracks:
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
         if available_agents:
@@ -143,7 +157,8 @@ class ProviderGuidanceService:
             "In Octopus, 'skills' means Octopus runtime skills managed through the bot catalog, "
             "default-for-new-conversations settings, and per-conversation activation. Use the "
             "canonical terms 'available on this bot', 'active in this conversation', and "
-            "'advertised for routing' precisely. "
+            "'advertised for routing' precisely. Use the runtime skill state section in this prompt "
+            "as authoritative for the current bot and conversation. "
             "Do not answer in terms of Codex-native skills, session-local SKILL.md files, or any "
             "other non-Octopus skill system. Do not infer factual skill availability, current "
             "conversation activation, or prior skill usage from routing tables alone. If a user "

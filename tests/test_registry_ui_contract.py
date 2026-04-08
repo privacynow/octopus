@@ -191,7 +191,7 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "1. Basics" not in skill_catalog
     assert "6. Review" not in skill_catalog
     assert "activate_skill" in skill_catalog
-    assert "API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, {})" in skill_catalog
+    assert "API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, { confirm: true })" in skill_catalog
     assert "Active in this conversation" in conversation_detail
     assert "Available on this bot" in conversation_detail
     assert "requestedActivationSkill && requestedManagementMode === 'closed'" in conversation_detail

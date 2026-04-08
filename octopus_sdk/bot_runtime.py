@@ -37,7 +37,6 @@ from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.runtime.skills import (
     SkillInspectionPort,
-    render_skill_inspection_response,
 )
 from octopus_sdk.registry.models import (
     DiscoveredAgentRef,
@@ -1536,55 +1535,6 @@ class BotRuntime:
             mutated = activation.activate(session, skill_name) or mutated
         return mutated
 
-    async def _dispatch_skill_inspection_message(
-        self,
-        event: InboundMessage,
-        item: WorkItemRecord,
-        *,
-        egress: TransportEgress,
-        conversation_ref: str,
-    ):
-        from octopus_sdk.event_sink import build_event_sink_for_context
-        from octopus_sdk.execution import completed_reply_outcome
-
-        inspection = self._require_execution_services().skill_inspection
-        if inspection is None:
-            return None
-        actor_key = item.actor_key or str(getattr(event.user, "id", "") or "")
-        response = await inspection.inspect_text(
-            text=event.text,
-            conversation_key=item.conversation_key,
-            conversation_ref=conversation_ref,
-            actor_key=actor_key,
-            provider_name=self.provider.name,
-            provider_state_factory=self.provider.new_provider_state,
-        )
-        if response is None:
-            return None
-        reply = render_skill_inspection_response(response).strip()
-        if not reply:
-            return None
-        follow_up_subject = response.follow_up_subject
-        if follow_up_subject is not None:
-            session = self._load_session(item.conversation_key)
-            if session.last_skill_subject != follow_up_subject:
-                session.last_skill_subject = follow_up_subject
-                self.sessions.save(item.conversation_key, session)
-        transport_identity = self._build_transport_identity(
-            event=event,
-            conversation_ref=conversation_ref,
-            actor_key=actor_key,
-        )
-        event_sink = build_event_sink_for_context(
-            transport_identity,
-            self.control_plane.conversation_projection if self.control_plane is not None else None,
-            self.config,
-        )
-        await event_sink.on_user_message(event.text, actor=actor_key)
-        await egress.send_formatted_reply(reply)
-        await event_sink.on_bot_reply(reply[:2000])
-        return completed_reply_outcome(reply)
-
     async def _dispatch_claimed_message(
         self,
         event: InboundMessage,
@@ -1680,37 +1630,6 @@ class BotRuntime:
                 conversation_ref=conversation_ref,
             ):
                 return
-        inspection_outcome = await self._dispatch_skill_inspection_message(
-            event,
-            item,
-            egress=egress,
-            conversation_ref=conversation_ref,
-        )
-        if inspection_outcome is not None:
-            await finalize_execution(
-                inspection_outcome,
-                context=FinalizationContext(
-                    config=self.config,
-                    item_id=item.id,
-                    conversation_key=item.conversation_key,
-                    runtime_chat=item.conversation_key,
-                    conversation_ref=conversation_ref,
-                    chat_id=event.chat_id if isinstance(event.chat_id, int) else 0,
-                    routed_task_id=routed_task_id,
-                    authority_ref=authority_ref,
-                    skip_approval=bool(getattr(event, "skip_approval", False)),
-                    load_session=self._load_session,
-                    save_session=self.sessions.save,
-                    task_routing=self.control_plane.task_routing if self.control_plane is not None else None,
-                    record_usage=self.work_queue.record_usage,
-                    completion_webhook_sender=self.workflows.completion_webhook,
-                    deferred_notifications=self.workflows.deferred_notifications,
-                    deferred_target_agent_id=self._target_agent_id_for_authority(authority_ref),
-                    deferred_actor_key=str(getattr(event, "authorized_actor_key", "") or ""),
-                    deferred_title=title,
-                ),
-            )
-            return
         skill_mutated = self._activate_requested_routing_skills(
             session,
             requested_skills=tuple(

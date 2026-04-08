@@ -156,7 +156,7 @@ const RegistrySkillHub = (() => {
             Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
             return conversation;
         }
-        const activation = await API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, {});
+        const activation = await API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, { confirm: true });
         if (activation.status === 'activated' || activation.status === 'already_active') {
             Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
             return conversation;

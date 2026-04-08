@@ -44,6 +44,10 @@ Skills also carry dimensions that are independent from the core states:
   - `Core`: built into the runtime image
   - `Store`: installed from the remote skill store
   - `Custom`: authored inside Octopus and managed through lifecycle actions
+- `Kind`
+  - `prompt`: applied as operator-selected conversation instructions in the
+    provider run context
+  - `executable`: enabled through runtime orchestration, not only prompt text
 - `Setup`
   - `Needs setup`: requires credentials before it can be active in a
     conversation
@@ -68,6 +72,12 @@ The shared backend operations are:
 
 Clients can compose these operations into smoother flows, but they should not
 reimplement their rules or invent extra state machines.
+
+The activation state is shared across both kinds. What changes is the execution
+semantics after activation:
+
+- active prompt skills shape the normal provider context
+- active executable skills also participate in runtime orchestration
 
 Examples:
 

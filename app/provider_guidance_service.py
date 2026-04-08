@@ -73,7 +73,11 @@ class ProviderGuidanceService:
             guidance_text = self.published_guidance_text(provider_name, instance_key=instance_key)
         if guidance_text:
             parts.append(guidance_text + "\n")
-        for record in self._tracks(active_skills):
+        tracks = self._tracks(active_skills)
+        if tracks:
+            labels = ", ".join(record.display_name for record in tracks)
+            parts.append(f"Active Octopus runtime skills in this conversation: {labels}.\n")
+        for record in tracks:
             parts.append(f"## {record.display_name}\n\n{record.revision.instruction_body}\n")
         if available_agents:
             parts.append(self._format_agent_discovery_section(available_agents))

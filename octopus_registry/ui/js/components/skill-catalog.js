@@ -151,7 +151,17 @@ const RegistrySkillHub = (() => {
         const conversation = await API.openConversationForAgent(agentId, {
             title: `Conversation with ${label}`,
         });
-        Router.navigate(conversationActivationHref(conversation.conversation_id, skillName));
+        const normalizedSkill = String(skillName || '').trim();
+        if (!normalizedSkill) {
+            Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
+            return conversation;
+        }
+        const activation = await API.activateConversationSkill(agentId, conversation.conversation_id, normalizedSkill, {});
+        if (activation.status === 'activated' || activation.status === 'already_active') {
+            Router.navigate(`/ui/conversations/${encodeURIComponent(conversation.conversation_id)}`);
+            return conversation;
+        }
+        Router.navigate(conversationActivationHref(conversation.conversation_id, normalizedSkill));
         return conversation;
     }
 

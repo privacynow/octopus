@@ -444,6 +444,12 @@ def build_system_prompt(role: str, skill_names: list[str]) -> str:
             parts.append(f"You are a {stripped}.\n")
 
     catalog = load_catalog()
+    labels: list[str] = []
+    for name in skill_names:
+        meta = catalog.get(name)
+        labels.append(meta.display_name if meta else name)
+    if labels:
+        parts.append(f"Active Octopus runtime skills in this conversation: {', '.join(labels)}.\n")
     for name in skill_names:
         instructions = get_skill_instructions(name)
         if not instructions:

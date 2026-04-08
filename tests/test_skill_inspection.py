@@ -476,6 +476,9 @@ def test_parse_skill_question_handles_common_paraphrase() -> None:
         "what skill is active",
         "what skill am I using in this conversation",
         "I activated a skill for this conversation, which one is it?",
+        "which skill did I just activate",
+        "what did I just activate here",
+        "which one did I activate",
     ],
 )
 def test_parse_skill_question_handles_active_skill_meta_questions(text: str) -> None:

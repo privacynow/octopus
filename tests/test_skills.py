@@ -277,12 +277,14 @@ def test_skill_digests():
 def test_system_prompt_building():
     prompt = build_system_prompt("Senior Python engineer", ["code-review", "testing"])
     assert "You are a Senior Python engineer" in prompt
+    assert "Active Octopus runtime skills in this conversation: Code Review, Testing." in prompt
     assert "## Code Review" in prompt
     assert "## Testing" in prompt
 
     # No role
     prompt_no_role = build_system_prompt("", ["code-review"])
     assert "You are a" not in prompt_no_role
+    assert "Active Octopus runtime skills in this conversation: Code Review." in prompt_no_role
     assert "## Code Review" in prompt_no_role
 
     # No skills
@@ -303,6 +305,7 @@ def test_context_builders():
     assert isinstance(run_ctx, RunContext)
     assert run_ctx.extra_dirs == ["/tmp/uploads/123"]
     assert "You are a engineer" in run_ctx.system_prompt
+    assert "Active Octopus runtime skills in this conversation: Code Review." in run_ctx.system_prompt
     assert run_ctx.capability_summary == ""
     assert run_ctx.provider_config == {}
     assert run_ctx.credential_env == {}

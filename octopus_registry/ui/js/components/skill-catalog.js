@@ -866,7 +866,10 @@ function renderSkillCatalog(container) {
         const lifecycle = selectedLifecycle && selectedLifecycle.name === selected.skill.name
             ? selectedLifecycle
             : null;
-        renderLocalDetail(selected.skill, detail, lifecycle);
+        renderLocalDetail(selected.skill, detail, lifecycle, {
+            loading: selectionLoading,
+            detailLoaded: Boolean(selectedLocalDetail && selectedLocalDetail.name === selected.skill.name),
+        });
     }
 
     function renderStoreDetail(skill) {
@@ -955,6 +958,7 @@ function renderSkillCatalog(container) {
             skillName: selected?.skill?.name || '',
             loading: selectionLoading,
             detailLoaded: Boolean(selectedLocalDetail && selected && selectedLocalDetail.name === selected.skill.name),
+            detailSnapshot: _draftSnapshot(detail, lifecycle),
             skillKind: String(lifecycle?.skill_kind || detail?.skill_kind || ''),
             lifecycleStatus: String(lifecycle?.lifecycle_status || detail?.lifecycle_status || ''),
             revisionId: String(lifecycle?.active_revision_id || ''),
@@ -975,14 +979,23 @@ function renderSkillCatalog(container) {
         });
     }
 
-    function renderLocalDetail(summary, detail, lifecycle) {
+    function renderLocalDetail(summary, detail, lifecycle, { loading = false, detailLoaded = false } = {}) {
         UI.memoizedRender(detailEl, {
             agentId: currentAgentId,
             agentLabel: _currentAgentLabel(),
             summary,
             detail,
             lifecycle,
+            loading,
+            detailLoaded,
+            detailSnapshot: _draftSnapshot(detail, lifecycle),
         }, (state) => {
+            if (state.loading && !state.detailLoaded) {
+                return _buildLoadingPanel(state.detail, {
+                    keyPrefix: 'skill-loading',
+                    message: 'Loading skill details…',
+                });
+            }
             const nodes = [];
             nodes.push(_buildOverviewPanel(state.summary, state.detail, state.lifecycle));
             nodes.push(_buildCatalogHelpPanel(state.summary, state.detail, state.agentLabel));
@@ -997,6 +1010,9 @@ function renderSkillCatalog(container) {
                     runtimeAvailable: Boolean(state.detail && state.detail.runtime_available),
                     source: String((state.detail && state.detail.source_kind) || ''),
                     activeRevisionId: String((state.lifecycle && state.lifecycle.active_revision_id) || ''),
+                    loading: Boolean(state.loading),
+                    detailLoaded: Boolean(state.detailLoaded),
+                    detailSnapshot: String(state.detailSnapshot || ''),
                 };
             },
         });
@@ -1237,16 +1253,23 @@ function renderSkillCatalog(container) {
         return panel;
     }
 
-    function _buildStudioLoading(detail) {
+    function _buildLoadingPanel(detail, { keyPrefix = 'skill-loading', message = 'Loading…' } = {}) {
         const panel = document.createElement('section');
         panel.className = 'editor-panel';
-        panel.dataset.key = `studio-loading:${detail?.name || ''}`;
+        panel.dataset.key = `${keyPrefix}:${detail?.name || ''}`;
         const title = document.createElement('div');
         title.className = 'editor-section-title';
-        title.textContent = detail?.display_name || detail?.name || 'Custom skill';
+        title.textContent = detail?.display_name || detail?.name || 'Skill';
         panel.appendChild(title);
-        panel.appendChild(UI.renderEmptyState('Loading draft…', true));
+        panel.appendChild(UI.renderEmptyState(message, true));
         return [panel];
+    }
+
+    function _buildStudioLoading(detail) {
+        return _buildLoadingPanel(detail, {
+            keyPrefix: 'studio-loading',
+            message: 'Loading draft…',
+        });
     }
 
     function _buildStudioHome(agentLabel, selected) {

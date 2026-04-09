@@ -179,6 +179,9 @@ def test_skill_catalog_unifies_bot_skill_management_and_keeps_custom_editing_pro
     assert "API.saveSkillDraft(currentAgentId, skillName" in skill_catalog
     assert "await persistDraft({ quiet: true })" in skill_catalog
     assert "function _editableDraftState(detail, lifecycle)" in skill_catalog
+    assert "detailSnapshot: _draftSnapshot(detail, lifecycle)" in skill_catalog
+    assert "Loading skill details…" in skill_catalog
+    assert "function _buildLoadingPanel(detail" in skill_catalog
     assert "workspace.className = 'dashboard-board';" in skill_catalog
     assert "listWrap.className = 'list-shell dashboard-column';" in skill_catalog
     assert "detailEl.className = 'editor-shell dashboard-column';" in skill_catalog

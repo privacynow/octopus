@@ -97,6 +97,17 @@ def test_catalog_use_cases_mark_defaults_for_new_conversations(tmp_path: Path):
         content_store_mod.reset_for_test()
 
 
+def test_catalog_use_cases_include_builtin_instruction_body(tmp_path: Path):
+    cfg, data_dir = _init_runtime_content(tmp_path)
+    try:
+        detail = _flows(cfg).runtime_skills.catalog.get_skill("architecture")
+        assert detail is not None
+        assert "requirements and constraints" in detail.body
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
 def test_activation_use_cases_list_and_activate_skill(tmp_path: Path):
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:

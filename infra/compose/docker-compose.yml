@@ -4,6 +4,10 @@ volumes:
   bot-home:
   data:
 
+x-bot-sandbox-security: &bot-sandbox-security
+  security_opt:
+    - seccomp=unconfined
+
 networks:
   default:
     name: ${OCTOPUS_NETWORK:-octopus-net}
@@ -48,6 +52,7 @@ services:
 
   # Provider-only checks (no runtime DB access): used by provider_status.sh and provider_login.sh.
   bot-provider:
+    <<: *bot-sandbox-security
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot
@@ -63,6 +68,7 @@ services:
 
   # Bot service backed by Postgres. Build via ./scripts/provider/build_bot_image.sh and start via ./octopus.
   bot:
+    <<: *bot-sandbox-security
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot

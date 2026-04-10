@@ -9,9 +9,10 @@ from typing import Callable, Protocol
 
 from octopus_sdk.config import BotConfigBase
 from octopus_sdk.providers import ProviderStateRecord
-from octopus_sdk.sessions import SessionState
+from octopus_sdk.sessions import ProjectBinding, SessionState
 
 ProviderStateFactory = Callable[[str], ProviderStateRecord]
+ApprovalModeGuard = Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class ConversationControlPort(Protocol):
         approval_mode_default: str,
         default_role: str,
         default_skills: tuple[str, ...],
+        projects: tuple[ProjectBinding, ...],
         conversation_key: str,
     ) -> ConversationResetOutcome: ...
 
@@ -82,7 +84,11 @@ class ConversationSettingsPort(Protocol):
         effective_model: str,
     ) -> ModelProfileState: ...
 
-    def set_approval_mode(self, session: SessionState, value: str) -> SettingMutationOutcome: ...
+    def set_approval_mode(
+        self,
+        session: SessionState,
+        value: str,
+    ) -> SettingMutationOutcome: ...
 
     def set_compact_mode(self, session: SessionState, value: bool) -> SettingMutationOutcome: ...
 

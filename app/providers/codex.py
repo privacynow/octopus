@@ -28,6 +28,7 @@ from octopus_sdk.providers import (
     ToolExecutionRecord,
 )
 from app.providers.codex_security import (
+    codex_sandbox_support_error,
     validate_codex_sandbox,
     validated_codex_config_overrides,
 )
@@ -114,16 +115,20 @@ class CodexProvider:
         errors = await self.check_auth_health()
         if errors:
             return errors
+        sandbox_error = codex_sandbox_support_error(
+            self.config,
+            approval_mode=self.config.approval_mode,
+        )
+        if sandbox_error is not None:
+            return [sandbox_error]
         try:
-            ping_cmd = ["codex", "exec", "--json", "--ephemeral",
-                        "--sandbox", self.config.codex_sandbox]
-            if self.config.codex_skip_git_repo_check:
-                ping_cmd.append("--skip-git-repo-check")
-            if self.config.model:
-                ping_cmd.extend(["--model", self.config.model])
-            if self.config.codex_profile:
-                ping_cmd.extend(["--profile", self.config.codex_profile])
-            ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
+            ping_cmd = self._build_new_cmd(
+                "reply with ok",
+                [],
+                ephemeral=True,
+                skip_permissions=self.config.approval_mode != "on",
+                working_dir=str(self.config.working_dir),
+            )
             returncode, stdout, stderr = await run_health_command(
                 *ping_cmd,
                 timeout=30,
@@ -149,18 +154,43 @@ class CodexProvider:
 
     # -- command building --------------------------------------------------
 
-    def _common_args(self, effective_model: str = "") -> list[str]:
+    def _model_and_profile_args(self, effective_model: str = "") -> list[str]:
         args: list[str] = []
         model = effective_model or self.config.model
         if model:
             args.extend(["--model", model])
         if self.config.codex_profile:
             args.extend(["--profile", self.config.codex_profile])
-        if self.config.codex_dangerous:
+        return args
+
+    def _common_args(
+        self,
+        effective_model: str = "",
+        *,
+        skip_permissions: bool = False,
+        safe_mode: bool = False,
+    ) -> list[str]:
+        args = self._model_and_profile_args(effective_model)
+        if safe_mode:
+            return args
+        if skip_permissions or self.config.codex_dangerous:
             args.append("--dangerously-bypass-approvals-and-sandbox")
         elif self.config.codex_full_auto:
             args.append("--full-auto")
         return args
+
+    def _resolved_sandbox(
+        self,
+        *,
+        sandbox: str | None = None,
+        skip_permissions: bool = False,
+        safe_mode: bool = False,
+    ) -> str | None:
+        if skip_permissions or self.config.codex_dangerous:
+            return None
+        if safe_mode:
+            return sandbox or self.config.codex_sandbox
+        return sandbox or self.config.codex_sandbox
 
     def _extra_dir_args(self, extra_dirs: list[str] | None = None) -> list[str]:
         args: list[str] = []
@@ -181,21 +211,26 @@ class CodexProvider:
         sandbox: str | None = None,
         ephemeral: bool = False,
         safe_mode: bool = False,
+        skip_permissions: bool = False,
         extra_dirs: list[str] | None = None,
         effective_model: str = "",
         working_dir: str = "",
     ) -> list[str]:
         cmd = ["codex", "exec", "--json"]
-        if safe_mode:
-            # Preflight: model and profile only, no --full-auto or --dangerous
-            model = effective_model or self.config.model
-            if model:
-                cmd.extend(["--model", model])
-            if self.config.codex_profile:
-                cmd.extend(["--profile", self.config.codex_profile])
-        else:
-            cmd.extend(self._common_args(effective_model))
-        cmd.extend(["--sandbox", sandbox or self.config.codex_sandbox])
+        cmd.extend(
+            self._common_args(
+                effective_model,
+                skip_permissions=skip_permissions,
+                safe_mode=safe_mode,
+            )
+        )
+        resolved_sandbox = self._resolved_sandbox(
+            sandbox=sandbox,
+            skip_permissions=skip_permissions,
+            safe_mode=safe_mode,
+        )
+        if resolved_sandbox:
+            cmd.extend(["--sandbox", resolved_sandbox])
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
         if ephemeral:
@@ -213,6 +248,7 @@ class CodexProvider:
         image_paths: list[str],
         *,
         ephemeral: bool = False,
+        skip_permissions: bool = False,
         effective_model: str = "",
         working_dir: str = "",
     ) -> list[str]:
@@ -221,7 +257,7 @@ class CodexProvider:
         # Working root still matters for workspace-write sandboxing, so pass
         # it via the global -C flag that applies to all codex subcommands.
         cmd = ["codex", "-C", self._resolved_working_dir(working_dir), "exec", "resume", "--json"]
-        cmd.extend(self._common_args(effective_model))
+        cmd.extend(self._common_args(effective_model, skip_permissions=skip_permissions))
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
         if ephemeral:
@@ -361,6 +397,42 @@ class CodexProvider:
                     )
                 return tuple(changes)
         return ()
+
+    @classmethod
+    def _tool_output_failure_detail(cls, output: Any) -> str:
+        if isinstance(output, str):
+            stripped = output.strip()
+            if not stripped:
+                return ""
+            try:
+                output = json.loads(stripped)
+            except json.JSONDecodeError:
+                lowered = stripped.lower()
+                if any(
+                    token in lowered
+                    for token in (
+                        "permission denied",
+                        "operation not permitted",
+                        "read-only file system",
+                        "os error",
+                        "sandbox",
+                    )
+                ):
+                    return stripped
+                return ""
+        if not isinstance(output, dict):
+            return ""
+        if output.get("is_error") is True:
+            return cls._trimmed_text(output.get("error")) or cls._trimmed_text(output.get("message")) or "tool error"
+        if output.get("success") is False or output.get("ok") is False:
+            return cls._trimmed_text(output.get("error")) or cls._trimmed_text(output.get("message")) or "tool error"
+        status = cls._normalize_type(output.get("status"))
+        if status in {"error", "failed", "denied"}:
+            return cls._trimmed_text(output.get("error")) or cls._trimmed_text(output.get("message")) or status
+        error_text = cls._trimmed_text(output.get("error"))
+        if error_text:
+            return error_text
+        return ""
 
     @classmethod
     def _extract_assistant_text(cls, event: dict[str, Any]) -> tuple[str | None, str]:
@@ -542,6 +614,8 @@ class CodexProvider:
         pending_tool_records: dict[str, dict[str, Any]] = {}
         tool_records: list[ToolExecutionRecord] = []
         tool_counter = 0
+        failed_file_change = False
+        successful_file_change = False
         usage_input = 0
         usage_output = 0
         cached_usage_input: int | None = None
@@ -555,6 +629,7 @@ class CodexProvider:
             nonlocal thread_id, final_text, draft_text
             nonlocal usage_input, usage_output
             nonlocal cached_usage_input, cached_usage_output
+            nonlocal failed_file_change, successful_file_change
             while True:
                 read_coro = proc.stdout.readline()
                 if cancel is not None:
@@ -607,20 +682,28 @@ class CodexProvider:
                         call_id = str(payload.get("call_id") or "")
                         pending = pending_tool_records.pop(call_id, None)
                         if pending is not None:
+                            failure_detail = self._tool_output_failure_detail(payload.get("output"))
                             output = self._trimmed_text(payload.get("output")) or "completed"
+                            status = "failed" if failure_detail else "completed"
                             duration_ms: int | None = None
                             started_at = pending.get("started_at")
                             if isinstance(started_at, (int, float)):
                                 duration_ms = max(0, int((time.monotonic() - started_at) * 1000))
+                            file_changes = tuple(pending["file_changes"])
+                            if file_changes:
+                                if status == "failed":
+                                    failed_file_change = True
+                                else:
+                                    successful_file_change = True
                             tool_records.append(
                                 ToolExecutionRecord(
                                     tool_name=str(pending["tool_name"]),
                                     call_id=str(pending["call_id"]),
-                                    status="completed",
+                                    status=status,
                                     input_summary=str(pending["input_summary"]),
-                                    output_summary=trim_text(output, 300),
+                                    output_summary=trim_text(failure_detail or output, 300),
                                     duration_ms=duration_ms,
-                                    file_changes=tuple(pending["file_changes"]),
+                                    file_changes=file_changes,
                                 )
                             )
 
@@ -725,6 +808,14 @@ class CodexProvider:
                 tool_executions=tool_records,
             )
 
+        if failed_file_change and not successful_file_change:
+            return RunResult(
+                text="Codex reported a file-change failure before completing the request.",
+                returncode=1,
+                provider_state_updates=state_updates,
+                tool_executions=tool_records,
+            )
+
         return RunResult(
             text=reply,
             provider_state_updates=state_updates,
@@ -755,12 +846,13 @@ class CodexProvider:
             effective_prompt = context.system_prompt + "\n\n---\n\n" + prompt
 
         # Apply provider_config: sandbox override, config overrides.
-        # inspect mode is authoritative — skill/provider configs cannot weaken it.
+        # inspect mode is authoritative unless approvals are bypassed.
         sandbox_override = None
+        skip_permissions = bool(context and context.skip_permissions)
         inspect_mode = context and context.file_policy == "inspect"
-        if inspect_mode:
+        if inspect_mode and not skip_permissions:
             sandbox_override = "read-only"
-        elif context and context.provider_config:
+        elif context and context.provider_config and not skip_permissions:
             pc = context.provider_config
             if "sandbox" in pc:
                 raw_sandbox = str(pc["sandbox"])
@@ -781,6 +873,7 @@ class CodexProvider:
                 effective_prompt,
                 image_paths,
                 effective_model=effective_model,
+                skip_permissions=skip_permissions,
                 working_dir=working_dir,
             )
         else:
@@ -789,20 +882,10 @@ class CodexProvider:
                 image_paths,
                 extra_dirs=extra_dirs,
                 sandbox=sandbox_override,
+                skip_permissions=skip_permissions,
                 effective_model=effective_model,
                 working_dir=working_dir,
             )
-
-        # Preserve resume semantics after a bot-level approval. Changing a resumed
-        # thread to --dangerously-bypass-approvals-and-sandbox can break continuity.
-        # Fresh execs only need the dangerous flag when full-auto is not already
-        # enabled; codex-cli 0.111.0 rejects the combination of both flags.
-        if context and context.skip_permissions and not is_resume:
-            if (
-                "--dangerously-bypass-approvals-and-sandbox" not in cmd
-                and "--full-auto" not in cmd
-            ):
-                cmd.insert(3, "--dangerously-bypass-approvals-and-sandbox")
 
         # Inject config_overrides as -c flags
         if context and context.provider_config:
@@ -834,6 +917,7 @@ class CodexProvider:
         if system_prompt:
             effective_prompt = system_prompt + "\n\n---\n\n" + prompt
         extra_dirs = context.extra_dirs if context else None
+        working_dir = context.working_dir if context else ""
         effective_model = getattr(context, 'effective_model', '') if context else ""
         cmd = self._build_new_cmd(
             effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,

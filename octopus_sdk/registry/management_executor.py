@@ -675,6 +675,7 @@ async def execute_management_request(
                 approval_mode_default=context.config.approval_mode,
                 default_role=context.config.role,
                 default_skills=context.config.default_skills,
+                projects=context.config.projects,
                 conversation_key=payload.conversation_key,
             )
             next_session = outcome.replacement_session or session

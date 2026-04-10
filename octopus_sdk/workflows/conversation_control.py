@@ -5,7 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from octopus_sdk.messages import MessageTemplatePort
-from octopus_sdk.sessions import SessionState, default_session, session_from_dict
+from octopus_sdk.sessions import (
+    ProjectBinding,
+    SessionState,
+    default_session,
+    normalize_single_project_session,
+    session_from_dict,
+)
 from octopus_sdk.work_queue import CancelRequestResult, WorkQueuePort
 from octopus_sdk.workflows.conversation import (
     ConversationCancelOutcome,
@@ -40,6 +46,7 @@ class ConversationControlUseCases(ConversationControlPort):
         approval_mode_default: str,
         default_role: str,
         default_skills: tuple[str, ...],
+        projects: tuple[ProjectBinding, ...],
         conversation_key: str,
     ) -> ConversationResetOutcome:
         foreign = self._setup.foreign_setup(session, actor_key=actor_key)
@@ -57,6 +64,12 @@ class ConversationControlUseCases(ConversationControlPort):
         )
         if session.approval_mode_explicit:
             replacement.approval_mode_explicit = True
+        normalize_single_project_session(
+            replacement,
+            projects=projects,
+            provider_state_factory=provider_state_factory,
+            conversation_key=conversation_key,
+        )
         return ConversationResetOutcome(
             status="reset",
             message=f"Fresh {provider_name} conversation started.",

@@ -186,6 +186,7 @@ def test_workflow_profile_behavioral_suite_exposes_full_operator_surface(tmp_pat
         approval_mode_default=runtime.config.approval_mode,
         default_role=runtime.config.role,
         default_skills=runtime.config.default_skills,
+        projects=runtime.config.projects,
         conversation_key="stub:conversation:1",
     )
     approval = runtime.workflows.pending.requests.approve(

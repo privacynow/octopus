@@ -97,6 +97,7 @@ def test_command_building_dangerous():
     cmd6 = p4._build_new_cmd("test", [])
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd6
     assert "--full-auto" not in cmd6
+    assert "--sandbox" not in cmd6
 
 
 def test_command_building_profile():
@@ -435,7 +436,7 @@ async def test_provider_config_flag_entry_is_rejected(caplog):
 
 # -- skip_permissions behaviour --
 
-async def test_skip_permissions_fresh_exec_preserves_full_auto():
+async def test_skip_permissions_fresh_exec_forces_dangerous_without_sandbox():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
@@ -457,8 +458,9 @@ async def test_skip_permissions_fresh_exec_preserves_full_auto():
     await provider.run(ProviderStateRecord({"thread_id": None}), "start", [], progress, context=context)
     cmd_new, is_resume_new = calls[-1]
     assert is_resume_new is False
-    assert "--full-auto" in cmd_new
-    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd_new
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd_new
+    assert "--full-auto" not in cmd_new
+    assert "--sandbox" not in cmd_new
 
 
 async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
@@ -484,6 +486,7 @@ async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
     cmd_new, is_resume_new = calls[-1]
     assert is_resume_new is False
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd_new
+    assert "--sandbox" not in cmd_new
 
 
 async def test_skip_permissions_resume():
@@ -508,7 +511,8 @@ async def test_skip_permissions_resume():
     await provider.run(ProviderStateRecord({"thread_id": "thread-123"}), "continue", [], progress, context=context)
     cmd_resume, is_resume_resume = calls[-1]
     assert is_resume_resume is True
-    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd_resume
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd_resume
+    assert "--full-auto" not in cmd_resume
     assert "resume" in cmd_resume
     assert "thread-123" in cmd_resume
 
@@ -755,6 +759,43 @@ def _failing_codex_script(stderr_text: str, returncode: int) -> str:
     """)
 
 
+def _failing_file_change_script() -> str:
+    return textwrap.dedent("""\
+        import json, sys
+        events = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "write_file",
+                    "call_id": "call-1",
+                    "arguments": "{\\"path\\":\\"/tmp/out.txt\\",\\"content\\":\\"hello\\"}",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": "{\\"error\\": \\"Operation not permitted\\"}",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                    "phase": "final_answer",
+                },
+            },
+        ]
+        for event in events:
+            sys.stdout.write(json.dumps(event) + "\\n")
+            sys.stdout.flush()
+    """)
+
+
 # -- _run_cmd timeout behaviour --
 
 async def test_timeout_non_resume():
@@ -834,6 +875,22 @@ async def test_run_cmd_nonzero_exit_hides_raw_stderr():
     assert "exited with code 2" in result.text
     assert "Usage: <MODEL>" not in result.text
     assert "/tmp/token" not in result.text
+
+
+async def test_run_cmd_failed_file_change_becomes_failure():
+    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    progress = FakeProgress()
+    result = await provider._run_cmd(
+        [sys.executable, "-c", _failing_file_change_script()],
+        progress,
+    )
+
+    assert result.returncode == 1
+    assert "file-change failure" in result.text
+    assert len(result.tool_executions) == 1
+    assert result.tool_executions[0].status == "failed"
 
 
 # -- _run_cmd modern schema --
@@ -965,6 +1022,79 @@ async def test_run_uses_context_working_dir_for_new_and_resume():
     assert "-C" in cmd_resume
     assert "/workspace/workspace" in cmd_resume
     assert working_dir_resume == "/workspace/workspace"
+
+
+async def test_run_preflight_uses_context_working_dir():
+    provider = CodexProvider(make_config())
+    calls: list[tuple[list[str], bool, str]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
+        calls.append((cmd, is_resume, working_dir))
+        return RunResult(text="ok")
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(
+        extra_dirs=[],
+        system_prompt="",
+        capability_summary="",
+        provider_config=ProviderConfigRecord(),
+        credential_env=CredentialEnvRecord(),
+        working_dir="/workspace/workspace",
+    )
+
+    await provider.run_preflight("plan", [], progress, context=context)
+    cmd, is_resume, working_dir = calls[-1]
+    assert is_resume is False
+    assert "-C" in cmd
+    assert "/workspace/workspace" in cmd
+    assert working_dir == "/workspace/workspace"
+
+
+async def test_check_runtime_health_uses_dangerous_when_approval_off(monkeypatch):
+    provider = CodexProvider(make_config(provider_name="codex", approval_mode="off", codex_full_auto=True))
+
+    async def fake_auth():
+        return []
+
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del timeout, env
+        calls.append(cmd)
+        return 0, "ok", ""
+
+    provider.check_auth_health = fake_auth  # type: ignore[method-assign]
+    monkeypatch.setattr("app.providers.codex.run_health_command", fake_run)
+    monkeypatch.setattr("app.providers.codex.codex_sandbox_support_error", lambda config, approval_mode: None)
+
+    assert await provider.check_runtime_health() == []
+    cmd = calls[-1]
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+    assert "--sandbox" not in cmd
+    assert "--full-auto" not in cmd
+
+
+async def test_check_runtime_health_reports_sandbox_support_error(monkeypatch):
+    provider = CodexProvider(make_config(provider_name="codex", approval_mode="on"))
+
+    async def fake_auth():
+        return []
+
+    async def fake_run(*cmd: str, timeout: int, env):
+        del cmd, timeout, env
+        raise AssertionError("runtime probe should not run when sandbox support is missing")
+
+    provider.check_auth_health = fake_auth  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "app.providers.codex.codex_sandbox_support_error",
+        lambda config, approval_mode: "Approval mode 'on' requires Codex sandboxing, but this host cannot provide it: nope",
+    )
+    monkeypatch.setattr("app.providers.codex.run_health_command", fake_run)
+
+    assert await provider.check_runtime_health() == [
+        "Approval mode 'on' requires Codex sandboxing, but this host cannot provide it: nope",
+    ]
 
 
 def test_codex_new_with_runtime_extra_dirs():

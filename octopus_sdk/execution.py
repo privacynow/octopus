@@ -29,6 +29,7 @@ from octopus_sdk.sessions import (
     PendingApprovalAttachmentRecord,
     PendingRetry,
     SessionState,
+    trusted_conversation_bypasses_approvals,
 )
 from octopus_sdk.registry.models import AgentDiscoveryQuery, DiscoveredAgentRef
 from octopus_sdk.runtime.skills import skill_execution_manifest_hash
@@ -447,8 +448,10 @@ async def _execute_request_locked(
         effective_model=resolved.effective_model,
         available_agents=available_agents,
     )
-    autonomous_grant = cfg.autonomous and session.approval_mode != "on"
-    context.skip_permissions = skip_permissions or autonomous_grant
+    context.skip_permissions = skip_permissions or trusted_conversation_bypasses_approvals(
+        session,
+        trust_tier=trust_tier,
+    )
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     context.system_prompt = guidance.apply_compact_mode(context.system_prompt, compact)

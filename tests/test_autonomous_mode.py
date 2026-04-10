@@ -138,30 +138,21 @@ def test_autonomous_explicit_approval_on_wins(monkeypatch, tmp_path):
 # -- Execution skip_permissions --
 
 
-async def test_autonomous_grants_skip_permissions():
-    """config.autonomous=True + session.approval_mode='off' -> skip_permissions=True."""
-    from octopus_sdk.sessions import SessionState
+async def test_trusted_approval_off_grants_skip_permissions():
+    """Trusted conversations bypass approvals when approval mode is off."""
+    from octopus_sdk.sessions import SessionState, trusted_conversation_bypasses_approvals
 
     session = SessionState(
         provider="claude",
         provider_state=ProviderStateRecord(),
         approval_mode="off",
     )
-    cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
-
-    # Build a minimal RunContext mock to capture skip_permissions
-    context = MagicMock()
-    context.skip_permissions = False
-
-    # The autonomous grant logic: cfg.autonomous and session.approval_mode != "on"
-    autonomous_grant = cfg.autonomous and session.approval_mode != "on"
-    context.skip_permissions = False or autonomous_grant
-    assert context.skip_permissions is True
+    assert trusted_conversation_bypasses_approvals(session, trust_tier="trusted") is True
 
 
-async def test_autonomous_respects_approval_on_override():
-    """config.autonomous=True + session.approval_mode='on' -> no autonomous grant."""
-    from octopus_sdk.sessions import SessionState
+async def test_approval_on_blocks_skip_permissions():
+    """Approval mode on disables the trusted bypass."""
+    from octopus_sdk.sessions import SessionState, trusted_conversation_bypasses_approvals
 
     session = SessionState(
         provider="claude",
@@ -169,26 +160,19 @@ async def test_autonomous_respects_approval_on_override():
         approval_mode="on",
         approval_mode_explicit=True,
     )
-    cfg = make_config(autonomous=True, allow_open=False, allowed_actor_keys=frozenset({"tg:42"}))
-
-    autonomous_grant = cfg.autonomous and session.approval_mode != "on"
-    skip_permissions = False or autonomous_grant
-    assert skip_permissions is False
+    assert trusted_conversation_bypasses_approvals(session, trust_tier="trusted") is False
 
 
-async def test_non_autonomous_no_grant():
-    """config.autonomous=False -> no autonomous grant regardless of approval_mode."""
-    from octopus_sdk.sessions import SessionState
+async def test_public_approval_off_does_not_grant_skip_permissions():
+    """Public conversations still require approvals even when the chat is off."""
+    from octopus_sdk.sessions import SessionState, trusted_conversation_bypasses_approvals
 
     session = SessionState(
         provider="claude",
         provider_state=ProviderStateRecord(),
         approval_mode="off",
     )
-    cfg = make_config(autonomous=False)
-
-    autonomous_grant = cfg.autonomous and session.approval_mode != "on"
-    assert autonomous_grant is False
+    assert trusted_conversation_bypasses_approvals(session, trust_tier="public") is False
 
 
 # -- Setup flow (octopus CLI) --

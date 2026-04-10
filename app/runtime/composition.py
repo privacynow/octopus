@@ -16,6 +16,7 @@ from app.provider_guidance_service import (
     PROMPT_SIZE_WARNING_THRESHOLD,
     get_provider_guidance_service,
 )
+from app.providers.codex_security import codex_sandbox_support_error
 from app.runtime.deferred_notifications import LocalDeferredNotifications
 from app.runtime.session_runtime import LocalSessionRuntime
 from app.skill_activation_service import get_skill_activation_service
@@ -50,6 +51,11 @@ def compose_workflows(
     config: BotConfig,
     sessions: SessionRuntimePort,
 ) -> WorkflowComposition:
+    def approval_mode_guard(value: str) -> str | None:
+        if value != "on":
+            return None
+        return codex_sandbox_support_error(config, approval_mode=value)
+
     return (
         WorkflowComposer()
         .with_messages(_msg)
@@ -68,6 +74,7 @@ def compose_workflows(
         .with_completion_webhook(_send_completion_webhook)
         .with_deferred_notifications(LocalDeferredNotifications())
         .with_prompt_size_warning_threshold(PROMPT_SIZE_WARNING_THRESHOLD)
+        .with_approval_mode_guard(approval_mode_guard)
         .build()
     )
 

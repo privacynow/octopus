@@ -12,7 +12,7 @@ Design rules:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 import dataclasses
 import time
 from dataclasses import dataclass, field
@@ -330,6 +330,40 @@ def session_from_dict(d: Mapping[str, object]) -> SessionState:
 
 ProviderStateInput = ProviderStateRecord | Mapping[str, JsonValue]
 ProviderStateFactory = Callable[[str], ProviderStateInput]
+
+
+def trusted_conversation_bypasses_approvals(
+    session: SessionState,
+    *,
+    trust_tier: str,
+) -> bool:
+    return trust_tier != "public" and session.approval_mode != "on"
+
+
+def single_project_binding(projects: Sequence[ProjectBinding]) -> ProjectBinding | None:
+    if len(projects) != 1:
+        return None
+    project = projects[0]
+    if not project.name:
+        return None
+    return project
+
+
+def normalize_single_project_session(
+    session: SessionState,
+    *,
+    projects: Sequence[ProjectBinding],
+    provider_state_factory: ProviderStateFactory | None = None,
+    conversation_key: str = "",
+) -> bool:
+    project = single_project_binding(projects)
+    if project is None or session.project_id == project.name:
+        return False
+    session.project_id = project.name
+    session.clear_pending()
+    if provider_state_factory is not None:
+        session.provider_state = coerce_provider_state(provider_state_factory(conversation_key))
+    return True
 
 
 def default_session(

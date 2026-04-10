@@ -7,6 +7,7 @@ from octopus_sdk.execution_context import resolve_execution_context
 from octopus_sdk.messages import MessageTemplatePort
 from octopus_sdk.sessions import SessionState
 from octopus_sdk.workflows.conversation import (
+    ApprovalModeGuard,
     ConversationSettingsPort,
     ModelProfileState,
     ProviderStateFactory,
@@ -23,9 +24,11 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
         *,
         messages: MessageTemplatePort,
         catalog: RuntimeSkillCatalogPort,
+        approval_mode_guard: ApprovalModeGuard | None = None,
     ) -> None:
         self._messages = messages
         self._catalog = catalog
+        self._approval_mode_guard = approval_mode_guard
 
     def _resolve_context(
         self,
@@ -72,6 +75,10 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
     def set_approval_mode(self, session: SessionState, value: str) -> SettingMutationOutcome:
         if value not in {"on", "off"}:
             return SettingMutationOutcome(status="invalid", message=self._messages.approval_usage())
+        if self._approval_mode_guard is not None:
+            guard_error = self._approval_mode_guard(value)
+            if guard_error:
+                return SettingMutationOutcome(status="blocked", message=guard_error)
         if session.approval_mode == value and session.approval_mode_explicit:
             return SettingMutationOutcome(
                 status="unchanged",
@@ -79,6 +86,7 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
             )
         session.approval_mode = value
         session.approval_mode_explicit = True
+        session.clear_pending()
         return SettingMutationOutcome(
             status="updated",
             mutated=True,
@@ -186,6 +194,8 @@ class ConversationSettingsUseCases(ConversationSettingsPort):
     ) -> SettingMutationOutcome:
         if not cfg.projects:
             return SettingMutationOutcome(status="no_projects", message=self._messages.no_projects_configured())
+        if value == "clear" and len(cfg.projects) == 1:
+            value = cfg.projects[0].name
         if value == "clear":
             if not session.project_id:
                 return SettingMutationOutcome(status="no_project", message=self._messages.trust_no_project_active())

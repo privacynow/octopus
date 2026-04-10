@@ -114,7 +114,7 @@ async def test_happy_path():
         ctx = prov.run_calls[0]["context"]
         assert isinstance(ctx, RunContext)
         assert any("uploads" in d for d in ctx.extra_dirs)
-        assert ctx.skip_permissions is False
+        assert ctx.skip_permissions is True
 
         session = load_session_disk(data_dir, _conv(12345), prov)
         assert session["provider_state"]["started"] == True
@@ -3052,9 +3052,9 @@ async def test_project_list_shows_projects():
 async def test_project_use_switches_project():
     """'/project use <name>' binds the chat to a project and resets provider state."""
     import app.runtime.telegram_ingress as th
-    with tempfile.TemporaryDirectory() as proj_dir:
+    with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other_dir:
         with fresh_env(config_overrides={
-            "projects": (("frontend", proj_dir, ()),),
+            "projects": (("frontend", proj_dir, ()), ("backend", other_dir, ())),
         }) as (data_dir, cfg, prov):
             chat = FakeChat(2001)
             user = FakeUser(1)
@@ -3094,9 +3094,9 @@ async def test_project_use_unknown_project():
 async def test_project_clear_resets_to_default():
     """'/project clear' removes the project binding and resets provider state."""
     import app.runtime.telegram_ingress as th
-    with tempfile.TemporaryDirectory() as proj_dir:
+    with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other_dir:
         with fresh_env(config_overrides={
-            "projects": (("myapp", proj_dir, ()),),
+            "projects": (("myapp", proj_dir, ()), ("other", other_dir, ())),
         }) as (data_dir, cfg, prov):
             chat = FakeChat(3001)
             user = FakeUser(1)
@@ -3119,9 +3119,9 @@ async def test_project_clear_resets_to_default():
 async def test_project_show_current():
     """'/project' with no args shows the current project."""
     import app.runtime.telegram_ingress as th
-    with tempfile.TemporaryDirectory() as proj_dir:
+    with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other_dir:
         with fresh_env(config_overrides={
-            "projects": (("backend", proj_dir, ()),),
+            "projects": (("backend", proj_dir, ()), ("frontend", other_dir, ())),
         }) as (data_dir, cfg, prov):
             chat = FakeChat(4001)
             user = FakeUser(1)
@@ -3133,6 +3133,21 @@ async def test_project_show_current():
 
             # Bind and check
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = last_reply(msg)
+            assert "backend" in reply
+
+
+async def test_single_project_show_current_auto_binds():
+    """Single-project bots should show the configured project immediately."""
+    import app.runtime.telegram_ingress as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(4002)
+            user = FakeUser(1)
+
             msg = await send_command(th.cmd_project, chat, user, "/project")
             reply = last_reply(msg)
             assert "backend" in reply
@@ -3592,9 +3607,9 @@ async def test_settings_callback_project_use():
     """setting_project:<name> callback switches project and resets provider state."""
     import app.runtime.telegram_ingress as th
     from tests.support.handler_support import send_callback
-    with tempfile.TemporaryDirectory() as proj_dir:
+    with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other_dir:
         with fresh_env(config_overrides={
-            "projects": (("myproj", proj_dir, ()),),
+            "projects": (("myproj", proj_dir, ()), ("other", other_dir, ())),
         }) as (data_dir, cfg, prov):
             chat = FakeChat(1)
             user = FakeUser(42)
@@ -3614,9 +3629,9 @@ async def test_settings_callback_project_clear():
     """setting_project:clear callback clears project and resets provider state."""
     import app.runtime.telegram_ingress as th
     from tests.support.handler_support import send_callback
-    with tempfile.TemporaryDirectory() as proj_dir:
+    with tempfile.TemporaryDirectory() as proj_dir, tempfile.TemporaryDirectory() as other_dir:
         with fresh_env(config_overrides={
-            "projects": (("p1", proj_dir, ()),),
+            "projects": (("p1", proj_dir, ()), ("p2", other_dir, ())),
         }) as (data_dir, cfg, prov):
             chat = FakeChat(1)
             user = FakeUser(42)
@@ -4281,7 +4296,10 @@ async def test_project_switch_shows_inherited_defaults():
     """Project switch confirmation message includes inherited file_policy and model_profile."""
     import app.runtime.telegram_ingress as th
     with fresh_env(config_overrides={
-        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),),
+        "projects": (
+            ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),
+            ProjectBinding(name="be", root_dir="/tmp/backend"),
+        ),
         "model_profiles": {"fast": "haiku", "best": "opus"},
     }) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
@@ -4296,7 +4314,10 @@ async def test_project_switch_no_defaults_no_extra_lines():
     """Project with no inherited defaults shows basic switch message."""
     import app.runtime.telegram_ingress as th
     with fresh_env(config_overrides={
-        "projects": (ProjectBinding(name="fe", root_dir="/tmp"),),
+        "projects": (
+            ProjectBinding(name="fe", root_dir="/tmp"),
+            ProjectBinding(name="be", root_dir="/tmp/backend"),
+        ),
     }) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")

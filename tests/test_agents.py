@@ -1280,6 +1280,54 @@ async def test_admit_registry_delivery_preserves_registry_external_conversation_
     ]
 
 
+async def test_admit_registry_delivery_derives_registry_external_conversation_ref_when_missing(
+    tmp_path: Path,
+):
+    captured: dict[str, str] = {}
+
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            del binding
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            return _FakeEgress()
+
+    class _CapturingSubmitter:
+        async def admit_message(self, envelope):
+            captured["conversation_ref"] = envelope.conversation_ref
+            captured["external_conversation_ref"] = envelope.event.external_conversation_ref
+            return InboundSubmissionResult(status="queued", item_id="queued-item")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "channel_input",
+            "delivery_id": "delivery-reg-derived-1",
+            "registry_id": "prod",
+            "payload": {
+                "conversation_id": "conv-1",
+                "text": "hello registry",
+            },
+        },
+        submitter=_CapturingSubmitter(),
+        dispatcher=_FakeDispatcher(),
+    )
+
+    assert outcome == "accepted"
+    assert captured == {
+        "conversation_ref": registry_conversation_ref("prod", "conv-1"),
+        "external_conversation_ref": "conv-1",
+    }
+
+
 async def test_admit_registry_delivery_deduplicates_identical_routed_task_title_and_instructions(
     tmp_path: Path,
 ):

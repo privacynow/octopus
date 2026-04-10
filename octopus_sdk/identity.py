@@ -261,6 +261,52 @@ def resolve_delegation_parent_identity(
     return "", ""
 
 
+def canonical_external_conversation_ref(value: str) -> str:
+    """Return the stable external ref identity for a transport ref or raw token."""
+
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    if token.startswith("registry:"):
+        full_parts = token.split(":", 3)
+        if len(full_parts) == 4 and full_parts[2] in {"conversation", "task"} and full_parts[3]:
+            return full_parts[3]
+        collapsed_parts = token.split(":", 2)
+        if (
+            len(collapsed_parts) == 3
+            and collapsed_parts[1] in {"conversation", "task"}
+            and collapsed_parts[2]
+        ):
+            return collapsed_parts[2]
+    return token
+
+
+def resolve_external_conversation_ref(
+    *,
+    origin_channel: str = "",
+    external_conversation_ref: str = "",
+    conversation_ref: str = "",
+    conversation_key: str = "",
+) -> str:
+    """Resolve the canonical external conversation ref for runtime mirroring."""
+
+    resolved = canonical_external_conversation_ref(external_conversation_ref)
+    if resolved:
+        return resolved
+    if origin_channel == "telegram":
+        chat_id = telegram_chat_id_from_ref(conversation_ref)
+        if chat_id is not None:
+            return str(chat_id)
+        numeric_chat_id = telegram_numeric_id(conversation_key)
+        if numeric_chat_id is not None:
+            return str(numeric_chat_id)
+    for candidate in (conversation_ref, conversation_key):
+        resolved = canonical_external_conversation_ref(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
 def resolve_event_conversation_ref(*, config: BotConfigBase, event: ConversationScopedEvent) -> str:
     conversation_ref = str(getattr(event, "conversation_ref", "") or "")
     if conversation_ref:

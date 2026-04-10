@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from octopus_sdk.identity import canonical_external_conversation_ref
+
 
 def registry_conversation_ref(registry_id: str, conversation_id: str) -> str:
     return f"registry:{registry_id}:conversation:{conversation_id}"
@@ -26,10 +28,7 @@ def parse_registry_ref(conversation_ref: str) -> tuple[str, str, str] | None:
 
 
 def binding_external_id_for_ref(conversation_ref: str) -> str:
-    parsed = parse_registry_ref(conversation_ref)
-    if parsed is None:
-        return conversation_ref
-    return parsed[2]
+    return canonical_external_conversation_ref(conversation_ref)
 
 
 def qualify_registry_conversation_ref(registry_id: str, conversation_ref: str) -> str:

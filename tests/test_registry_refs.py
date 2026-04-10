@@ -79,5 +79,9 @@ def test_binding_external_id_for_ref_returns_parsed_external_id_for_task_ref() -
     assert binding_external_id_for_ref("registry:prod:task:task-1") == "task-1"
 
 
+def test_binding_external_id_for_ref_returns_parsed_external_id_for_collapsed_registry_ref() -> None:
+    assert binding_external_id_for_ref("registry:conversation:conv-1") == "conv-1"
+
+
 def test_binding_external_id_for_ref_returns_original_for_non_registry_ref() -> None:
     assert binding_external_id_for_ref("slack:eng:C0123ABC") == "slack:eng:C0123ABC"

@@ -20,6 +20,7 @@ from octopus_sdk.bot_runtime import run_provider_request
 from octopus_sdk.execution_context import ResolvedExecutionContext
 from octopus_sdk.execution_events import ExecutionEventSink
 from octopus_sdk.formatting import extract_send_directives
+from octopus_sdk.identity import resolve_external_conversation_ref
 from octopus_sdk.inbound_types import InboundAttachment
 from octopus_sdk.providers import CredentialEnvRecord, DenialRecord
 from octopus_sdk.request_flow import extra_dirs_from_denials
@@ -173,12 +174,18 @@ def build_transport_identity_from_metadata(
     routed_task_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
 ) -> TransportIdentity:
     conversation_ref = metadata.message_conversation_ref
+    external_conversation_ref = resolve_external_conversation_ref(
+        origin_channel=metadata.origin_channel,
+        external_conversation_ref=metadata.external_conversation_ref,
+        conversation_ref=conversation_ref,
+        conversation_key=metadata.conversation_key,
+    )
     if metadata.routed_task_id and metadata.authority_ref:
         return TransportIdentity(
             conversation_key=metadata.conversation_key,
             origin_channel=metadata.origin_channel,
             actor=metadata.actor,
-            external_conversation_ref=metadata.external_conversation_ref,
+            external_conversation_ref=external_conversation_ref,
             target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
@@ -200,7 +207,7 @@ def build_transport_identity_from_metadata(
             conversation_key=metadata.conversation_key,
             origin_channel=metadata.origin_channel,
             actor=metadata.actor,
-            external_conversation_ref=metadata.external_conversation_ref,
+            external_conversation_ref=external_conversation_ref,
             target_agent_id=metadata.target_agent_id,
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
@@ -215,7 +222,7 @@ def build_transport_identity_from_metadata(
         conversation_key=metadata.conversation_key,
         origin_channel=metadata.origin_channel,
         actor=metadata.actor,
-        external_conversation_ref=metadata.external_conversation_ref,
+        external_conversation_ref=external_conversation_ref,
         target_agent_id=metadata.target_agent_id,
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,

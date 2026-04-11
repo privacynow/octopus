@@ -1199,6 +1199,7 @@ class BotRuntime:
                 approval_mode_default=self.config.approval_mode,
                 default_role=self.config.role,
                 default_skills=self.config.default_skills,
+                projects=self.config.projects,
                 conversation_key=item.conversation_key,
             )
             if outcome.replacement_session is not None:

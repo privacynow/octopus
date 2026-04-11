@@ -141,6 +141,56 @@ async def test_approval_wording():
         assert "chat override" in session_texts
 
 
+async def test_approval_off_clears_pending_and_preserves_thread():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, provider_name="codex", approval_mode="on")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", {"thread_id": "thread-123", "started": True}, "on")
+        session["pending_approval"] = pending_approval_dict(prompt="do it", created_at=0)
+        save_session(data_dir, telegram_conversation_key(12345), session)
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        set_msg = FakeMessage(chat=chat, text="/approval off")
+        set_update = FakeUpdate(message=set_msg, user=user, chat=chat)
+        await th.cmd_approval(set_update, FakeContext(["off"]))
+
+        reloaded = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert reloaded["approval_mode"] == "off"
+        assert reloaded["provider_state"]["thread_id"] == "thread-123"
+        assert reloaded.get("pending_approval") is None and reloaded.get("pending_retry") is None
+
+
+async def test_approval_on_rejected_when_codex_sandbox_is_unavailable(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, provider_name="codex", approval_mode="off")
+        prov = FakeProvider("codex")
+        monkeypatch.setattr(
+            "app.runtime.composition.codex_sandbox_support_error",
+            lambda config, approval_mode: (
+                "Approval mode 'on' requires Codex sandboxing, but this host cannot provide it: nope"
+            ),
+        )
+        setup_globals(cfg, prov)
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        set_msg = FakeMessage(chat=chat, text="/approval on")
+        set_update = FakeUpdate(message=set_msg, user=user, chat=chat)
+        await th.cmd_approval(set_update, FakeContext(["on"]))
+
+        set_texts = " ".join(r.get("text", "") for r in set_msg.replies)
+        assert "requires Codex sandboxing" in set_texts
+        reloaded = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert reloaded["approval_mode"] == "off"
+
+
 async def test_denial_retry_flow():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

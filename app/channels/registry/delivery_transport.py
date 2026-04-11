@@ -34,6 +34,7 @@ from octopus_sdk.identity import (
     conversation_key_for_ref,
     delegation_session_key,
     resolve_delegation_parent_identity,
+    resolve_external_conversation_ref,
 )
 from octopus_sdk.inbound_types import (
     InboundAction,
@@ -197,6 +198,12 @@ def build_registry_message_envelope(
         raise ValueError("Registry message delivery requires an explicit registry_id")
     source_transport = str(source_transport or "registry").strip() or "registry"
     conversation_key = conversation_key_override or conversation_key_for_ref(conversation_ref)
+    resolved_external_ref = resolve_external_conversation_ref(
+        origin_channel=source_transport,
+        external_conversation_ref=external_conversation_ref,
+        conversation_ref=conversation_ref,
+        conversation_key=conversation_key,
+    )
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
     event = InboundMessage(
@@ -208,7 +215,7 @@ def build_registry_message_envelope(
         source=source_transport,
         transport=source_transport,
         conversation_ref=conversation_ref,
-        external_conversation_ref=external_conversation_ref,
+        external_conversation_ref=resolved_external_ref,
         routed_task_id=routed_task_id,
         context_text=context_text,
         constraints_text=constraints_text,
@@ -250,6 +257,12 @@ def build_registry_action_envelope(
     if not registry_id:
         raise ValueError("Registry action delivery requires an explicit registry_id")
     conversation_key = conversation_key_for_ref(conversation_ref)
+    resolved_external_ref = resolve_external_conversation_ref(
+        origin_channel="registry",
+        external_conversation_ref=external_conversation_ref,
+        conversation_ref=conversation_ref,
+        conversation_key=conversation_key,
+    )
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
     event = InboundAction(
@@ -260,7 +273,7 @@ def build_registry_action_envelope(
         source="registry",
         transport="registry",
         conversation_ref=conversation_ref,
-        external_conversation_ref=external_conversation_ref,
+        external_conversation_ref=resolved_external_ref,
         authority_ref=registry_authority_ref(registry_id),
     )
     return InboundEnvelope(

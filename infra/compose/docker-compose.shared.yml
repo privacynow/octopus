@@ -5,8 +5,13 @@
 #     -f infra/compose/docker-compose.shared.yml \
 #     --profile bot up -d --scale bot-worker=2 bot-webhook bot-worker
 
+x-bot-sandbox-security: &bot-sandbox-security
+  security_opt:
+    - seccomp=unconfined
+
 services:
   bot-webhook:
+    <<: *bot-sandbox-security
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot
@@ -27,6 +32,7 @@ services:
       - "${BOT_WEBHOOK_PORT:-8443}:8443"
 
   bot-worker:
+    <<: *bot-sandbox-security
     image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot

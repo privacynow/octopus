@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import logging
 import re
+import sys
+from functools import lru_cache
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -103,3 +107,55 @@ def validated_codex_config_overrides(
         accepted.append(override)
 
     return accepted
+
+
+def codex_runtime_requires_sandbox(config: Any, *, approval_mode: str) -> bool:
+    if str(getattr(config, "provider_name", "") or "") != "codex":
+        return False
+    if approval_mode != "on":
+        return False
+    if bool(getattr(config, "codex_dangerous", False)):
+        return False
+    return str(getattr(config, "codex_sandbox", "") or "") != "danger-full-access"
+
+
+@lru_cache(maxsize=1)
+def probe_codex_sandbox_support() -> str | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    unshare = shutil.which("unshare")
+    if not unshare:
+        return "the Linux 'unshare' command is not available"
+    try:
+        completed = subprocess.run(
+            [unshare, "--user", "--map-root-user", "true"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "the sandbox capability probe timed out"
+    except OSError as exc:
+        return str(exc)
+    if completed.returncode == 0:
+        return None
+    detail = (completed.stderr or "").strip()
+    return detail or f"probe exited with code {completed.returncode}"
+
+
+def codex_sandbox_support_error(config: Any, *, approval_mode: str) -> str | None:
+    if not codex_runtime_requires_sandbox(config, approval_mode=approval_mode):
+        return None
+    detail = probe_codex_sandbox_support()
+    if detail is None:
+        return None
+    return (
+        "Approval mode 'on' requires Codex sandboxing, but this host cannot provide it: "
+        f"{detail}"
+    )
+
+
+def reset_codex_sandbox_probe_cache() -> None:
+    probe_codex_sandbox_support.cache_clear()

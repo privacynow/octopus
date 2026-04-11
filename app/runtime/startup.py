@@ -13,6 +13,7 @@ import app.runtime_backend as runtime_backend
 from app.config import BotConfig, ProcessRole
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
+from app.providers.codex_security import codex_sandbox_support_error
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
     format_database_startup_exception,
@@ -174,6 +175,15 @@ def validate_provider_auth(config: BotConfig, provider: Provider) -> None:
     raise SystemExit(1)
 
 
+def validate_provider_runtime_requirements(config: BotConfig) -> None:
+    runtime_error = codex_sandbox_support_error(config, approval_mode=config.approval_mode)
+    if runtime_error is None:
+        return
+    print("Provider runtime validation failed.", file=sys.stderr)
+    print(f"  {runtime_error}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def validate_required_runtime_profile(config: BotConfig) -> None:
     if not config.telegram_token:
         return
@@ -204,6 +214,7 @@ def initialize_runtime_startup(config: BotConfig, provider: Provider) -> None:
     initialize_runtime_health_startup(config)
     run_database_startup_checks(config)
     validate_provider_auth(config, provider)
+    validate_provider_runtime_requirements(config)
     validate_required_runtime_profile(config)
     log_runtime_profile(config, provider)
 

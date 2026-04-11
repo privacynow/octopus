@@ -120,6 +120,7 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
             approval_mode_default=cfg.approval_mode,
             default_role=cfg.role,
             default_skills=cfg.default_skills,
+            projects=cfg.projects,
         )
         if outcome.status == "foreign_setup":
             rendered = telegram_presenters.conversation_foreign_setup_message(old_session.awaiting_skill_setup)
@@ -641,6 +642,7 @@ async def handle_worker_conversation_action(
             approval_mode_default=cfg.approval_mode,
             default_role=cfg.role,
             default_skills=cfg.default_skills,
+            projects=cfg.projects,
         )
         if outcome.status == "foreign_setup":
             rendered = telegram_presenters.conversation_foreign_setup_message(old_session.awaiting_skill_setup)

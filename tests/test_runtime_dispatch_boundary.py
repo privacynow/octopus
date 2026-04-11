@@ -511,6 +511,50 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
     assert context.timeline_callback is not None
 
 
+def test_workflow_context_builder_derives_registry_external_conversation_ref_when_missing() -> None:
+    context = build_transport_identity_from_metadata(
+        ExecutionChannelMetadata(
+            conversation_key="registry:conversation:conv-1",
+            origin_channel="registry",
+            actor="registry:operator",
+            descriptor=TransportDescriptor(
+                transport_type="registry",
+                display_name="Registry",
+                supports_multiple=True,
+                inbound_model="delivery",
+                trust_tier="trusted",
+                contributes_transport_capability=True,
+                accepts_transport_input=True,
+                supports_conversation_binding=True,
+                supports_timeline=True,
+            ),
+            message_conversation_ref="registry:ops:conversation:conv-1",
+            routed_task_id="",
+            authority_ref="",
+            external_conversation_ref="",
+            target_agent_id="",
+        ),
+        conversation_callback_factory=lambda conversation_ref, routed_task_id: (
+            lambda html_text, force=False: _no_op(
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        routed_task_callback_factory=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: _no_op(
+                routed_task_id,
+                authority_ref,
+                html_text,
+                force=force,
+            )
+        ),
+    )
+
+    assert context.external_conversation_ref == "conv-1"
+
+
 async def test_workflow_context_builder_chooses_routed_task_callback_by_concern() -> None:
     observed: list[tuple[str, str, str]] = []
 
@@ -596,6 +640,22 @@ def test_execution_channel_metadata_uses_registry_external_conversation_ref__bou
 
     assert metadata.origin_channel == "registry"
     assert metadata.external_conversation_ref == "registry-ui-conv-1"
+
+
+def test_execution_channel_metadata_derives_registry_external_conversation_ref_from_ref() -> None:
+    with fresh_env():
+        runtime = current_runtime()
+        message = FakeMessage(chat=FakeChat(12345), text="hello")
+        message.conversation_ref = "registry:ops:conversation:conv-1"
+
+        metadata = execution_channel_metadata(
+            runtime,
+            message,
+            "registry:conversation:conv-1",
+        )
+
+    assert metadata.origin_channel == "registry"
+    assert metadata.external_conversation_ref == "conv-1"
 
 
 def test_execution_channel_metadata_honors_telegram_transport_for_string_chat_id() -> None:

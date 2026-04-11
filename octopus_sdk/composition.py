@@ -23,6 +23,7 @@ from octopus_sdk.work_queue import WorkQueuePort
 from octopus_sdk.webhooks import CompletionWebhookPort
 from octopus_sdk.workflows.conversation_control import ConversationControlUseCases
 from octopus_sdk.workflows.conversation_settings import ConversationSettingsUseCases
+from octopus_sdk.workflows.conversation import ApprovalModeGuard
 from octopus_sdk.workflows.credential_management import CredentialManagementUseCases
 from octopus_sdk.workflows.credentials import CredentialServicePort, CredentialValidatorPort
 from octopus_sdk.workflows.pending_requests import PendingRequestUseCases
@@ -115,6 +116,7 @@ class WorkflowComposer:
         self._completion_webhook: CompletionWebhookPort | None = None
         self._deferred_notifications: DeferredNotificationPort | None = None
         self._prompt_size_warning_threshold: int = 0
+        self._approval_mode_guard: ApprovalModeGuard | None = None
 
     def with_messages(self, messages: MessageTemplatePort) -> "WorkflowComposer":
         self._messages = messages
@@ -181,6 +183,10 @@ class WorkflowComposer:
 
     def with_prompt_size_warning_threshold(self, threshold: int) -> "WorkflowComposer":
         self._prompt_size_warning_threshold = threshold
+        return self
+
+    def with_approval_mode_guard(self, guard: ApprovalModeGuard) -> "WorkflowComposer":
+        self._approval_mode_guard = guard
         return self
 
     def _reject_test_implementations(self) -> None:
@@ -337,6 +343,7 @@ class WorkflowComposer:
                 settings=ConversationSettingsUseCases(
                     messages=messages,
                     catalog=catalog,
+                    approval_mode_guard=self._approval_mode_guard,
                 ),
             ),
             pending=PendingWorkflows(

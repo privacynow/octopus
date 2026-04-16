@@ -289,6 +289,131 @@ CREATE INDEX IF NOT EXISTS idx_events_kind
 CREATE INDEX IF NOT EXISTS idx_events_fts
     ON agent_registry.events USING GIN (to_tsvector('english', content));
 
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_definitions (
+    protocol_id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    lifecycle_state TEXT NOT NULL DEFAULT 'draft',
+    current_version_id TEXT NOT NULL DEFAULT '',
+    draft_definition_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    draft_content_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_definitions_lifecycle
+    ON agent_registry.protocol_definitions (lifecycle_state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_definition_versions (
+    protocol_definition_version_id TEXT PRIMARY KEY,
+    protocol_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    definition_json JSONB NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    validation_status TEXT NOT NULL DEFAULT '',
+    published_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_definition_versions_protocol_version
+    ON agent_registry.protocol_definition_versions (protocol_id, version);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
+    protocol_run_id TEXT PRIMARY KEY,
+    protocol_id TEXT NOT NULL,
+    protocol_definition_version_id TEXT NOT NULL,
+    entry_agent_id TEXT NOT NULL DEFAULT '',
+    entry_authority_ref TEXT NOT NULL DEFAULT '',
+    root_conversation_id TEXT NOT NULL DEFAULT '',
+    origin_channel TEXT NOT NULL DEFAULT '',
+    workspace_ref TEXT NOT NULL DEFAULT '',
+    repo_ref TEXT NOT NULL DEFAULT '',
+    branch_ref TEXT NOT NULL DEFAULT '',
+    problem_statement TEXT NOT NULL DEFAULT '',
+    constraints_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'queued',
+    current_stage_execution_id TEXT NOT NULL DEFAULT '',
+    current_stage_key TEXT NOT NULL DEFAULT '',
+    termination_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
+    ON agent_registry.protocol_runs (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_status
+    ON agent_registry.protocol_runs (status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_run_participants (
+    protocol_run_participant_id TEXT PRIMARY KEY,
+    protocol_run_id TEXT NOT NULL,
+    participant_key TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    required_skills_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    target_selector_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    resolved_agent_id TEXT NOT NULL DEFAULT '',
+    resolved_authority_ref TEXT NOT NULL DEFAULT '',
+    session_key TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_run_participants_unique
+    ON agent_registry.protocol_run_participants (protocol_run_id, participant_key);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_stage_executions (
+    protocol_stage_execution_id TEXT PRIMARY KEY,
+    protocol_run_id TEXT NOT NULL,
+    stage_key TEXT NOT NULL,
+    participant_key TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    loop_iteration INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'queued',
+    decision TEXT NOT NULL DEFAULT '',
+    decision_summary TEXT NOT NULL DEFAULT '',
+    input_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    routed_task_id TEXT NOT NULL DEFAULT '',
+    failure_code TEXT NOT NULL DEFAULT '',
+    failure_detail TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_stage_executions_run
+    ON agent_registry.protocol_stage_executions (protocol_run_id, started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_stage_executions_routed_task
+    ON agent_registry.protocol_stage_executions (routed_task_id)
+    WHERE routed_task_id <> '';
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_artifacts (
+    protocol_artifact_id TEXT PRIMARY KEY,
+    protocol_run_id TEXT NOT NULL,
+    artifact_key TEXT NOT NULL,
+    artifact_kind TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    workspace_path TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    produced_by_stage_execution_id TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT '',
+    supersedes_protocol_artifact_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_artifacts_run
+    ON agent_registry.protocol_artifacts (protocol_run_id, artifact_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_transitions (
+    protocol_transition_id TEXT PRIMARY KEY,
+    protocol_run_id TEXT NOT NULL,
+    from_stage_execution_id TEXT NOT NULL DEFAULT '',
+    to_stage_execution_id TEXT NOT NULL DEFAULT '',
+    transition_kind TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    actor_type TEXT NOT NULL DEFAULT '',
+    actor_ref TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_transitions_run
+    ON agent_registry.protocol_transitions (protocol_run_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS agent_registry.skills_override (
     skill_name TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),

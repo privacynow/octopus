@@ -24,6 +24,13 @@ _REQUIRED_TABLES: dict[str, tuple[str, ...]] = {
         "conversations",
         "routed_tasks",
         "events",
+        "protocol_definitions",
+        "protocol_definition_versions",
+        "protocol_runs",
+        "protocol_run_participants",
+        "protocol_stage_executions",
+        "protocol_artifacts",
+        "protocol_transitions",
         "skills_override",
         "runtime_skills",
         "skill_revisions",
@@ -64,6 +71,7 @@ _REQUIRED_COLUMNS: dict[tuple[str, str], tuple[str, ...]] = {
         "runtime_health_json",
     ),
     ("agent_registry", "conversations"): ("conversation_type",),
+    ("agent_registry", "protocol_definitions"): ("draft_definition_json", "draft_content_hash"),
     ("bot_content", "skill_revisions"): ("skill_kind",),
 }
 _REQUIRED_INDEX = "idx_one_claimed_per_conv"

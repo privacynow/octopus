@@ -18,6 +18,16 @@ from octopus_sdk.content_models import (
     SkillRevisionRecord,
 )
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
+from octopus_sdk.protocols import (
+    ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
+    ProtocolMutationRecord,
+    ProtocolRunCreateRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunRecord,
+)
 
 from .runtime_health import report_from_dict, report_to_dict
 from octopus_sdk.registry.models import (
@@ -619,6 +629,45 @@ class AbstractRegistryStore(Protocol):
 
     def export_conversation(self, conversation_id: str) -> str:
         """Export conversation as markdown events."""
+
+    # ------------------------------------------------------------------
+    # Protocol definitions and runs
+    # ------------------------------------------------------------------
+
+    def list_protocols(self) -> list[ProtocolDefinitionRecord]:
+        """Return protocol definitions in UI-ready form."""
+
+    def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
+        """Return one builtin protocol template document by slug."""
+
+    def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        """Return one protocol definition with latest validation/version metadata."""
+
+    def save_protocol_draft(
+        self,
+        *,
+        protocol_id: str,
+        slug: str,
+        display_name: str,
+        description: str,
+        definition_json: RegistryJsonRecord,
+    ) -> ProtocolMutationRecord:
+        """Create or update one protocol draft."""
+
+    def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        """Validate the current draft for one protocol."""
+
+    def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        """Publish the current validated draft as a new immutable version."""
+
+    def list_protocol_runs(self, *, limit: int = 25, cursor: int = 0, status: str = "") -> list[ProtocolRunRecord]:
+        """Return protocol runs in UI-ready form."""
+
+    def create_protocol_run(self, payload: ProtocolRunCreateRecord) -> ProtocolRunMutationRecord:
+        """Create a protocol run and dispatch its first stage."""
+
+    def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
+        """Return one protocol run with participants, stages, artifacts, and transitions."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

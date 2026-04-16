@@ -76,6 +76,7 @@ plane. It runs independently of any bot. When bots connect, it manages them.
 - Conversation storage, event timeline, message/action APIs, and browser-origin
   operator messages
 - Routed task lifecycle (create, status, result, recipient projection)
+- Protocol definition/version storage and protocol run orchestration
 - Skill catalog and provider guidance management (via management protocol)
 - Skill-derived routing projection and global routing policy
 - Operator dashboard and SPA
@@ -115,12 +116,22 @@ flowchart TB
 | Agent API | Agent token | Enroll, register, heartbeat, poll, ack, deregister |
 | Resource API | Agent token, operator session, or both (varies per endpoint) | Agents, conversations, tasks, events. Usage and summary are operator-only. |
 | Management bridge | Operator session or UI bearer token | Agent-scoped skill/guidance operations via management protocol |
+| Protocol API | Operator session or UI write access | Protocol templates, definitions, versions, runs, and run inspection |
 | Realtime API | Operator session | WebSocket — events, heartbeats, progress, invalidations |
 | Operator SPA | Session cookie | Dashboard, conversations, agents, tasks, approvals, skills, routing, guidance, usage |
 
 All management endpoints are agent-scoped: `/v1/agents/{agent_id}/catalog/skills`,
 `/v1/agents/{agent_id}/guidance/{provider}`, etc. No global management endpoints
 that assume a single connected bot.
+
+Protocol definitions and protocol runs are registry-owned control-plane
+objects:
+
+- definitions are versioned in `agent_registry`
+- runs are persisted in `agent_registry`
+- stage execution is dispatched through the existing routed-task/runtime path
+- transport clients such as Telegram invoke and observe protocol runs, but they
+  do not own protocol state or state-machine rules
 
 For skills, the shared user-facing states are:
 
@@ -315,6 +326,7 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Runtime orchestration (`BotRuntime` — admission, dispatch, worker loop)
 - Execution engine (`execute_request` — provider invocation, delegation, finalization)
 - Registry participant contracts (enrollment, mirroring, coordination)
+- Protocol models, validation, stage prompt rendering, and participant session-keying
 - Workflow composition (`WorkflowComposer` with builder pattern)
 - Event taxonomy (12 typed event kinds with validated metadata)
 - Task protocol (lifecycle state machine, transition validation)

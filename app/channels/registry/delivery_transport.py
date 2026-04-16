@@ -300,6 +300,7 @@ async def admit_registry_delivery(
     *,
     submitter: BotRuntimeHandle,
     dispatcher: TransportDispatcher | None = None,
+    runtime: RegistryDeliveryRuntime | None = None,
 ) -> str:
     kind = str(delivery.get("kind", ""))
     payload = delivery.get("payload", {})
@@ -352,7 +353,10 @@ async def admit_registry_delivery(
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
         origin_agent_id = request.get("origin_agent_id", "")
         parent_conversation_id = request.get("parent_conversation_id", "")
-        if origin_agent_id and parent_conversation_id:
+        session_key_override = str(request.get("session_key_override", "") or "").strip()
+        if session_key_override:
+            shared_key = session_key_override
+        elif origin_agent_id and parent_conversation_id:
             shared_key = delegation_session_key(origin_agent_id, parent_conversation_id)
         else:
             shared_key = ""
@@ -373,6 +377,13 @@ async def admit_registry_delivery(
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             registry_id=registry_id,
         )
+        if runtime is not None and envelope.conversation_key:
+            _apply_routed_task_session_overrides(
+                config=config,
+                runtime=runtime,
+                conversation_key=envelope.conversation_key,
+                request=request,
+            )
         await submitter.admit_message(envelope)
         return "accepted"
 
@@ -398,6 +409,34 @@ def _save_session(config: BotConfig, conversation_key: str, session) -> None:
     save_runtime_session(config.data_dir, conversation_key, session)
 
 
+def _apply_routed_task_session_overrides(
+    *,
+    config: BotConfig,
+    runtime: RegistryDeliveryRuntime,
+    conversation_key: str,
+    request: dict[str, Any],
+) -> None:
+    project_id = str(request.get("project_id_override", "") or "").strip()
+    file_policy = str(request.get("file_policy_override", "") or "").strip()
+    if not project_id and not file_policy:
+        return
+    session = _load_session(config, runtime, conversation_key)
+    mutated = False
+    if project_id and session.project_id != project_id:
+        session.project_id = project_id
+        session.provider_state = runtime.provider_state_factory(conversation_key)
+        session.clear_pending()
+        mutated = True
+    if file_policy and session.file_policy != file_policy:
+        session.file_policy = file_policy
+        if not project_id:
+            session.provider_state = runtime.provider_state_factory(conversation_key)
+            session.clear_pending()
+        mutated = True
+    if mutated:
+        _save_session(config, conversation_key, session)
+
+
 async def handle_registry_delivery(
     config: BotConfig,
     delivery: dict[str, object],
@@ -416,6 +455,7 @@ async def handle_registry_delivery(
             delivery,
             submitter=submitter,
             dispatcher=runtime.dispatcher,
+            runtime=runtime,
         )
 
     payload = delivery.get("payload", {})
@@ -488,6 +528,8 @@ async def handle_registry_delivery(
         if not registry_id:
             return "rejected"
         routed_task_id = str(payload.get("routed_task_id", ""))
+        if routed_task_id.startswith("protocol-stage:"):
+            return "accepted"
         parent_conversation_id = qualify_registry_parent_ref(
             registry_id,
             str(payload.get("parent_conversation_id", "")),

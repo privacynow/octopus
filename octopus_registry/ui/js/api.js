@@ -200,6 +200,28 @@ const API = (() => {
         getTask: (id) =>
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
 
+        // Protocols
+        listProtocols: () =>
+            request('GET', '/v1/protocols'),
+        getProtocolTemplate: (slug) =>
+            request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
+        getProtocol: (id) =>
+            request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
+        createProtocol: (body = {}) =>
+            request('POST', '/v1/protocols', { body }),
+        saveProtocolDraft: (id, body = {}) =>
+            request('PUT', `/v1/protocols/${encodeURIComponent(id)}/draft`, { body }),
+        validateProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
+        publishProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
+        listProtocolRuns: (opts = {}) =>
+            request('GET', '/v1/protocol-runs', { params: opts }),
+        createProtocolRun: (body = {}) =>
+            request('POST', '/v1/protocol-runs', { body }),
+        getProtocolRun: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}`),
+
         // Routing skills
         listRoutingSkills: () =>
             request('GET', '/v1/routing/skills'),

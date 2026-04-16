@@ -12,12 +12,15 @@ from telegram.ext import ContextTypes
 from app import access
 from app import user_messages as _msg
 from app.presentation import telegram as telegram_presenters
+from app.agents.state import load_runtime_registry_connection_state
 from app.config import BotConfig
 from octopus_sdk.identity import (
     parse_actor_key,
     parse_conversation_key,
+    telegram_conversation_ref,
     telegram_numeric_id,
 )
+from octopus_sdk.registry.client import RegistryClient, RegistryClientError
 from octopus_sdk.sessions import (
     SessionState,
     session_to_dict,
@@ -95,8 +98,12 @@ from app import work_queue
 from octopus_sdk.work_queue import TransportStateCorruption
 
 log = logging.getLogger(__name__)
+
+
 class ClaimBlocked(Exception):
     """Raised when a worker already owns the claimed item for this chat."""
+
+
 def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRuntime:
     if context is not None:
         runtime = getattr(context, "telegram_runtime", None)
@@ -108,6 +115,7 @@ def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRunti
             runtime = bot_data.get("telegram_runtime")
             if isinstance(runtime, TelegramRuntime):
                 return runtime
+    raise RuntimeError("Telegram runtime is not attached to the handler context")
 
 
 def event_trust_tier(*, config, dispatcher, event) -> str:
@@ -117,7 +125,20 @@ def event_trust_tier(*, config, dispatcher, event) -> str:
         config=config,
         dispatcher=dispatcher,
     )
-    raise RuntimeError("Telegram runtime is not attached to the handler context")
+
+
+def _registry_client_for_runtime(runtime: TelegramRuntime) -> tuple[RegistryClient, str] | None:
+    for registry in runtime.config.agent_registries:
+        state = load_runtime_registry_connection_state(
+            runtime.config.data_dir,
+            registry.registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if state.agent_token:
+            return RegistryClient(registry.url, agent_token=state.agent_token), str(state.agent_id or "")
+    return None
+
+
 @contextlib.asynccontextmanager
 async def _chat_lock(
     runtime: TelegramRuntime,
@@ -795,6 +816,144 @@ async def cmd_delegate(
         return
     await update.effective_message.reply_text(
         f"Task sent to {target_label}. Routed task id: {task_ref.routed_task_id}"
+    )
+
+
+@_command_handler
+async def cmd_protocol(
+    runtime: TelegramRuntime,
+    event,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    del context
+    if await _public_guard(runtime, event, update):
+        return
+    registry_access = _registry_client_for_runtime(runtime)
+    if registry_access is None:
+        await update.effective_message.reply_text("Protocol control requires a connected registry.")
+        return
+    client, agent_id = registry_access
+    args = tuple(event.args or ())
+    sub = str(args[0] or "").strip().lower() if args else ""
+    if sub in {"", "help"}:
+        await update.effective_message.reply_text(
+            "Usage:\n"
+            "/protocol list\n"
+            "/protocol start <slug> <problem statement>\n"
+            "/protocol status <run_id>"
+        )
+        return
+    if sub == "list":
+        try:
+            protocols = await client.list_protocols()
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to list protocols. {exc}")
+            return
+        published = [
+            item for item in protocols
+            if str(item.lifecycle_state or "") == "published" and str(item.current_version_id or "")
+        ]
+        if not published:
+            await update.effective_message.reply_text("No protocols are published in the registry yet.")
+            return
+        lines = ["Protocols:"]
+        for item in published[:12]:
+            label = item.display_name or item.slug or item.protocol_id
+            lines.append(f"- {label} ({item.slug or item.protocol_id})")
+        await update.effective_message.reply_text("\n".join(lines))
+        return
+    if sub == "start":
+        if len(args) < 3:
+            await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
+            return
+        slug = str(args[1] or "").strip()
+        problem_statement = " ".join(str(part).strip() for part in args[2:] if str(part).strip()).strip()
+        if not slug or not problem_statement:
+            await update.effective_message.reply_text("Usage: /protocol start <slug> <problem statement>")
+            return
+        try:
+            protocols = await client.list_protocols()
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to load protocols. {exc}")
+            return
+        match = next(
+            (
+                item
+                for item in protocols
+                if slug in {str(item.slug or "").strip(), str(item.protocol_id or "").strip()}
+                and str(item.lifecycle_state or "") == "published"
+                and str(item.current_version_id or "")
+            ),
+            None,
+        )
+        if match is None:
+            await update.effective_message.reply_text(f"Unknown published protocol: {slug}")
+            return
+        session = telegram_session_io.load(runtime, event.chat_id)
+        conversation = await client.create_conversation(
+            target_agent_id=agent_id,
+            origin_channel="telegram",
+            external_conversation_ref=telegram_conversation_ref(runtime.config, event.chat_id),
+            title=f"Telegram chat {event.chat_id}",
+        )
+        try:
+            result = await client.create_protocol_run(
+                {
+                    "protocol_id": match.protocol_id,
+                    "entry_agent_id": agent_id,
+                    "root_conversation_id": conversation.conversation_id,
+                    "origin_channel": "telegram",
+                    "workspace_ref": str(session.project_id or ""),
+                    "problem_statement": problem_statement,
+                    "constraints_json": {},
+                }
+            )
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to start the protocol run. {exc}")
+            return
+        run = result.run
+        if run is None:
+            await update.effective_message.reply_text("Protocol run creation failed without a run record.")
+            return
+        await update.effective_message.reply_text(
+            f"Protocol run started.\n"
+            f"Run id: {run.protocol_run_id}\n"
+            f"Protocol: {match.display_name or match.slug or match.protocol_id}\n"
+            f"Current stage: {run.current_stage_key or 'queued'}"
+        )
+        return
+    if sub == "status":
+        if len(args) < 2:
+            await update.effective_message.reply_text("Usage: /protocol status <run_id>")
+            return
+        run_id = str(args[1] or "").strip()
+        try:
+            detail = await client.get_protocol_run(run_id)
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to load the protocol run. {exc}")
+            return
+        run = detail.run
+        lines = [
+            f"Run id: {run.protocol_run_id}",
+            f"Status: {run.status}",
+            f"Current stage: {run.current_stage_key or 'n/a'}",
+            f"Workspace: {run.workspace_ref or 'default'}",
+        ]
+        if detail.stage_executions:
+            latest = detail.stage_executions[0]
+            lines.append(f"Latest stage: {latest.stage_key} ({latest.status})")
+            if latest.decision_summary:
+                lines.append(f"Latest summary: {latest.decision_summary}")
+            elif latest.failure_detail:
+                lines.append(f"Latest failure: {latest.failure_detail}")
+        await update.effective_message.reply_text("\n".join(lines))
+        return
+    await update.effective_message.reply_text(
+        "Usage:\n"
+        "/protocol list\n"
+        "/protocol start <slug> <problem statement>\n"
+        "/protocol status <run_id>"
     )
 
 

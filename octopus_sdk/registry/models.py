@@ -536,6 +536,9 @@ class RoutedTaskRequest(RegistryRecordModel):
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
     constraints: RoutedTaskConstraintsRecord = Field(default_factory=RoutedTaskConstraintsRecord)
     requested_skills: list[str] = Field(default_factory=list)
+    session_key_override: str = ""
+    project_id_override: str = ""
+    file_policy_override: str = ""
     priority: str = "normal"
     created_at: str = Field(default_factory=utcnow_iso, min_length=1)
 

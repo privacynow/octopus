@@ -3,8 +3,8 @@
 Octopus runs Claude or Codex behind bot runtimes and adds a local registry UI
 for operators. In the shipped product you can talk to bots from Telegram or
 from registry-origin browser conversations, and you use the registry to inspect
-conversations, review approvals, manage skills and guidance, and inspect agent
-health.
+conversations, review approvals, manage skills and guidance, define reusable
+protocols, launch protocol runs, and inspect agent health.
 
 The main entrypoint is:
 
@@ -75,6 +75,8 @@ Use the registry to:
 - review approvals
 - manage skills
 - manage provider guidance
+- define and publish protocols
+- inspect protocol runs
 
 If you want the browser workflow in detail, use
 [docs/registry-user-guide.md](docs/registry-user-guide.md).
@@ -94,6 +96,9 @@ Useful Telegram commands:
 - `/project <name>`
 - `/skills ...`
 - `/guidance ...`
+- `/protocol list`
+- `/protocol start <slug> <problem statement>`
+- `/protocol status <run_id>`
 
 If you want the Telegram workflow in detail, use
 [docs/telegram-user-guide.md](docs/telegram-user-guide.md).
@@ -134,6 +139,25 @@ skills, use [docs/skills-guide.md](docs/skills-guide.md).
 
 For the lower-level shared model, use
 [docs/skills-model.md](docs/skills-model.md).
+
+## Protocols
+
+Protocols are reusable multi-stage workflows stored in the registry control
+plane and executed through the shared SDK/runtime path.
+
+The current shipped model is:
+
+- define and edit protocol definitions in the registry UI
+- validate and publish immutable protocol versions
+- start protocol runs from the registry UI or from Telegram
+- observe run progress, stage transitions, and outcomes in the registry
+
+The first built-in protocol is `software-engineering`, which models planning,
+review, architecture, implementation, review, and acceptance over durable repo
+artifacts.
+
+For the detailed project specification, use
+[protocol_plan.md](protocol_plan.md).
 
 `./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
 

@@ -58,6 +58,30 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
+def test_run_init_restores_missing_additive_schema_objects(postgres_truncated):
+    """run_init() recreates missing additive objects from the canonical init.sql."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE agent_registry.protocol_transitions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_artifacts CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_stage_executions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_run_participants CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_runs CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_definition_versions CASCADE")
+            cur.execute("DROP TABLE agent_registry.protocol_definitions CASCADE")
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+        assert run_doctor(conn) == []
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('agent_registry.protocol_definitions')")
+            assert cur.fetchone()[0] == "agent_registry.protocol_definitions"
+
+
 def test_registry_init_schema_matches_current_store_contract(postgres_truncated):
     """Fresh Postgres init exposes the current registry tables/columns/defaults."""
     from app.db.postgres import get_connection

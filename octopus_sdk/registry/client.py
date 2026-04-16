@@ -6,12 +6,22 @@ async — the client and store run in different processes.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TypeVar
 
 import httpx
 from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
+from octopus_sdk.protocols import (
+    ProtocolDefinitionDocumentRecord,
+    ProtocolDefinitionRecord,
+    ProtocolMutationRecord,
+    ProtocolRunCreateRecord,
+    ProtocolRunDetailRecord,
+    ProtocolRunMutationRecord,
+    ProtocolRunRecord,
+)
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import (
     AckResult,
@@ -219,6 +229,75 @@ class RegistryClient:
     async def get_agent_status(self, agent_id: str) -> AgentRecord:
         result = await self._request("GET", f"/v1/agents/{agent_id}/status")
         return AgentRecord.model_validate(result)
+
+    async def list_protocols(self) -> list[ProtocolDefinitionRecord]:
+        result = await self._request("GET", "/v1/protocols")
+        return [ProtocolDefinitionRecord.model_validate(item) for item in result]
+
+    async def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
+        result = await self._request("GET", f"/v1/protocol-templates/{slug}")
+        return ProtocolDefinitionDocumentRecord.model_validate(result)
+
+    async def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("GET", f"/v1/protocols/{protocol_id}")
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def save_protocol(
+        self,
+        *,
+        protocol_id: str = "",
+        slug: str,
+        display_name: str,
+        description: str,
+        definition_json: dict[str, object],
+    ) -> ProtocolMutationRecord:
+        payload = {
+            "protocol_id": protocol_id,
+            "slug": slug,
+            "display_name": display_name,
+            "description": description,
+            "definition_json": definition_json,
+        }
+        if protocol_id:
+            result = await self._request("PUT", f"/v1/protocols/{protocol_id}/draft", json=payload)
+        else:
+            result = await self._request("POST", "/v1/protocols", json=payload)
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/validate", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/publish", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def list_protocol_runs(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolRunRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocol-runs",
+            params={"cursor": cursor, "limit": limit, "status": status},
+        )
+        rows = result.get("runs", result)
+        return [ProtocolRunRecord.model_validate(item) for item in rows]
+
+    async def create_protocol_run(
+        self,
+        payload: ProtocolRunCreateRecord | dict[str, object],
+    ) -> ProtocolRunMutationRecord:
+        body = _validated_model(payload, ProtocolRunCreateRecord).model_dump(mode="json")
+        result = await self._request("POST", "/v1/protocol-runs", json=body)
+        return ProtocolRunMutationRecord.model_validate(result)
+
+    async def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}")
+        return ProtocolRunDetailRecord.model_validate(result)
 
     async def publish_events(
         self,

@@ -305,6 +305,11 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_definitions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+ALTER TABLE agent_registry.protocol_definitions
+    ADD COLUMN IF NOT EXISTS owner_org_id TEXT NOT NULL DEFAULT 'local',
+    ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'org_private',
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_protocol_definitions_lifecycle
     ON agent_registry.protocol_definitions (lifecycle_state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_definitions_owner
@@ -352,6 +357,14 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     updated_at TEXT NOT NULL,
     completed_at TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE agent_registry.protocol_runs
+    ADD COLUMN IF NOT EXISTS blocked_code TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS blocked_detail TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS run_org_id TEXT NOT NULL DEFAULT 'local',
+    ADD COLUMN IF NOT EXISTS started_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_updated
     ON agent_registry.protocol_runs (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_status
@@ -442,6 +455,30 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_transitions (
 );
 CREATE INDEX IF NOT EXISTS idx_protocol_transitions_run
     ON agent_registry.protocol_transitions (protocol_run_id, created_at DESC);
+
+ALTER TABLE agent_registry.protocol_definition_versions
+    ADD COLUMN IF NOT EXISTS published_by TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE agent_registry.protocol_run_participants
+    ADD COLUMN IF NOT EXISTS resolution_outcome TEXT NOT NULL DEFAULT 'queued',
+    ADD COLUMN IF NOT EXISTS resolution_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS selector_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE agent_registry.protocol_stage_executions
+    ADD COLUMN IF NOT EXISTS timeout_at TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS lease_expires_at TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE agent_registry.protocol_artifacts
+    ADD COLUMN IF NOT EXISTS size_bytes BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS exists BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS modified_at TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS observed_at TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS verification_state TEXT NOT NULL DEFAULT 'declared';
+
+ALTER TABLE agent_registry.protocol_transitions
+    ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_idempotency (
     protocol_idempotency_id TEXT PRIMARY KEY,

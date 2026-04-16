@@ -82,6 +82,26 @@ def test_run_init_restores_missing_additive_schema_objects(postgres_truncated):
             assert cur.fetchone()[0] == "agent_registry.protocol_definitions"
 
 
+def test_run_init_restores_missing_additive_protocol_columns(postgres_truncated):
+    """run_init() adds newly introduced protocol columns onto existing tables."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE agent_registry.protocol_definitions DROP COLUMN owner_org_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_definition_versions DROP COLUMN published_by")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN blocked_code")
+            cur.execute("ALTER TABLE agent_registry.protocol_run_participants DROP COLUMN resolution_outcome")
+            cur.execute("ALTER TABLE agent_registry.protocol_stage_executions DROP COLUMN timeout_at")
+            cur.execute("ALTER TABLE agent_registry.protocol_artifacts DROP COLUMN verification_state")
+            cur.execute("ALTER TABLE agent_registry.protocol_transitions DROP COLUMN error_code")
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+        assert run_doctor(conn) == []
+
+
 def test_registry_init_schema_matches_current_store_contract(postgres_truncated):
     """Fresh Postgres init exposes the current registry tables/columns/defaults."""
     from app.db.postgres import get_connection

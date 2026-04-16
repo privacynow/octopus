@@ -608,6 +608,8 @@ class BotRuntime:
                 save_session=self.sessions.save,
                 record_usage=self.work_queue.record_usage,
                 completion_webhook_sender=self.workflows.completion_webhook,
+                registry_inspection=self.control_plane.registry_inspection if self.control_plane is not None else None,
+                working_dir_resolver=self._resolved_working_dir,
             ),
         )
         return DelegationContinuationResult(status="continued", matched=True, resumed=True)
@@ -986,6 +988,16 @@ class BotRuntime:
             cancel_event=cancel_event,
             runtime=execution_runtime,
         )
+
+    def _resolved_working_dir(self, conversation_key: int | str) -> str:
+        session = self._load_session(str(conversation_key))
+        resolved = self.sessions.resolve_context(
+            session,
+            config=self.config,
+            provider_name=self.provider.name,
+            trust_tier="trusted",
+        )
+        return str(resolved.working_dir or "")
 
     def _save_session_if_mutated(self, conversation_key: str, session: SessionState, *, mutated: bool) -> None:
         if mutated:
@@ -1683,6 +1695,8 @@ class BotRuntime:
                 deferred_target_agent_id=self._target_agent_id_for_authority(authority_ref),
                 deferred_actor_key=str(getattr(event, "authorized_actor_key", "") or ""),
                 deferred_title=title,
+                registry_inspection=self.control_plane.registry_inspection if self.control_plane is not None else None,
+                working_dir_resolver=self._resolved_working_dir,
             ),
         )
 

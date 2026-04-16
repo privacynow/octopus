@@ -841,7 +841,11 @@ async def cmd_protocol(
             "Usage:\n"
             "/protocol list\n"
             "/protocol start <slug> <problem statement>\n"
-            "/protocol status <run_id>"
+            "/protocol status <run_id>\n"
+            "/protocol cancel <run_id> [reason]\n"
+            "/protocol retry <run_id> [reason]\n"
+            "/protocol accept <run_id> [reason]\n"
+            "/protocol send-back <run_id> [reason]"
         )
         return
     if sub == "list":
@@ -937,9 +941,26 @@ async def cmd_protocol(
         lines = [
             f"Run id: {run.protocol_run_id}",
             f"Status: {run.status}",
+            f"Version: {run.version or 1}",
             f"Current stage: {run.current_stage_key or 'n/a'}",
             f"Workspace: {run.workspace_ref or 'default'}",
         ]
+        if run.termination_summary:
+            lines.append(f"Summary: {run.termination_summary}")
+        if run.blocked_detail:
+            lines.append(f"Blocked: {run.blocked_detail}")
+        if detail.participants:
+            participants = ", ".join(
+                f"{item.participant_key}:{item.state or item.resolution_outcome or 'queued'}"
+                for item in detail.participants[:6]
+            )
+            lines.append(f"Participants: {participants}")
+        if detail.artifacts:
+            artifacts = ", ".join(
+                f"{item.artifact_key}:{item.verification_state or item.state or 'declared'}"
+                for item in detail.artifacts[:6]
+            )
+            lines.append(f"Artifacts: {artifacts}")
         if detail.stage_executions:
             latest = detail.stage_executions[0]
             lines.append(f"Latest stage: {latest.stage_key} ({latest.status})")
@@ -949,11 +970,43 @@ async def cmd_protocol(
                 lines.append(f"Latest failure: {latest.failure_detail}")
         await update.effective_message.reply_text("\n".join(lines))
         return
+    if sub in {"cancel", "retry", "accept", "send-back"}:
+        if len(args) < 2:
+            await update.effective_message.reply_text(f"Usage: /protocol {sub} <run_id> [reason]")
+            return
+        run_id = str(args[1] or "").strip()
+        reason = " ".join(str(part).strip() for part in args[2:] if str(part).strip()).strip()
+        try:
+            detail = await client.get_protocol_run(run_id)
+            result = await client.act_on_protocol_run(
+                run_id,
+                action=sub,
+                reason=reason,
+                expected_version=detail.run.version or 1,
+            )
+        except RegistryClientError as exc:
+            await update.effective_message.reply_text(f"Failed to update the protocol run. {exc}")
+            return
+        run = result.run
+        if run is None:
+            await update.effective_message.reply_text("Protocol action completed without a refreshed run payload.")
+            return
+        await update.effective_message.reply_text(
+            f"Protocol run updated.\n"
+            f"Run id: {run.protocol_run_id}\n"
+            f"Status: {run.status}\n"
+            f"Current stage: {run.current_stage_key or 'n/a'}"
+        )
+        return
     await update.effective_message.reply_text(
         "Usage:\n"
         "/protocol list\n"
         "/protocol start <slug> <problem statement>\n"
-        "/protocol status <run_id>"
+        "/protocol status <run_id>\n"
+        "/protocol cancel <run_id> [reason]\n"
+        "/protocol retry <run_id> [reason]\n"
+        "/protocol accept <run_id> [reason]\n"
+        "/protocol send-back <run_id> [reason]"
     )
 
 

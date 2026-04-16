@@ -41,7 +41,7 @@ const API = (() => {
         }
     }
 
-    async function request(method, path, { body, params, raw } = {}) {
+    async function request(method, path, { body, params, raw, headers } = {}) {
         const url = new URL(path, window.location.origin);
         if (params) {
             for (const [k, v] of Object.entries(params)) {
@@ -50,7 +50,7 @@ const API = (() => {
         }
         const opts = {
             method,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(headers || {}) },
             credentials: 'same-origin',
             signal: AbortSignal.timeout(REQUEST_TIMEOUT),
         };
@@ -71,7 +71,17 @@ const API = (() => {
         }
         if (!resp.ok) {
             const text = await resp.text();
-            throw new Error(`${resp.status}: ${text}`);
+            let message = text;
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed === 'object') {
+                    const detail = parsed.detail && typeof parsed.detail === 'object' ? parsed.detail : parsed;
+                    message = detail.message || detail.error_code || text;
+                }
+            } catch (err) {
+                void err;
+            }
+            throw new Error(`${resp.status}: ${message}`);
         }
         if (resp.status === 204) return null;
         if (raw) return resp.text();
@@ -201,12 +211,14 @@ const API = (() => {
             request('GET', `/v1/tasks/${encodeURIComponent(id)}`),
 
         // Protocols
-        listProtocols: () =>
-            request('GET', '/v1/protocols'),
+        listProtocols: (opts = {}) =>
+            request('GET', '/v1/protocols', { params: opts }),
         getProtocolTemplate: (slug) =>
             request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
         getProtocol: (id) =>
             request('GET', `/v1/protocols/${encodeURIComponent(id)}`),
+        getProtocolVersion: (protocolId, versionId) =>
+            request('GET', `/v1/protocols/${encodeURIComponent(protocolId)}/versions/${encodeURIComponent(versionId)}`),
         createProtocol: (body = {}) =>
             request('POST', '/v1/protocols', { body }),
         saveProtocolDraft: (id, body = {}) =>
@@ -217,10 +229,29 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
         listProtocolRuns: (opts = {}) =>
             request('GET', '/v1/protocol-runs', { params: opts }),
-        createProtocolRun: (body = {}) =>
-            request('POST', '/v1/protocol-runs', { body }),
+        createProtocolRun: (body = {}, opts = {}) =>
+            request('POST', '/v1/protocol-runs', {
+                body,
+                headers: opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : undefined,
+            }),
         getProtocolRun: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}`),
+        getProtocolRunParticipants: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
+        getProtocolRunArtifacts: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts`),
+        getProtocolRunTimeline: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/timeline`),
+        exportProtocolRun: (id) =>
+            request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/export`),
+        actOnProtocolRun: (id, action, body = {}, opts = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/actions/${encodeURIComponent(action)}`, {
+                body,
+                headers: {
+                    ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
+                    ...(Number.isFinite(opts.expectedVersion) ? { 'If-Match': String(opts.expectedVersion) } : {}),
+                },
+            }),
 
         // Routing skills
         listRoutingSkills: () =>

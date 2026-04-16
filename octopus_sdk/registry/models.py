@@ -534,6 +534,7 @@ class RoutedTaskRequest(RegistryRecordModel):
     title: str
     instructions: str
     context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
+    internal_context: RoutedTaskContextRecord = Field(default_factory=RoutedTaskContextRecord)
     constraints: RoutedTaskConstraintsRecord = Field(default_factory=RoutedTaskConstraintsRecord)
     requested_skills: list[str] = Field(default_factory=list)
     session_key_override: str = ""

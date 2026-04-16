@@ -7,7 +7,7 @@ import hmac
 import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, WebSocket
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request, WebSocket
 from starlette.websockets import WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -33,7 +33,7 @@ from .auth import (
 from .ws import WebSocketManager
 from .routing_skill_service import RoutingSkillService
 from octopus_sdk.exact_aliases import direct_selector_aliases
-from octopus_sdk.protocols import ProtocolRunCreateRecord
+from octopus_sdk.protocols import ProtocolAccessContextRecord, ProtocolRunCreateRecord
 from octopus_sdk.registry.models import (
     AgentDiscoveryQuery,
     ConversationCreate,
@@ -157,6 +157,64 @@ _ws_manager = WebSocketManager()
 
 def get_ws_manager() -> WebSocketManager:
     return _ws_manager
+
+
+def _protocol_access(auth: AuthContext) -> ProtocolAccessContextRecord:
+    actor_ref = f"agent:{auth.agent_id}" if auth.is_agent and auth.agent_id else "operator-session"
+    return ProtocolAccessContextRecord(
+        actor_ref=actor_ref,
+        org_id=str(auth.org_id or "local"),
+        roles=list(auth.roles or ()),
+    )
+
+
+def _protocol_http_error(
+    status_code: int,
+    *,
+    error_code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "error_code": error_code,
+            "message": message,
+            "details": details or {},
+        },
+        headers=headers,
+    )
+
+
+def _protocol_result_http_error(result) -> HTTPException:
+    status = str(getattr(result, "status", "") or "")
+    message = str(getattr(result, "message", "") or "Protocol request failed.")
+    if status == "not_found":
+        return _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message=message)
+    if status == "forbidden":
+        return _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=message)
+    if status in {"conflict", "idempotency_conflict"}:
+        return _protocol_http_error(409, error_code=status.upper(), message=message)
+    if status == "duplicate_slug":
+        return _protocol_http_error(409, error_code="PROTOCOL_DUPLICATE_SLUG", message=message)
+    if status == "invalid_action":
+        return _protocol_http_error(400, error_code="PROTOCOL_INVALID_ACTION", message=message)
+    if status == "invalid":
+        return _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=message)
+    return _protocol_http_error(400, error_code="PROTOCOL_REQUEST_FAILED", message=message)
+
+
+def _expected_protocol_version(if_match: str | None) -> int | None:
+    text = str(if_match or "").strip().strip('"')
+    if not text:
+        return None
+    if text.startswith("W/"):
+        text = text.removeprefix("W/").strip().strip('"')
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_IF_MATCH", message="If-Match must be an integer protocol run version.") from exc
 
 
 def _raise_ingress_http_error(exc: RegistryIngressError) -> None:
@@ -967,17 +1025,28 @@ def resource_get_task(
 
 @app.get("/v1/protocols")
 def resource_list_protocols(
-    auth: AuthContext = Depends(require_operator_session),
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    lifecycle_state: str = Query(default=""),
+    slug: str = Query(default=""),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> list[dict[str, Any]]:
-    del auth
-    return _json_payload(store.list_protocols())
+    return _json_payload(
+        store.list_protocols(
+            access=_protocol_access(auth),
+            cursor=cursor,
+            limit=limit,
+            lifecycle_state=lifecycle_state,
+            slug=slug,
+        )
+    )
 
 
 @app.get("/v1/protocol-templates/{slug}")
 def resource_get_protocol_template(
     slug: str,
-    auth: AuthContext = Depends(require_operator_session),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     del auth
@@ -991,35 +1060,48 @@ def resource_get_protocol_template(
 @app.get("/v1/protocols/{protocol_id}")
 def resource_get_protocol(
     protocol_id: str,
-    auth: AuthContext = Depends(require_operator_session),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
-    result = store.get_protocol(protocol_id)
-    if not result.ok and result.status == "not_found":
-        raise HTTPException(status_code=404, detail="Protocol not found")
+    result = store.get_protocol(protocol_id, access=_protocol_access(auth))
+    if not result.ok:
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
+
+
+@app.get("/v1/protocols/{protocol_id}/versions/{version_id}")
+def resource_get_protocol_version(
+    protocol_id: str,
+    version_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        version = store.get_protocol_version(protocol_id, version_id, access=_protocol_access(auth))
+    except KeyError as exc:
+        raise _protocol_http_error(404, error_code="PROTOCOL_VERSION_NOT_FOUND", message="Protocol version not found.") from exc
+    return _json_payload(version)
 
 
 @app.post("/v1/protocols")
 async def resource_create_protocol(
     request: Request,
-    auth: AuthContext = Depends(require_ui_write_access),
+    auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid protocol payload")
     result = store.save_protocol_draft(
+        access=_protocol_access(auth),
         protocol_id=str(payload.get("protocol_id", "") or ""),
         slug=str(payload.get("slug", "") or ""),
         display_name=str(payload.get("display_name", "") or ""),
         description=str(payload.get("description", "") or ""),
         definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
     )
-    if not result.ok and result.status == "invalid":
-        raise HTTPException(status_code=400, detail=result.message)
+    if not result.ok:
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
 
 
@@ -1027,14 +1109,14 @@ async def resource_create_protocol(
 async def resource_save_protocol_draft(
     protocol_id: str,
     request: Request,
-    auth: AuthContext = Depends(require_ui_write_access),
+    auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid protocol payload")
     result = store.save_protocol_draft(
+        access=_protocol_access(auth),
         protocol_id=protocol_id,
         slug=str(payload.get("slug", "") or ""),
         display_name=str(payload.get("display_name", "") or ""),
@@ -1042,7 +1124,7 @@ async def resource_save_protocol_draft(
         definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
     )
     if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
 
 
@@ -1052,25 +1134,21 @@ def resource_validate_protocol(
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
-    result = store.validate_protocol(protocol_id)
-    if not result.ok and result.status == "not_found":
-        raise HTTPException(status_code=404, detail="Protocol not found")
+    result = store.validate_protocol(protocol_id, access=_protocol_access(auth))
+    if not result.ok:
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
 
 
 @app.post("/v1/protocols/{protocol_id}/publish")
 def resource_publish_protocol(
     protocol_id: str,
-    auth: AuthContext = Depends(require_ui_write_access),
+    auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
-    result = store.publish_protocol(protocol_id)
-    if not result.ok and result.status == "not_found":
-        raise HTTPException(status_code=404, detail="Protocol not found")
+    result = store.publish_protocol(protocol_id, access=_protocol_access(auth))
     if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
 
 
@@ -1079,39 +1157,125 @@ def resource_list_protocol_runs(
     cursor: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
     status: str = Query(default=""),
-    auth: AuthContext = Depends(require_operator_session),
+    protocol_id: str = Query(default=""),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
-    runs = store.list_protocol_runs(limit=limit, cursor=cursor, status=status)
+    runs = store.list_protocol_runs(
+        access=_protocol_access(auth),
+        limit=limit,
+        cursor=cursor,
+        status=status,
+        protocol_id=protocol_id,
+    )
     return _json_payload(_paginated_response("runs", runs, cursor, limit))
 
 
 @app.post("/v1/protocol-runs")
 def resource_create_protocol_run(
     payload: ProtocolRunCreateRecord,
-    auth: AuthContext = Depends(require_ui_write_access),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
-    result = store.create_protocol_run(payload)
+    result = store.create_protocol_run(
+        payload,
+        access=_protocol_access(auth),
+        idempotency_key=str(idempotency_key or "").strip(),
+    )
     if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
+        raise _protocol_result_http_error(result)
     return _json_payload(result)
 
 
 @app.get("/v1/protocol-runs/{run_id}")
 def resource_get_protocol_run(
     run_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        detail = store.get_protocol_run(run_id, access=_protocol_access(auth))
+    except KeyError as exc:
+        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+    return _json_payload(detail)
+
+
+@app.get("/v1/protocol-runs/{run_id}/participants")
+def resource_get_protocol_run_participants(
+    run_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        participants = store.get_protocol_run_participants(run_id, access=_protocol_access(auth))
+    except KeyError as exc:
+        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+    return _json_payload({"participants": participants})
+
+
+@app.get("/v1/protocol-runs/{run_id}/artifacts")
+def resource_get_protocol_run_artifacts(
+    run_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        artifacts = store.get_protocol_run_artifacts(run_id, access=_protocol_access(auth))
+    except KeyError as exc:
+        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+    return _json_payload({"artifacts": artifacts})
+
+
+@app.get("/v1/protocol-runs/{run_id}/timeline")
+def resource_get_protocol_run_timeline(
+    run_id: str,
+    auth: AuthContext = Depends(require_authenticated),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        transitions = store.get_protocol_run_timeline(run_id, access=_protocol_access(auth))
+    except KeyError as exc:
+        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+    return _json_payload({"transitions": transitions})
+
+
+@app.get("/v1/protocol-runs/{run_id}/export")
+def resource_export_protocol_run(
+    run_id: str,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
     try:
-        detail = store.get_protocol_run(run_id)
+        exported = store.export_protocol_run(run_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_EXPORT_FORBIDDEN", message=str(exc)) from exc
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Protocol run not found") from exc
-    return _json_payload(detail)
+        raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+    return _json_payload(exported)
+
+
+@app.post("/v1/protocol-runs/{run_id}/actions/{action}")
+def resource_act_on_protocol_run(
+    run_id: str,
+    action: str,
+    payload: dict[str, Any],
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    auth: AuthContext = Depends(require_operator_session),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    result = store.act_on_protocol_run(
+        run_id,
+        access=_protocol_access(auth),
+        action=action,
+        reason=str(payload.get("reason", "") or ""),
+        idempotency_key=str(idempotency_key or "").strip(),
+        expected_version=_expected_protocol_version(if_match),
+    )
+    if not result.ok:
+        raise _protocol_result_http_error(result)
+    return _json_payload(result)
 
 
 @app.get("/v1/routing/skills")

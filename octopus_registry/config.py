@@ -19,6 +19,23 @@ class RegistryConfig:
     allow_http: bool
     bind_host: str
     port: int
+    operator_org_id: str
+    operator_roles: tuple[str, ...]
+
+
+def registry_operator_roles() -> tuple[str, ...]:
+    raw = os.environ.get("REGISTRY_OPERATOR_ROLES", "").strip()
+    if not raw:
+        return ("author", "publisher", "operator", "auditor", "admin")
+    roles: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        role = str(part or "").strip().lower()
+        if not role or role in seen:
+            continue
+        seen.add(role)
+        roles.append(role)
+    return tuple(roles) or ("author", "publisher", "operator", "auditor", "admin")
 
 
 def registry_allows_http() -> bool:
@@ -35,6 +52,8 @@ def load_registry_config() -> RegistryConfig:
         allow_http=registry_allows_http(),
         bind_host=os.environ.get("REGISTRY_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0",
         port=int(os.environ.get("REGISTRY_PORT", "8787") or "8787"),
+        operator_org_id=os.environ.get("REGISTRY_OPERATOR_ORG_ID", "local").strip() or "local",
+        operator_roles=registry_operator_roles(),
     )
 
 

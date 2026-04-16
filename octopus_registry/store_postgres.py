@@ -19,29 +19,39 @@ from octopus_sdk.content_models import (
     SkillRevisionRecord,
 )
 from octopus_sdk.protocols import (
+    PROTOCOL_DEFAULT_OPERATOR_REF,
+    PROTOCOL_DEFAULT_RETENTION_DAYS,
+    PROTOCOL_DEFAULT_RUN_ORG_ID,
+    PROTOCOL_DEFAULT_VISIBILITY,
+    ProtocolAccessContextRecord,
+    ProtocolArtifactObservationRecord,
     builtin_protocol_document,
     builtin_protocol_documents,
+    evaluate_protocol_operator_action,
+    evaluate_protocol_task_result,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
+    ProtocolDispatchDecisionRecord,
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
+    ProtocolRunExportRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
-    ProtocolStageDecisionRecord,
     ProtocolStageExecutionRecord,
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
     canonical_protocol_document,
     default_protocol_document_slug,
-    is_protocol_terminal_target,
-    parse_protocol_stage_decision,
+    protocol_dispatch_decision,
+    protocol_retention_until,
+    protocol_stage_internal_context,
+    ProtocolStageTaskResultRecord,
     protocol_definition_content_hash,
     protocol_participant_session_key,
     render_protocol_stage_prompt,
-    stage_target_for_decision,
     validate_protocol_document,
 )
 from psycopg.rows import dict_row
@@ -315,9 +325,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     f"""
                     INSERT INTO {_SCHEMA}.protocol_definitions (
                         protocol_id, slug, display_name, description, lifecycle_state,
-                        current_version_id, draft_definition_json, draft_content_hash,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, 'published', %s, %s, %s, %s, %s)
+                        current_version_id, owner_org_id, visibility, created_by, updated_by,
+                        draft_definition_json, draft_content_hash, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, 'published', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         protocol_id,
@@ -325,6 +335,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         document.display_name or slug,
                         document.description,
                         version_id,
+                        PROTOCOL_DEFAULT_RUN_ORG_ID,
+                        "registry_template",
+                        "bootstrap",
+                        "bootstrap",
                         _jsonb(payload),
                         content_hash,
                         now,
@@ -335,8 +349,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     f"""
                     INSERT INTO {_SCHEMA}.protocol_definition_versions (
                         protocol_definition_version_id, protocol_id, version, definition_json,
-                        content_hash, validation_status, published_at, created_at
-                    ) VALUES (%s, %s, 1, %s, %s, 'valid', %s, %s)
+                        content_hash, validation_status, published_at, published_by, created_at
+                    ) VALUES (%s, %s, 1, %s, %s, 'valid', %s, %s, %s)
                     """,
                     (
                         version_id,
@@ -344,6 +358,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         _jsonb(payload),
                         content_hash,
                         now,
+                        "bootstrap",
                         now,
                     ),
                 )
@@ -766,6 +781,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "description": row["description"],
                 "lifecycle_state": row["lifecycle_state"],
                 "current_version_id": row["current_version_id"],
+                "owner_org_id": row.get("owner_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
+                "visibility": row.get("visibility", PROTOCOL_DEFAULT_VISIBILITY),
+                "created_by": row.get("created_by", ""),
+                "updated_by": row.get("updated_by", ""),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             },
@@ -783,6 +802,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "content_hash": row["content_hash"],
                 "validation_status": row["validation_status"],
                 "published_at": row["published_at"],
+                "published_by": row.get("published_by", ""),
                 "created_at": row["created_at"],
             },
         )
@@ -808,6 +828,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "current_stage_execution_id": row["current_stage_execution_id"],
                 "current_stage_key": row["current_stage_key"],
                 "termination_summary": row["termination_summary"],
+                "blocked_code": row.get("blocked_code", ""),
+                "blocked_detail": row.get("blocked_detail", ""),
+                "run_org_id": row.get("run_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
+                "started_by": row.get("started_by", ""),
+                "version": row.get("version", 1),
+                "retention_until": row.get("retention_until", ""),
+                "last_transition_at": row.get("last_transition_at", ""),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "completed_at": row["completed_at"],
@@ -829,6 +856,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "resolved_authority_ref": row["resolved_authority_ref"],
                 "session_key": row["session_key"],
                 "state": row["state"],
+                "resolution_outcome": row.get("resolution_outcome", "queued"),
+                "resolution_reason": row.get("resolution_reason", ""),
+                "selector_snapshot_json": row.get("selector_snapshot_json", {}),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             },
@@ -852,6 +882,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "routed_task_id": row["routed_task_id"],
                 "failure_code": row["failure_code"],
                 "failure_detail": row["failure_detail"],
+                "timeout_at": row.get("timeout_at", ""),
+                "lease_owner": row.get("lease_owner", ""),
+                "lease_expires_at": row.get("lease_expires_at", ""),
                 "started_at": row["started_at"],
                 "completed_at": row["completed_at"],
             },
@@ -869,6 +902,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "location": row["location"],
                 "workspace_path": row["workspace_path"],
                 "content_hash": row["content_hash"],
+                "size_bytes": row.get("size_bytes", 0),
+                "exists": row.get("exists", False),
+                "modified_at": row.get("modified_at", ""),
+                "observed_at": row.get("observed_at", ""),
+                "verification_state": row.get("verification_state", "declared"),
                 "produced_by_stage_execution_id": row["produced_by_stage_execution_id"],
                 "state": row["state"],
                 "supersedes_protocol_artifact_id": row["supersedes_protocol_artifact_id"],
@@ -888,6 +926,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "transition_kind": row["transition_kind"],
                 "decision": row["decision"],
                 "reason": row["reason"],
+                "error_code": row.get("error_code", ""),
+                "metadata_json": row.get("metadata_json", {}),
                 "actor_type": row["actor_type"],
                 "actor_ref": row["actor_ref"],
                 "created_at": row["created_at"],
@@ -899,6 +939,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             conn,
             f"SELECT * FROM {_SCHEMA}.protocol_definitions WHERE protocol_id = %s",
             (protocol_id,),
+        )
+
+    def _protocol_row_for_slug(self, conn, slug: str) -> dict[str, object] | None:
+        return _POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {_SCHEMA}.protocol_definitions WHERE slug = %s",
+            (slug,),
         )
 
     def _protocol_version_row(self, conn, version_id: str) -> dict[str, object] | None:
@@ -920,6 +967,286 @@ class RegistryPostgresStore(AbstractRegistryStore):
             """,
             (protocol_id,),
         )
+
+    @staticmethod
+    def _access_actor_ref(access: ProtocolAccessContextRecord | None) -> str:
+        return str((access.actor_ref if access is not None else "") or PROTOCOL_DEFAULT_OPERATOR_REF)
+
+    @staticmethod
+    def _access_org_id(access: ProtocolAccessContextRecord | None) -> str:
+        return str((access.org_id if access is not None else "") or PROTOCOL_DEFAULT_RUN_ORG_ID)
+
+    @staticmethod
+    def _access_has_role(access: ProtocolAccessContextRecord | None, role: str) -> bool:
+        return bool(access is not None and access.has_role(role))
+
+    @staticmethod
+    def _access_primary_role(access: ProtocolAccessContextRecord | None) -> str:
+        for role in ("admin", "publisher", "author", "auditor", "operator"):
+            if access is not None and access.has_role(role):
+                return role
+        return "service"
+
+    def _protocol_visible_to_access(
+        self,
+        row: Mapping[str, object],
+        *,
+        access: ProtocolAccessContextRecord,
+        include_drafts: bool,
+    ) -> bool:
+        lifecycle_state = str(row.get("lifecycle_state", "") or "")
+        if lifecycle_state != "published" and not include_drafts:
+            return False
+        if self._access_has_role(access, "admin"):
+            return True
+        owner_org_id = str(row.get("owner_org_id", "") or "")
+        visibility = str(row.get("visibility", "") or PROTOCOL_DEFAULT_VISIBILITY)
+        current_org_id = self._access_org_id(access)
+        if owner_org_id and owner_org_id != current_org_id and visibility != "registry_template":
+            return False
+        if visibility == "registry_template":
+            return True
+        return not owner_org_id or owner_org_id == current_org_id
+
+    def _assert_protocol_visible(
+        self,
+        row: Mapping[str, object] | None,
+        *,
+        access: ProtocolAccessContextRecord,
+        include_drafts: bool,
+    ) -> dict[str, object] | None:
+        if row is None:
+            return None
+        if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts):
+            return dict(row)
+        return None
+
+    def _assert_protocol_run_visible(
+        self,
+        row: Mapping[str, object] | None,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> dict[str, object] | None:
+        if row is None:
+            return None
+        if self._access_has_role(access, "admin"):
+            return dict(row)
+        run_org_id = str(row.get("run_org_id", "") or "")
+        if run_org_id and run_org_id != self._access_org_id(access):
+            return None
+        return dict(row)
+
+    def _protocol_stage_executions_for_run(self, conn, run_id: str) -> list[ProtocolStageExecutionRecord]:
+        rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_stage_executions
+            WHERE protocol_run_id = %s
+            ORDER BY started_at ASC, protocol_stage_execution_id ASC
+            """,
+            (run_id,),
+        )
+        return [self._protocol_stage_execution_from_row(row) for row in rows]
+
+    def _protocol_run_artifacts_history(self, conn, run_id: str) -> list[ProtocolArtifactRecord]:
+        rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_artifacts
+            WHERE protocol_run_id = %s
+            ORDER BY created_at DESC, artifact_key ASC
+            """,
+            (run_id,),
+        )
+        return [self._protocol_artifact_from_row(row) for row in rows]
+
+    def _protocol_run_transitions_history(self, conn, run_id: str) -> list[ProtocolTransitionRecord]:
+        rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_transitions
+            WHERE protocol_run_id = %s
+            ORDER BY created_at DESC, protocol_transition_id DESC
+            """,
+            (run_id,),
+        )
+        return [self._protocol_transition_from_row(row) for row in rows]
+
+    def _protocol_run_detail_in_tx(
+        self,
+        conn,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolRunDetailRecord | None:
+        run_row = self._assert_protocol_run_visible(
+            _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                (run_id,),
+            ),
+            access=access,
+        )
+        if run_row is None:
+            return None
+        definition_row = self._assert_protocol_visible(
+            self._protocol_row(conn, str(run_row["protocol_id"] or "")),
+            access=access,
+            include_drafts=True,
+        )
+        version_row = self._protocol_version_row(conn, str(run_row["protocol_definition_version_id"] or ""))
+        if definition_row is None or version_row is None:
+            return None
+        participant_rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_run_participants
+            WHERE protocol_run_id = %s
+            ORDER BY participant_key ASC
+            """,
+            (run_id,),
+        )
+        stage_rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_stage_executions
+            WHERE protocol_run_id = %s
+            ORDER BY started_at DESC, protocol_stage_execution_id DESC
+            """,
+            (run_id,),
+        )
+        artifact_rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_artifacts
+            WHERE protocol_run_id = %s
+            ORDER BY created_at DESC, artifact_key ASC
+            """,
+            (run_id,),
+        )
+        transition_rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_transitions
+            WHERE protocol_run_id = %s
+            ORDER BY created_at DESC, protocol_transition_id DESC
+            """,
+            (run_id,),
+        )
+        return ProtocolRunDetailRecord(
+            run=self._protocol_run_from_row(run_row),
+            definition=self._protocol_record_from_row(definition_row),
+            version=self._protocol_version_from_row(version_row),
+            participants=[self._protocol_run_participant_from_row(row) for row in participant_rows],
+            stage_executions=[self._protocol_stage_execution_from_row(row) for row in stage_rows],
+            artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
+            transitions=[self._protocol_transition_from_row(row) for row in transition_rows],
+        )
+
+    def _record_protocol_compliance_event(
+        self,
+        conn,
+        *,
+        protocol_run_id: str,
+        protocol_definition_version_id: str,
+        event_kind: str,
+        actor_ref: str,
+        actor_role: str,
+        summary: str,
+        metadata: Mapping[str, object],
+        now: str,
+    ) -> None:
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.protocol_compliance_events (
+                    protocol_compliance_event_id, protocol_run_id, protocol_definition_version_id,
+                    event_kind, actor_ref, actor_role, summary, metadata_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    protocol_run_id,
+                    protocol_definition_version_id,
+                    event_kind,
+                    actor_ref,
+                    actor_role,
+                    summary,
+                    _jsonb(dict(metadata)),
+                    now,
+                ),
+            )
+
+    def _request_hash(self, payload: Mapping[str, object]) -> str:
+        encoded = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _protocol_idempotency_row(
+        self,
+        conn,
+        *,
+        scope_kind: str,
+        scope_ref: str,
+        action_name: str,
+        idempotency_key: str,
+    ) -> dict[str, object] | None:
+        if not str(idempotency_key or "").strip():
+            return None
+        return _POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"""
+            SELECT *
+            FROM {_SCHEMA}.protocol_idempotency
+            WHERE scope_kind = %s
+              AND scope_ref = %s
+              AND action_name = %s
+              AND idempotency_key = %s
+            """,
+            (scope_kind, scope_ref, action_name, idempotency_key),
+        )
+
+    def _store_protocol_idempotency(
+        self,
+        conn,
+        *,
+        scope_kind: str,
+        scope_ref: str,
+        action_name: str,
+        idempotency_key: str,
+        request_hash: str,
+        response_json: Mapping[str, object],
+        now: str,
+    ) -> None:
+        if not str(idempotency_key or "").strip():
+            return
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.protocol_idempotency (
+                    protocol_idempotency_id, scope_kind, scope_ref, action_name,
+                    idempotency_key, request_hash, response_json, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (scope_kind, scope_ref, action_name, idempotency_key)
+                DO NOTHING
+                """,
+                (
+                    uuid.uuid4().hex,
+                    scope_kind,
+                    scope_ref,
+                    action_name,
+                    idempotency_key,
+                    request_hash,
+                    _jsonb(dict(response_json)),
+                    now,
+                ),
+            )
 
     def _draft_protocol_document(self, row: Mapping[str, object]) -> ProtocolDefinitionDocumentRecord:
         return canonical_protocol_document(row.get("draft_definition_json") or {})
@@ -988,6 +1315,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
         transition_kind: str,
         decision: str,
         reason: str,
+        error_code: str,
+        metadata: Mapping[str, object],
         actor_type: str,
         actor_ref: str,
         now: str,
@@ -998,8 +1327,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 INSERT INTO {_SCHEMA}.protocol_transitions (
                     protocol_transition_id, protocol_run_id, from_stage_execution_id,
                     to_stage_execution_id, transition_kind, decision, reason,
-                    actor_type, actor_ref, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    error_code, metadata_json, actor_type, actor_ref, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     uuid.uuid4().hex,
@@ -1009,6 +1338,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     transition_kind,
                     decision,
                     reason,
+                    error_code,
+                    _jsonb(dict(metadata)),
                     actor_type,
                     actor_ref,
                     now,
@@ -1023,6 +1354,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         stage_key: str,
         participant_key: str,
         input_snapshot: dict[str, object],
+        timeout_at: str,
         now: str,
     ) -> dict[str, object]:
         with _cur(conn) as cur:
@@ -1043,8 +1375,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     protocol_stage_execution_id, protocol_run_id, stage_key, participant_key,
                     attempt, loop_iteration, status, decision, decision_summary,
                     input_snapshot_json, routed_task_id, failure_code, failure_detail,
-                    started_at, completed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', '', '', %s, '', '', '', '', '')
+                    timeout_at, lease_owner, lease_expires_at, started_at, completed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', '', '', %s, '', '', '', %s, '', '', '', '')
                 RETURNING *
                 """,
                 (
@@ -1055,6 +1387,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     attempt,
                     attempt,
                     _jsonb(input_snapshot),
+                    timeout_at,
                 ),
             )
             inserted = cur.fetchone()
@@ -1075,6 +1408,72 @@ class RegistryPostgresStore(AbstractRegistryStore):
         stage = document.stage(str(stage_execution_row["stage_key"] or ""))
         participant = document.participant(stage.participant_key)
         artifacts = self._protocol_artifacts_for_run(conn, run.protocol_run_id)
+        stage_executions = self._protocol_stage_executions_for_run(conn, run.protocol_run_id)
+        dispatch = protocol_dispatch_decision(
+            document=document,
+            run=run,
+            stage=stage,
+            stage_executions=stage_executions,
+            now=now,
+            lease_owner=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+            lease_ttl_seconds=900,
+        )
+        if not dispatch.ok:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_stage_executions
+                    SET status = 'blocked',
+                        failure_code = %s,
+                        failure_detail = %s,
+                        completed_at = %s
+                    WHERE protocol_stage_execution_id = %s
+                    """,
+                    (
+                        dispatch.error_code.lower() or "lease_held",
+                        dispatch.error_detail,
+                        now,
+                        stage_execution_row["protocol_stage_execution_id"],
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_runs
+                    SET status = 'blocked',
+                        blocked_code = %s,
+                        blocked_detail = %s,
+                        current_stage_execution_id = %s,
+                        current_stage_key = %s,
+                        version = COALESCE(version, 1) + 1,
+                        last_transition_at = %s,
+                        updated_at = %s
+                    WHERE protocol_run_id = %s
+                    """,
+                    (
+                        dispatch.error_code.lower() or "lease_held",
+                        dispatch.error_detail,
+                        stage_execution_row["protocol_stage_execution_id"],
+                        stage.stage_key,
+                        now,
+                        now,
+                        run.protocol_run_id,
+                    ),
+                )
+            self._insert_protocol_transition(
+                conn,
+                run_id=run.protocol_run_id,
+                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                to_stage_execution_id="",
+                transition_kind="blocked",
+                decision="",
+                reason=dispatch.error_detail,
+                error_code=dispatch.error_code,
+                metadata={},
+                actor_type="protocol_engine",
+                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                now=now,
+            )
+            return {}
         previous_feedback = self._latest_protocol_review_feedback(
             conn,
             run_id=run.protocol_run_id,
@@ -1090,7 +1489,77 @@ class RegistryPostgresStore(AbstractRegistryStore):
             )
         else:
             selector = TargetSelector(kind="agent", value=run.entry_agent_id)
-        resolved_target = self._resolve_selector(conn, selector)
+        try:
+            resolved_target = self._resolve_selector(conn, selector)
+        except Exception as exc:
+            detail = str(exc)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_run_participants
+                    SET state = 'error',
+                        resolution_outcome = 'error',
+                        resolution_reason = %s,
+                        selector_snapshot_json = %s,
+                        updated_at = %s
+                    WHERE protocol_run_id = %s AND participant_key = %s
+                    """,
+                    (
+                        detail,
+                        _jsonb(selector.model_dump(mode="json")),
+                        now,
+                        run.protocol_run_id,
+                        participant.participant_key,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_stage_executions
+                    SET status = 'blocked',
+                        failure_code = 'participant_resolution_failed',
+                        failure_detail = %s,
+                        completed_at = %s
+                    WHERE protocol_stage_execution_id = %s
+                    """,
+                    (detail, now, stage_execution_row["protocol_stage_execution_id"]),
+                )
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_runs
+                    SET status = 'blocked',
+                        blocked_code = 'participant_resolution_failed',
+                        blocked_detail = %s,
+                        current_stage_execution_id = %s,
+                        current_stage_key = %s,
+                        version = COALESCE(version, 1) + 1,
+                        last_transition_at = %s,
+                        updated_at = %s
+                    WHERE protocol_run_id = %s
+                    """,
+                    (
+                        detail,
+                        stage_execution_row["protocol_stage_execution_id"],
+                        stage.stage_key,
+                        now,
+                        now,
+                        run.protocol_run_id,
+                    ),
+                )
+            self._insert_protocol_transition(
+                conn,
+                run_id=run.protocol_run_id,
+                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                to_stage_execution_id="",
+                transition_kind="blocked",
+                decision="",
+                reason=detail,
+                error_code="TARGET_RESOLUTION_FAILED",
+                metadata={"selector": selector.model_dump(mode="json")},
+                actor_type="protocol_engine",
+                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                now=now,
+            )
+            return {}
         session_key = protocol_participant_session_key(run.protocol_run_id, participant.participant_key)
         instructions = render_protocol_stage_prompt(
             document=document,
@@ -1108,6 +1577,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "stage_key": stage.stage_key,
             "artifact_manifest": [item.model_dump(mode="json") for item in artifacts],
         }
+        internal_context = protocol_stage_internal_context(
+            document=document,
+            run=run,
+            stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+            stage=stage,
+        )
         request = {
             "routed_task_id": routed_task_id,
             "parent_conversation_id": run.root_conversation_id,
@@ -1119,6 +1594,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "title": stage.display_name or stage.stage_key,
             "instructions": instructions,
             "context": context_payload,
+            "internal_context": internal_context,
             "constraints": run.constraints_json.as_dict(),
             "requested_skills": participant.required_skills,
             "session_key_override": session_key,
@@ -1135,12 +1611,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 SET resolved_agent_id = %s,
                     resolved_authority_ref = %s,
                     state = 'running',
+                    resolution_outcome = 'ok',
+                    resolution_reason = '',
+                    selector_snapshot_json = %s,
                     updated_at = %s
                 WHERE protocol_run_id = %s AND participant_key = %s
                 """,
                 (
                     resolved_target["agent_id"],
                     resolved_target.get("authority_ref", ""),
+                    _jsonb(selector.model_dump(mode="json")),
                     now,
                     run.protocol_run_id,
                     participant.participant_key,
@@ -1151,11 +1631,17 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 UPDATE {_SCHEMA}.protocol_stage_executions
                 SET status = 'running',
                     routed_task_id = %s,
+                    timeout_at = %s,
+                    lease_owner = %s,
+                    lease_expires_at = %s,
                     started_at = %s
                 WHERE protocol_stage_execution_id = %s
                 """,
                 (
                     routed_task_id,
+                    dispatch.timeout_at,
+                    dispatch.lease_owner,
+                    dispatch.lease_expires_at,
                     now,
                     stage_execution_row["protocol_stage_execution_id"],
                 ),
@@ -1164,14 +1650,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 f"""
                 UPDATE {_SCHEMA}.protocol_runs
                 SET status = 'running',
+                    blocked_code = '',
+                    blocked_detail = '',
                     current_stage_execution_id = %s,
                     current_stage_key = %s,
+                    version = COALESCE(version, 1) + 1,
+                    last_transition_at = %s,
                     updated_at = %s
                 WHERE protocol_run_id = %s
                 """,
                 (
                     stage_execution_row["protocol_stage_execution_id"],
                     stage.stage_key,
+                    now,
                     now,
                     run.protocol_run_id,
                 ),
@@ -1184,31 +1675,190 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         run_row: Mapping[str, object],
         stage_execution_row: Mapping[str, object],
-        document: ProtocolDefinitionDocumentRecord,
-        stage_key: str,
+        observations: Sequence[ProtocolArtifactObservationRecord],
         now: str,
     ) -> None:
-        stage = document.stage(stage_key)
-        for artifact_key in stage.outputs:
-            definition = document.artifact(artifact_key)
+        current_artifacts = {item.artifact_key: item for item in self._protocol_artifacts_for_run(conn, str(run_row["protocol_run_id"] or ""))}
+        for observation in observations:
+            previous = current_artifacts.get(observation.artifact_key)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.protocol_artifacts (
                         protocol_artifact_id, protocol_run_id, artifact_key, artifact_kind,
-                        location, workspace_path, content_hash, produced_by_stage_execution_id,
-                        state, supersedes_protocol_artifact_id, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, '', %s, 'available', '', %s)
+                        location, workspace_path, content_hash, size_bytes, exists,
+                        modified_at, observed_at, verification_state,
+                        produced_by_stage_execution_id, state, supersedes_protocol_artifact_id, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         uuid.uuid4().hex,
                         run_row["protocol_run_id"],
-                        artifact_key,
-                        definition.kind,
-                        definition.path,
-                        definition.path,
+                        observation.artifact_key,
+                        observation.artifact_kind,
+                        observation.path,
+                        observation.path,
+                        observation.content_hash,
+                        int(observation.size_bytes or 0),
+                        bool(observation.exists),
+                        observation.modified_at,
+                        observation.observed_at or now,
+                        observation.verification_state,
                         stage_execution_row["protocol_stage_execution_id"],
+                        "available" if observation.exists else "missing",
+                        previous.protocol_artifact_id if previous is not None else "",
                         now,
+                    ),
+                )
+
+    def _protocol_stage_task_result_from_task_row(self, task_row: Mapping[str, object]) -> ProtocolStageTaskResultRecord:
+        result_json = task_row.get("result_json")
+        if not isinstance(result_json, dict):
+            result_json = {}
+        observations: list[ProtocolArtifactObservationRecord] = []
+        for raw in result_json.get("artifacts", ()) or ():
+            try:
+                observations.append(ProtocolArtifactObservationRecord.model_validate(raw))
+            except Exception:
+                continue
+        return ProtocolStageTaskResultRecord(
+            routed_task_id=str(task_row.get("routed_task_id", "") or ""),
+            status=str(task_row.get("status", "") or ""),
+            summary=str(result_json.get("summary", "") or ""),
+            full_text=str(result_json.get("full_text", "") or ""),
+            artifacts=observations,
+            completed_at=str(result_json.get("completed_at", "") or utcnow_iso()),
+        )
+
+    def _apply_protocol_engine_decision_in_tx(
+        self,
+        conn,
+        *,
+        run_row: Mapping[str, object],
+        stage_execution_row: Mapping[str, object],
+        engine,
+        actor_type: str,
+        actor_ref: str,
+        now: str,
+    ) -> None:
+        completion_timestamp = now if engine.stage_status in {"completed", "failed", "blocked", "cancelled"} else str(stage_execution_row.get("completed_at", "") or "")
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                UPDATE {_SCHEMA}.protocol_stage_executions
+                SET status = %s,
+                    decision = %s,
+                    decision_summary = %s,
+                    failure_code = %s,
+                    failure_detail = %s,
+                    lease_owner = '',
+                    lease_expires_at = '',
+                    completed_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (
+                    engine.stage_status,
+                    engine.decision,
+                    engine.summary,
+                    engine.failure_code,
+                    engine.failure_detail,
+                    completion_timestamp,
+                    stage_execution_row["protocol_stage_execution_id"],
+                ),
+            )
+            cur.execute(
+                f"""
+                UPDATE {_SCHEMA}.protocol_runs
+                SET status = %s,
+                    termination_summary = %s,
+                    blocked_code = %s,
+                    blocked_detail = %s,
+                    retention_until = %s,
+                    version = COALESCE(version, 1) + 1,
+                    last_transition_at = %s,
+                    updated_at = %s,
+                    completed_at = CASE WHEN %s IN ('completed', 'failed', 'cancelled') THEN %s ELSE completed_at END
+                WHERE protocol_run_id = %s
+                """,
+                (
+                    engine.run_status,
+                    engine.summary if engine.terminal_status else (engine.run_blocked_detail or ""),
+                    engine.run_blocked_code,
+                    engine.run_blocked_detail,
+                    engine.retention_until or protocol_retention_until(now, days=PROTOCOL_DEFAULT_RETENTION_DAYS),
+                    now,
+                    now,
+                    engine.run_status,
+                    now,
+                    run_row["protocol_run_id"],
+                ),
+            )
+        if engine.artifact_observations:
+            self._upsert_protocol_stage_artifacts_in_tx(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                observations=engine.artifact_observations,
+                now=now,
+            )
+        next_execution_id = ""
+        if engine.create_next_execution and engine.next_stage_key:
+            next_stage = self._protocol_document_for_run(conn, run_row).stage(engine.next_stage_key)
+            next_execution_row = self._create_protocol_stage_execution_in_tx(
+                conn,
+                run_row=run_row,
+                stage_key=next_stage.stage_key,
+                participant_key=next_stage.participant_key,
+                input_snapshot=engine.input_snapshot.as_dict(),
+                timeout_at="",
+                now=now,
+            )
+            next_execution_id = str(next_execution_row["protocol_stage_execution_id"] or "")
+        self._insert_protocol_transition(
+            conn,
+            run_id=str(run_row["protocol_run_id"]),
+            from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"]),
+            to_stage_execution_id=next_execution_id,
+            transition_kind=engine.transition_kind,
+            decision=engine.decision,
+            reason=engine.transition_reason,
+            error_code=engine.transition_error_code,
+            metadata={},
+            actor_type=actor_type,
+            actor_ref=actor_ref,
+            now=now,
+        )
+        if next_execution_id:
+            refreshed_run_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                (run_row["protocol_run_id"],),
+            )
+            refreshed_stage_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+                (next_execution_id,),
+            )
+            if refreshed_run_row is not None and refreshed_stage_row is not None:
+                self._dispatch_protocol_stage_in_tx(
+                    conn,
+                    run_row=refreshed_run_row,
+                    stage_execution_row=refreshed_stage_row,
+                    now=now,
+                )
+        elif engine.run_status in {"completed", "failed", "cancelled"}:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_runs
+                    SET current_stage_execution_id = %s,
+                        current_stage_key = %s
+                    WHERE protocol_run_id = %s
+                    """,
+                    (
+                        stage_execution_row["protocol_stage_execution_id"],
+                        stage_execution_row["stage_key"],
+                        run_row["protocol_run_id"],
                     ),
                 )
 
@@ -1241,194 +1891,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         if run_row is None or task_row is None:
             return
         document = self._protocol_document_for_run(conn, run_row)
-        stage = document.stage(str(stage_execution_row["stage_key"] or ""))
-        result_json = task_row.get("result_json")
-        if not isinstance(result_json, dict):
-            result_json = {}
-        task_status = str(task_row.get("status", "") or "")
-        if task_status != "completed":
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_stage_executions
-                    SET status = 'failed',
-                        failure_code = %s,
-                        failure_detail = %s,
-                        completed_at = %s
-                    WHERE protocol_stage_execution_id = %s
-                    """,
-                    (
-                        task_status or "failed",
-                        str(result_json.get("summary", "") or task_status or "Stage failed"),
-                        now,
-                        stage_execution_row["protocol_stage_execution_id"],
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = 'failed',
-                        termination_summary = %s,
-                        updated_at = %s,
-                        completed_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (
-                        str(result_json.get("summary", "") or task_status or "Protocol stage failed"),
-                        now,
-                        now,
-                        run_row["protocol_run_id"],
-                    ),
-                )
-            self._insert_protocol_transition(
-                conn,
-                run_id=str(run_row["protocol_run_id"]),
-                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"]),
-                to_stage_execution_id="",
-                transition_kind="terminal",
-                decision=task_status or "failed",
-                reason=str(result_json.get("summary", "") or task_status or "Protocol stage failed"),
-                actor_type="system",
-                actor_ref=routed_task_id,
-                now=now,
-            )
-            return
-        try:
-            decision = parse_protocol_stage_decision(
-                stage=stage,
-                full_text=str(result_json.get("full_text", "") or ""),
-                summary_fallback=str(result_json.get("summary", "") or ""),
-            )
-        except Exception as exc:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_stage_executions
-                    SET status = 'blocked',
-                        failure_code = 'protocol_contract_invalid',
-                        failure_detail = %s,
-                        completed_at = %s
-                    WHERE protocol_stage_execution_id = %s
-                    """,
-                    (str(exc), now, stage_execution_row["protocol_stage_execution_id"]),
-                )
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = 'blocked',
-                        termination_summary = %s,
-                        updated_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (str(exc), now, run_row["protocol_run_id"]),
-                )
-            return
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                UPDATE {_SCHEMA}.protocol_stage_executions
-                SET status = 'completed',
-                    decision = %s,
-                    decision_summary = %s,
-                    completed_at = %s
-                WHERE protocol_stage_execution_id = %s
-                """,
-                (
-                    decision.decision,
-                    decision.summary,
-                    now,
-                    stage_execution_row["protocol_stage_execution_id"],
-                ),
-            )
-        self._upsert_protocol_stage_artifacts_in_tx(
+        stage_execution = self._protocol_stage_execution_from_row(stage_execution_row)
+        engine = evaluate_protocol_task_result(
+            document=document,
+            run=self._protocol_run_from_row(run_row),
+            stage_execution=stage_execution,
+            stage_executions=self._protocol_stage_executions_for_run(conn, str(run_row["protocol_run_id"] or "")),
+            result=self._protocol_stage_task_result_from_task_row(task_row),
+        )
+        self._apply_protocol_engine_decision_in_tx(
             conn,
             run_row=run_row,
             stage_execution_row=stage_execution_row,
-            document=document,
-            stage_key=stage.stage_key,
-            now=now,
-        )
-        target = stage_target_for_decision(stage, decision.decision)
-        if not target:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = 'blocked',
-                        termination_summary = %s,
-                        updated_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (f"Stage {stage.stage_key} has no transition for {decision.decision}", now, run_row["protocol_run_id"]),
-                )
-            return
-        if is_protocol_terminal_target(target):
-            terminal_status = {
-                "__complete__": "completed",
-                "__failed__": "failed",
-                "__cancelled__": "cancelled",
-            }[target]
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = %s,
-                        termination_summary = %s,
-                        updated_at = %s,
-                        completed_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (
-                        terminal_status,
-                        decision.summary,
-                        now,
-                        now,
-                        run_row["protocol_run_id"],
-                    ),
-                )
-            self._insert_protocol_transition(
-                conn,
-                run_id=str(run_row["protocol_run_id"]),
-                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"]),
-                to_stage_execution_id="",
-                transition_kind="terminal",
-                decision=decision.decision,
-                reason=decision.summary,
-                actor_type="protocol_engine",
-                actor_ref=routed_task_id,
-                now=now,
-            )
-            return
-        next_stage = document.stage(target)
-        next_execution_row = self._create_protocol_stage_execution_in_tx(
-            conn,
-            run_row=run_row,
-            stage_key=next_stage.stage_key,
-            participant_key=next_stage.participant_key,
-            input_snapshot={
-                "previous_stage_key": stage.stage_key,
-                "previous_stage_execution_id": stage_execution_row["protocol_stage_execution_id"],
-                "decision": decision.decision,
-                "decision_summary": decision.summary,
-            },
-            now=now,
-        )
-        self._insert_protocol_transition(
-            conn,
-            run_id=str(run_row["protocol_run_id"]),
-            from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"]),
-            to_stage_execution_id=str(next_execution_row["protocol_stage_execution_id"]),
-            transition_kind="advance",
-            decision=decision.decision,
-            reason=decision.summary,
+            engine=engine,
             actor_type="protocol_engine",
             actor_ref=routed_task_id,
-            now=now,
-        )
-        self._dispatch_protocol_stage_in_tx(
-            conn,
-            run_row=run_row,
-            stage_execution_row=next_execution_row,
             now=now,
         )
 
@@ -1734,24 +2211,60 @@ class RegistryPostgresStore(AbstractRegistryStore):
             [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows],
         )
 
-    def list_protocols(self) -> list[ProtocolDefinitionRecord]:
+    def list_protocols(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+    ) -> list[ProtocolDefinitionRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if lifecycle_state:
+            params.append(lifecycle_state)
+            clauses.append("lifecycle_state = %s")
+        if slug:
+            params.append(slug)
+            clauses.append("slug = %s")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        include_drafts = any(
+            self._access_has_role(access, role)
+            for role in ("author", "publisher", "admin")
+        )
         with self._connect() as conn:
             rows = _POSTGRES_STORE_DIALECT.fetchall(
                 conn,
                 f"""
                 SELECT *
                 FROM {_SCHEMA}.protocol_definitions
+                {where_sql}
                 ORDER BY updated_at DESC, display_name ASC, slug ASC
                 """,
+                tuple(params),
             )
-            return [self._protocol_record_from_row(row) for row in rows]
+        visible = [
+            self._protocol_record_from_row(row)
+            for row in rows
+            if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts)
+        ]
+        return visible[cursor:cursor + limit]
 
     def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
         return builtin_protocol_document(slug)
 
-    def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+    def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        include_drafts = any(
+            self._access_has_role(access, role)
+            for role in ("author", "publisher", "admin")
+        )
         with self._connect() as conn:
-            row = self._protocol_row(conn, protocol_id)
+            row = self._assert_protocol_visible(
+                self._protocol_row(conn, protocol_id),
+                access=access,
+                include_drafts=include_drafts,
+            )
             if row is None:
                 return ProtocolMutationRecord(ok=False, status="not_found", message="Protocol not found.")
             raw_definition = row.get("draft_definition_json") or {}
@@ -1773,15 +2286,42 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 validation=validation,
             )
 
+    def get_protocol_version(
+        self,
+        protocol_id: str,
+        version_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionVersionRecord:
+        include_drafts = any(
+            self._access_has_role(access, role)
+            for role in ("author", "publisher", "admin")
+        )
+        with self._connect() as conn:
+            row = self._assert_protocol_visible(
+                self._protocol_row(conn, protocol_id),
+                access=access,
+                include_drafts=include_drafts,
+            )
+            if row is None:
+                raise KeyError(protocol_id)
+            version_row = self._protocol_version_row(conn, version_id)
+            if version_row is None or str(version_row.get("protocol_id", "") or "") != protocol_id:
+                raise KeyError(version_id)
+            return self._protocol_version_from_row(version_row)
+
     def save_protocol_draft(
         self,
         *,
+        access: ProtocolAccessContextRecord,
         protocol_id: str,
         slug: str,
         display_name: str,
         description: str,
         definition_json: RegistryJsonRecord,
     ) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = definition_json.as_dict()
         validation = validate_protocol_document(raw_definition)
@@ -1796,18 +2336,46 @@ class RegistryPostgresStore(AbstractRegistryStore):
         normalized_description = str(description or (document.description if document is not None else "") or "").strip()
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
+            existing_slug_row = self._protocol_row_for_slug(conn, normalized_slug)
+            if existing_slug_row is not None and str(existing_slug_row.get("protocol_id", "") or "") != protocol_key:
+                return ProtocolMutationRecord(
+                    ok=False,
+                    status="duplicate_slug",
+                    message=f"Protocol slug {normalized_slug!r} is already in use.",
+                )
+            existing_row = self._protocol_row(conn, protocol_key)
+            if existing_row is not None and self._assert_protocol_visible(existing_row, access=access, include_drafts=True) is None:
+                return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol not visible to this actor.")
+            owner_org_id = str(
+                (existing_row.get("owner_org_id", "") if existing_row is not None else "") or self._access_org_id(access)
+            )
+            visibility = str(
+                (existing_row.get("visibility", "") if existing_row is not None else "") or PROTOCOL_DEFAULT_VISIBILITY
+            )
+            created_by = str(
+                (existing_row.get("created_by", "") if existing_row is not None else "") or self._access_actor_ref(access)
+            )
+            lifecycle_state = str((existing_row.get("lifecycle_state", "") if existing_row is not None else "") or "draft")
+            current_version_id = str((existing_row.get("current_version_id", "") if existing_row is not None else "") or "")
+            created_at = str((existing_row.get("created_at", "") if existing_row is not None else "") or now)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.protocol_definitions (
                         protocol_id, slug, display_name, description, lifecycle_state,
-                        current_version_id, draft_definition_json, draft_content_hash,
+                        current_version_id, owner_org_id, visibility, created_by, updated_by,
+                        draft_definition_json, draft_content_hash,
                         created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, 'draft', '', %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (protocol_id) DO UPDATE SET
                         slug = EXCLUDED.slug,
                         display_name = EXCLUDED.display_name,
                         description = EXCLUDED.description,
+                        owner_org_id = EXCLUDED.owner_org_id,
+                        visibility = EXCLUDED.visibility,
+                        updated_by = EXCLUDED.updated_by,
+                        lifecycle_state = EXCLUDED.lifecycle_state,
+                        current_version_id = EXCLUDED.current_version_id,
                         draft_definition_json = EXCLUDED.draft_definition_json,
                         draft_content_hash = EXCLUDED.draft_content_hash,
                         updated_at = EXCLUDED.updated_at
@@ -1817,13 +2385,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         normalized_slug,
                         normalized_name,
                         normalized_description,
+                        lifecycle_state,
+                        current_version_id,
+                        owner_org_id,
+                        visibility,
+                        created_by,
+                        self._access_actor_ref(access),
                         _jsonb(raw_definition),
                         raw_hash,
-                        now,
+                        created_at,
                         now,
                     ),
                 )
-        result = self.get_protocol(protocol_key)
+        result = self.get_protocol(protocol_key, access=access)
         return ProtocolMutationRecord(
             ok=True,
             status="saved",
@@ -1835,8 +2409,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             validation=result.validation,
         )
 
-    def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
-        result = self.get_protocol(protocol_id)
+    def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        result = self.get_protocol(protocol_id, access=access)
         if not result.ok or result.validation is None:
             return result
         return ProtocolMutationRecord(
@@ -1850,8 +2424,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
             validation=result.validation,
         )
 
-    def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
-        loaded = self.get_protocol(protocol_id)
+    def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol publish requires publisher access.")
+        loaded = self.get_protocol(protocol_id, access=access)
         if not loaded.ok or loaded.validation is None or loaded.draft_document is None:
             return loaded
         if not loaded.validation.ok:
@@ -1881,8 +2457,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     f"""
                     INSERT INTO {_SCHEMA}.protocol_definition_versions (
                         protocol_definition_version_id, protocol_id, version, definition_json,
-                        content_hash, validation_status, published_at, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, 'valid', %s, %s)
+                        content_hash, validation_status, published_at, published_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, 'valid', %s, %s, %s)
                     """,
                     (
                         version_id,
@@ -1891,6 +2467,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         _jsonb(loaded.draft_document.model_dump(mode="json")),
                         loaded.validation.content_hash,
                         now,
+                        self._access_actor_ref(access),
                         now,
                     ),
                 )
@@ -1899,12 +2476,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     UPDATE {_SCHEMA}.protocol_definitions
                     SET lifecycle_state = 'published',
                         current_version_id = %s,
+                        updated_by = %s,
                         updated_at = %s
                     WHERE protocol_id = %s
                     """,
-                    (version_id, now, protocol_id),
+                    (version_id, self._access_actor_ref(access), now, protocol_id),
                 )
-        result = self.get_protocol(protocol_id)
+        result = self.get_protocol(protocol_id, access=access)
         return ProtocolMutationRecord(
             ok=result.ok,
             status="published" if result.ok else result.status,
@@ -1916,13 +2494,24 @@ class RegistryPostgresStore(AbstractRegistryStore):
             validation=result.validation,
         )
 
-    def list_protocol_runs(self, *, limit: int = 25, cursor: int = 0, status: str = "") -> list[ProtocolRunRecord]:
+    def list_protocol_runs(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        status: str = "",
+        protocol_id: str = "",
+    ) -> list[ProtocolRunRecord]:
         params: list[object] = []
-        where = ""
+        clauses: list[str] = []
         if status:
-            where = "WHERE status = %s"
             params.append(status)
-        params.extend([limit, cursor])
+            clauses.append("status = %s")
+        if protocol_id:
+            params.append(protocol_id)
+            clauses.append("protocol_id = %s")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = _POSTGRES_STORE_DIALECT.fetchall(
                 conn,
@@ -1931,20 +2520,53 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 FROM {_SCHEMA}.protocol_runs
                 {where}
                 ORDER BY updated_at DESC, created_at DESC
-                LIMIT %s OFFSET %s
                 """,
                 tuple(params),
             )
-            return [self._protocol_run_from_row(row) for row in rows]
+        visible = [
+            self._protocol_run_from_row(row)
+            for row in rows
+            if self._assert_protocol_run_visible(row, access=access) is not None
+        ]
+        return visible[cursor:cursor + limit]
 
-    def create_protocol_run(self, payload: ProtocolRunCreateRecord) -> ProtocolRunMutationRecord:
+    def create_protocol_run(
+        self,
+        payload: ProtocolRunCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunMutationRecord:
         request = (
             payload
             if isinstance(payload, ProtocolRunCreateRecord)
             else ProtocolRunCreateRecord.model_validate(payload)
         )
+        request_hash = self._request_hash(
+            {
+                "payload": request.model_dump(mode="json"),
+                "actor_ref": self._access_actor_ref(access),
+                "org_id": self._access_org_id(access),
+            }
+        )
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
+            existing_idempotency = self._protocol_idempotency_row(
+                conn,
+                scope_kind="protocol_runs",
+                scope_ref=str(request.protocol_definition_version_id or request.protocol_id or ""),
+                action_name="create",
+                idempotency_key=idempotency_key,
+            )
+            if existing_idempotency is not None:
+                existing_hash = str(existing_idempotency.get("request_hash", "") or "")
+                if existing_hash and existing_hash != request_hash:
+                    return ProtocolRunMutationRecord(
+                        ok=False,
+                        status="idempotency_conflict",
+                        message="Idempotency key was already used for a different protocol run request.",
+                    )
+                return ProtocolRunMutationRecord.model_validate(existing_idempotency.get("response_json", {}))
             protocol_row = None
             version_row = None
             if request.protocol_definition_version_id:
@@ -1961,8 +2583,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     version_row = self._protocol_version_row(conn, current_version_id)
                 if version_row is None:
                     version_row = self._latest_protocol_version_row(conn, request.protocol_id)
+            protocol_row = self._assert_protocol_visible(protocol_row, access=access, include_drafts=False)
             if protocol_row is None or version_row is None:
                 return ProtocolRunMutationRecord(ok=False, status="not_found", message="Published protocol version required.")
+            if str(protocol_row.get("lifecycle_state", "") or "") != "published":
+                return ProtocolRunMutationRecord(ok=False, status="invalid", message="Only published protocols can start runs.")
             document = canonical_protocol_document(version_row["definition_json"])
             run_id = uuid.uuid4().hex
             root_conversation_id = str(request.root_conversation_id or "").strip()
@@ -1986,8 +2611,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         origin_channel, workspace_ref, repo_ref, branch_ref,
                         problem_statement, constraints_json, status,
                         current_stage_execution_id, current_stage_key, termination_summary,
-                        created_at, updated_at, completed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', %s, %s, '')
+                        blocked_code, blocked_detail, run_org_id, started_by, version,
+                        retention_until, last_transition_at, created_at, updated_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued', '', '', '', '', '', %s, %s, 1, %s, '', %s, %s, '')
                     RETURNING *
                     """,
                     (
@@ -2007,6 +2633,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             if isinstance(request.constraints_json, RegistryJsonRecord)
                             else dict(request.constraints_json or {})
                         ),
+                        self._access_org_id(access),
+                        self._access_actor_ref(access),
+                        protocol_retention_until(now, days=PROTOCOL_DEFAULT_RETENTION_DAYS),
                         now,
                         now,
                     ),
@@ -2021,8 +2650,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             protocol_run_participant_id, protocol_run_id, participant_key,
                             display_name, required_skills_json, target_selector_json,
                             resolved_agent_id, resolved_authority_ref, session_key, state,
+                            resolution_outcome, resolution_reason, selector_snapshot_json,
                             created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, '', '', %s, 'queued', %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, '', '', %s, 'queued', 'queued', '', %s, %s, %s)
                         """,
                         (
                             uuid.uuid4().hex,
@@ -2032,6 +2662,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             _jsonb(participant.required_skills),
                             _jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
                             protocol_participant_session_key(run_id, participant.participant_key),
+                            _jsonb(participant.selector.model_dump(mode="json") if participant.selector is not None else {}),
                             now,
                             now,
                         ),
@@ -2041,9 +2672,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         f"""
                         INSERT INTO {_SCHEMA}.protocol_artifacts (
                             protocol_artifact_id, protocol_run_id, artifact_key, artifact_kind,
-                            location, workspace_path, content_hash, produced_by_stage_execution_id,
-                            state, supersedes_protocol_artifact_id, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, '', '', 'declared', '', %s)
+                            location, workspace_path, content_hash, size_bytes, exists,
+                            modified_at, observed_at, verification_state,
+                            produced_by_stage_execution_id, state, supersedes_protocol_artifact_id, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, '', 0, false, '', '', 'declared', '', 'declared', '', %s)
                         """,
                         (
                             uuid.uuid4().hex,
@@ -2065,6 +2697,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     "problem_statement": request.problem_statement,
                     "workspace_ref": request.workspace_ref,
                 },
+                timeout_at="",
                 now=now,
             )
             self._dispatch_protocol_stage_in_tx(
@@ -2073,77 +2706,232 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 stage_execution_row=execution_row,
                 now=now,
             )
-        detail = self.get_protocol_run(run_id)
-        return ProtocolRunMutationRecord(
-            ok=True,
-            status="created",
-            message="Protocol run created.",
-            run=detail.run,
-            stage_execution=detail.stage_executions[0] if detail.stage_executions else None,
-        )
-
-    def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
-        with self._connect() as conn:
-            run_row = _POSTGRES_STORE_DIALECT.fetchone(
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise RuntimeError("Failed to load protocol run detail after creation")
+            result = ProtocolRunMutationRecord(
+                ok=True,
+                status="created",
+                message="Protocol run created.",
+                run=detail.run,
+                stage_execution=detail.stage_executions[0] if detail.stage_executions else None,
+            )
+            self._store_protocol_idempotency(
                 conn,
-                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
-                (run_id,),
+                scope_kind="protocol_runs",
+                scope_ref=str(request.protocol_definition_version_id or request.protocol_id or ""),
+                action_name="create",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_json=_json_ready(result.model_dump(mode="json")),
+                now=now,
+            )
+            return result
+
+    def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return detail
+
+    def get_protocol_run_participants(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolRunParticipantRecord]:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return detail.participants
+
+    def get_protocol_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolArtifactRecord]:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return detail.artifacts
+
+    def get_protocol_run_timeline(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTransitionRecord]:
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return detail.transitions
+
+    def export_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolRunExportRecord:
+        if not any(self._access_has_role(access, role) for role in ("operator", "auditor", "admin")):
+            raise PermissionError("Protocol export requires operator or auditor access.")
+        with self._connect() as conn:
+            detail = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if detail is None:
+                raise KeyError(run_id)
+            return ProtocolRunExportRecord(
+                run=detail.run,
+                definition=detail.definition,
+                version=detail.version,
+                definition_document=canonical_protocol_document(detail.version.definition_json),
+                participants=detail.participants,
+                stage_executions=detail.stage_executions,
+                artifacts=detail.artifacts,
+                transitions=detail.transitions,
+            )
+
+    def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        action: str,
+        reason: str,
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action == "send-back":
+            normalized_action = "send_back"
+        if normalized_action not in {"cancel", "retry", "accept", "send_back"}:
+            return ProtocolRunMutationRecord(ok=False, status="invalid_action", message=f"Unsupported protocol action {action!r}.")
+        if not any(self._access_has_role(access, role) for role in ("operator", "admin")):
+            return ProtocolRunMutationRecord(ok=False, status="forbidden", message="Protocol run intervention requires operator access.")
+        request_hash = self._request_hash(
+            {
+                "run_id": run_id,
+                "action": normalized_action,
+                "reason": reason,
+                "expected_version": expected_version or 0,
+                "actor_ref": self._access_actor_ref(access),
+            }
+        )
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            existing_idempotency = self._protocol_idempotency_row(
+                conn,
+                scope_kind="protocol_run",
+                scope_ref=run_id,
+                action_name=normalized_action,
+                idempotency_key=idempotency_key,
+            )
+            if existing_idempotency is not None:
+                existing_hash = str(existing_idempotency.get("request_hash", "") or "")
+                if existing_hash and existing_hash != request_hash:
+                    return ProtocolRunMutationRecord(
+                        ok=False,
+                        status="idempotency_conflict",
+                        message="Idempotency key was already used for a different protocol action.",
+                    )
+                return ProtocolRunMutationRecord.model_validate(existing_idempotency.get("response_json", {}))
+            run_row = self._assert_protocol_run_visible(
+                _POSTGRES_STORE_DIALECT.fetchone(
+                    conn,
+                    f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                    (run_id,),
+                ),
+                access=access,
             )
             if run_row is None:
-                raise KeyError(run_id)
-            definition_row = self._protocol_row(conn, str(run_row["protocol_id"] or ""))
-            version_row = self._protocol_version_row(conn, str(run_row["protocol_definition_version_id"] or ""))
-            if definition_row is None or version_row is None:
-                raise KeyError(run_id)
-            participant_rows = _POSTGRES_STORE_DIALECT.fetchall(
-                conn,
-                f"""
-                SELECT *
-                FROM {_SCHEMA}.protocol_run_participants
-                WHERE protocol_run_id = %s
-                ORDER BY participant_key ASC
-                """,
-                (run_id,),
-            )
-            stage_rows = _POSTGRES_STORE_DIALECT.fetchall(
-                conn,
-                f"""
-                SELECT *
-                FROM {_SCHEMA}.protocol_stage_executions
-                WHERE protocol_run_id = %s
-                ORDER BY started_at DESC, protocol_stage_execution_id DESC
-                """,
-                (run_id,),
-            )
-            artifact_rows = _POSTGRES_STORE_DIALECT.fetchall(
-                conn,
-                f"""
-                SELECT *
-                FROM {_SCHEMA}.protocol_artifacts
-                WHERE protocol_run_id = %s
-                ORDER BY created_at DESC, artifact_key ASC
-                """,
-                (run_id,),
-            )
-            transition_rows = _POSTGRES_STORE_DIALECT.fetchall(
-                conn,
-                f"""
-                SELECT *
-                FROM {_SCHEMA}.protocol_transitions
-                WHERE protocol_run_id = %s
-                ORDER BY created_at DESC, protocol_transition_id DESC
-                """,
-                (run_id,),
-            )
-            return ProtocolRunDetailRecord(
+                return ProtocolRunMutationRecord(ok=False, status="not_found", message="Protocol run not found.")
+            current_version = int(run_row.get("version", 1) or 1)
+            if expected_version is not None and current_version != int(expected_version):
+                return ProtocolRunMutationRecord(
+                    ok=False,
+                    status="conflict",
+                    message=f"Protocol run version conflict: expected {expected_version}, found {current_version}.",
+                )
+            current_stage_execution_id = str(run_row.get("current_stage_execution_id", "") or "")
+            stage_execution_row = None
+            if current_stage_execution_id:
+                stage_execution_row = _POSTGRES_STORE_DIALECT.fetchone(
+                    conn,
+                    f"SELECT * FROM {_SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+                    (current_stage_execution_id,),
+                )
+            if stage_execution_row is None:
+                stage_execution_row = _POSTGRES_STORE_DIALECT.fetchone(
+                    conn,
+                    f"""
+                    SELECT *
+                    FROM {_SCHEMA}.protocol_stage_executions
+                    WHERE protocol_run_id = %s
+                    ORDER BY started_at DESC, protocol_stage_execution_id DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                )
+            if stage_execution_row is None:
+                return ProtocolRunMutationRecord(ok=False, status="invalid", message="Protocol run has no active stage execution.")
+            document = self._protocol_document_for_run(conn, run_row)
+            engine = evaluate_protocol_operator_action(
+                document=document,
                 run=self._protocol_run_from_row(run_row),
-                definition=self._protocol_record_from_row(definition_row),
-                version=self._protocol_version_from_row(version_row),
-                participants=[self._protocol_run_participant_from_row(row) for row in participant_rows],
-                stage_executions=[self._protocol_stage_execution_from_row(row) for row in stage_rows],
-                artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
-                transitions=[self._protocol_transition_from_row(row) for row in transition_rows],
+                stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),
+                stage_executions=self._protocol_stage_executions_for_run(conn, run_id),
+                action=normalized_action,
+                reason=reason,
+                now=now,
             )
+            self._apply_protocol_engine_decision_in_tx(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                actor_type="operator",
+                actor_ref=self._access_actor_ref(access),
+                now=now,
+            )
+            refreshed = self._protocol_run_detail_in_tx(conn, run_id, access=access)
+            if refreshed is None:
+                raise RuntimeError("Failed to load protocol run detail after operator action")
+            self._record_protocol_compliance_event(
+                conn,
+                protocol_run_id=run_id,
+                protocol_definition_version_id=refreshed.run.protocol_definition_version_id,
+                event_kind=f"operator_{normalized_action}",
+                actor_ref=self._access_actor_ref(access),
+                actor_role=self._access_primary_role(access),
+                summary=str(reason or normalized_action).strip() or normalized_action,
+                metadata={
+                    "expected_version": expected_version,
+                    "result_status": refreshed.run.status,
+                    "current_stage_key": refreshed.run.current_stage_key,
+                },
+                now=now,
+            )
+            result = ProtocolRunMutationRecord(
+                ok=True,
+                status="updated",
+                message="Protocol run updated.",
+                run=refreshed.run,
+                stage_execution=refreshed.stage_executions[0] if refreshed.stage_executions else None,
+            )
+            self._store_protocol_idempotency(
+                conn,
+                scope_kind="protocol_run",
+                scope_ref=run_id,
+                action_name=normalized_action,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_json=_json_ready(result.model_dump(mode="json")),
+                now=now,
+            )
+            return result
 
     def add_conversation_message(self, conversation_id: str, text: str) -> MessageRecord:
         now = utcnow_iso()

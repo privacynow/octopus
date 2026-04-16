@@ -392,8 +392,54 @@ function renderProtocolWorkspace(container) {
         } else {
             const summary = document.createElement('div');
             summary.className = 'quiet-note';
-            summary.textContent = `Status: ${currentRun.run.status} · Current stage: ${currentRun.run.current_stage_key || 'n/a'} · Workspace: ${currentRun.run.workspace_ref || 'default'}`;
+            summary.textContent = `Status: ${currentRun.run.status} · Version: ${currentRun.run.version || 1} · Current stage: ${currentRun.run.current_stage_key || 'n/a'} · Workspace: ${currentRun.run.workspace_ref || 'default'}`;
             runDetailPanel.appendChild(summary);
+
+            if (currentRun.run.termination_summary || currentRun.run.blocked_detail) {
+                const outcomeNote = document.createElement('div');
+                outcomeNote.className = 'quiet-note';
+                outcomeNote.textContent = currentRun.run.termination_summary || currentRun.run.blocked_detail;
+                runDetailPanel.appendChild(outcomeNote);
+            }
+
+            const runActions = document.createElement('div');
+            runActions.className = 'editor-actions';
+            const actionSpecs = [
+                { action: 'cancel', label: 'Cancel', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
+                { action: 'retry', label: 'Retry', enabled: ['blocked', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
+                { action: 'accept', label: 'Accept', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
+                { action: 'send-back', label: 'Send back', enabled: !['completed', 'failed', 'cancelled'].includes(String(currentRun.run.status || '')) },
+            ];
+            actionSpecs.forEach((spec) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = spec.action === 'cancel' ? 'btn' : 'btn btn-primary';
+                btn.textContent = spec.label;
+                btn.disabled = !spec.enabled;
+                btn.addEventListener('click', async () => {
+                    const reason = window.prompt(`${spec.label} reason`, '');
+                    if (reason === null) {
+                        return;
+                    }
+                    try {
+                        await API.actOnProtocolRun(
+                            currentRun.run.protocol_run_id,
+                            spec.action,
+                            { reason: reason.trim() },
+                            { expectedVersion: currentRun.run.version || 1 },
+                        );
+                        await loadRuns();
+                        await loadRunDetail();
+                        UI.notify(`Protocol run ${spec.label.toLowerCase()} applied.`, 'success');
+                    } catch (err) {
+                        UI.reportError(`Failed to ${spec.label.toLowerCase()} the protocol run`, err, {
+                            context: 'Protocol run action failed',
+                        });
+                    }
+                });
+                runActions.appendChild(btn);
+            });
+            runDetailPanel.appendChild(runActions);
 
             const stageList = document.createElement('div');
             const stageRows = (currentRun.stage_executions || []).map((item) => UI.renderListRow({
@@ -403,6 +449,34 @@ function renderProtocolWorkspace(container) {
             }));
             UI.reconcileChildren(stageList, stageRows.length ? stageRows : [UI.renderEmptyState('No stage executions yet.', true)]);
             runDetailPanel.appendChild(stageList);
+
+            const participantTitle = document.createElement('div');
+            participantTitle.className = 'editor-section-title';
+            participantTitle.textContent = 'Participants';
+            runDetailPanel.appendChild(participantTitle);
+
+            const participantList = document.createElement('div');
+            const participantRows = (currentRun.participants || []).map((item) => UI.renderListRow({
+                label: `${item.display_name || item.participant_key} · ${item.state || item.resolution_outcome || 'queued'}`,
+                sublabel: item.resolution_reason || item.resolved_agent_id || item.session_key || '',
+                badgeText: item.resolution_outcome || '',
+            }));
+            UI.reconcileChildren(participantList, participantRows.length ? participantRows : [UI.renderEmptyState('No participants resolved yet.', true)]);
+            runDetailPanel.appendChild(participantList);
+
+            const artifactTitle = document.createElement('div');
+            artifactTitle.className = 'editor-section-title';
+            artifactTitle.textContent = 'Artifacts';
+            runDetailPanel.appendChild(artifactTitle);
+
+            const artifactList = document.createElement('div');
+            const artifactRows = (currentRun.artifacts || []).map((item) => UI.renderListRow({
+                label: `${item.artifact_key} · ${item.verification_state || item.state || 'declared'}`,
+                sublabel: item.workspace_path || item.location || '',
+                badgeText: item.content_hash ? item.content_hash.slice(0, 8) : '',
+            }));
+            UI.reconcileChildren(artifactList, artifactRows.length ? artifactRows : [UI.renderEmptyState('No artifacts recorded yet.', true)]);
+            runDetailPanel.appendChild(artifactList);
 
             const transitionTitle = document.createElement('div');
             transitionTitle.className = 'editor-section-title';
@@ -422,7 +496,7 @@ function renderProtocolWorkspace(container) {
     }
 
     async function loadProtocols() {
-        protocols = await API.listProtocols();
+        protocols = await API.listProtocols({ limit: 100 });
         if (!currentProtocolId && protocols.length) {
             currentProtocolId = protocols[0].protocol_id;
         }

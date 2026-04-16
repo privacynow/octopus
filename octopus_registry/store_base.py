@@ -19,14 +19,19 @@ from octopus_sdk.content_models import (
 )
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
+    ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
+    ProtocolRunExportRecord,
     ProtocolRunMutationRecord,
+    ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolArtifactRecord,
+    ProtocolTransitionRecord,
 )
 
 from .runtime_health import report_from_dict, report_to_dict
@@ -634,18 +639,36 @@ class AbstractRegistryStore(Protocol):
     # Protocol definitions and runs
     # ------------------------------------------------------------------
 
-    def list_protocols(self) -> list[ProtocolDefinitionRecord]:
+    def list_protocols(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+    ) -> list[ProtocolDefinitionRecord]:
         """Return protocol definitions in UI-ready form."""
 
     def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
         """Return one builtin protocol template document by slug."""
 
-    def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+    def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Return one protocol definition with latest validation/version metadata."""
+
+    def get_protocol_version(
+        self,
+        protocol_id: str,
+        version_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionVersionRecord:
+        """Return one immutable protocol definition version."""
 
     def save_protocol_draft(
         self,
         *,
+        access: ProtocolAccessContextRecord,
         protocol_id: str,
         slug: str,
         display_name: str,
@@ -654,20 +677,78 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolMutationRecord:
         """Create or update one protocol draft."""
 
-    def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+    def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Validate the current draft for one protocol."""
 
-    def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+    def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Publish the current validated draft as a new immutable version."""
 
-    def list_protocol_runs(self, *, limit: int = 25, cursor: int = 0, status: str = "") -> list[ProtocolRunRecord]:
+    def list_protocol_runs(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        limit: int = 25,
+        cursor: int = 0,
+        status: str = "",
+        protocol_id: str = "",
+    ) -> list[ProtocolRunRecord]:
         """Return protocol runs in UI-ready form."""
 
-    def create_protocol_run(self, payload: ProtocolRunCreateRecord) -> ProtocolRunMutationRecord:
+    def create_protocol_run(
+        self,
+        payload: ProtocolRunCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunMutationRecord:
         """Create a protocol run and dispatch its first stage."""
 
-    def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
+    def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
         """Return one protocol run with participants, stages, artifacts, and transitions."""
+
+    def get_protocol_run_participants(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolRunParticipantRecord]:
+        """Return participant resolution state for one run."""
+
+    def get_protocol_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolArtifactRecord]:
+        """Return artifact history for one run."""
+
+    def get_protocol_run_timeline(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTransitionRecord]:
+        """Return transition history for one run."""
+
+    def export_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolRunExportRecord:
+        """Return one export-safe protocol run bundle."""
+
+    def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        access: ProtocolAccessContextRecord,
+        action: str,
+        reason: str,
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        """Apply one idempotent operator action to a protocol run."""
 
     # ------------------------------------------------------------------
     # Skill / guidance persistence (registry-owned content store)

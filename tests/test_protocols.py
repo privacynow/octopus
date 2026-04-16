@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from octopus_sdk.protocols import (
+    ProtocolAccessContextRecord,
     ProtocolStageDefinitionRecord,
     parse_protocol_stage_decision,
     validate_protocol_document,
@@ -27,6 +28,14 @@ def _agent_card(*, bot_key: str = "m1") -> AgentCard:
         channel_capabilities=["telegram"],
         management_capabilities=["conversation_settings"],
         version="test",
+    )
+
+
+def _operator_access() -> ProtocolAccessContextRecord:
+    return ProtocolAccessContextRecord(
+        actor_ref="operator-session",
+        org_id="local",
+        roles=["author", "publisher", "operator", "auditor", "admin"],
     )
 
 
@@ -105,6 +114,7 @@ def test_parse_protocol_stage_decision_requires_explicit_review_decision() -> No
 def test_registry_store_preserves_invalid_protocol_draft(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     saved = store.save_protocol_draft(
+        access=_operator_access(),
         protocol_id="",
         slug="broken-protocol",
         display_name="Broken Protocol",
@@ -122,7 +132,7 @@ def test_registry_store_preserves_invalid_protocol_draft(postgres_registry_trunc
     assert saved.ok is True
     assert saved.protocol is not None
 
-    loaded = store.get_protocol(saved.protocol.protocol_id)
+    loaded = store.get_protocol(saved.protocol.protocol_id, access=_operator_access())
     assert loaded.ok is True
     assert loaded.validation is not None
     assert loaded.validation.ok is False
@@ -137,6 +147,7 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     agent_id = enroll.agent_id
 
     saved = store.save_protocol_draft(
+        access=_operator_access(),
         protocol_id="",
         slug="mini-protocol",
         display_name="Mini Protocol",
@@ -146,7 +157,7 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     assert saved.ok is True
     protocol_id = saved.protocol.protocol_id
 
-    published = store.publish_protocol(protocol_id)
+    published = store.publish_protocol(protocol_id, access=_operator_access())
     assert published.ok is True
     assert published.version is not None
 
@@ -158,12 +169,13 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
             "workspace_ref": "default",
             "problem_statement": "Build the feature.",
             "constraints_json": {},
-        }
+        },
+        access=_operator_access(),
     )
     assert created.ok is True
     assert created.run is not None
 
-    detail = store.get_protocol_run(created.run.protocol_run_id)
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=_operator_access())
     assert detail.run.current_stage_key == "planning"
     assert detail.stage_executions
     first_stage = detail.stage_executions[0]
@@ -177,10 +189,22 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
             "transition_id": "done-1",
             "summary": "Plan updated.",
             "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "abc123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
         },
     )
 
-    detail = store.get_protocol_run(created.run.protocol_run_id)
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=_operator_access())
     assert detail.run.current_stage_key == "review"
     review_stage = detail.stage_executions[0]
     assert review_stage.stage_key == "review"
@@ -197,6 +221,6 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
         },
     )
 
-    detail = store.get_protocol_run(created.run.protocol_run_id)
+    detail = store.get_protocol_run(created.run.protocol_run_id, access=_operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."

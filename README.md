@@ -99,6 +99,10 @@ Useful Telegram commands:
 - `/protocol list`
 - `/protocol start <slug> <problem statement>`
 - `/protocol status <run_id>`
+- `/protocol cancel <run_id> [reason]`
+- `/protocol retry <run_id> [reason]`
+- `/protocol accept <run_id> [reason]`
+- `/protocol send-back <run_id> [reason]`
 
 If you want the Telegram workflow in detail, use
 [docs/telegram-user-guide.md](docs/telegram-user-guide.md).
@@ -150,14 +154,18 @@ The current shipped model is:
 - define and edit protocol definitions in the registry UI
 - validate and publish immutable protocol versions
 - start protocol runs from the registry UI or from Telegram
-- observe run progress, stage transitions, and outcomes in the registry
+- observe participants, artifacts, stage transitions, and outcomes in the registry
+- intervene on runs with typed operator actions over the shared registry API
+- enforce stage completion through shared SDK contracts, artifact observations,
+  and versioned operator actions instead of UI-only state
 
 The first built-in protocol is `software-engineering`, which models planning,
 review, architecture, implementation, review, and acceptance over durable repo
 artifacts.
 
-For the detailed project specification, use
-[protocol_plan.md](protocol_plan.md).
+The protocol implementation is described in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the active delivery backlog
+lives in [protocol_remediation_plan.md](protocol_remediation_plan.md).
 
 `./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
 

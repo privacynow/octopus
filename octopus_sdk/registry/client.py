@@ -16,11 +16,16 @@ from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
+    ProtocolDefinitionVersionRecord,
     ProtocolMutationRecord,
+    ProtocolRunExportRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunMutationRecord,
+    ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolTransitionRecord,
+    ProtocolArtifactRecord,
 )
 from octopus_sdk.registry.management import ManagementResult
 from octopus_sdk.registry.models import (
@@ -75,6 +80,15 @@ def _registry_http_error_code(status_code: int) -> str:
     return "registry_request_failed"
 
 
+def _detail_error_payload(value: object) -> tuple[str, str]:
+    if isinstance(value, dict):
+        error_code = str(value.get("error_code", "") or "").strip()
+        message = str(value.get("message", "") or "").strip()
+        if error_code or message:
+            return error_code or "registry_request_failed", message or "Registry request failed."
+    return "", ""
+
+
 def _validated_model(
     value: ModelT | Mapping[str, object],
     schema: type[ModelT],
@@ -118,9 +132,12 @@ class RegistryClient:
         path: str,
         *,
         require_auth: bool = True,
+        extra_headers: Mapping[str, str] | None = None,
         **kwargs: object,
     ) -> object:
         headers = self._headers(require_auth=require_auth)
+        if extra_headers:
+            headers.update({str(key): str(value) for key, value in extra_headers.items() if str(value or "").strip()})
 
         async def _do(client: httpx.AsyncClient) -> object:
             try:
@@ -145,10 +162,20 @@ class RegistryClient:
                     ),
                 ) from exc
             if response.status_code >= 400:
+                payload: object = {}
+                if response.headers.get("content-type", "").startswith("application/json"):
+                    try:
+                        payload = response.json().get("detail", response.json())
+                    except Exception:
+                        payload = {}
+                error_code, message = _detail_error_payload(payload)
                 raise RegistryClientError(
-                    f"Registry {method} {path} failed: HTTP {response.status_code}",
-                    error_code=_registry_http_error_code(response.status_code),
-                    operator_detail=f"Registry {method} {path} failed with HTTP {response.status_code}.",
+                    message or f"Registry {method} {path} failed: HTTP {response.status_code}",
+                    error_code=error_code or _registry_http_error_code(response.status_code),
+                    operator_detail=(
+                        message
+                        or f"Registry {method} {path} failed with HTTP {response.status_code}."
+                    ),
                     status_code=response.status_code,
                 )
             if response.status_code == 204 or not response.content:
@@ -230,8 +257,24 @@ class RegistryClient:
         result = await self._request("GET", f"/v1/agents/{agent_id}/status")
         return AgentRecord.model_validate(result)
 
-    async def list_protocols(self) -> list[ProtocolDefinitionRecord]:
-        result = await self._request("GET", "/v1/protocols")
+    async def list_protocols(
+        self,
+        *,
+        cursor: int = 0,
+        limit: int = 50,
+        lifecycle_state: str = "",
+        slug: str = "",
+    ) -> list[ProtocolDefinitionRecord]:
+        result = await self._request(
+            "GET",
+            "/v1/protocols",
+            params={
+                "cursor": cursor,
+                "limit": limit,
+                "lifecycle_state": lifecycle_state,
+                "slug": slug,
+            },
+        )
         return [ProtocolDefinitionRecord.model_validate(item) for item in result]
 
     async def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
@@ -241,6 +284,10 @@ class RegistryClient:
     async def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
         result = await self._request("GET", f"/v1/protocols/{protocol_id}")
         return ProtocolMutationRecord.model_validate(result)
+
+    async def get_protocol_version(self, protocol_id: str, version_id: str) -> ProtocolDefinitionVersionRecord:
+        result = await self._request("GET", f"/v1/protocols/{protocol_id}/versions/{version_id}")
+        return ProtocolDefinitionVersionRecord.model_validate(result)
 
     async def save_protocol(
         self,
@@ -278,11 +325,12 @@ class RegistryClient:
         cursor: int = 0,
         limit: int = 25,
         status: str = "",
+        protocol_id: str = "",
     ) -> list[ProtocolRunRecord]:
         result = await self._request(
             "GET",
             "/v1/protocol-runs",
-            params={"cursor": cursor, "limit": limit, "status": status},
+            params={"cursor": cursor, "limit": limit, "status": status, "protocol_id": protocol_id},
         )
         rows = result.get("runs", result)
         return [ProtocolRunRecord.model_validate(item) for item in rows]
@@ -290,14 +338,62 @@ class RegistryClient:
     async def create_protocol_run(
         self,
         payload: ProtocolRunCreateRecord | dict[str, object],
+        *,
+        idempotency_key: str = "",
     ) -> ProtocolRunMutationRecord:
         body = _validated_model(payload, ProtocolRunCreateRecord).model_dump(mode="json")
-        result = await self._request("POST", "/v1/protocol-runs", json=body)
+        result = await self._request(
+            "POST",
+            "/v1/protocol-runs",
+            json=body,
+            extra_headers={"Idempotency-Key": idempotency_key} if idempotency_key else None,
+        )
         return ProtocolRunMutationRecord.model_validate(result)
 
     async def get_protocol_run(self, run_id: str) -> ProtocolRunDetailRecord:
         result = await self._request("GET", f"/v1/protocol-runs/{run_id}")
         return ProtocolRunDetailRecord.model_validate(result)
+
+    async def get_protocol_run_participants(self, run_id: str) -> list[ProtocolRunParticipantRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/participants")
+        rows = result.get("participants", result)
+        return [ProtocolRunParticipantRecord.model_validate(item) for item in rows]
+
+    async def get_protocol_run_artifacts(self, run_id: str) -> list[ProtocolArtifactRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/artifacts")
+        rows = result.get("artifacts", result)
+        return [ProtocolArtifactRecord.model_validate(item) for item in rows]
+
+    async def get_protocol_run_timeline(self, run_id: str) -> list[ProtocolTransitionRecord]:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/timeline")
+        rows = result.get("transitions", result)
+        return [ProtocolTransitionRecord.model_validate(item) for item in rows]
+
+    async def export_protocol_run(self, run_id: str) -> ProtocolRunExportRecord:
+        result = await self._request("GET", f"/v1/protocol-runs/{run_id}/export")
+        return ProtocolRunExportRecord.model_validate(result)
+
+    async def act_on_protocol_run(
+        self,
+        run_id: str,
+        *,
+        action: str,
+        reason: str = "",
+        idempotency_key: str = "",
+        expected_version: int | None = None,
+    ) -> ProtocolRunMutationRecord:
+        headers: dict[str, str] = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if expected_version is not None:
+            headers["If-Match"] = str(expected_version)
+        result = await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/actions/{action}",
+            json={"reason": reason},
+            extra_headers=headers or None,
+        )
+        return ProtocolRunMutationRecord.model_validate(result)
 
     async def publish_events(
         self,

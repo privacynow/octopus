@@ -129,7 +129,10 @@ objects:
 
 - definitions are versioned in `agent_registry`
 - runs are persisted in `agent_registry`
+- lifecycle decisions are evaluated by SDK protocol helpers and persisted by the registry store
 - stage execution is dispatched through the existing routed-task/runtime path
+- work-stage completion is enforced through protocol control lines plus runtime-reported artifact observations
+- operator actions are versioned, idempotent registry mutations over the same run state
 - transport clients such as Telegram invoke and observe protocol runs, but they
   do not own protocol state or state-machine rules
 

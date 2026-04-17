@@ -60,6 +60,7 @@ from octopus_sdk.protocols import (
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from .protocol_runtime import evaluate_protocol_dispatch
 from .routing_skill_service import (
     requested_routed_skills,
 )
@@ -1445,7 +1446,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             run_id=run.protocol_run_id,
             current_stage_key=str(stage_execution_row["stage_key"] or ""),
         )
-        engine = self._protocol_engine.evaluate_dispatch(
+        engine = evaluate_protocol_dispatch(
+            protocol_engine=self._protocol_engine,
             document=document,
             run=run,
             stage_execution=stage_execution,

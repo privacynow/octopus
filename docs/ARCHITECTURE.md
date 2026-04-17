@@ -375,7 +375,7 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Execution engine (`execute_request` — provider invocation, delegation, finalization)
 - Registry participant contracts (enrollment, mirroring, coordination)
 - Protocol models, schema migration, validation, stage prompt rendering,
-  lifecycle evaluation (`protocol_engine.py`), and participant session-keying
+  lifecycle evaluation (`octopus_sdk/protocols/engine.py`), and participant session-keying
 - Workflow composition (`WorkflowComposer` with builder pattern)
 - Event taxonomy (12 typed event kinds with validated metadata)
 - Task protocol (lifecycle state machine, transition validation)

@@ -5,6 +5,7 @@ import pytest
 from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
+    ProtocolParticipantResolutionRecord,
     ProtocolRunRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
@@ -135,19 +136,35 @@ def test_protocol_run_engine_evaluates_dispatch_with_shared_request_contract() -
         }
     )
     stage_execution = _stage_execution(status="queued")
+    dispatch = _engine().dispatch_preflight(
+        document=document,
+        run=run,
+        stage=document.stage("planning"),
+        stage_executions=[],
+        now="2026-04-16T00:00:00+00:00",
+        lease_owner=stage_execution.protocol_stage_execution_id,
+        lease_ttl_seconds=900,
+    )
 
-    decision = _engine().evaluate_dispatch(
+    decision = _engine().evaluate_dispatch_resolution(
         document=document,
         run=run,
         stage_execution=stage_execution,
-        stage_executions=[],
         artifacts=[],
         previous_feedback="Tighten the scope.",
         now="2026-04-16T00:00:00+00:00",
-        resolve_selector=lambda selector: {
-            "agent_id": "agent-2",
-            "authority_ref": "registry:local",
-        },
+        resolution=ProtocolParticipantResolutionRecord(
+            selector=_engine().dispatch_target_selector(
+                run=run,
+                participant=document.participant("worker"),
+            ),
+            resolved_agent_id="agent-2",
+            resolved_authority_ref="registry:local",
+            outcome="ok",
+        ),
+        timeout_at=dispatch.timeout_at,
+        lease_owner=dispatch.lease_owner,
+        lease_expires_at=dispatch.lease_expires_at,
     )
 
     assert decision.run_status == "running"
@@ -160,18 +177,37 @@ def test_protocol_run_engine_evaluates_dispatch_with_shared_request_contract() -
 
 def test_protocol_run_engine_blocks_dispatch_when_resolution_fails() -> None:
     document = _document()
-    def _raise(selector):
-        raise RuntimeError(f"no agent for {selector.value}")
-
-    decision = _engine().evaluate_dispatch(
+    run = _run().model_copy(update={"entry_agent_id": "agent-1"})
+    stage_execution = _stage_execution(status="queued")
+    dispatch = _engine().dispatch_preflight(
         document=document,
-        run=_run().model_copy(update={"entry_agent_id": "agent-1"}),
-        stage_execution=_stage_execution(status="queued"),
+        run=run,
+        stage=document.stage("planning"),
         stage_executions=[],
+        now="2026-04-16T00:00:00+00:00",
+        lease_owner=stage_execution.protocol_stage_execution_id,
+        lease_ttl_seconds=900,
+    )
+    selector = _engine().dispatch_target_selector(
+        run=run,
+        participant=document.participant("worker"),
+    )
+
+    decision = _engine().evaluate_dispatch_resolution(
+        document=document,
+        run=run,
+        stage_execution=stage_execution,
         artifacts=[],
         previous_feedback="",
         now="2026-04-16T00:00:00+00:00",
-        resolve_selector=_raise,
+        resolution=ProtocolParticipantResolutionRecord(
+            selector=selector,
+            outcome="error",
+            reason=f"no agent for {selector.value}",
+        ),
+        timeout_at=dispatch.timeout_at,
+        lease_owner=dispatch.lease_owner,
+        lease_expires_at=dispatch.lease_expires_at,
     )
 
     assert decision.run_status == "blocked"

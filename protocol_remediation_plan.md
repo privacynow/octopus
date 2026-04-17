@@ -1,7 +1,7 @@
 # Protocol System Remediation Plan
 
-Status: implemented
-Last updated: 2026-04-16 (v4.0)
+Status: strict_compliance_pending
+Last updated: 2026-04-16 (v4.1)
 Audience: engineering, product, operations
 
 ---
@@ -691,11 +691,9 @@ Close **§1.6** before writing feature code. No coding affected phases until eac
 
 ## 20. Implementation status (code vs this plan)
 
-Strict-compliance evidence refresh completed on 2026-04-16 against the current tree. The protocol strict suite now covers the SDK package split, shared routed-task idempotency, route-level `PROTOCOL_NOT_VISIBLE` semantics, review-loop count/cap exposure, property/fuzz/performance checks, UI/Telegram parity, DB schema/bootstrap, and the checked-in OpenAPI/docs surfaces.
+This section is currently a **stale rolling snapshot**, not a strict-compliance close-out. The tree is being re-audited against **`STRICT_COMPLIANCE_FIX_PLAN.md`** and any remaining **`NON-COMPLIANT`** or **`NOT VERIFIED`** rows remain release-blocking until they are discharged with code and tests.
 
-Rolling snapshot: **repository `telegram-agent-bot/`** as implemented against this document. **Statuses:** **done** means the current tree and tests satisfy the release intent for this phase. Line numbers drift with edits—use search if they no longer match.
-
-This section reflects the current branch after the remediation acceptance bar in **§18.1** was satisfied locally.
+Treat the phase rows below as the last broad evidence snapshot, not the current strict stop-condition verdict. Refresh this section only after the strict re-audit and acceptance pass are complete.
 
 ### 20.1 Phase rollup (P1–P11)
 
@@ -720,13 +718,13 @@ This section reflects the current branch after the remediation acceptance bar in
 | Topic | Where |
 |--------|--------|
 | Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` → `ProtocolRunEngine.evaluate_task_result()` (`octopus_sdk/protocols/engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
-| Dispatch → engine → persist | `_dispatch_protocol_stage_in_tx` → `ProtocolRunEngine.evaluate_dispatch()` (`octopus_sdk/protocols/engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
+| Dispatch → engine → persist | `_dispatch_protocol_stage_in_tx` → registry-side `evaluate_protocol_dispatch()` (`octopus_registry/protocol_runtime.py`) → `ProtocolRunEngine.evaluate_dispatch_resolution()` (`octopus_sdk/protocols/engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
 | Operator actions (cancel/retry/accept/send-back) | `ProtocolRunEngine.evaluate_operator_action()` `octopus_sdk/protocols/engine.py`; HTTP `resource_act_on_protocol_run` `server.py` |
 | Synthetic timeout → engine → persist | `run_protocol_maintenance()` / `_sweep_protocol_timeouts_in_tx` `store_postgres.py` → `ProtocolRunEngine.evaluate_stage_timeout()` |
 | Tenancy (runs) | `_protocol_run_visibility_status` / `_protocol_run_detail_in_tx` `store_postgres.py`; `PROTOCOL_NOT_VISIBLE` mapping on run routes in `server.py` |
 | Definition visibility | `_protocol_visible_to_access` (~990+) `store_postgres.py` |
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
-| Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
+| Waiver mode A | `ProtocolArtifactDefinitionRecord` validator in `octopus_sdk/protocols/core.py` |
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
 | Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_sdk/protocols/bootstrap.py` |
 | Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
@@ -769,5 +767,6 @@ This section reflects the current branch after the remediation acceptance bar in
 | 3.8 | 2026-04-16 | Final remediation close-out: all P1–P11 phases marked done with current evidence; structured protocol authoring UI, Telegram watch parity, checked-in OpenAPI artifact, protocol operator/author guides, protocol docs contract tests, and canonical bootstrap/maintenance coverage reflected in §20 |
 | 3.9 | 2026-04-16 | Strict-compliance reset: status set back to pending, §20 marked stale until re-proven, and SDK path references updated to `octopus_sdk/protocols/` package layout |
 | 4.0 | 2026-04-16 | Strict-compliance evidence refresh completed: SDK protocol package split landed, shared routed-task result dedupe fixed, review-loop/API contract proven, strict protocol/property/fuzz/performance tests added, docs/schema contracts updated, and the broad protocol suite re-passed |
+| 4.1 | 2026-04-16 | Strict-compliance audit follow-up: status returned to pending, §20 explicitly marked stale again, dispatch ownership references updated to the registry-side helper + engine-resolution split, and path drift (`protocol_engine.py` / `protocols.py`) corrected where touched |
 
-**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7–3.8** reflect the final implementation passes on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v3.8**).
+**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7–4.1** reflect the ongoing strict-compliance passes on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v4.1**).

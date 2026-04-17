@@ -620,6 +620,18 @@ class ProtocolDispatchDecisionRecord(RegistryRecordModel):
     timeout_at: str = ""
 
 
+class ProtocolParticipantResolutionRecord(RegistryRecordModel):
+    selector: TargetSelector
+    resolved_agent_id: str = ""
+    resolved_authority_ref: str = ""
+    outcome: ProtocolResolutionOutcome | str = "queued"
+    reason: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return str(self.outcome or "").strip() == "ok" and bool(str(self.resolved_agent_id or "").strip())
+
+
 class ProtocolEngineDecisionRecord(RegistryRecordModel):
     run_status: ProtocolRunStatus
     stage_status: ProtocolStageExecutionStatus

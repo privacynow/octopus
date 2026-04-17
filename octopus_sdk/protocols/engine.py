@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from .core import (
     ProtocolArtifactRecord,
@@ -10,6 +10,7 @@ from .core import (
     ProtocolDispatchDecisionRecord,
     ProtocolEngineDecisionRecord,
     ProtocolOperatorAction,
+    ProtocolParticipantResolutionRecord,
     ProtocolRunRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
@@ -34,46 +35,27 @@ from octopus_sdk.registry.models import RoutedTaskRequest
 class ProtocolRunEngine:
     """Pure protocol lifecycle evaluator used by the registry store."""
 
-    def evaluate_dispatch(
+    def evaluate_dispatch_resolution(
         self,
         *,
         document: ProtocolDefinitionDocumentRecord,
         run: ProtocolRunRecord,
         stage_execution: ProtocolStageExecutionRecord,
-        stage_executions: Sequence[ProtocolStageExecutionRecord],
         artifacts: Sequence[ProtocolArtifactRecord],
         previous_feedback: str,
         now: str,
-        resolve_selector: Callable[[TargetSelector], Mapping[str, object]],
-        lease_ttl_seconds: int = 900,
+        resolution: ProtocolParticipantResolutionRecord,
+        timeout_at: str = "",
+        lease_owner: str = "",
+        lease_expires_at: str = "",
     ) -> ProtocolEngineDecisionRecord:
         stage = document.stage(stage_execution.stage_key)
         participant = document.participant(stage.participant_key)
-        dispatch = self.dispatch_preflight(
-            document=document,
-            run=run,
-            stage=stage,
-            stage_executions=stage_executions,
-            now=now,
-            lease_owner=stage_execution.protocol_stage_execution_id,
-            lease_ttl_seconds=lease_ttl_seconds,
-        )
-        if not dispatch.ok:
-            return self.dispatch_blocked(
-                run=run,
-                stage_execution=stage_execution,
-                error_code=dispatch.error_code,
-                error_detail=dispatch.error_detail,
-            )
-        selector = self.dispatch_target_selector(run=run, participant=participant)
-        try:
-            resolved_target = resolve_selector(selector)
-        except Exception as exc:
+        if not resolution.ok:
             return self.dispatch_resolution_failed(
                 run=run,
                 stage_execution=stage_execution,
-                selector=selector,
-                error_detail=str(exc),
+                resolution=resolution,
             )
         request = self.build_dispatch_request(
             document=document,
@@ -81,7 +63,7 @@ class ProtocolRunEngine:
             stage=stage,
             participant=participant,
             stage_execution_id=stage_execution.protocol_stage_execution_id,
-            target_agent_id=str(resolved_target.get("agent_id", "") or ""),
+            target_agent_id=resolution.resolved_agent_id,
             artifacts=artifacts,
             previous_feedback=previous_feedback,
             now=now,
@@ -90,12 +72,12 @@ class ProtocolRunEngine:
             run=run,
             stage_execution=stage_execution,
             routed_task_id=request.routed_task_id,
-            timeout_at=dispatch.timeout_at,
-            lease_owner=dispatch.lease_owner,
-            lease_expires_at=dispatch.lease_expires_at,
-            selector=selector,
-            resolved_agent_id=str(resolved_target.get("agent_id", "") or ""),
-            resolved_authority_ref=str(resolved_target.get("authority_ref", "") or ""),
+            timeout_at=timeout_at,
+            lease_owner=lease_owner,
+            lease_expires_at=lease_expires_at,
+            selector=resolution.selector,
+            resolved_agent_id=resolution.resolved_agent_id,
+            resolved_authority_ref=resolution.resolved_authority_ref,
             now=now,
         ).model_copy(update={"routed_task_request": request})
 
@@ -241,10 +223,9 @@ class ProtocolRunEngine:
         *,
         run: ProtocolRunRecord,
         stage_execution: ProtocolStageExecutionRecord,
-        selector: TargetSelector,
-        error_detail: str,
+        resolution: ProtocolParticipantResolutionRecord,
     ) -> ProtocolEngineDecisionRecord:
-        detail = str(error_detail or "").strip() or "Participant resolution failed."
+        detail = str(resolution.reason or "").strip() or "Participant resolution failed."
         retention_until = run.retention_until or protocol_retention_until(run.created_at or utcnow_iso())
         return ProtocolEngineDecisionRecord(
             run_status="blocked",
@@ -260,8 +241,10 @@ class ProtocolRunEngine:
             participant_state="error",
             participant_resolution_outcome="error",
             participant_resolution_reason=detail,
-            participant_selector_snapshot=RegistryJsonRecord.model_validate(selector.model_dump(mode="json")),
-            transition_metadata=RegistryJsonRecord.model_validate({"selector": selector.model_dump(mode="json")}),
+            participant_selector_snapshot=RegistryJsonRecord.model_validate(resolution.selector.model_dump(mode="json")),
+            transition_metadata=RegistryJsonRecord.model_validate(
+                {"selector": resolution.selector.model_dump(mode="json")}
+            ),
             retention_until=retention_until,
         )
 

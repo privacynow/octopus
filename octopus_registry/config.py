@@ -21,6 +21,7 @@ class RegistryConfig:
     port: int
     operator_org_id: str
     operator_roles: tuple[str, ...]
+    protocol_registry_templates_enabled: bool
 
 
 def registry_operator_roles() -> tuple[str, ...]:
@@ -43,6 +44,11 @@ def registry_allows_http() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def registry_protocol_templates_enabled() -> bool:
+    value = os.environ.get("REGISTRY_PROTOCOL_TEMPLATES_ENABLED", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def load_registry_config() -> RegistryConfig:
     return RegistryConfig(
         database_url=os.environ.get("OCTOPUS_DATABASE_URL", "").strip(),
@@ -54,6 +60,7 @@ def load_registry_config() -> RegistryConfig:
         port=int(os.environ.get("REGISTRY_PORT", "8787") or "8787"),
         operator_org_id=os.environ.get("REGISTRY_OPERATOR_ORG_ID", "local").strip() or "local",
         operator_roles=registry_operator_roles(),
+        protocol_registry_templates_enabled=registry_protocol_templates_enabled(),
     )
 
 

@@ -129,10 +129,16 @@ objects:
 
 - definitions are versioned in `agent_registry`
 - runs are persisted in `agent_registry`
-- lifecycle decisions are evaluated by SDK protocol helpers and persisted by the registry store
+- lifecycle decisions are evaluated by SDK protocol helpers and persisted
+  through one canonical registry applier in the Postgres store
 - stage execution is dispatched through the existing routed-task/runtime path
 - work-stage completion is enforced through protocol control lines plus runtime-reported artifact observations
-- operator actions are versioned, idempotent registry mutations over the same run state
+- operator actions are versioned, idempotent registry mutations over the same
+  run state (`cancel`, `retry`, `accept`, `send-back` in the current release)
+- built-in protocol templates are seeded from SDK documents at bootstrap, then
+  served from the registry database as the runtime/control-plane source of truth
+- stage timeout enforcement uses registry maintenance traffic and the same
+  canonical applier; it does not depend on receiving a late routed-task result
 - transport clients such as Telegram invoke and observe protocol runs, but they
   do not own protocol state or state-machine rules
 
@@ -290,7 +296,9 @@ progressive editor, but the owning bot remains part of the request identity.
 WebSocket topics:
 - `conversation:{id}` — conversation events and progress
 - `agent:{id}` — agent heartbeat and status
-- Collection topics: `agents`, `conversations`, `tasks`, `approvals`, `summary`, `usage`
+- `protocol-run:{id}` — protocol run detail invalidations
+- Collection topics: `agents`, `conversations`, `tasks`, `approvals`,
+  `summary`, `usage`, `protocols`
 
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,
@@ -329,7 +337,8 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Runtime orchestration (`BotRuntime` — admission, dispatch, worker loop)
 - Execution engine (`execute_request` — provider invocation, delegation, finalization)
 - Registry participant contracts (enrollment, mirroring, coordination)
-- Protocol models, validation, stage prompt rendering, and participant session-keying
+- Protocol models, schema migration, validation, stage prompt rendering,
+  lifecycle evaluation, and participant session-keying
 - Workflow composition (`WorkflowComposer` with builder pattern)
 - Event taxonomy (12 typed event kinds with validated metadata)
 - Task protocol (lifecycle state machine, transition validation)

@@ -153,11 +153,19 @@ The current shipped model is:
 
 - define and edit protocol definitions in the registry UI
 - validate and publish immutable protocol versions
+- archive published protocol definitions when operators retire them
 - start protocol runs from the registry UI or from Telegram
 - observe participants, artifacts, stage transitions, and outcomes in the registry
-- intervene on runs with typed operator actions over the shared registry API
+- intervene on runs with typed operator actions over the shared registry API:
+  `cancel`, `retry`, `accept`, and `send-back`
 - enforce stage completion through shared SDK contracts, artifact observations,
   and versioned operator actions instead of UI-only state
+- serve built-in protocol templates from the seeded registry database after
+  bootstrap, not from a parallel SDK-only read path
+- sweep expired protocol-stage timeouts through normal registry traffic so
+  timeout handling uses the same canonical run-state applier as task results
+- refresh protocol UI state through registry realtime invalidation topics
+  instead of maintaining a separate browser-side protocol state machine
 
 The first built-in protocol is `software-engineering`, which models planning,
 review, architecture, implementation, review, and acceptance over durable repo

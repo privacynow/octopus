@@ -1176,6 +1176,22 @@ def test_registry_openapi_title_is_channel_neutral(monkeypatch, tmp_path: Path):
     assert response.json()["info"]["title"] == "Agent Registry"
 
 
+def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    assert "/v1/protocols/{protocol_id}/archive" in paths
+    protocol_list_parameters = {
+        item["name"]
+        for item in paths["/v1/protocols"]["get"].get("parameters", [])
+    }
+    assert "created_after" in protocol_list_parameters
+
+
 def test_registry_http_module_stays_under_guard_threshold():
     repo_root = Path(__file__).resolve().parents[1]
     http_path = repo_root / "octopus_registry" / "server.py"

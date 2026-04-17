@@ -481,6 +481,7 @@ class RegistrySummaryRecord(RegistryRecordModel):
     agents: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     conversations: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     tasks: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    protocols: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     usage_24h: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 

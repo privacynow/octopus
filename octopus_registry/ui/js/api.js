@@ -227,6 +227,8 @@ const API = (() => {
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/validate`, { body: {} }),
         publishProtocol: (id) =>
             request('POST', `/v1/protocols/${encodeURIComponent(id)}/publish`, { body: {} }),
+        archiveProtocol: (id) =>
+            request('POST', `/v1/protocols/${encodeURIComponent(id)}/archive`, { body: {} }),
         listProtocolRuns: (opts = {}) =>
             request('GET', '/v1/protocol-runs', { params: opts }),
         createProtocolRun: (body = {}, opts = {}) =>

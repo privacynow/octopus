@@ -264,6 +264,7 @@ class RegistryClient:
         limit: int = 50,
         lifecycle_state: str = "",
         slug: str = "",
+        created_after: str = "",
     ) -> list[ProtocolDefinitionRecord]:
         result = await self._request(
             "GET",
@@ -273,6 +274,7 @@ class RegistryClient:
                 "limit": limit,
                 "lifecycle_state": lifecycle_state,
                 "slug": slug,
+                "created_after": created_after,
             },
         )
         return [ProtocolDefinitionRecord.model_validate(item) for item in result]
@@ -317,6 +319,10 @@ class RegistryClient:
 
     async def publish_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
         result = await self._request("POST", f"/v1/protocols/{protocol_id}/publish", json={})
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def archive_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
+        result = await self._request("POST", f"/v1/protocols/{protocol_id}/archive", json={})
         return ProtocolMutationRecord.model_validate(result)
 
     async def list_protocol_runs(

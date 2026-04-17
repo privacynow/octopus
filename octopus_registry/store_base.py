@@ -647,10 +647,16 @@ class AbstractRegistryStore(Protocol):
         limit: int = 50,
         lifecycle_state: str = "",
         slug: str = "",
+        created_after: str = "",
     ) -> list[ProtocolDefinitionRecord]:
         """Return protocol definitions in UI-ready form."""
 
-    def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
+    def get_protocol_template(
+        self,
+        slug: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionDocumentRecord:
         """Return one builtin protocol template document by slug."""
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
@@ -682,6 +688,9 @@ class AbstractRegistryStore(Protocol):
 
     def publish_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Publish the current validated draft as a new immutable version."""
+
+    def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        """Archive one published protocol definition."""
 
     def list_protocol_runs(
         self,

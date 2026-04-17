@@ -25,14 +25,16 @@ from octopus_sdk.protocols import (
     PROTOCOL_DEFAULT_VISIBILITY,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
-    builtin_protocol_document,
     builtin_protocol_documents,
+    evaluate_protocol_stage_timeout,
+    protocol_dispatch_blocked_decision,
     evaluate_protocol_operator_action,
+    protocol_dispatch_resolution_failed_decision,
+    protocol_dispatch_started_decision,
     evaluate_protocol_task_result,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
-    ProtocolDispatchDecisionRecord,
     ProtocolMutationRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
@@ -60,6 +62,7 @@ from psycopg.types.json import Jsonb
 from .routing_skill_service import (
     requested_routed_skills,
 )
+from .config import RegistryConfig, load_registry_config
 from .postgres import get_connection
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
@@ -279,8 +282,9 @@ def _jsonb(value: object) -> Jsonb:
 class RegistryPostgresStore(AbstractRegistryStore):
     """Postgres-backed implementation of the registry store contract."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, config: RegistryConfig | None = None) -> None:
         self.database_url = database_url
+        self._config = config or load_registry_config()
         self._verify_schema()
 
     def _connect(self):
@@ -479,7 +483,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def heartbeat(self, agent_token: str, payload: AgentHeartbeatRequest) -> HealthSummary:
         with self._connect() as conn, _write_tx(conn):
-            return shared_heartbeat(
+            result = shared_heartbeat(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
@@ -491,6 +495,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 agent_token=agent_token,
                 payload=payload,
             )
+            self._sweep_protocol_timeouts_in_tx(conn, now=utcnow_iso())
+            return result
 
     def get_routing_skill_override(self, skill_name: str) -> bool | None:
         normalized = skill_name.strip().lower()
@@ -1001,12 +1007,27 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return True
         owner_org_id = str(row.get("owner_org_id", "") or "")
         visibility = str(row.get("visibility", "") or PROTOCOL_DEFAULT_VISIBILITY)
+        if visibility == "registry_template" and not self._config.protocol_registry_templates_enabled:
+            visibility = "org_shared"
         current_org_id = self._access_org_id(access)
         if owner_org_id and owner_org_id != current_org_id and visibility != "registry_template":
             return False
         if visibility == "registry_template":
             return True
         return not owner_org_id or owner_org_id == current_org_id
+
+    def _protocol_visibility_status(
+        self,
+        row: Mapping[str, object] | None,
+        *,
+        access: ProtocolAccessContextRecord,
+        include_drafts: bool,
+    ) -> Literal["missing", "visible", "not_visible"]:
+        if row is None:
+            return "missing"
+        if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts):
+            return "visible"
+        return "not_visible"
 
     def _assert_protocol_visible(
         self,
@@ -1404,6 +1425,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now: str,
     ) -> dict[str, object]:
         run = self._protocol_run_from_row(run_row)
+        stage_execution = self._protocol_stage_execution_from_row(stage_execution_row)
         document = self._protocol_document_for_run(conn, run_row)
         stage = document.stage(str(stage_execution_row["stage_key"] or ""))
         participant = document.participant(stage.participant_key)
@@ -1419,56 +1441,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
             lease_ttl_seconds=900,
         )
         if not dispatch.ok:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_stage_executions
-                    SET status = 'blocked',
-                        failure_code = %s,
-                        failure_detail = %s,
-                        completed_at = %s
-                    WHERE protocol_stage_execution_id = %s
-                    """,
-                    (
-                        dispatch.error_code.lower() or "lease_held",
-                        dispatch.error_detail,
-                        now,
-                        stage_execution_row["protocol_stage_execution_id"],
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = 'blocked',
-                        blocked_code = %s,
-                        blocked_detail = %s,
-                        current_stage_execution_id = %s,
-                        current_stage_key = %s,
-                        version = COALESCE(version, 1) + 1,
-                        last_transition_at = %s,
-                        updated_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (
-                        dispatch.error_code.lower() or "lease_held",
-                        dispatch.error_detail,
-                        stage_execution_row["protocol_stage_execution_id"],
-                        stage.stage_key,
-                        now,
-                        now,
-                        run.protocol_run_id,
-                    ),
-                )
-            self._insert_protocol_transition(
+            self._apply_protocol_engine_decision_in_tx(
                 conn,
-                run_id=run.protocol_run_id,
-                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-                to_stage_execution_id="",
-                transition_kind="blocked",
-                decision="",
-                reason=dispatch.error_detail,
-                error_code=dispatch.error_code,
-                metadata={},
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=protocol_dispatch_blocked_decision(
+                    run=run,
+                    stage_execution=stage_execution,
+                    error_code=dispatch.error_code,
+                    error_detail=dispatch.error_detail,
+                ),
                 actor_type="protocol_engine",
                 actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
                 now=now,
@@ -1492,69 +1474,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
         try:
             resolved_target = self._resolve_selector(conn, selector)
         except Exception as exc:
-            detail = str(exc)
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_run_participants
-                    SET state = 'error',
-                        resolution_outcome = 'error',
-                        resolution_reason = %s,
-                        selector_snapshot_json = %s,
-                        updated_at = %s
-                    WHERE protocol_run_id = %s AND participant_key = %s
-                    """,
-                    (
-                        detail,
-                        _jsonb(selector.model_dump(mode="json")),
-                        now,
-                        run.protocol_run_id,
-                        participant.participant_key,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_stage_executions
-                    SET status = 'blocked',
-                        failure_code = 'participant_resolution_failed',
-                        failure_detail = %s,
-                        completed_at = %s
-                    WHERE protocol_stage_execution_id = %s
-                    """,
-                    (detail, now, stage_execution_row["protocol_stage_execution_id"]),
-                )
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET status = 'blocked',
-                        blocked_code = 'participant_resolution_failed',
-                        blocked_detail = %s,
-                        current_stage_execution_id = %s,
-                        current_stage_key = %s,
-                        version = COALESCE(version, 1) + 1,
-                        last_transition_at = %s,
-                        updated_at = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (
-                        detail,
-                        stage_execution_row["protocol_stage_execution_id"],
-                        stage.stage_key,
-                        now,
-                        now,
-                        run.protocol_run_id,
-                    ),
-                )
-            self._insert_protocol_transition(
+            self._apply_protocol_engine_decision_in_tx(
                 conn,
-                run_id=run.protocol_run_id,
-                from_stage_execution_id=str(stage_execution_row["protocol_stage_execution_id"] or ""),
-                to_stage_execution_id="",
-                transition_kind="blocked",
-                decision="",
-                reason=detail,
-                error_code="TARGET_RESOLUTION_FAILED",
-                metadata={"selector": selector.model_dump(mode="json")},
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=protocol_dispatch_resolution_failed_decision(
+                    run=run,
+                    stage_execution=stage_execution,
+                    selector=selector,
+                    error_detail=str(exc),
+                ),
                 actor_type="protocol_engine",
                 actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
                 now=now,
@@ -1603,71 +1532,44 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "priority": "normal",
             "created_at": now,
         }
-        created = self._create_routed_task_in_tx(conn, request, now=now)
-        with _cur(conn) as cur:
-            cur.execute(
-                f"""
-                UPDATE {_SCHEMA}.protocol_run_participants
-                SET resolved_agent_id = %s,
-                    resolved_authority_ref = %s,
-                    state = 'running',
-                    resolution_outcome = 'ok',
-                    resolution_reason = '',
-                    selector_snapshot_json = %s,
-                    updated_at = %s
-                WHERE protocol_run_id = %s AND participant_key = %s
-                """,
-                (
-                    resolved_target["agent_id"],
-                    resolved_target.get("authority_ref", ""),
-                    _jsonb(selector.model_dump(mode="json")),
-                    now,
-                    run.protocol_run_id,
-                    participant.participant_key,
+        try:
+            return self._apply_protocol_engine_decision_in_tx(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=protocol_dispatch_started_decision(
+                    run=run,
+                    stage_execution=stage_execution,
+                    routed_task_id=routed_task_id,
+                    timeout_at=dispatch.timeout_at,
+                    lease_owner=dispatch.lease_owner,
+                    lease_expires_at=dispatch.lease_expires_at,
+                    selector=selector,
+                    resolved_agent_id=str(resolved_target["agent_id"] or ""),
+                    resolved_authority_ref=str(resolved_target.get("authority_ref", "") or ""),
+                    now=now,
                 ),
-            )
-            cur.execute(
-                f"""
-                UPDATE {_SCHEMA}.protocol_stage_executions
-                SET status = 'running',
-                    routed_task_id = %s,
-                    timeout_at = %s,
-                    lease_owner = %s,
-                    lease_expires_at = %s,
-                    started_at = %s
-                WHERE protocol_stage_execution_id = %s
-                """,
-                (
-                    routed_task_id,
-                    dispatch.timeout_at,
-                    dispatch.lease_owner,
-                    dispatch.lease_expires_at,
-                    now,
-                    stage_execution_row["protocol_stage_execution_id"],
+                actor_type="protocol_engine",
+                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                now=now,
+                routed_task_request=request,
+            ) or {}
+        except RoutingSkillDisabledError as exc:
+            self._apply_protocol_engine_decision_in_tx(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=protocol_dispatch_blocked_decision(
+                    run=run,
+                    stage_execution=stage_execution,
+                    error_code="ROUTING_SKILL_DISABLED",
+                    error_detail=str(exc),
                 ),
+                actor_type="protocol_engine",
+                actor_ref=str(stage_execution_row["protocol_stage_execution_id"] or ""),
+                now=now,
             )
-            cur.execute(
-                f"""
-                UPDATE {_SCHEMA}.protocol_runs
-                SET status = 'running',
-                    blocked_code = '',
-                    blocked_detail = '',
-                    current_stage_execution_id = %s,
-                    current_stage_key = %s,
-                    version = COALESCE(version, 1) + 1,
-                    last_transition_at = %s,
-                    updated_at = %s
-                WHERE protocol_run_id = %s
-                """,
-                (
-                    stage_execution_row["protocol_stage_execution_id"],
-                    stage.stage_key,
-                    now,
-                    now,
-                    run.protocol_run_id,
-                ),
-            )
-        return created
+            return {}
 
     def _upsert_protocol_stage_artifacts_in_tx(
         self,
@@ -1740,9 +1642,52 @@ class RegistryPostgresStore(AbstractRegistryStore):
         actor_type: str,
         actor_ref: str,
         now: str,
-    ) -> None:
-        completion_timestamp = now if engine.stage_status in {"completed", "failed", "blocked", "cancelled"} else str(stage_execution_row.get("completed_at", "") or "")
+        routed_task_request: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        created_routed_task: dict[str, object] | None = None
+        routed_task_id = str(stage_execution_row.get("routed_task_id", "") or "")
+        if routed_task_request is not None:
+            created_routed_task = self._create_routed_task_in_tx(conn, dict(routed_task_request), now=now)
+            request_record = created_routed_task.get("request")
+            routed_task_id = str(getattr(request_record, "routed_task_id", "") or routed_task_id)
+        completion_timestamp = now if engine.stage_status in {"completed", "failed", "blocked", "cancelled"} else ""
+        started_at = str(engine.started_at or stage_execution_row.get("started_at", "") or "")
+        timeout_at = str(engine.timeout_at or "")
+        lease_owner = str(engine.lease_owner or "")
+        lease_expires_at = str(engine.lease_expires_at or "")
         with _cur(conn) as cur:
+            if str(engine.participant_key or "").strip():
+                participant_selector_snapshot = engine.participant_selector_snapshot.as_dict()
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_run_participants
+                    SET resolved_agent_id = CASE WHEN %s <> '' THEN %s ELSE resolved_agent_id END,
+                        resolved_authority_ref = CASE WHEN %s <> '' THEN %s ELSE resolved_authority_ref END,
+                        state = CASE WHEN %s <> '' THEN %s ELSE state END,
+                        resolution_outcome = CASE WHEN %s <> '' THEN %s ELSE resolution_outcome END,
+                        resolution_reason = CASE WHEN %s <> '' THEN %s ELSE resolution_reason END,
+                        selector_snapshot_json = CASE WHEN %s::jsonb <> '{{}}'::jsonb THEN %s ELSE selector_snapshot_json END,
+                        updated_at = %s
+                    WHERE protocol_run_id = %s AND participant_key = %s
+                    """,
+                    (
+                        str(engine.participant_resolved_agent_id or ""),
+                        str(engine.participant_resolved_agent_id or ""),
+                        str(engine.participant_resolved_authority_ref or ""),
+                        str(engine.participant_resolved_authority_ref or ""),
+                        str(engine.participant_state or ""),
+                        str(engine.participant_state or ""),
+                        str(engine.participant_resolution_outcome or ""),
+                        str(engine.participant_resolution_outcome or ""),
+                        str(engine.participant_resolution_reason or ""),
+                        str(engine.participant_resolution_reason or ""),
+                        _jsonb(participant_selector_snapshot),
+                        _jsonb(participant_selector_snapshot),
+                        now,
+                        run_row["protocol_run_id"],
+                        str(engine.participant_key or ""),
+                    ),
+                )
             cur.execute(
                 f"""
                 UPDATE {_SCHEMA}.protocol_stage_executions
@@ -1751,8 +1696,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     decision_summary = %s,
                     failure_code = %s,
                     failure_detail = %s,
-                    lease_owner = '',
-                    lease_expires_at = '',
+                    routed_task_id = %s,
+                    timeout_at = %s,
+                    lease_owner = %s,
+                    lease_expires_at = %s,
+                    started_at = %s,
                     completed_at = %s
                 WHERE protocol_stage_execution_id = %s
                 """,
@@ -1762,6 +1710,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     engine.summary,
                     engine.failure_code,
                     engine.failure_detail,
+                    routed_task_id,
+                    timeout_at,
+                    lease_owner,
+                    lease_expires_at,
+                    started_at,
                     completion_timestamp,
                     stage_execution_row["protocol_stage_execution_id"],
                 ),
@@ -1773,6 +1726,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     termination_summary = %s,
                     blocked_code = %s,
                     blocked_detail = %s,
+                    current_stage_execution_id = %s,
+                    current_stage_key = %s,
                     retention_until = %s,
                     version = COALESCE(version, 1) + 1,
                     last_transition_at = %s,
@@ -1782,9 +1737,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 """,
                 (
                     engine.run_status,
-                    engine.summary if engine.terminal_status else (engine.run_blocked_detail or ""),
+                    engine.summary if engine.terminal_status else "",
                     engine.run_blocked_code,
                     engine.run_blocked_detail,
+                    stage_execution_row["protocol_stage_execution_id"],
+                    stage_execution_row["stage_key"],
                     engine.retention_until or protocol_retention_until(now, days=PROTOCOL_DEFAULT_RETENTION_DAYS),
                     now,
                     now,
@@ -1823,7 +1780,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             decision=engine.decision,
             reason=engine.transition_reason,
             error_code=engine.transition_error_code,
-            metadata={},
+            metadata=engine.transition_metadata.as_dict(),
             actor_type=actor_type,
             actor_ref=actor_ref,
             now=now,
@@ -1846,21 +1803,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     stage_execution_row=refreshed_stage_row,
                     now=now,
                 )
-        elif engine.run_status in {"completed", "failed", "cancelled"}:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {_SCHEMA}.protocol_runs
-                    SET current_stage_execution_id = %s,
-                        current_stage_key = %s
-                    WHERE protocol_run_id = %s
-                    """,
-                    (
-                        stage_execution_row["protocol_stage_execution_id"],
-                        stage_execution_row["stage_key"],
-                        run_row["protocol_run_id"],
-                    ),
-                )
+        return created_routed_task
 
     def _advance_protocol_run_for_task_in_tx(
         self,
@@ -1909,6 +1852,56 @@ class RegistryPostgresStore(AbstractRegistryStore):
             now=now,
         )
 
+    def _sweep_protocol_timeouts_in_tx(self, conn, *, now: str) -> None:
+        rows = _POSTGRES_STORE_DIALECT.fetchall(
+            conn,
+            f"""
+            SELECT pse.protocol_stage_execution_id, pse.protocol_run_id
+            FROM {_SCHEMA}.protocol_stage_executions pse
+            JOIN {_SCHEMA}.protocol_runs pr
+              ON pr.protocol_run_id = pse.protocol_run_id
+            WHERE pse.status = 'running'
+              AND coalesce(pse.timeout_at, '') <> ''
+              AND pse.timeout_at::timestamptz <= %s::timestamptz
+              AND pr.status = 'running'
+            ORDER BY pse.timeout_at ASC, pse.protocol_stage_execution_id ASC
+            """,
+            (now,),
+        )
+        for row in rows:
+            stage_execution_id = str(row.get("protocol_stage_execution_id", "") or "")
+            run_id = str(row.get("protocol_run_id", "") or "")
+            if not stage_execution_id or not run_id:
+                continue
+            stage_execution_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_stage_executions WHERE protocol_stage_execution_id = %s",
+                (stage_execution_id,),
+            )
+            run_row = _POSTGRES_STORE_DIALECT.fetchone(
+                conn,
+                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+                (run_id,),
+            )
+            if stage_execution_row is None or run_row is None:
+                continue
+            document = self._protocol_document_for_run(conn, run_row)
+            engine = evaluate_protocol_stage_timeout(
+                document=document,
+                run=self._protocol_run_from_row(run_row),
+                stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),
+                now=now,
+            )
+            self._apply_protocol_engine_decision_in_tx(
+                conn,
+                run_row=run_row,
+                stage_execution_row=stage_execution_row,
+                engine=engine,
+                actor_type="protocol_engine",
+                actor_ref=str(stage_execution_row.get("protocol_stage_execution_id", "") or ""),
+                now=now,
+            )
+
     def create_routed_task(self, request: RegistryRecordModel) -> TaskRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
@@ -1926,7 +1919,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            return shared_poll(
+            result = shared_poll(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 agent_row=row,
@@ -1936,6 +1929,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 registry_epoch=self._registry_epoch(conn),
                 task_snapshot_row=self._task_snapshot__row,
             )
+            self._sweep_protocol_timeouts_in_tx(conn, now=now)
+            return result
 
     def ack(self, agent_token: str, *, delivery_ids: list[str], classification: str) -> AckResult:
         now = utcnow_iso()
@@ -2219,6 +2214,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         limit: int = 50,
         lifecycle_state: str = "",
         slug: str = "",
+        created_after: str = "",
     ) -> list[ProtocolDefinitionRecord]:
         clauses: list[str] = []
         params: list[object] = []
@@ -2228,6 +2224,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         if slug:
             params.append(slug)
             clauses.append("slug = %s")
+        if created_after:
+            try:
+                created_after_iso = datetime.fromisoformat(created_after).isoformat()
+            except ValueError as exc:
+                raise ValueError("created_after must be ISO-8601 text") from exc
+            params.append(created_after_iso)
+            clauses.append("created_at >= %s")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         include_drafts = any(
             self._access_has_role(access, role)
@@ -2251,8 +2254,32 @@ class RegistryPostgresStore(AbstractRegistryStore):
         ]
         return visible[cursor:cursor + limit]
 
-    def get_protocol_template(self, slug: str) -> ProtocolDefinitionDocumentRecord:
-        return builtin_protocol_document(slug)
+    def get_protocol_template(
+        self,
+        slug: str,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolDefinitionDocumentRecord:
+        with self._connect() as conn:
+            row = self._protocol_row_for_slug(conn, slug)
+            visibility = self._protocol_visibility_status(
+                row,
+                access=access,
+                include_drafts=False,
+            )
+            if visibility == "not_visible":
+                raise PermissionError(slug)
+            if visibility != "visible" or row is None:
+                raise KeyError(slug)
+            version_row = None
+            current_version_id = str(row.get("current_version_id", "") or "")
+            if current_version_id:
+                version_row = self._protocol_version_row(conn, current_version_id)
+            if version_row is None:
+                version_row = self._latest_protocol_version_row(conn, str(row.get("protocol_id", "") or ""))
+            if version_row is None:
+                raise KeyError(slug)
+            return canonical_protocol_document(version_row.get("definition_json") or {})
 
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         include_drafts = any(
@@ -2260,13 +2287,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for role in ("author", "publisher", "admin")
         )
         with self._connect() as conn:
-            row = self._assert_protocol_visible(
-                self._protocol_row(conn, protocol_id),
+            row = self._protocol_row(conn, protocol_id)
+            visibility = self._protocol_visibility_status(
+                row,
                 access=access,
                 include_drafts=include_drafts,
             )
-            if row is None:
+            if visibility == "missing" or row is None:
                 return ProtocolMutationRecord(ok=False, status="not_found", message="Protocol not found.")
+            if visibility == "not_visible":
+                return ProtocolMutationRecord(ok=False, status="not_visible", message="Protocol is not visible to this actor.")
             raw_definition = row.get("draft_definition_json") or {}
             validation = validate_protocol_document(row.get("draft_definition_json") or {})
             version_row = None
@@ -2298,13 +2328,16 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for role in ("author", "publisher", "admin")
         )
         with self._connect() as conn:
-            row = self._assert_protocol_visible(
-                self._protocol_row(conn, protocol_id),
+            row = self._protocol_row(conn, protocol_id)
+            visibility = self._protocol_visibility_status(
+                row,
                 access=access,
                 include_drafts=include_drafts,
             )
-            if row is None:
+            if visibility == "missing" or row is None:
                 raise KeyError(protocol_id)
+            if visibility == "not_visible":
+                raise PermissionError(protocol_id)
             version_row = self._protocol_version_row(conn, version_id)
             if version_row is None or str(version_row.get("protocol_id", "") or "") != protocol_id:
                 raise KeyError(version_id)
@@ -2494,6 +2527,40 @@ class RegistryPostgresStore(AbstractRegistryStore):
             validation=result.validation,
         )
 
+    def archive_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol archive requires publisher access.")
+        loaded = self.get_protocol(protocol_id, access=access)
+        if not loaded.ok:
+            return loaded
+        now = utcnow_iso()
+        with self._connect() as conn, _write_tx(conn):
+            row = self._protocol_row(conn, protocol_id)
+            if row is None:
+                return ProtocolMutationRecord(ok=False, status="not_found", message="Protocol not found.")
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.protocol_definitions
+                    SET lifecycle_state = 'archived',
+                        updated_by = %s,
+                        updated_at = %s
+                    WHERE protocol_id = %s
+                    """,
+                    (self._access_actor_ref(access), now, protocol_id),
+                )
+        result = self.get_protocol(protocol_id, access=access)
+        return ProtocolMutationRecord(
+            ok=result.ok,
+            status="archived" if result.ok else result.status,
+            message="Protocol archived." if result.ok else result.message,
+            protocol=result.protocol,
+            draft_definition_json=result.draft_definition_json,
+            draft_document=result.draft_document,
+            version=result.version,
+            validation=result.validation,
+        )
+
     def list_protocol_runs(
         self,
         *,
@@ -2583,9 +2650,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     version_row = self._protocol_version_row(conn, current_version_id)
                 if version_row is None:
                     version_row = self._latest_protocol_version_row(conn, request.protocol_id)
-            protocol_row = self._assert_protocol_visible(protocol_row, access=access, include_drafts=False)
-            if protocol_row is None or version_row is None:
+            visibility = self._protocol_visibility_status(protocol_row, access=access, include_drafts=False)
+            if visibility == "missing" or version_row is None:
                 return ProtocolRunMutationRecord(ok=False, status="not_found", message="Published protocol version required.")
+            if visibility == "not_visible":
+                return ProtocolRunMutationRecord(ok=False, status="not_visible", message="Protocol is not visible to this actor.")
             if str(protocol_row.get("lifecycle_state", "") or "") != "published":
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Only published protocols can start runs.")
             document = canonical_protocol_document(version_row["definition_json"])

@@ -24,6 +24,7 @@ ProtocolArtifactVerificationState = Literal["declared", "available", "verified",
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 
 PROTOCOL_SCHEMA_VERSION = 1
+PROTOCOL_MIN_SCHEMA_VERSION = 1
 PROTOCOL_WAIVER_MODE = "forbid"
 PROTOCOL_DEFAULT_RETENTION_DAYS = 90
 PROTOCOL_DEFAULT_RUN_ORG_ID = "local"
@@ -206,9 +207,10 @@ class ProtocolDefinitionDocumentRecord(RegistryRecordModel):
 
     @model_validator(mode="after")
     def _validate_document(self) -> "ProtocolDefinitionDocumentRecord":
-        if self.schema_version != PROTOCOL_SCHEMA_VERSION:
+        if self.schema_version < PROTOCOL_MIN_SCHEMA_VERSION or self.schema_version > PROTOCOL_SCHEMA_VERSION:
             raise ValueError(
-                f"Unsupported protocol schema_version {self.schema_version}; expected {PROTOCOL_SCHEMA_VERSION}"
+                "Unsupported protocol schema_version "
+                f"{self.schema_version}; expected between {PROTOCOL_MIN_SCHEMA_VERSION} and {PROTOCOL_SCHEMA_VERSION}"
             )
         participant_keys = [item.participant_key for item in self.participants]
         artifact_keys = [item.artifact_key for item in self.artifacts]
@@ -561,6 +563,19 @@ class ProtocolEngineDecisionRecord(RegistryRecordModel):
     artifact_observations: list[ProtocolArtifactObservationRecord] = Field(default_factory=list)
     input_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     retention_until: str = ""
+    routed_task_id: str = ""
+    timeout_at: str = ""
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    started_at: str = ""
+    participant_key: str = ""
+    participant_state: str = ""
+    participant_resolution_outcome: ProtocolResolutionOutcome | str = ""
+    participant_resolution_reason: str = ""
+    participant_resolved_agent_id: str = ""
+    participant_resolved_authority_ref: str = ""
+    participant_selector_snapshot: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    transition_metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
 
 class ProtocolAccessContextRecord(RegistryRecordModel):
@@ -602,7 +617,18 @@ def migrate_protocol_document_data(value: object) -> dict[str, object]:
     if not raw:
         return {}
     migrated = json.loads(json.dumps(raw))
-    migrated.setdefault("schema_version", PROTOCOL_SCHEMA_VERSION)
+    raw_schema_version = migrated.get("schema_version", PROTOCOL_SCHEMA_VERSION)
+    try:
+        schema_version = int(raw_schema_version or PROTOCOL_SCHEMA_VERSION)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("protocol definition schema_version must be an integer") from exc
+    if schema_version < PROTOCOL_MIN_SCHEMA_VERSION:
+        schema_version = PROTOCOL_MIN_SCHEMA_VERSION
+    if schema_version > PROTOCOL_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported protocol schema_version {schema_version}; expected at most {PROTOCOL_SCHEMA_VERSION}"
+        )
+    migrated["schema_version"] = PROTOCOL_SCHEMA_VERSION
     migrated.setdefault("metadata", {})
     migrated.setdefault("participants", [])
     migrated.setdefault("artifacts", [])
@@ -871,6 +897,124 @@ def protocol_dispatch_decision(
     )
 
 
+def protocol_dispatch_blocked_decision(
+    *,
+    run: ProtocolRunRecord,
+    stage_execution: ProtocolStageExecutionRecord,
+    error_code: str,
+    error_detail: str,
+) -> ProtocolEngineDecisionRecord:
+    retention_until = run.retention_until or protocol_retention_until(run.created_at or utcnow_iso())
+    return ProtocolEngineDecisionRecord(
+        run_status="blocked",
+        stage_status="blocked",
+        failure_code=str(error_code or "").strip().lower() or "lease_held",
+        failure_detail=str(error_detail or "").strip() or "Protocol dispatch blocked.",
+        transition_kind="blocked",
+        transition_reason=str(error_detail or "").strip() or "Protocol dispatch blocked.",
+        transition_error_code=str(error_code or "").strip().upper() or "LEASE_HELD",
+        run_blocked_code=str(error_code or "").strip().lower() or "lease_held",
+        run_blocked_detail=str(error_detail or "").strip() or "Protocol dispatch blocked.",
+        participant_key=stage_execution.participant_key,
+        retention_until=retention_until,
+    )
+
+
+def protocol_dispatch_resolution_failed_decision(
+    *,
+    run: ProtocolRunRecord,
+    stage_execution: ProtocolStageExecutionRecord,
+    selector: TargetSelector,
+    error_detail: str,
+) -> ProtocolEngineDecisionRecord:
+    detail = str(error_detail or "").strip() or "Participant resolution failed."
+    retention_until = run.retention_until or protocol_retention_until(run.created_at or utcnow_iso())
+    return ProtocolEngineDecisionRecord(
+        run_status="blocked",
+        stage_status="blocked",
+        failure_code="participant_resolution_failed",
+        failure_detail=detail,
+        transition_kind="blocked",
+        transition_reason=detail,
+        transition_error_code="PARTICIPANT_RESOLUTION_FAILED",
+        run_blocked_code="participant_resolution_failed",
+        run_blocked_detail=detail,
+        participant_key=stage_execution.participant_key,
+        participant_state="error",
+        participant_resolution_outcome="error",
+        participant_resolution_reason=detail,
+        participant_selector_snapshot=RegistryJsonRecord.model_validate(selector.model_dump(mode="json")),
+        transition_metadata=RegistryJsonRecord.model_validate({"selector": selector.model_dump(mode="json")}),
+        retention_until=retention_until,
+    )
+
+
+def protocol_dispatch_started_decision(
+    *,
+    run: ProtocolRunRecord,
+    stage_execution: ProtocolStageExecutionRecord,
+    routed_task_id: str,
+    timeout_at: str,
+    lease_owner: str,
+    lease_expires_at: str,
+    selector: TargetSelector,
+    resolved_agent_id: str,
+    resolved_authority_ref: str,
+    now: str,
+) -> ProtocolEngineDecisionRecord:
+    retention_until = run.retention_until or protocol_retention_until(run.created_at or now)
+    return ProtocolEngineDecisionRecord(
+        run_status="running",
+        stage_status="running",
+        transition_kind="dispatch",
+        transition_reason=f"Dispatched stage {stage_execution.stage_key}.",
+        routed_task_id=str(routed_task_id or "").strip(),
+        timeout_at=str(timeout_at or "").strip(),
+        lease_owner=str(lease_owner or "").strip(),
+        lease_expires_at=str(lease_expires_at or "").strip(),
+        started_at=str(now or "").strip(),
+        participant_key=stage_execution.participant_key,
+        participant_state="running",
+        participant_resolution_outcome="ok",
+        participant_resolution_reason="",
+        participant_resolved_agent_id=str(resolved_agent_id or "").strip(),
+        participant_resolved_authority_ref=str(resolved_authority_ref or "").strip(),
+        participant_selector_snapshot=RegistryJsonRecord.model_validate(selector.model_dump(mode="json")),
+        transition_metadata=RegistryJsonRecord.model_validate(
+            {
+                "target_agent_id": str(resolved_agent_id or "").strip(),
+                "routed_task_id": str(routed_task_id or "").strip(),
+                "selector": selector.model_dump(mode="json"),
+            }
+        ),
+        retention_until=retention_until,
+    )
+
+
+def evaluate_protocol_stage_timeout(
+    *,
+    document: ProtocolDefinitionDocumentRecord,
+    run: ProtocolRunRecord,
+    stage_execution: ProtocolStageExecutionRecord,
+    now: str,
+) -> ProtocolEngineDecisionRecord:
+    stage = document.stage(stage_execution.stage_key)
+    detail = f"Stage {stage.stage_key} exceeded timeout."
+    retention_until = run.retention_until or protocol_retention_until(run.created_at or now)
+    return ProtocolEngineDecisionRecord(
+        run_status="failed",
+        stage_status="failed",
+        failure_code="stage_timeout",
+        failure_detail=detail,
+        transition_kind="terminal",
+        transition_reason=detail,
+        transition_error_code="STAGE_TIMEOUT",
+        terminal_status="failed",
+        participant_key=stage_execution.participant_key,
+        retention_until=retention_until,
+    )
+
+
 def evaluate_protocol_task_result(
     *,
     document: ProtocolDefinitionDocumentRecord,
@@ -880,20 +1024,14 @@ def evaluate_protocol_task_result(
     result: ProtocolStageTaskResultRecord,
 ) -> ProtocolEngineDecisionRecord:
     stage = document.stage(stage_execution.stage_key)
-    retention_until = run.retention_until or protocol_retention_until(run.created_at or result.completed_at)
     if stage_execution.timeout_at and _iso_expired(stage_execution.timeout_at, reference=result.completed_at):
-        detail = f"Stage {stage.stage_key} exceeded timeout."
-        return ProtocolEngineDecisionRecord(
-            run_status="failed",
-            stage_status="failed",
-            failure_code="stage_timeout",
-            failure_detail=detail,
-            transition_kind="terminal",
-            transition_reason=detail,
-            transition_error_code="STAGE_TIMEOUT",
-            terminal_status="failed",
-            retention_until=retention_until,
+        return evaluate_protocol_stage_timeout(
+            document=document,
+            run=run,
+            stage_execution=stage_execution,
+            now=result.completed_at,
         )
+    retention_until = run.retention_until or protocol_retention_until(run.created_at or result.completed_at)
     if result.status != "completed":
         detail = result.summary or result.status or "Stage failed"
         return ProtocolEngineDecisionRecord(

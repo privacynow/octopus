@@ -561,10 +561,25 @@ function renderProtocolWorkspace(container) {
         }
     }
 
+    async function refreshWorkspace() {
+        await Promise.all([loadProtocols(), loadRuns()]);
+        if (currentProtocolId) {
+            await loadProtocolDetail();
+        } else {
+            _applyDraftFromProtocol(null);
+            renderWorkspace();
+        }
+        if (currentRunId) {
+            await loadRunDetail();
+        }
+    }
+
     cleanups.add(() => {
         currentProtocol = null;
         currentRun = null;
     });
+
+    UI.subscribeWithRefresh(cleanups, 'protocols', () => refreshWorkspace(), 350);
 
     void bootstrap();
 }

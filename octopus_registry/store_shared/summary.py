@@ -104,6 +104,19 @@ def get_summary(
         """,
         (window_start,),
     ) or {}
+    protocol_totals = dialect.fetchone(
+        conn,
+        f"""
+        SELECT
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_definitions')}) AS definitions_total,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_definitions')} WHERE lifecycle_state = 'published') AS definitions_published,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')}) AS runs_total,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status IN ('queued', 'running', 'blocked')) AS runs_active,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'blocked') AS runs_blocked,
+            (SELECT COUNT(*) FROM {dialect.qualify('protocol_runs')} WHERE status = 'failed' AND updated_at >= {dialect.placeholder(1)}) AS runs_failed_24h
+        """,
+        (window_start,),
+    ) or {}
 
     connected = 0
     degraded = 0
@@ -142,6 +155,14 @@ def get_summary(
             "running": int(task_totals.get("running") or 0),
             "pending": int(task_totals.get("pending") or 0),
             "failed_24h": int(task_totals.get("failed_24h") or 0),
+        },
+        "protocols": {
+            "definitions_total": int(protocol_totals.get("definitions_total") or 0),
+            "definitions_published": int(protocol_totals.get("definitions_published") or 0),
+            "runs_total": int(protocol_totals.get("runs_total") or 0),
+            "runs_active": int(protocol_totals.get("runs_active") or 0),
+            "runs_blocked": int(protocol_totals.get("runs_blocked") or 0),
+            "runs_failed_24h": int(protocol_totals.get("runs_failed_24h") or 0),
         },
         "usage_24h": usage_total,
     })

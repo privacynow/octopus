@@ -192,6 +192,8 @@ def _protocol_result_http_error(result) -> HTTPException:
     message = str(getattr(result, "message", "") or "Protocol request failed.")
     if status == "not_found":
         return _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message=message)
+    if status == "not_visible":
+        return _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message=message)
     if status == "forbidden":
         return _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=message)
     if status in {"conflict", "idempotency_conflict"}:
@@ -1029,18 +1031,23 @@ def resource_list_protocols(
     limit: int = Query(default=50, ge=1, le=200),
     lifecycle_state: str = Query(default=""),
     slug: str = Query(default=""),
+    created_after: str = Query(default=""),
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> list[dict[str, Any]]:
-    return _json_payload(
-        store.list_protocols(
-            access=_protocol_access(auth),
-            cursor=cursor,
-            limit=limit,
-            lifecycle_state=lifecycle_state,
-            slug=slug,
+    try:
+        return _json_payload(
+            store.list_protocols(
+                access=_protocol_access(auth),
+                cursor=cursor,
+                limit=limit,
+                lifecycle_state=lifecycle_state,
+                slug=slug,
+                created_after=created_after,
+            )
         )
-    )
+    except ValueError as exc:
+        raise _protocol_http_error(400, error_code="PROTOCOL_INVALID_FILTER", message=str(exc)) from exc
 
 
 @app.get("/v1/protocol-templates/{slug}")
@@ -1049,9 +1056,10 @@ def resource_get_protocol_template(
     auth: AuthContext = Depends(require_authenticated),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    del auth
     try:
-        document = store.get_protocol_template(slug)
+        document = store.get_protocol_template(slug, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol is not visible to this actor.") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Protocol template not found") from exc
     return _json_payload(document)
@@ -1078,6 +1086,8 @@ def resource_get_protocol_version(
 ) -> dict[str, Any]:
     try:
         version = store.get_protocol_version(protocol_id, version_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol is not visible to this actor.") from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_VERSION_NOT_FOUND", message="Protocol version not found.") from exc
     return _json_payload(version)
@@ -1102,6 +1112,7 @@ async def resource_create_protocol(
     )
     if not result.ok:
         raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
     return _json_payload(result)
 
 
@@ -1125,11 +1136,12 @@ async def resource_save_protocol_draft(
     )
     if not result.ok:
         raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
     return _json_payload(result)
 
 
 @app.post("/v1/protocols/{protocol_id}/validate")
-def resource_validate_protocol(
+async def resource_validate_protocol(
     protocol_id: str,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
@@ -1137,11 +1149,12 @@ def resource_validate_protocol(
     result = store.validate_protocol(protocol_id, access=_protocol_access(auth))
     if not result.ok:
         raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(topics=("protocols",), reason="protocol.validated")
     return _json_payload(result)
 
 
 @app.post("/v1/protocols/{protocol_id}/publish")
-def resource_publish_protocol(
+async def resource_publish_protocol(
     protocol_id: str,
     auth: AuthContext = Depends(require_operator_session),
     store: AbstractRegistryStore = Depends(get_store),
@@ -1149,6 +1162,20 @@ def resource_publish_protocol(
     result = store.publish_protocol(protocol_id, access=_protocol_access(auth))
     if not result.ok:
         raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(topics=("protocols",), reason="protocol.published")
+    return _json_payload(result)
+
+
+@app.post("/v1/protocols/{protocol_id}/archive")
+async def resource_archive_protocol(
+    protocol_id: str,
+    auth: AuthContext = Depends(require_operator_session),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    result = store.archive_protocol(protocol_id, access=_protocol_access(auth))
+    if not result.ok:
+        raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(topics=("protocols",), reason="protocol.archived")
     return _json_payload(result)
 
 
@@ -1172,7 +1199,7 @@ def resource_list_protocol_runs(
 
 
 @app.post("/v1/protocol-runs")
-def resource_create_protocol_run(
+async def resource_create_protocol_run(
     payload: ProtocolRunCreateRecord,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     auth: AuthContext = Depends(require_authenticated),
@@ -1185,6 +1212,10 @@ def resource_create_protocol_run(
     )
     if not result.ok:
         raise _protocol_result_http_error(result)
+    topics = {"protocols", "summary"}
+    if result.run is not None:
+        topics.add(f"protocol-run:{result.run.protocol_run_id}")
+    await _broadcast_invalidations(topics=topics, reason="protocol.run.created")
     return _json_payload(result)
 
 
@@ -1256,7 +1287,7 @@ def resource_export_protocol_run(
 
 
 @app.post("/v1/protocol-runs/{run_id}/actions/{action}")
-def resource_act_on_protocol_run(
+async def resource_act_on_protocol_run(
     run_id: str,
     action: str,
     payload: dict[str, Any],
@@ -1275,6 +1306,10 @@ def resource_act_on_protocol_run(
     )
     if not result.ok:
         raise _protocol_result_http_error(result)
+    await _broadcast_invalidations(
+        topics=("protocols", "summary", f"protocol-run:{run_id}"),
+        reason=f"protocol.run.{action}",
+    )
     return _json_payload(result)
 
 

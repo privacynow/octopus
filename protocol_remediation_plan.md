@@ -1,8 +1,8 @@
 # Protocol System Remediation Plan
 
-Status: draft  
-Last updated: 2026-04-01 (v3.3)  
-Audience: engineering, product, operations  
+Status: draft
+Last updated: 2026-04-16 (v3.7)
+Audience: engineering, product, operations
 
 ---
 
@@ -15,6 +15,7 @@ Bring the protocol system from a **working vertical slice** to a **commercially 
 ### 1.2 Non-negotiables
 
 - **One orchestration pipeline only.** No duplicate engine in registry, runtime, and UI.
+- **One canonical persistence path.** All protocol run / stage / participant **state mutations** in the registry must flow through **one canonical applier** (single store method or thin wrapper family that always runs the same SQL and side effects). Evaluation may use multiple SDK helpers (`dispatch` preflight, task result, operator action, synthetic timeout), but **persistence must not** use competing styles (inline `UPDATE` branches alongside the applier for the same concern). See **§19.2**.
 - **The SDK is the single owner of protocol lifecycle rules** — transition validation, policy enforcement, and advancement decisions.
 - **Visible fields and controls must be enforced, not advisory** (policies, leases, artifact verification, strict stage modes).
 - **If a field or control is not enforced, it must not remain user-visible.** Hide it until implemented rather than training users to ignore it.
@@ -54,17 +55,17 @@ This plan unifies:
 - **`protocol_plan.md`** is **background and original product narrative** (domain model, early architecture). It does **not** drive sequencing and **must not** override §§4–8 or §12. **Do not** allocate delivery or implementation effort to updating it unless there is a **separate** archival or compliance reason; treat it as **read-only context** for engineers.
 - **Do not** introduce a separate “implementation spec” markdown file (e.g. a phantom `*_implementation_spec.md`). Normative engineering rules live **in this file** until shipped; optional user-facing markdown under `docs/` is added only when you actually create those files (see §14). Code and OpenAPI must match reality, not imaginary paths.
 
-### 1.6 Explicit unresolved product decisions
+### 1.6 Closed product decisions for this release
 
-These decisions must be resolved here before implementation reaches the affected phases:
+These decisions are **closed for the current protocol release** and are no longer open design forks:
 
-| Decision | Current options | Required before |
-|----------|-----------------|-----------------|
-| Run lifecycle includes `paused` | Support `paused` as a real state, or exclude it entirely from V1 surfaces and API | P5 |
-| External event delivery | Registry realtime only, SSE, or signed outbound webhooks | P6 |
-| Provider/model policy | Per-participant overrides, or one provider/model contract per run | P4 |
-| Artifact verification waivers | **Resolved in §5.3b.** Product may ship **no-waiver mode** (reject `artifact.verify: false` at validate) or **publisher-gated waivers** as written there—**not** an open design slot at P3 | P3 enforces chosen mode |
-| Retention and export defaults | Default retention period, export availability, and role gates | P9 |
+| Decision | Chosen behavior |
+|----------|-----------------|
+| Run lifecycle includes `paused` | **Excluded from V1.** `ProtocolRunStatus` stays `queued | running | blocked | completed | failed | cancelled`. No `pause` / `resume` API, UI, or Telegram controls in this release. |
+| External event delivery | **Registry realtime invalidations only** for this release. No SSE or signed outbound webhooks in the same pass. |
+| Provider/model policy | **One provider/model contract per run** for V1. Per-participant overrides remain unsupported. |
+| Artifact verification waivers | **Mode A only** for this release: no waivers. Definitions containing `artifact.verify: false` are rejected. |
+| Retention and export defaults | **90-day default retention**. Export is available to **operator**, **auditor**, and **admin** roles only. |
 
 ---
 
@@ -257,7 +258,7 @@ Include lifecycle-consistent **delete or archive**; **`GET /v1/protocols/{protoc
 
 ### 7.3 Operator actions
 
-Typed endpoints: **pause**, **resume**, **cancel**, **retry**, **accept**, **send-back** — each **idempotent** (`Idempotency-Key`), **optimistic concurrency** (`If-Match` / `version`), **409** with current version on conflict. Response indicates **first apply vs replay**.
+Typed endpoints for this release: **cancel**, **retry**, **accept**, **send-back** — each **idempotent** (`Idempotency-Key`), **optimistic concurrency** (`If-Match` / `version`), **409** with current version on conflict. Response indicates **first apply vs replay**. `pause` / `resume` are intentionally excluded in V1 per **§1.6**.
 
 ### 7.4 Stable errors
 
@@ -267,7 +268,7 @@ Publish a **registry of `error_code` values** and HTTP mapping in **`octopus_reg
 
 **Schema (align with §2.3):** definitions carry **`owner_org_id`**, **`visibility`**, **`created_by`**, **`updated_by`**; runs carry **`run_org_id`**, **`started_by`**, and links to **`entry_agent_id`** as today. **Publish** and **archive** require **`publisher`** (definitions); **operator** actions on runs require **`operator`** or **`admin`** per endpoint table you add to OpenAPI.
 
-Define **role-based actions** with explicit names: **author**, **publisher**, **operator**, **auditor**, **admin** (map to registry roles / service accounts). Capture who may draft/publish/archive definitions; who may start/pause/cancel/send-back/view artifacts/export; **operator** vs **service account** vs **entry agent** scoped to run—**in this file** or in **auth docs you actually add** (e.g. under `docs/` when P11 ships them). **Export/download** (§7.2) allowed only for **`auditor`**, **`operator`**, or **`admin`** unless tightened further in §10.
+Define **role-based actions** with explicit names: **author**, **publisher**, **operator**, **auditor**, **admin** (map to registry roles / service accounts). Capture who may draft/publish/archive definitions; who may start/cancel/send-back/view artifacts/export; **operator** vs **service account** vs **entry agent** scoped to run—**in this file** or in **auth docs you actually add** (e.g. under `docs/` when P11 ships them). **Export/download** (§7.2) allowed only for **`auditor`**, **`operator`**, or **`admin`** unless tightened further in §10.
 
 ### 7.6 OpenAPI and contracts
 
@@ -385,11 +386,11 @@ Structured logs: `protocol_run_id`, `protocol_stage_execution_id`, **`participan
 - **Onboarding:** Empty states and **first-run wizard** (create → validate → publish → start run).
 - **Designer:** JSON + structured forms; **YAML** import/export with same validator; **validation gutter** (inline errors); **diff** draft vs last published; keyboard **accessibility**; ARIA on timeline.
 - **Run detail:** Timeline **filterable by participant**; **blocked** state with reason and remediation; artifact table with path, hash, verification, download per policy.
-- **Intervention controls:** pause/resume/cancel/send-back with **confirmation**, **reason capture**, **concurrency conflict** handling (surface `409`), **audit-visible** outcomes.
+- **Intervention controls:** cancel/send-back/retry/accept with **confirmation**, **reason capture**, **concurrency conflict** handling (surface `409`), **audit-visible** outcomes.
 
 ### 11.2 Telegram
 
-- Commands aligned with §7 (**list**, **start**, **status**, **pause/resume/cancel** where safe).
+- Commands aligned with §7 (**list**, **start**, **status**, **cancel/retry/accept/send-back** where safe).
 - **Deep link** to registry run in status messages.
 - **Stage-change** and **terminal** notifications; **debounced** and **rate-limited** (max messages per minute per run).
 - **Destructive** actions: **confirmation + short reason** for audit (§10).
@@ -538,6 +539,8 @@ Phases are **ordered dependencies**, not optional drops.
 
 **Rule:** Do not ship **P7** as “complete” without **P5** operator APIs unless feature-flagged with a **dated** temporary limitation documented in this file.
 
+**Execution:** For a **canonical rebuild** (recommended when seams have diverged), follow **§19** and validate with **§18.1**—the P1–P11 table remains the dependency spine, but **order of work** should follow **§19.12**.
+
 ---
 
 ## 18. Success criteria (acceptance bar)
@@ -560,6 +563,189 @@ The subsystem is **commercially viable** when:
 14. **Bootstrap and seeding** (§15) are deterministic and reviewed.
 15. **This remediation plan** is current and authoritative; **OpenAPI**, **`README.md`**, and **`docs/ARCHITECTURE.md`** match shipped behavior; any **optional** operator docs under `docs/` match reality if and when they exist (no imaginary spec files).
 
+### 18.1 Rebuild acceptance bar (stricter than §18 alone)
+
+Use this checklist **before** calling protocol remediation **done** after a **canonical rebuild** (§19). It restates §18 in seam-specific terms.
+
+1. **One persistence path** — Dispatch, task-result, operator-action, and **timeout** outcomes may use different SDK evaluators, but **all** persist through **one canonical registry applier** (§1.2, §19.2–§19.3).
+2. **One builtin source of truth** — SDK **seeds** builtins; **DB** is the only runtime/control-plane read for templates and published definitions (§19.4).
+3. **No advisory UI** — Nothing visible in API/UI/docs is unimplemented (§1.2, §19.9).
+4. **Timeouts** — Overdue running stages are handled by **maintenance/synthetic timeout** through the **same** applier; not only “late task result” (§19.6).
+5. **Historical definitions** — `schema_version`: immutable JSON on disk, **in-memory migrate** to current, **validate** migrated model (§19.5).
+6. **Tenancy and roles** — Visibility, org, export, and errors match **§2.3** and **§7** (no `NOT_FOUND` where **`NOT_VISIBLE`** is required).
+7. **Surface parity** — Registry UI, Telegram, SDK client, and HTTP API share **one** protocol truth (§19.8–§19.9).
+8. **One-sentence explanation** — *Protocol lifecycle decisions are evaluated in the SDK and persisted through one canonical registry applier on one routed-task completion pipeline (plus explicit synthetic events for timeout and operator actions), with DB-backed definitions.*
+
+---
+
+## 19. Execution strategy: canonical rebuild (vs endless patching)
+
+**Problem:** A branch that accumulated **one** routed-task completion path but **many** lifecycle seams and **store-owned** orchestration will not converge by patching alone.
+
+**Approach:** Treat any existing **feature/protocol** branch as **reference only**. **Cherry-pick ideas and passing tests**, not architecture. **Rebuild** protocol behavior on a **fresh branch from `main`**, with **`protocol_remediation_plan.md` (this file)** as the **governing** document, porting only code that **satisfies** it.
+
+### 19.0 Review refinements (implementation notes)
+
+- **Applier identity** — Decide explicitly whether the canonical applier is **`_apply_protocol_engine_decision_in_tx`** (extended to cover all outcomes) or a **new** single entry point that replaces it; there must be **one** persist API, not two “canonical” methods. Document the chosen name/signature in the first refactor PR.
+- **Cherry-pick discipline** — **Allowed:** characterization tests, pure SDK helpers, types, bugfixes that do not fork persistence. **Disallowed:** copying `_dispatch_*` / inline `UPDATE` blocks from a reference branch without routing through the applier.
+- **Phase E0 risk** — If **§1.6** stays open, the rebuild stalls. **Time-box** decisions or adopt the **recommended default** column in **§1.6** and revise later via amendment.
+- **Merge/rebase risk** — A long-lived rebuild branch conflicts with parallel **`main`** work; plan **rebase cadence** or integration checkpoints, not only technical milestones.
+- **Registry realtime (when you ship P6)** — Protocol run/stage events must be emitted **after** the applier’s DB commit (same truth as reads), not from pre-persist branches, or realtime reintroduces dual truth.
+- **Execution order nuance** — Within **E6**, ship **visibility / `NOT_VISIBLE` / list semantics** before **E7** UI/Telegram so surfaces do not encode wrong HTTP behavior.
+
+### 19.1 Phase E0 — Lock product decisions
+
+Close **§1.6** before writing feature code. No coding affected phases until each row has a **single** chosen option.
+
+### 19.2 Non-negotiable: canonical applier
+
+- **All** mutations to `protocol_runs`, `protocol_stage_executions`, `protocol_run_participants`, `protocol_transitions`, compliance events (when applicable), artifact rows, `version`, `blocked_code`, `blocked_detail`, `termination_summary`, `retention_until`, `current_stage_*`, lease fields, and timestamps — **through one applier** (see **§19.0**).
+- **Evaluation** may have multiple SDK entrypoints (preflight, resolution outcome, routed task result, operator action, **deadline expiry**), but they must converge on **one decision record shape** then **one** persist path.
+
+### 19.3 Phase E1 — Rebuild the lifecycle seam (one mutation path)
+
+1. **SDK** remains owner of lifecycle **decisions**; collapse the **public** surface in `octopus_sdk/protocols.py` so every stimulus yields **one** decision record shape (or explicit variants documented in one module).
+2. **Stimuli** to cover: dispatch preflight, dispatch resolution result, routed task result, operator action, **deadline expiry** (synthetic).
+3. **Refactor** `_dispatch_protocol_stage_in_tx` in `octopus_registry/store_postgres.py` to **orchestration only**: load snapshot → SDK eval → resolve participant if needed → SDK resolution outcome → **canonical applier** (same as task-result and operator paths).
+4. **Expand** the applier; **do not** add parallel side paths.
+5. **Remove or wire** dead fields (`repeat_current_stage`, etc.): implement end-to-end + tests, or **delete**.
+
+### 19.4 Phase E2 — Builtin protocols: DB truth
+
+1. **Database** is the only runtime/control-plane source for builtin definitions after seed.
+2. **`get_protocol_template`** (and equivalents) must use **DB-backed** definition/version paths, **not** direct SDK reads for control plane.
+3. **Bootstrap** is authoritative and **early**: seeding + schema init on the **canonical** migration path (§15, **P1b**); **no** hidden runtime-only side effects as the sole source of truth.
+
+### 19.5 Phase E3 — Schema/versioning contract
+
+1. **In-memory migrators** for published definition JSON: immutable on disk, migrate N→current in memory, validate.
+2. **Loader** accepts supported historical versions, migrates, validates migrated model; **raw** stored JSON unchanged.
+3. **Tests:** old published → load OK; unsupported future → clear failure; migrated shape matches expectations.
+
+### 19.6 Phase E4 — Policy enforcement (complete)
+
+1. **`max_review_rounds`** — Count the **real** producer–reviewer **loop** in the graph (revise edge), not an approximation by counting same `stage_key` executions; surface in API/UI; enforce in SDK. **Design note:** Record the **counted unit** in implementation tickets (e.g. each **traversal of the revise edge** between named stages, or a dedicated loop id)—avoid mid-build graph algorithm debates.
+2. **Single-active-writer** — Lease **acquire / renew / expiry / admin break / retry** through one dispatch path; **no** second lease logic in the store.
+3. **Active timeouts** — **Maintenance** (or existing registry background) finds overdue **running** executions and feeds **synthetic timeout** through **same** engine/applier as other events (no timeout-specific persistence fork). **Idempotency:** If a **late routed-task result** arrives after a timeout transition, **one** outcome wins—resolve via the same applier (e.g. terminal timeout vs ignored late result with stable reason codes); document the rule and test it.
+
+### 19.7 Phase E5 — Artifacts
+
+1. **Runtime observations** are authoritative; finish the contract: existence, integrity/hash, current-pointer, supersession, failure codes.
+2. **Waiver mode** — **Fully** enforce **§5.3b** mode **A** or **B** (publisher-gated metadata + audit if B); **no** hardcoded mode if product requires **deployment-configurable** behavior. **Forward compatibility:** If mode **A** ships first but **B** is plausible, add **nullable** publish-time waiver metadata columns (or equivalent) when you touch schema so mode **B** does not require a second migration-only project.
+3. **Work-stage completion** — Advance only when strict markers, verification, and contract rules are satisfied; otherwise blocked/contract-invalid paths.
+
+### 19.8 Phase E6 — API, auth, tenancy, errors
+
+1. **Operator + definition lifecycle** — Implement or **explicitly exclude** (with doc/UI parity): pause/resume if chosen, cancel/retry/accept/send-back, definition archive if required; **hide** unsupported controls.
+2. **List filters** — `cursor`, `limit`, `slug`, `lifecycle_state`, **`created_after`** where §7 requires.
+3. **Visibility** — §2.3 exactly: **`registry_template`** gated by **deployment config** (default **off**); cross-tenant `get`/`start` use **`NOT_VISIBLE`** (or equivalent), not generic `not_found`; lists omit invisible rows.
+4. **Audit** — `protocol_transitions` = lifecycle truth; compliance events = operator/security/export; document and test separation.
+5. **Errors + OpenAPI** — One **stable** protocol error registry in code + SDK types; OpenAPI reflects real routes; **protocol** contract tests on handlers—**no** hand-maintained second spec.
+
+### 19.9 Phase E7 — UI / Telegram / runtime drift
+
+1. **No** new UI until backend seams are unified; UI consumes **canonical** endpoints only.
+2. **Hide or remove** unsupported controls (operator actions, visibility, waiver, pause, advisory fields).
+3. **Telegram** thin: `/protocol` maps only to **real** APIs; no parallel protocol semantics or fake status.
+4. **Canonical run visibility** in UI and Telegram: same stage, blocked reason, **review loop vs cap**, lease, artifact verification, transitions—**no** UI-only derivation.
+
+### 19.10 Phase E8 — Commercial hardening
+
+1. **Observability** from the **applier** (logs/metrics) keyed by `protocol_run_id`, `protocol_stage_execution_id`, `participant_key`, `routed_task_id`, error codes.
+2. **Realtime (P6)** — When protocol events are exposed, they must reflect **post-applier** state (same projection consumers get from GET/timeline), consistent with **§19.0**.
+3. **Support/admin** surfaces after the model is stable: blocked runs, lease conflicts, timeouts, contract failures, export/audit visibility.
+4. **Retention / export / redaction** per §10 once §1.6 defaults are set.
+
+### 19.11 Phase E9 — Test strategy
+
+1. **Pure SDK** lifecycle tests (no Postgres): preflight, resolution failure, task success/failure, revise loops, operator actions, **synthetic timeout**, artifacts.
+2. **Store** characterization: **one** persistence path — parity across dispatch blocked, resolution blocked, task blocked, operator blocked, running, terminal (**version**, blocked detail, retention, timestamps, participants, transitions).
+3. **Builtin** — Seeded rows read via DB paths; bootstrap idempotent; **no** runtime direct SDK template reads.
+4. **Multi-tenant** — `registry_template` off/on; **NOT_VISIBLE**; export roles; role boundaries.
+5. **Timeout/maintenance** — Overdue stages **without** a routed result.
+6. **E2E** — One run through create → dispatch → result → verification → transition → optional retry/send-back → **terminal**, single pipeline.
+
+### 19.12 Phase E10 — Execution logistics
+
+1. **Branch** — Fresh from `main`; reference branch for selective port only.
+2. **Order** — Canonical bootstrap/schema → unified applier seam → DB builtin truth → policy + timeouts → artifacts → **tenancy / visibility / error shapes (E6 subset)** → **then** UI/Telegram alignment (E7) → observability/support → docs/tests/deploy. **Do not** build registry UI or Telegram protocol surfaces on **`NOT_FOUND`**/`403` behavior you intend to replace with **`NOT_VISIBLE`**-style errors.
+3. **Ship** — Do not redeploy protocol changes widely until **§18.1** passes in **local + staging-like** environments.
+
+### 19.13 Mapping E-phases to P1–P11
+
+| E-phase | Primary P-phase overlap |
+|--------|-------------------------|
+| E0 | **Before** P1 — **§1.6** |
+| E1 | **P1** (engine + applier) |
+| E2 | **P1b**, §15 |
+| E3 | **P2** (migrators §8) |
+| E4 | **P2**, **P4** |
+| E5 | **P3**, **P4** |
+| E6 | **P5** |
+| E7 | **P5a**, **P7**, **P8** |
+| E8 | **P6**, **P9**, §9–§10 |
+| E9 | **§13**, P11 tests |
+| E10 | Process around **§17** |
+
+---
+
+## 20. Implementation status (code vs this plan)
+
+Rolling snapshot: **repository `telegram-agent-bot/`** as reviewed against this document. **Statuses:** **done** (meets intent), **partial**, **missing**. Line numbers drift with edits—use search if they no longer match.
+
+After a **rebuild** per **§19**, refresh **this section** when **§18.1** is satisfied.
+
+### 20.1 Phase rollup (P1–P11)
+
+| Phase | Status | Evidence / gap |
+|-------|--------|----------------|
+| **P1** Engine extraction | **partial** | SDK: `evaluate_protocol_task_result`, `evaluate_protocol_operator_action`, `protocol_dispatch_decision` in `octopus_sdk/protocols.py` (`evaluate_protocol_task_result` ~874+). Store still owns dispatch orchestration SQL in `_dispatch_protocol_stage_in_tx` (~1398+ `octopus_registry/store_postgres.py`)—not **§18.1** / **§19.3** “one applier” bar. |
+| **P1b** §15 shell | **partial** | Builtin seed in `_ensure_builtin_protocols` (~308+ `store_postgres.py`) on store init; authoritative SQL lives in `app/db/init.sql` / migrations elsewhere—confirm single path in ops, not ad hoc only. |
+| **P2** Policies + DSL + migrators | **partial** | Leases + max rounds enforced in SDK; `schema_version` required on `ProtocolDefinitionDocumentRecord` (~199–212 `protocols.py`). Full **§8.3** in-memory migrators for older published versions **not** evidenced (strict version equality). |
+| **P3** Artifacts + verification | **partial** | Observations + `protocol_artifact_contract_error` on task result; **`PROTOCOL_WAIVER_MODE = "forbid"`** (~27, ~134 `protocols.py`) implements §5.3b **mode A** only—**mode B** (publisher-gated) **missing**. |
+| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, parse/contract blocked paths in `evaluate_protocol_task_result`; **`timeout_at`** checked on result (~884–895 `protocols.py`). **Wall-clock job** to fail running stages without a result (**§6.4**) **missing**. |
+| **P5** Full API + auth + export | **partial** | Sub-resources, export, actions with `Idempotency-Key` / `If-Match`, definition archive, `created_after`, and `NOT_VISIBLE` handling are now part of the shipped surface. Remaining work is broader contract coverage and documentation hardening. |
+| **P5a** Thin UI | **partial** | `octopus_registry/ui/js/api.js` + `protocol-workspace.js` call core endpoints—complete only relative to whatever P5 ships. |
+| **P6** Realtime + metrics + admin views | **missing** | No `protocol_run.*` realtime wiring found in registry; §2.2 metrics not instrumented in code paths reviewed. |
+| **P7** Full UI | **missing** | Depends on P5/P6; designer/operator UX per §11 not fully product-complete. |
+| **P8** Telegram parity | **partial** | Protocol commands exist in `app/runtime/telegram_ingress.py` (e.g. create/act flows)—parity with §11.2 not fully verified here. |
+| **P9** Security + audit + retention | **partial** | `retention_until`, compliance hooks in store; §10 redaction/pen-test **not** verified as complete. |
+| **P10** §15 completion | **missing** | Operational backfill/hardening vs plan—track as delivery work. |
+| **P11** Docs + OpenAPI story | **partial** | `/openapi.json` exists (e.g. `tests/test_registry_service.py` ~1169–1176); **golden protocol contract tests** and **shipped OpenAPI artifact** per §7.6 **missing**. README / `docs/ARCHITECTURE.md` need explicit protocol updates when you claim P11. |
+
+### 20.2 Implemented and traceable (strengths)
+
+| Topic | Where |
+|--------|--------|
+| Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` (~1865+) → `evaluate_protocol_task_result` → `_apply_protocol_engine_decision_in_tx` (~1733+) `store_postgres.py` |
+| Operator actions (cancel/retry/accept/send-back) | `evaluate_protocol_operator_action` (~1034+) `protocols.py`; HTTP `resource_act_on_protocol_run` ~1258+ `server.py` |
+| Tenancy (runs) | `_assert_protocol_run_visible` (~1024+) `store_postgres.py` |
+| Definition visibility | `_protocol_visible_to_access` (~990+) `store_postgres.py` |
+| Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
+| Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
+| Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
+
+### 20.3 Gaps with file citations
+
+| Gap | Plan | Code reference |
+|-----|------|----------------|
+| Dispatch vs single engine apply | §1.2, §18.1 | `_dispatch_protocol_stage_in_tx` (~1398+) vs `_apply_protocol_engine_decision_in_tx` (~1733+) `store_postgres.py` |
+| Pause / resume | §7.3, §1.6 | **Closed by product decision:** excluded from V1. Unsupported controls must stay hidden. |
+| Definition archive / delete | §7.1 | **Archive implemented**. Hard delete remains intentionally absent. |
+| List filter `created_after` | §7.1 | **Implemented** in protocol list API. |
+| `registry_template` gated “off” | §2.3 | **Implemented** through registry config; DB-builtins remain seeded but not globally visible unless enabled. |
+| Waiver mode B | §5.3b | **Closed by product decision:** Mode A only for this release. |
+| Timeout without task result | §6.4 | **Implemented** via timeout sweep on registry heartbeat/poll traffic through the same protocol applier. |
+| Older schema migrators | §8.3 | Migration framework is present; continue hardening when schema version increments beyond `1`. |
+| Engine-only unit tests | §3.4, §13 | `tests/test_protocol_engine.py` **absent**; `tests/test_protocols.py` present |
+| Protocol OpenAPI contract tests | §7.6 | Only generic OpenAPI smoke ~1169–1176 `tests/test_registry_service.py` |
+| Cross-tenant start error shape | §2.3 | `create_protocol_run` when not visible (~2586–2588) returns `not_found`-style outcome—not dedicated `NOT_VISIBLE` |
+
+### 20.4 How to use this section
+
+- **Engineering:** Treat **§20.1** as the backlog ordering; close gaps with PRs that **update this table** or §18 when a phase is truly complete.
+- **Reviewers:** If **§20.3** cites a line and behavior changed, **grep the symbol** and refresh **§20** in the same PR.
+
 ---
 
 ## Document control
@@ -572,6 +758,9 @@ The subsystem is **commercially viable** when:
 | 3.1 | 2026-04-16 | Removed any notion of a separate `protocol_implementation_spec.md`; clarified §1.5, §8.2, §16; fixed P11 cross-reference; acceptance §18 |
 | 3.2 | 2026-04-01 | Scrubbed invented `docs/protocol-*.md` paths; §14 lists topics + only real files (`README.md`, `docs/ARCHITECTURE.md`); cross-references fixed |
 | 3.3 | 2026-04-01 | Normative §8.2 DSL enums/transitions; §12 resolution algorithm; §5.3a/b waiver modes; §2.3 V1 tenancy; §7.5 schema cross-ref; **P1b** §15 shell; `protocol_plan.md` non-delivery; metadata aligned |
+| 3.4 | 2026-04-01 | Implementation status (now **§20**): P1–P11 rollup, strengths, gap citations (code vs plan) |
+| 3.5 | 2026-04-01 | **§1.2** canonical applier; **§1.6** Phase E0 + recommendations; **§18.1** rebuild acceptance bar; **§19** execution strategy (E0–E10); **§20** code snapshot; **§17** execution cross-ref |
+| 3.6 | 2026-04-01 | **§19.0** review refinements: applier identity, cherry-pick rules, E0/merge risk, realtime-after-commit, E6-before-E7 order; **§19.6–19.7** timeout idempotency + max_review_rounds design note + waiver forward-compat; **§19.10** realtime note; **§19.12** explicit tenancy-before-UI order |
+| 3.7 | 2026-04-16 | Closed release decisions in **§1.6**; aligned §7 / §11 / §20 with shipped V1 contract (no pause/resume, archive + created_after + NOT_VISIBLE, DB-backed templates, timeout sweep, Mode A waivers) |
 
-**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.3** edits are **2026-04-01**. The **Last updated** field reflects the latest editorial pass (**v3.3**).
-
+**Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7** reflects the current implementation pass on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v3.7**).

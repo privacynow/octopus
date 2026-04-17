@@ -17,7 +17,7 @@ from octopus_sdk.protocols import (
     protocol_review_edge_key,
     validate_protocol_document,
 )
-from octopus_sdk.registry.models import RegistryJsonRecord
+from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskUpdate
 from octopus_registry.postgres import get_connection
 from octopus_registry.store_postgres import RegistryPostgresStore
 from psycopg.types.json import Jsonb
@@ -311,6 +311,54 @@ def test_registry_store_duplicate_routed_task_result_is_idempotent(postgres_regi
     assert second.run.current_stage_execution_id == first.run.current_stage_execution_id
     assert [item.protocol_stage_execution_id for item in second.stage_executions] == first_stage_ids
     assert [item.protocol_transition_id for item in second.transitions] == first_transition_ids
+
+
+def test_registry_store_running_status_renews_protocol_write_lease(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    stage = detail.stage_executions[0]
+    expired = "2000-01-01T00:00:00+00:00"
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_stage_executions
+                SET lease_expires_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (expired, stage.protocol_stage_execution_id),
+            )
+        conn.commit()
+
+    store.update_routed_task_status(
+        enroll.agent_token,
+        stage.routed_task_id,
+        RoutedTaskUpdate(
+            routed_task_id=stage.routed_task_id,
+            status="leased",
+            transition_id="lease-renew-lease",
+            summary="Leased.",
+            timeline_events=[],
+        ),
+    )
+    store.update_routed_task_status(
+        enroll.agent_token,
+        stage.routed_task_id,
+        RoutedTaskUpdate(
+            routed_task_id=stage.routed_task_id,
+            status="running",
+            transition_id="lease-renew-1",
+            summary="Still working.",
+            timeline_events=[],
+        ),
+    )
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    renewed = next(
+        item for item in refreshed.stage_executions if item.protocol_stage_execution_id == stage.protocol_stage_execution_id
+    )
+    assert renewed.status == "running"
+    assert renewed.lease_expires_at > expired
 
 
 def test_registry_store_exposes_review_loop_count_and_cap(postgres_registry_truncated: str) -> None:

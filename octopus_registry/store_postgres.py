@@ -704,7 +704,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> TaskRecord:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            return shared_update_routed_task_status(
+            result = shared_update_routed_task_status(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
                 token_row=self._token_row,
@@ -717,6 +717,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 payload=payload,
                 now=now,
             )
+            status_value = str(getattr(payload, "status", "") or "")
+            if status_value == "running":
+                self._protocol_store.renew_protocol_stage_lease_in_tx(
+                    conn,
+                    routed_task_id=routed_task_id,
+                    now=now,
+                )
+            return result
 
     def update_routed_task_result(
         self,

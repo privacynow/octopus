@@ -7,7 +7,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from octopus_sdk.protocols import (
@@ -895,6 +895,53 @@ class ProtocolPostgresAdapter:
             artifacts=observations,
             completed_at=str(result_json.get("completed_at", "") or utcnow_iso()),
         )
+
+    def renew_protocol_stage_lease_in_tx(
+        self,
+        conn,
+        *,
+        routed_task_id: str,
+        now: str,
+        lease_ttl_seconds: int = 900,
+    ) -> None:
+        stage_execution_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_stage_executions WHERE routed_task_id = %s",
+            (routed_task_id,),
+        )
+        if stage_execution_row is None:
+            return
+        if str(stage_execution_row.get("status", "") or "") != "running":
+            return
+        run_row = POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            (stage_execution_row["protocol_run_id"],),
+        )
+        if run_row is None:
+            return
+        document = self._protocol_document_for_run(conn, run_row)
+        stage = document.stage(str(stage_execution_row.get("stage_key", "") or ""))
+        if not stage.write_capable or not document.policies.single_active_writer:
+            return
+        parsed_now = datetime.fromisoformat(now)
+        if parsed_now.tzinfo is None:
+            parsed_now = parsed_now.replace(tzinfo=timezone.utc)
+        renewed_until = (
+            parsed_now + timedelta(seconds=max(int(lease_ttl_seconds or 0), 0))
+        ).isoformat()
+        with cur(conn) as db_cur:
+            db_cur.execute(
+                f"""
+                UPDATE {SCHEMA}.protocol_stage_executions
+                SET lease_expires_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (
+                    renewed_until,
+                    stage_execution_row["protocol_stage_execution_id"],
+                ),
+            )
 
     def _apply_protocol_engine_decision_in_tx(
         self,

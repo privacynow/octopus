@@ -17,6 +17,7 @@ from app.execution_faults import LocalExecutionFaultState
 os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
 from octopus_registry import auth as registry_auth
+from octopus_registry import server as registry_server
 from octopus_registry.server import app
 from octopus_registry import ingress
 from octopus_registry.backend import get_registry_store
@@ -37,6 +38,7 @@ from octopus_sdk.registry.management import (
     ManagementRequest,
     ManagementResult,
 )
+from octopus_sdk.registry.models import RegistryJsonRecord, TaskRecord
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
@@ -1190,6 +1192,70 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
         for item in paths["/v1/protocols"]["get"].get("parameters", [])
     }
     assert "created_after" in protocol_list_parameters
+
+
+def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            raise PermissionError("Protocol run is not visible to this actor.")
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocol-runs/run-1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+
+
+def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    captured: list[set[str]] = []
+
+    class _Authority:
+        def report_routed_result_for_agent(self, agent_token: str, payload):
+            assert agent_token == "agent-token"
+            assert payload["routed_task_id"] == "protocol-stage:stage-1"
+            return TaskRecord(
+                routed_task_id="protocol-stage:stage-1",
+                target_agent_id="agent-1",
+                request=RegistryJsonRecord.model_validate(
+                    {
+                        "context": {
+                            "protocol_run_id": "run-1",
+                        }
+                    }
+                ),
+            )
+
+    async def _capture_invalidations(*, topics, reason, conversation_id="", agent_id="", routed_task_id=""):
+        captured.append(set(topics))
+
+    monkeypatch.setattr(registry_server, "_broadcast_invalidations", _capture_invalidations)
+    app.dependency_overrides[registry_server.get_authority] = lambda: _Authority()
+    try:
+        response = client.post(
+            "/v1/agents/routed-tasks/protocol-stage:stage-1/result",
+            headers={"Authorization": "Bearer agent-token"},
+            json={"status": "completed", "summary": "done"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_authority, None)
+
+    assert response.status_code == 200
+    assert captured
+    assert {"tasks", "conversations", "summary", "protocols", "protocol-run:run-1"} in captured
 
 
 def test_registry_http_module_stays_under_guard_threshold():

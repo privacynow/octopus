@@ -129,18 +129,24 @@ objects:
 
 - definitions are versioned in `agent_registry`
 - runs are persisted in `agent_registry`
-- lifecycle decisions are evaluated by SDK protocol helpers and persisted
-  through one canonical registry applier in the Postgres store
+- lifecycle decisions are evaluated by `octopus_sdk/protocol_engine.py`
+  (`ProtocolRunEngine`) and persisted through one canonical registry applier
+  in the Postgres store
 - stage execution is dispatched through the existing routed-task/runtime path
 - work-stage completion is enforced through protocol control lines plus runtime-reported artifact observations
 - operator actions are versioned, idempotent registry mutations over the same
   run state (`cancel`, `retry`, `accept`, `send-back` in the current release)
-- built-in protocol templates are seeded from SDK documents at bootstrap, then
-  served from the registry database as the runtime/control-plane source of truth
+- built-in protocol templates are seeded by the canonical DB init/bootstrap path
+  (`app/db/postgres_init.py`), then served from the registry database as the
+  runtime/control-plane source of truth
 - stage timeout enforcement uses registry maintenance traffic and the same
   canonical applier; it does not depend on receiving a late routed-task result
 - transport clients such as Telegram invoke and observe protocol runs, but they
   do not own protocol state or state-machine rules
+- `protocol-stage:` routed-task results intentionally short-circuit delegation
+  continuation in `app/channels/registry/delivery_transport.py`; the
+  authoritative completion path is routed-task result update in the registry,
+  followed by protocol engine advancement
 
 For skills, the shared user-facing states are:
 
@@ -300,6 +306,11 @@ WebSocket topics:
 - Collection topics: `agents`, `conversations`, `tasks`, `approvals`,
   `summary`, `usage`, `protocols`
 
+Protocol run invalidations are emitted from the canonical registry path on run
+create, operator actions, and protocol-stage routed-task completion. The
+browser reacts to those invalidations; it does not infer protocol advancement
+locally from task rows.
+
 Four envelope types (defined in `octopus_sdk/realtime.py`):
 `RealtimeEventEnvelope`, `RealtimeHeartbeatEnvelope`,
 `RealtimeProgressEnvelope`, `RealtimeInvalidationEnvelope`.
@@ -338,7 +349,7 @@ layer. It defines what a bot IS, not how any specific bot works.
 - Execution engine (`execute_request` — provider invocation, delegation, finalization)
 - Registry participant contracts (enrollment, mirroring, coordination)
 - Protocol models, schema migration, validation, stage prompt rendering,
-  lifecycle evaluation, and participant session-keying
+  lifecycle evaluation (`protocol_engine.py`), and participant session-keying
 - Workflow composition (`WorkflowComposer` with builder pattern)
 - Event taxonomy (12 typed event kinds with validated metadata)
 - Task protocol (lifecycle state machine, transition validation)

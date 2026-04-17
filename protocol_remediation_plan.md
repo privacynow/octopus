@@ -699,31 +699,33 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 
 | Phase | Status | Evidence / gap |
 |-------|--------|----------------|
-| **P1** Engine extraction | **partial** | SDK: `evaluate_protocol_task_result`, `evaluate_protocol_operator_action`, `protocol_dispatch_decision` in `octopus_sdk/protocols.py` (`evaluate_protocol_task_result` ~874+). Store still owns dispatch orchestration SQL in `_dispatch_protocol_stage_in_tx` (~1398+ `octopus_registry/store_postgres.py`)—not **§18.1** / **§19.3** “one applier” bar. |
-| **P1b** §15 shell | **partial** | Builtin seed in `_ensure_builtin_protocols` (~308+ `store_postgres.py`) on store init; authoritative SQL lives in `app/db/init.sql` / migrations elsewhere—confirm single path in ops, not ad hoc only. |
+| **P1** Engine extraction | **partial** | Named SDK engine now exists in `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`), with dedicated engine-only tests in `tests/test_protocol_engine.py`. Store still owns selector resolution, prompt rendering, and routed-task request construction inside `_dispatch_protocol_stage_in_tx`, so the full **§18.1 / §19.3** “load → engine → apply” seam is not complete yet. |
+| **P1b** §15 shell | **partial** | Builtin protocol seeding now runs through `app/db/postgres_init.py` via `octopus_registry/protocol_bootstrap.py`, and `RegistryPostgresStore` no longer seeds definitions in its constructor. Broader operational backfill / migration hardening remains open under P10. |
 | **P2** Policies + DSL + migrators | **partial** | Leases + max rounds enforced in SDK; `schema_version` required on `ProtocolDefinitionDocumentRecord` (~199–212 `protocols.py`). Full **§8.3** in-memory migrators for older published versions **not** evidenced (strict version equality). |
 | **P3** Artifacts + verification | **partial** | Observations + `protocol_artifact_contract_error` on task result; **`PROTOCOL_WAIVER_MODE = "forbid"`** (~27, ~134 `protocols.py`) implements §5.3b **mode A** only—**mode B** (publisher-gated) **missing**. |
-| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, parse/contract blocked paths in `evaluate_protocol_task_result`; **`timeout_at`** checked on result (~884–895 `protocols.py`). **Wall-clock job** to fail running stages without a result (**§6.4**) **missing**. |
+| **P4** Strict work + timeouts + remediation | **partial** | `strict_completion`, contract-invalid blocking, and timeout evaluation live in `octopus_sdk/protocol_engine.py`. Timeout sweep exists for running stages without a result, but it is still piggybacked on registry heartbeat/poll traffic rather than a dedicated maintenance worker. |
 | **P5** Full API + auth + export | **partial** | Sub-resources, export, actions with `Idempotency-Key` / `If-Match`, definition archive, `created_after`, and `NOT_VISIBLE` handling are now part of the shipped surface. Remaining work is broader contract coverage and documentation hardening. |
 | **P5a** Thin UI | **partial** | `octopus_registry/ui/js/api.js` + `protocol-workspace.js` call core endpoints—complete only relative to whatever P5 ships. |
-| **P6** Realtime + metrics + admin views | **missing** | No `protocol_run.*` realtime wiring found in registry; §2.2 metrics not instrumented in code paths reviewed. |
+| **P6** Realtime + metrics + admin views | **partial** | Protocol run invalidation topics now refresh run detail from the canonical registry path on create, operator action, and protocol-stage completion. Named protocol events, metrics instrumentation, and admin/support views remain open. |
 | **P7** Full UI | **missing** | Depends on P5/P6; designer/operator UX per §11 not fully product-complete. |
 | **P8** Telegram parity | **partial** | Protocol commands exist in `app/runtime/telegram_ingress.py` (e.g. create/act flows)—parity with §11.2 not fully verified here. |
 | **P9** Security + audit + retention | **partial** | `retention_until`, compliance hooks in store; §10 redaction/pen-test **not** verified as complete. |
 | **P10** §15 completion | **missing** | Operational backfill/hardening vs plan—track as delivery work. |
-| **P11** Docs + OpenAPI story | **partial** | `/openapi.json` exists (e.g. `tests/test_registry_service.py` ~1169–1176); **golden protocol contract tests** and **shipped OpenAPI artifact** per §7.6 **missing**. README / `docs/ARCHITECTURE.md` need explicit protocol updates when you claim P11. |
+| **P11** Docs + OpenAPI story | **partial** | `/openapi.json` exists and protocol route behavior now has targeted tests (`tests/test_registry_service.py`). README / `docs/ARCHITECTURE.md` mention the named engine and canonical bootstrap path, but golden protocol contract tests and a shipped OpenAPI artifact remain open. |
 
 ### 20.2 Implemented and traceable (strengths)
 
 | Topic | Where |
 |--------|--------|
-| Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` (~1865+) → `evaluate_protocol_task_result` → `_apply_protocol_engine_decision_in_tx` (~1733+) `store_postgres.py` |
-| Operator actions (cancel/retry/accept/send-back) | `evaluate_protocol_operator_action` (~1034+) `protocols.py`; HTTP `resource_act_on_protocol_run` ~1258+ `server.py` |
-| Tenancy (runs) | `_assert_protocol_run_visible` (~1024+) `store_postgres.py` |
+| Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` → `ProtocolRunEngine.evaluate_task_result()` (`octopus_sdk/protocol_engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
+| Operator actions (cancel/retry/accept/send-back) | `ProtocolRunEngine.evaluate_operator_action()` `octopus_sdk/protocol_engine.py`; HTTP `resource_act_on_protocol_run` `server.py` |
+| Tenancy (runs) | `_protocol_run_visibility_status` / `_protocol_run_detail_in_tx` `store_postgres.py`; `PROTOCOL_NOT_VISIBLE` mapping on run routes in `server.py` |
 | Definition visibility | `_protocol_visible_to_access` (~990+) `store_postgres.py` |
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
 | Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
+| Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_registry/protocol_bootstrap.py` |
+| Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
 
 ### 20.3 Gaps with file citations
 
@@ -737,9 +739,9 @@ After a **rebuild** per **§19**, refresh **this section** when **§18.1** is sa
 | Waiver mode B | §5.3b | **Closed by product decision:** Mode A only for this release. |
 | Timeout without task result | §6.4 | **Implemented** via timeout sweep on registry heartbeat/poll traffic through the same protocol applier. |
 | Older schema migrators | §8.3 | Migration framework is present; continue hardening when schema version increments beyond `1`. |
-| Engine-only unit tests | §3.4, §13 | `tests/test_protocol_engine.py` **absent**; `tests/test_protocols.py` present |
-| Protocol OpenAPI contract tests | §7.6 | Only generic OpenAPI smoke ~1169–1176 `tests/test_registry_service.py` |
-| Cross-tenant start error shape | §2.3 | `create_protocol_run` when not visible (~2586–2588) returns `not_found`-style outcome—not dedicated `NOT_VISIBLE` |
+| Engine-only unit tests | §3.4, §13 | **Implemented** in `tests/test_protocol_engine.py`; continue expanding the table-driven matrix under §13. |
+| Protocol OpenAPI contract tests | §7.6 | Still targeted/smoke-level in `tests/test_registry_service.py`; no golden protocol contract suite yet. |
+| Cross-tenant start error shape | §2.3 | **Implemented** for create-run and run-detail routes as `PROTOCOL_NOT_VISIBLE`; continue checking every read/export sub-resource against the same contract. |
 
 ### 20.4 How to use this section
 

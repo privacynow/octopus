@@ -58,6 +58,33 @@ def test_run_init_is_noop_on_current_db(postgres_truncated):
     assert errors == []
 
 
+def test_run_init_seeds_builtin_protocols(postgres_base_url, request):
+    """DB init seeds builtin protocol definitions through the canonical init path."""
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import _replace_db_in_url, create_test_database, get_worker_id
+
+    worker_id = get_worker_id(request.config)
+    db_name = f"test_bot_registry_builtin_seed_{worker_id}".replace("-", "_")
+    db_url = _replace_db_in_url(postgres_base_url, db_name)
+    create_test_database(postgres_base_url, db_name)
+
+    with get_connection(db_url) as conn:
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT slug, lifecycle_state
+                FROM agent_registry.protocol_definitions
+                WHERE slug = 'software-engineering'
+                """
+            )
+            row = cur.fetchone()
+
+    assert row == ("software-engineering", "published")
+
+
 def test_run_init_restores_missing_additive_schema_objects(postgres_truncated):
     """run_init() recreates missing additive objects from the canonical init.sql."""
     from app.db.postgres import get_connection

@@ -18,6 +18,7 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
+from octopus_sdk.protocol_engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
 from octopus_sdk.protocols import (
     PROTOCOL_DEFAULT_OPERATOR_REF,
     PROTOCOL_DEFAULT_RETENTION_DAYS,
@@ -25,13 +26,6 @@ from octopus_sdk.protocols import (
     PROTOCOL_DEFAULT_VISIBILITY,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
-    builtin_protocol_documents,
-    evaluate_protocol_stage_timeout,
-    protocol_dispatch_blocked_decision,
-    evaluate_protocol_operator_action,
-    protocol_dispatch_resolution_failed_decision,
-    protocol_dispatch_started_decision,
-    evaluate_protocol_task_result,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
@@ -46,8 +40,6 @@ from octopus_sdk.protocols import (
     ProtocolTransitionRecord,
     ProtocolArtifactRecord,
     canonical_protocol_document,
-    default_protocol_document_slug,
-    protocol_dispatch_decision,
     protocol_retention_until,
     protocol_stage_internal_context,
     ProtocolStageTaskResultRecord,
@@ -285,6 +277,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def __init__(self, database_url: str, *, config: RegistryConfig | None = None) -> None:
         self.database_url = database_url
         self._config = config or load_registry_config()
+        self._protocol_engine: ProtocolRunEngine = DEFAULT_PROTOCOL_RUN_ENGINE
         self._verify_schema()
 
     def _connect(self):
@@ -307,65 +300,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """,
                     (_REGISTRY_EPOCH_KEY, uuid.uuid4().hex),
                 )
-            self._ensure_builtin_protocols(conn)
             conn.commit()
-
-    def _ensure_builtin_protocols(self, conn) -> None:
-        now = utcnow_iso()
-        with _cur(conn) as cur:
-            for document in builtin_protocol_documents():
-                slug = default_protocol_document_slug(document)
-                cur.execute(
-                    f"SELECT protocol_id FROM {_SCHEMA}.protocol_definitions WHERE slug = %s",
-                    (slug,),
-                )
-                if cur.fetchone() is not None:
-                    continue
-                protocol_id = uuid.uuid4().hex
-                version_id = uuid.uuid4().hex
-                payload = document.model_dump(mode="json")
-                content_hash = protocol_definition_content_hash(document)
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.protocol_definitions (
-                        protocol_id, slug, display_name, description, lifecycle_state,
-                        current_version_id, owner_org_id, visibility, created_by, updated_by,
-                        draft_definition_json, draft_content_hash, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, 'published', %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        protocol_id,
-                        slug,
-                        document.display_name or slug,
-                        document.description,
-                        version_id,
-                        PROTOCOL_DEFAULT_RUN_ORG_ID,
-                        "registry_template",
-                        "bootstrap",
-                        "bootstrap",
-                        _jsonb(payload),
-                        content_hash,
-                        now,
-                        now,
-                    ),
-                )
-                cur.execute(
-                    f"""
-                    INSERT INTO {_SCHEMA}.protocol_definition_versions (
-                        protocol_definition_version_id, protocol_id, version, definition_json,
-                        content_hash, validation_status, published_at, published_by, created_at
-                    ) VALUES (%s, %s, 1, %s, %s, 'valid', %s, %s, %s)
-                    """,
-                    (
-                        version_id,
-                        protocol_id,
-                        _jsonb(payload),
-                        content_hash,
-                        now,
-                        "bootstrap",
-                        now,
-                    ),
-                )
 
     def _registry_epoch(self, conn) -> str:
         with _cur(conn) as cur:
@@ -1057,6 +992,18 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return None
         return dict(row)
 
+    def _protocol_run_visibility_status(
+        self,
+        row: Mapping[str, object] | None,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> Literal["missing", "visible", "not_visible"]:
+        if row is None:
+            return "missing"
+        if self._assert_protocol_run_visible(row, access=access) is not None:
+            return "visible"
+        return "not_visible"
+
     def _protocol_stage_executions_for_run(self, conn, run_id: str) -> list[ProtocolStageExecutionRecord]:
         rows = _POSTGRES_STORE_DIALECT.fetchall(
             conn,
@@ -1103,21 +1050,28 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolRunDetailRecord | None:
-        run_row = self._assert_protocol_run_visible(
-            _POSTGRES_STORE_DIALECT.fetchone(
-                conn,
-                f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
-                (run_id,),
-            ),
-            access=access,
+        raw_run_row = _POSTGRES_STORE_DIALECT.fetchone(
+            conn,
+            f"SELECT * FROM {_SCHEMA}.protocol_runs WHERE protocol_run_id = %s",
+            (run_id,),
         )
-        if run_row is None:
+        run_visibility = self._protocol_run_visibility_status(raw_run_row, access=access)
+        if run_visibility == "missing":
             return None
-        definition_row = self._assert_protocol_visible(
-            self._protocol_row(conn, str(run_row["protocol_id"] or "")),
+        if run_visibility == "not_visible":
+            raise PermissionError("Protocol run is not visible to this actor.")
+        run_row = dict(raw_run_row or {})
+        raw_definition_row = self._protocol_row(conn, str(run_row["protocol_id"] or ""))
+        definition_visibility = self._protocol_visibility_status(
+            raw_definition_row,
             access=access,
             include_drafts=True,
         )
+        if definition_visibility == "missing":
+            return None
+        if definition_visibility == "not_visible":
+            raise PermissionError("Protocol is not visible to this actor.")
+        definition_row = dict(raw_definition_row or {})
         version_row = self._protocol_version_row(conn, str(run_row["protocol_definition_version_id"] or ""))
         if definition_row is None or version_row is None:
             return None
@@ -1431,7 +1385,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         participant = document.participant(stage.participant_key)
         artifacts = self._protocol_artifacts_for_run(conn, run.protocol_run_id)
         stage_executions = self._protocol_stage_executions_for_run(conn, run.protocol_run_id)
-        dispatch = protocol_dispatch_decision(
+        dispatch = self._protocol_engine.dispatch_preflight(
             document=document,
             run=run,
             stage=stage,
@@ -1445,7 +1399,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 run_row=run_row,
                 stage_execution_row=stage_execution_row,
-                engine=protocol_dispatch_blocked_decision(
+                engine=self._protocol_engine.dispatch_blocked(
                     run=run,
                     stage_execution=stage_execution,
                     error_code=dispatch.error_code,
@@ -1478,7 +1432,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 run_row=run_row,
                 stage_execution_row=stage_execution_row,
-                engine=protocol_dispatch_resolution_failed_decision(
+                engine=self._protocol_engine.dispatch_resolution_failed(
                     run=run,
                     stage_execution=stage_execution,
                     selector=selector,
@@ -1537,7 +1491,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 run_row=run_row,
                 stage_execution_row=stage_execution_row,
-                engine=protocol_dispatch_started_decision(
+                engine=self._protocol_engine.dispatch_started(
                     run=run,
                     stage_execution=stage_execution,
                     routed_task_id=routed_task_id,
@@ -1559,7 +1513,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conn,
                 run_row=run_row,
                 stage_execution_row=stage_execution_row,
-                engine=protocol_dispatch_blocked_decision(
+                engine=self._protocol_engine.dispatch_blocked(
                     run=run,
                     stage_execution=stage_execution,
                     error_code="ROUTING_SKILL_DISABLED",
@@ -1835,7 +1789,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return
         document = self._protocol_document_for_run(conn, run_row)
         stage_execution = self._protocol_stage_execution_from_row(stage_execution_row)
-        engine = evaluate_protocol_task_result(
+        engine = self._protocol_engine.evaluate_task_result(
             document=document,
             run=self._protocol_run_from_row(run_row),
             stage_execution=stage_execution,
@@ -1886,7 +1840,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if stage_execution_row is None or run_row is None:
                 continue
             document = self._protocol_document_for_run(conn, run_row)
-            engine = evaluate_protocol_stage_timeout(
+            engine = self._protocol_engine.evaluate_stage_timeout(
                 document=document,
                 run=self._protocol_run_from_row(run_row),
                 stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),
@@ -2947,7 +2901,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if stage_execution_row is None:
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Protocol run has no active stage execution.")
             document = self._protocol_document_for_run(conn, run_row)
-            engine = evaluate_protocol_operator_action(
+            engine = self._protocol_engine.evaluate_operator_action(
                 document=document,
                 run=self._protocol_run_from_row(run_row),
                 stage_execution=self._protocol_stage_execution_from_row(stage_execution_row),

@@ -272,6 +272,20 @@ function renderDashboard(container) {
                 href: '/ui/agents',
             },
             {
+                key: 'protocol-runs',
+                value: String(summary.protocols?.runs_active || 0),
+                label: 'Active protocol runs',
+                detail: `${summary.protocols?.runs_blocked || 0} blocked · ${summary.protocols?.runs_failed_24h || 0} failed in 24h`,
+                href: '/ui/protocols',
+            },
+            {
+                key: 'protocol-definitions',
+                value: String(summary.protocols?.definitions_published || 0),
+                label: 'Published protocols',
+                detail: `${summary.protocols?.definitions_total || 0} total definitions`,
+                href: '/ui/protocols',
+            },
+            {
                 key: 'tokens-24h',
                 value: totalTokens.toLocaleString(),
                 label: 'Tokens · 24h',

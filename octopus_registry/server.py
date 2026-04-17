@@ -234,6 +234,17 @@ def _event_invalidation_topics(kind: str) -> tuple[str, ...]:
     return tuple(sorted(topics))
 
 
+def _protocol_run_id_from_task_record(task: TaskRecord) -> str:
+    routed_task_id = str(task.routed_task_id or "").strip()
+    if not routed_task_id.startswith("protocol-stage:"):
+        return ""
+    request_payload = task.request.as_dict() if task.request is not None else {}
+    context = request_payload.get("context", {})
+    if not isinstance(context, dict):
+        return ""
+    return str(context.get("protocol_run_id", "") or "").strip()
+
+
 async def _broadcast_task_record_events(result: TaskRecord) -> None:
     agent_id = str(result.target_agent_id or result.origin_agent_id or "")
     for event in result.inserted_events or []:
@@ -517,10 +528,15 @@ async def routed_task_result(
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
     parent_conversation_id = str(result.parent_conversation_id or "")
     agent_id = str(result.target_agent_id or result.origin_agent_id or "")
+    protocol_run_id = _protocol_run_id_from_task_record(result)
     if (parent_conversation_id or result.recipient_conversation_id) and (result.inserted_events or result.recipient_inserted_events):
         await _broadcast_task_record_events(result)
+    topics = {"tasks", "conversations", "summary"}
+    if protocol_run_id:
+        topics.add("protocols")
+        topics.add(f"protocol-run:{protocol_run_id}")
     await _broadcast_invalidations(
-        topics=("tasks", "conversations", "summary"),
+        topics=topics,
         reason="routed_task.completed",
         conversation_id=parent_conversation_id,
         agent_id=agent_id,
@@ -1227,6 +1243,8 @@ def resource_get_protocol_run(
 ) -> dict[str, Any]:
     try:
         detail = store.get_protocol_run(run_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
     return _json_payload(detail)
@@ -1240,6 +1258,8 @@ def resource_get_protocol_run_participants(
 ) -> dict[str, Any]:
     try:
         participants = store.get_protocol_run_participants(run_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
     return _json_payload({"participants": participants})
@@ -1253,6 +1273,8 @@ def resource_get_protocol_run_artifacts(
 ) -> dict[str, Any]:
     try:
         artifacts = store.get_protocol_run_artifacts(run_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
     return _json_payload({"artifacts": artifacts})
@@ -1266,6 +1288,8 @@ def resource_get_protocol_run_timeline(
 ) -> dict[str, Any]:
     try:
         transitions = store.get_protocol_run_timeline(run_id, access=_protocol_access(auth))
+    except PermissionError as exc:
+        raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
     return _json_payload({"transitions": transitions})
@@ -1280,7 +1304,8 @@ def resource_export_protocol_run(
     try:
         exported = store.export_protocol_run(run_id, access=_protocol_access(auth))
     except PermissionError as exc:
-        raise _protocol_http_error(403, error_code="PROTOCOL_EXPORT_FORBIDDEN", message=str(exc)) from exc
+        error_code = "PROTOCOL_NOT_VISIBLE" if "not visible" in str(exc).lower() else "PROTOCOL_EXPORT_FORBIDDEN"
+        raise _protocol_http_error(403, error_code=error_code, message=str(exc)) from exc
     except KeyError as exc:
         raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
     return _json_payload(exported)

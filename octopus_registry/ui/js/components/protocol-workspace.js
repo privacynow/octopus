@@ -277,9 +277,15 @@ function renderProtocolWorkspace(container) {
 
     function _syncDraftFieldsFromDocument(document) {
         const metadata = (document && document.metadata) || {};
-        draft.slug = String(metadata.slug || draft.slug || '');
-        draft.display_name = String(metadata.display_name || draft.display_name || '');
-        draft.description = String(metadata.description || draft.description || '');
+        draft.slug = Object.prototype.hasOwnProperty.call(metadata, 'slug')
+            ? String(metadata.slug || '')
+            : String(draft.slug || '');
+        draft.display_name = Object.prototype.hasOwnProperty.call(metadata, 'display_name')
+            ? String(metadata.display_name || '')
+            : String(draft.display_name || '');
+        draft.description = Object.prototype.hasOwnProperty.call(metadata, 'description')
+            ? String(metadata.description || '')
+            : String(draft.description || '');
     }
 
     function _clearStructuredDrafts(prefix = '') {
@@ -489,9 +495,15 @@ function renderProtocolWorkspace(container) {
         const metadata = draftDocument.metadata || {};
         draft = {
             protocol_id: detail?.protocol?.protocol_id || '',
-            slug: metadata.slug || detail?.protocol?.slug || '',
-            display_name: metadata.display_name || detail?.protocol?.display_name || '',
-            description: metadata.description || detail?.protocol?.description || '',
+            slug: Object.prototype.hasOwnProperty.call(metadata, 'slug')
+                ? String(metadata.slug || '')
+                : String(detail?.protocol?.slug || ''),
+            display_name: Object.prototype.hasOwnProperty.call(metadata, 'display_name')
+                ? String(metadata.display_name || '')
+                : String(detail?.protocol?.display_name || ''),
+            description: Object.prototype.hasOwnProperty.call(metadata, 'description')
+                ? String(metadata.description || '')
+                : String(detail?.protocol?.description || ''),
             definition_text: editorFormat === 'yaml'
                 ? ''
                 : JSON.stringify(draftDocument, null, 2),

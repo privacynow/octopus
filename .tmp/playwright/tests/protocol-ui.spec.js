@@ -57,11 +57,11 @@ test.describe('protocol routes live', () => {
     await expect(page.getByRole('heading', { name: 'Protocols' })).toBeVisible();
     await expect(page.getByText('Run launcher')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'New protocol' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Gallery' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Import' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Gallery', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Import', exact: true })).toBeVisible();
     await expect(page.getByText('Built-in examples')).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Gallery' }).click();
+    await page.getByRole('button', { name: 'Gallery', exact: true }).click();
     await page.waitForURL(/\/ui\/gallery$/);
     await expect(page.getByRole('heading', { name: 'Gallery' })).toBeVisible();
     await expect(page.getByText('Software Engineering')).toBeVisible();

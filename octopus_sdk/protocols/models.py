@@ -27,6 +27,7 @@ ProtocolArtifactVerificationState = Literal["declared", "available", "verified",
 ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
+ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -45,6 +46,18 @@ PROTOCOL_SUPPORTED_RUN_STATUSES: tuple[ProtocolRunStatus, ...] = (
     "blocked",
 )
 PROTOCOL_SUPPORTED_STAGE_STATUSES: tuple[ProtocolStageExecutionStatus, ...] = PROTOCOL_SUPPORTED_RUN_STATUSES
+PROTOCOL_STAGE_KIND_OPTIONS: tuple[ProtocolStageKind, ...] = ("work", "review", "acceptance")
+PROTOCOL_ARTIFACT_KIND_OPTIONS: tuple[ProtocolArtifactKind, ...] = ("workspace_file", "control_plane_text")
+PROTOCOL_SELECTOR_KIND_OPTIONS: tuple[str, ...] = ("agent", "skill", "role")
+PROTOCOL_AUTHORING_SECTION_OPTIONS: tuple[str, ...] = (
+    "overview",
+    "participants",
+    "stages",
+    "artifacts",
+    "policies",
+    "review",
+    "advanced",
+)
 
 _TERMINAL_STAGE_TARGETS = frozenset({"__complete__", "__failed__", "__cancelled__"})
 _DECISION_RE = re.compile(r"(?im)^\s*PROTOCOL_DECISION:\s*([a-z0-9_-]+)\s*$")
@@ -352,6 +365,42 @@ class ProtocolDefinitionVersionRecord(RegistryRecordModel):
     published_at: str = ""
     published_by: str = ""
     created_at: str = ""
+
+
+class ProtocolTemplateSummaryRecord(RegistryRecordModel):
+    slug: str = ""
+    display_name: str = ""
+    description: str = ""
+    featured: bool = False
+    participant_count: int = 0
+    artifact_count: int = 0
+    stage_count: int = 0
+    stage_kind_sequence: list[ProtocolStageKind] = Field(default_factory=list)
+
+
+class ProtocolAuthoringManifestRecord(RegistryRecordModel):
+    templates: list[ProtocolTemplateSummaryRecord] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=lambda: list(PROTOCOL_AUTHORING_SECTION_OPTIONS))
+    stage_kind_options: list[ProtocolStageKind] = Field(default_factory=lambda: list(PROTOCOL_STAGE_KIND_OPTIONS))
+    artifact_kind_options: list[ProtocolArtifactKind] = Field(default_factory=lambda: list(PROTOCOL_ARTIFACT_KIND_OPTIONS))
+    selector_kind_options: list[str] = Field(default_factory=lambda: list(PROTOCOL_SELECTOR_KIND_OPTIONS))
+
+
+class ProtocolDraftCreateRecord(RegistryRecordModel):
+    source_kind: ProtocolDraftSourceKind = "blank"
+    template_slug: str = ""
+    source_protocol_id: str = ""
+    slug: str = ""
+    display_name: str = ""
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> "ProtocolDraftCreateRecord":
+        if self.source_kind == "template" and not str(self.template_slug or "").strip():
+            raise ValueError("template_slug is required when source_kind=template")
+        if self.source_kind == "protocol" and not str(self.source_protocol_id or "").strip():
+            raise ValueError("source_protocol_id is required when source_kind=protocol")
+        return self
 
 
 class ProtocolRunRecord(RegistryRecordModel):
@@ -713,6 +762,10 @@ __all__ = [
         "PROTOCOL_DEFAULT_VISIBILITY",
         "PROTOCOL_SUPPORTED_RUN_STATUSES",
         "PROTOCOL_SUPPORTED_STAGE_STATUSES",
+        "PROTOCOL_STAGE_KIND_OPTIONS",
+        "PROTOCOL_ARTIFACT_KIND_OPTIONS",
+        "PROTOCOL_SELECTOR_KIND_OPTIONS",
+        "PROTOCOL_AUTHORING_SECTION_OPTIONS",
         "RegistryJsonRecord",
         "RegistryRecordModel",
         "RoutedTaskRequest",

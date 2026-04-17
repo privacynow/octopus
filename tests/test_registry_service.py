@@ -1189,6 +1189,8 @@ def test_protocol_openapi_exposes_archive_and_created_after_filter(monkeypatch, 
     assert response.status_code == 200
     paths = response.json()["paths"]
     assert "/v1/protocols/{protocol_id}/archive" in paths
+    assert "/v1/protocol-authoring/manifest" in paths
+    assert "/v1/protocol-drafts" in paths
     protocol_list_parameters = {
         item["name"]
         for item in paths["/v1/protocols"]["get"].get("parameters", [])
@@ -1208,6 +1210,7 @@ def test_protocol_openapi_exposes_parse_export_diff_and_run_filters(monkeypatch,
     assert "/v1/protocols/parse" in paths
     assert "/v1/protocols/{protocol_id}/draft/export" in paths
     assert "/v1/protocols/{protocol_id}/diff" in paths
+    assert paths["/v1/protocol-drafts"]["post"]["requestBody"]
     run_list_parameters = {
         item["name"]
         for item in paths["/v1/protocol-runs"]["get"].get("parameters", [])
@@ -1309,6 +1312,130 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
     assert export_response.json()["text"].startswith("schema_version: 1")
     assert diff_response.status_code == 200
     assert diff_response.json()["left_label"] == "draft"
+
+
+def test_protocol_authoring_manifest_route_returns_templates_and_section_metadata(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol_authoring_manifest(self, *, access):
+            return {
+                "templates": [
+                    {
+                        "slug": "demo-template",
+                        "display_name": "Demo Template",
+                        "description": "Reusable workflow starter.",
+                        "featured": False,
+                        "participant_count": 2,
+                        "artifact_count": 1,
+                        "stage_count": 3,
+                        "stage_kind_sequence": ["work", "review", "acceptance"],
+                    }
+                ],
+                "sections": ["overview", "participants", "stages", "artifacts", "policies", "review", "advanced"],
+                "stage_kind_options": ["work", "review", "acceptance"],
+                "artifact_kind_options": ["workspace_file", "control_plane_text"],
+                "selector_kind_options": ["agent", "skill", "role"],
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.get("/v1/protocol-authoring/manifest")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["templates"][0]["slug"] == "demo-template"
+    assert "advanced" in payload["sections"]
+    assert "review" in payload["stage_kind_options"]
+
+
+def test_protocol_draft_create_route_accepts_blank_source(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_draft(self, payload, *, access):
+            assert payload.source_kind == "blank"
+            return ProtocolMutationRecord(
+                ok=True,
+                status="saved",
+                message="Protocol draft saved.",
+                protocol={
+                    "protocol_id": "protocol-blank",
+                    "slug": "protocol-blank",
+                    "display_name": "Untitled Protocol",
+                    "description": "",
+                    "lifecycle_state": "draft",
+                    "current_version_id": "",
+                    "owner_org_id": "local",
+                    "visibility": "org_shared",
+                    "created_by": "operator",
+                    "updated_by": "operator",
+                    "created_at": "2026-04-16T00:00:00+00:00",
+                    "updated_at": "2026-04-16T00:00:00+00:00",
+                },
+                draft_definition_json={
+                    "schema_version": 1,
+                    "metadata": {
+                        "slug": "protocol-blank",
+                        "display_name": "Untitled Protocol",
+                        "description": "",
+                    },
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                validation={
+                    "ok": False,
+                    "errors": ["At least one stage is required."],
+                    "content_hash": "",
+                },
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post("/v1/protocol-drafts", json={"source_kind": "blank"})
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["protocol"]["protocol_id"] == "protocol-blank"
+    assert payload["draft_definition_json"]["metadata"]["slug"] == "protocol-blank"
+
+
+def test_protocol_draft_create_route_rejects_template_without_slug(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post("/v1/protocol-drafts", json={"source_kind": "template"})
+    finally:
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
+    assert "template_slug is required" in response.json()["detail"]["message"]
 
 
 def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(monkeypatch, tmp_path: Path):

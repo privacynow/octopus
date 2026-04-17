@@ -5,9 +5,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from pydantic import ValidationError
 
-from octopus_sdk.protocols import ProtocolAccessContextRecord, ProtocolRunCreateRecord
+from octopus_sdk.protocols import (
+    ProtocolAccessContextRecord,
+    ProtocolDraftCreateRecord,
+    ProtocolRunCreateRecord,
+)
 from octopus_sdk.registry.models import RegistryJsonRecord
 
 from .auth import AuthContext
@@ -118,6 +123,17 @@ def build_protocol_router(
             raise _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message="Protocol template not found.") from exc
         return _json_payload(document)
 
+    @router.get("/v1/protocol-authoring/manifest")
+    def resource_get_protocol_authoring_manifest(
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            manifest = store.get_protocol_authoring_manifest(access=protocol_access(auth))
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        return _json_payload(manifest)
+
     @router.get("/v1/protocols/{protocol_id}")
     def resource_get_protocol(
         protocol_id: str,
@@ -161,7 +177,7 @@ def build_protocol_router(
             )
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
-        except ValueError as exc:
+        except ValidationError as exc:
             raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=str(exc)) from exc
         return _json_payload(parsed)
 
@@ -216,6 +232,24 @@ def build_protocol_router(
             description=str(payload.get("description", "") or ""),
             definition_json=RegistryJsonRecord.model_validate(payload.get("definition_json", {})),
         )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        await broadcast_invalidations(topics=("protocols",), reason="protocol.saved")
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-drafts")
+    async def resource_create_protocol_draft(
+        payload: dict[str, Any] = Body(...),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message="Invalid protocol payload.")
+        try:
+            create_payload = ProtocolDraftCreateRecord.model_validate(payload)
+        except (ValidationError, ValueError) as exc:
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message=str(exc)) from exc
+        result = store.create_protocol_draft(create_payload, access=protocol_access(auth))
         if not result.ok:
             raise _protocol_result_http_error(result)
         await broadcast_invalidations(topics=("protocols",), reason="protocol.saved")

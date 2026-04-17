@@ -213,6 +213,8 @@ const API = (() => {
         // Protocols
         listProtocols: (opts = {}) =>
             request('GET', '/v1/protocols', { params: opts }),
+        getProtocolAuthoringManifest: () =>
+            request('GET', '/v1/protocol-authoring/manifest'),
         getProtocolTemplate: (slug) =>
             request('GET', `/v1/protocol-templates/${encodeURIComponent(slug)}`),
         getProtocol: (id) =>
@@ -221,6 +223,8 @@ const API = (() => {
             request('GET', `/v1/protocols/${encodeURIComponent(protocolId)}/versions/${encodeURIComponent(versionId)}`),
         parseProtocolDocument: (body = {}) =>
             request('POST', '/v1/protocols/parse', { body }),
+        createProtocolDraft: (body = {}) =>
+            request('POST', '/v1/protocol-drafts', { body }),
         createProtocol: (body = {}) =>
             request('POST', '/v1/protocols', { body }),
         saveProtocolDraft: (id, body = {}) =>

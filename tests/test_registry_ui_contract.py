@@ -126,6 +126,8 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.parseProtocolDocument(" in workspace
     assert "API.exportProtocolDraft(" in workspace
     assert "API.diffProtocolDraft(" in workspace
+    assert "API.getProtocolAuthoringManifest()" in workspace
+    assert "API.createProtocolDraft(" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.listProtocolRuns({ limit: 50 })" in workspace
     assert "API.getProtocolRun(currentRunId)" in workspace
@@ -133,15 +135,22 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
-    assert "Structured editor" in workspace
+    assert "Workflow summary" in workspace
+    assert "Workflow map" in workspace
+    assert "Review & publish" in workspace
+    assert "Advanced raw editor" in workspace
+    assert "Protocol basics" in workspace
+    assert "Blank protocol" in workspace
+    assert "Import JSON or YAML" in workspace
     assert "Add participant" in workspace
     assert "Add artifact" in workspace
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
-    assert "Select a protocol from Definitions to inspect or edit it, or start a new draft." in workspace
+    assert "Start from a blank workflow, choose a reusable template, or import a definition." in workspace
     assert "Select a run to inspect state, timeline, artifacts, and operator actions." in workspace
     assert "No protocol issues detected for this run." in workspace
     assert "No blocked runs, lease issues, contract failures, or expired timeouts match this filter." in workspace
+    assert "Structured editor" not in workspace
 
 
 def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_modes() -> None:
@@ -164,6 +173,9 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "renderLauncherStrip" not in workspace
     assert "UI.readQueryParam('entry_agent_id'" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
+    assert "UI.readQueryParam('protocol_section', 'overview')" in workspace
+    assert "API.getProtocolTemplate('software-engineering')" not in workspace
+    assert "loadDefaultTemplate" not in workspace
     assert "const structuredInputDrafts = new Map();" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);" in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
@@ -182,8 +194,10 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".protocol-scroll {" in css
     assert ".protocol-workspace-grid {" not in css
     assert "max-height: min(36dvh, 460px);" not in css
-    assert ".protocol-structured-editor," in css
-    assert ".protocol-structured-card {" in css
+    assert ".protocol-author-workspace {" in css
+    assert ".protocol-template-grid {" in css
+    assert ".protocol-stage-flow {" in css
+    assert ".protocol-inspector-panel {" in css
     assert ".protocol-inline-checkbox {" in css
     assert "@media (max-width: 1080px)" in css
     assert ".dashboard-board," in css

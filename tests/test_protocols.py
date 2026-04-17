@@ -11,6 +11,7 @@ import pytest
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolAccessContextRecord,
+    ProtocolDraftCreateRecord,
     ProtocolStageDefinitionRecord,
     parse_protocol_stage_decision,
     protocol_document_to_text,
@@ -748,6 +749,84 @@ def test_registry_store_uses_database_for_builtin_protocol_template(postgres_reg
 
     template = store.get_protocol_template("software-engineering", access=operator_access())
     assert template.display_name == "DB Seeded Protocol"
+
+
+def test_registry_store_authoring_manifest_lists_templates_and_sections(postgres_registry_truncated: str) -> None:
+    from app.db.postgres_init import run_init
+
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    with get_connection(postgres_registry_truncated) as conn:
+        assert run_init(conn) == []
+        conn.commit()
+
+    manifest = store.get_protocol_authoring_manifest(access=operator_access())
+
+    assert manifest.templates
+    assert any(item.slug == "software-engineering" for item in manifest.templates)
+    assert "overview" in manifest.sections
+    assert "advanced" in manifest.sections
+    assert "review" in manifest.stage_kind_options
+
+
+def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_starter(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}),
+        access=operator_access(),
+    )
+
+    assert created.ok is True
+    assert created.protocol is not None
+    assert created.protocol.lifecycle_state == "draft"
+    assert created.protocol.slug
+    assert created.draft_definition_json["metadata"]["slug"] == created.protocol.slug
+    assert created.draft_definition_json["stages"] == []
+    assert created.validation is not None
+    assert created.validation.ok is False
+
+
+def test_registry_store_create_template_protocol_draft_clones_builtin_template(postgres_registry_truncated: str) -> None:
+    from app.db.postgres_init import run_init
+
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    with get_connection(postgres_registry_truncated) as conn:
+        assert run_init(conn) == []
+        conn.commit()
+
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "template", "template_slug": "software-engineering"}),
+        access=operator_access(),
+    )
+
+    assert created.ok is True
+    assert created.protocol is not None
+    assert created.protocol.slug != "software-engineering"
+    assert created.draft_definition_json["metadata"]["display_name"].endswith("Draft")
+    assert created.draft_definition_json["stages"]
+    assert created.validation is not None
+    assert created.validation.ok is True
+
+
+def test_registry_store_create_protocol_draft_clones_existing_protocol(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store, slug="clone-source")
+
+    cloned = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate(
+            {"source_kind": "protocol", "source_protocol_id": published.protocol.protocol_id}
+        ),
+        access=operator_access(),
+    )
+
+    assert cloned.ok is True
+    assert cloned.protocol is not None
+    assert cloned.protocol.protocol_id != published.protocol.protocol_id
+    assert cloned.protocol.slug != published.protocol.slug
+    assert cloned.draft_definition_json["metadata"]["display_name"].endswith("Draft")
+    assert cloned.draft_definition_json["stages"]
+    assert cloned.validation is not None
+    assert cloned.validation.ok is True
 
 
 def test_registry_store_create_run_returns_not_visible_for_foreign_org(postgres_registry_truncated: str) -> None:

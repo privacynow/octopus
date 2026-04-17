@@ -11,10 +11,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from octopus_sdk.protocols import (
+    PROTOCOL_ARTIFACT_KIND_OPTIONS,
+    PROTOCOL_AUTHORING_SECTION_OPTIONS,
     PROTOCOL_DEFAULT_OPERATOR_REF,
     PROTOCOL_DEFAULT_RETENTION_DAYS,
     PROTOCOL_DEFAULT_RUN_ORG_ID,
+    PROTOCOL_SELECTOR_KIND_OPTIONS,
+    PROTOCOL_STAGE_KIND_OPTIONS,
     PROTOCOL_DEFAULT_VISIBILITY,
+    ProtocolAuthoringManifestRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactObservationRecord,
     ProtocolArtifactRecord,
@@ -22,6 +27,7 @@ from octopus_sdk.protocols import (
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
     ProtocolIssueRecord,
     ProtocolMaintenanceResultRecord,
     ProtocolMutationRecord,
@@ -33,10 +39,12 @@ from octopus_sdk.protocols import (
     ProtocolRunRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
+    ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
     ProtocolTransitionRecord,
     RegistryJsonRecord,
     TargetSelector,
+    builtin_protocol_template_summaries,
     canonical_protocol_document,
     normalize_protocol_document_format,
     protocol_current_review_state,
@@ -341,6 +349,40 @@ class ProtocolPostgresAdapter:
         if self._protocol_visible_to_access(row, access=access, include_drafts=include_drafts):
             return "visible"
         return "not_visible"
+
+    def _unique_protocol_slug(self, conn, base_slug: str, *, protocol_id: str = "") -> str:
+        normalized = str(base_slug or "").strip().lower() or f"protocol-{uuid.uuid4().hex[:8]}"
+        candidate = normalized
+        suffix = 1
+        while True:
+            row = self._protocol_row_for_slug(conn, candidate)
+            if row is None or str(row.get("protocol_id", "") or "") == str(protocol_id or ""):
+                return candidate
+            suffix += 1
+            candidate = f"{normalized}-{suffix}"
+
+    @staticmethod
+    def _blank_protocol_document(
+        *,
+        slug: str,
+        display_name: str,
+        description: str,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "metadata": {
+                "slug": str(slug or "").strip(),
+                "display_name": str(display_name or "").strip(),
+                "description": str(description or "").strip(),
+            },
+            "participants": [],
+            "artifacts": [],
+            "stages": [],
+            "policies": {
+                "single_active_writer": True,
+                "max_review_rounds": 5,
+            },
+        }
 
     def _assert_protocol_run_visible(
         self,
@@ -1311,6 +1353,35 @@ class ProtocolPostgresAdapter:
                 raise KeyError(slug)
             return canonical_protocol_document(version_row.get("definition_json") or {})
 
+    def list_protocol_templates(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTemplateSummaryRecord]:
+        summaries: list[ProtocolTemplateSummaryRecord] = []
+        with self._connect() as conn:
+            for item in builtin_protocol_template_summaries():
+                row = self._protocol_row_for_slug(conn, item.slug)
+                visibility = self._protocol_visibility_status(row, access=access, include_drafts=False)
+                if visibility == "visible":
+                    summaries.append(item)
+        return summaries
+
+    def get_protocol_authoring_manifest(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAuthoringManifestRecord:
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            raise PermissionError("Protocol authoring requires author access.")
+        return ProtocolAuthoringManifestRecord(
+            templates=self.list_protocol_templates(access=access),
+            sections=list(PROTOCOL_AUTHORING_SECTION_OPTIONS),
+            stage_kind_options=list(PROTOCOL_STAGE_KIND_OPTIONS),
+            artifact_kind_options=list(PROTOCOL_ARTIFACT_KIND_OPTIONS),
+            selector_kind_options=list(PROTOCOL_SELECTOR_KIND_OPTIONS),
+        )
+
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         include_drafts = any(self._access_has_role(access, role) for role in ("author", "publisher", "admin"))
         with self._connect() as conn:
@@ -1542,6 +1613,86 @@ class ProtocolPostgresAdapter:
                 draft_definition_json=RegistryJsonRecord.model_validate(raw_definition),
                 draft_document=document,
                 validation=validation,
+            )
+
+    def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
+            return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
+        source_kind = str(payload.source_kind or "blank").strip()
+        with self._connect() as conn:
+            if source_kind == "template":
+                try:
+                    template = self.get_protocol_template(payload.template_slug, access=access)
+                except PermissionError:
+                    return ProtocolMutationRecord(ok=False, status="not_visible", message="Protocol template is not visible to this actor.")
+                except KeyError:
+                    return ProtocolMutationRecord(ok=False, status="not_found", message="Protocol template not found.")
+                base_slug = template.slug or "protocol"
+                unique_slug = self._unique_protocol_slug(conn, f"{base_slug}-draft")
+                display_name = str(payload.display_name or f"{template.display_name} Draft").strip()
+                description = str(payload.description or template.description or "").strip()
+                definition_json = template.model_dump(mode="json")
+                definition_json["metadata"] = {
+                    **dict(definition_json.get("metadata") or {}),
+                    "slug": str(payload.slug or unique_slug).strip(),
+                    "display_name": display_name,
+                    "description": description,
+                }
+                return self.save_protocol_draft(
+                    access=access,
+                    protocol_id="",
+                    slug=str(payload.slug or unique_slug).strip(),
+                    display_name=display_name,
+                    description=description,
+                    definition_json=RegistryJsonRecord.model_validate(definition_json),
+                )
+            if source_kind == "protocol":
+                loaded = self.get_protocol(str(payload.source_protocol_id or "").strip(), access=access)
+                if not loaded.ok:
+                    return loaded
+                source_document = loaded.draft_document.model_dump(mode="json") if loaded.draft_document is not None else loaded.draft_definition_json.as_dict()
+                source_metadata = dict(source_document.get("metadata") or {})
+                base_slug = str(source_metadata.get("slug", "") or loaded.protocol.slug or "protocol").strip()
+                unique_slug = self._unique_protocol_slug(conn, f"{base_slug}-draft")
+                source_display_name = str(source_metadata.get("display_name", "") or loaded.protocol.display_name or base_slug).strip()
+                source_description = str(source_metadata.get("description", "") or loaded.protocol.description or "").strip()
+                display_name = str(payload.display_name or f"{source_display_name} Draft").strip()
+                description = str(payload.description or source_description or "").strip()
+                definition_json = source_document
+                definition_json["metadata"] = {
+                    **dict(definition_json.get("metadata") or {}),
+                    "slug": str(payload.slug or unique_slug).strip(),
+                    "display_name": display_name,
+                    "description": description,
+                }
+                return self.save_protocol_draft(
+                    access=access,
+                    protocol_id="",
+                    slug=str(payload.slug or unique_slug).strip(),
+                    display_name=display_name,
+                    description=description,
+                    definition_json=RegistryJsonRecord.model_validate(definition_json),
+                )
+            unique_slug = self._unique_protocol_slug(conn, str(payload.slug or "protocol").strip() or "protocol")
+            display_name = str(payload.display_name or "Untitled Protocol").strip()
+            description = str(payload.description or "").strip()
+            blank_document = self._blank_protocol_document(
+                slug=str(payload.slug or unique_slug).strip(),
+                display_name=display_name,
+                description=description,
+            )
+            return self.save_protocol_draft(
+                access=access,
+                protocol_id="",
+                slug=str(payload.slug or unique_slug).strip(),
+                display_name=display_name,
+                description=description,
+                definition_json=RegistryJsonRecord.model_validate(blank_document),
             )
 
     def validate_protocol(

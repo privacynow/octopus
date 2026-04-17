@@ -166,6 +166,24 @@ def builtin_protocol_documents() -> tuple[ProtocolDefinitionDocumentRecord, ...]
     return (software_engineering_protocol_document(),)
 
 
+def builtin_protocol_template_summaries() -> tuple[ProtocolTemplateSummaryRecord, ...]:
+    summaries: list[ProtocolTemplateSummaryRecord] = []
+    for document in builtin_protocol_documents():
+        summaries.append(
+            ProtocolTemplateSummaryRecord(
+                slug=document.slug,
+                display_name=document.display_name,
+                description=document.description,
+                featured=False,
+                participant_count=len(document.participants),
+                artifact_count=len(document.artifacts),
+                stage_count=len(document.stages),
+                stage_kind_sequence=[item.stage_kind for item in document.stages],
+            )
+        )
+    return tuple(summaries)
+
+
 def builtin_protocol_document(slug: str) -> ProtocolDefinitionDocumentRecord:
     normalized = str(slug or "").strip().lower()
     for document in builtin_protocol_documents():
@@ -212,6 +230,7 @@ def new_protocol_definition(
 __all__ = [
     "software_engineering_protocol_document",
     "builtin_protocol_documents",
+    "builtin_protocol_template_summaries",
     "builtin_protocol_document",
     "new_protocol_definition",
 ]

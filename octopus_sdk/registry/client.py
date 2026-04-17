@@ -14,10 +14,12 @@ from pydantic import BaseModel
 
 from octopus_sdk.events import ConversationEvent, validate_event_metadata
 from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
     ProtocolTextDocumentRecord,
@@ -335,6 +337,10 @@ class RegistryClient:
         result = await self._request("GET", f"/v1/protocol-templates/{slug}")
         return ProtocolDefinitionDocumentRecord.model_validate(result)
 
+    async def get_protocol_authoring_manifest(self) -> ProtocolAuthoringManifestRecord:
+        result = await self._request("GET", "/v1/protocol-authoring/manifest")
+        return ProtocolAuthoringManifestRecord.model_validate(result)
+
     async def get_protocol(self, protocol_id: str) -> ProtocolMutationRecord:
         result = await self._request("GET", f"/v1/protocols/{protocol_id}")
         return ProtocolMutationRecord.model_validate(result)
@@ -363,6 +369,17 @@ class RegistryClient:
             result = await self._request("PUT", f"/v1/protocols/{protocol_id}/draft", json=payload)
         else:
             result = await self._request("POST", "/v1/protocols", json=payload)
+        return ProtocolMutationRecord.model_validate(result)
+
+    async def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+    ) -> ProtocolMutationRecord:
+        result = await self._request(
+            "POST",
+            "/v1/protocol-drafts",
+            json=payload.model_dump(exclude_unset=True),
+        )
         return ProtocolMutationRecord.model_validate(result)
 
     async def validate_protocol(self, protocol_id: str) -> ProtocolMutationRecord:

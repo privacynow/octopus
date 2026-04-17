@@ -17,12 +17,14 @@ from octopus_sdk.content_models import (
     SkillRevisionRecord,
 )
 from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
     ProtocolAccessContextRecord,
     ProtocolArtifactRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
     ProtocolIssueRecord,
     ProtocolMaintenanceResultRecord,
     ProtocolMutationRecord,
@@ -32,6 +34,7 @@ from octopus_sdk.protocols import (
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
     ProtocolTransitionRecord,
 )
@@ -1008,6 +1011,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
     ) -> ProtocolDefinitionDocumentRecord:
         return self._protocol_store.get_protocol_template(slug, access=access)
 
+    def list_protocol_templates(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTemplateSummaryRecord]:
+        return self._protocol_store.list_protocol_templates(access=access)
+
+    def get_protocol_authoring_manifest(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAuthoringManifestRecord:
+        return self._protocol_store.get_protocol_authoring_manifest(access=access)
+
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.get_protocol(protocol_id, access=access)
 
@@ -1077,6 +1094,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
             description=description,
             definition_json=definition_json,
         )
+
+    def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        return self._protocol_store.create_protocol_draft(payload, access=access)
 
     def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         return self._protocol_store.validate_protocol(protocol_id, access=access)

@@ -19,14 +19,17 @@ from octopus_sdk.content_models import (
 )
 from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
+    ProtocolAuthoringManifestRecord,
     ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDefinitionDiffRecord,
     ProtocolDefinitionRecord,
     ProtocolDefinitionVersionRecord,
+    ProtocolDraftCreateRecord,
     ProtocolMutationRecord,
     ProtocolIssueRecord,
     ProtocolMaintenanceResultRecord,
+    ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
@@ -663,6 +666,20 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolDefinitionDocumentRecord:
         """Return one builtin protocol template document by slug."""
 
+    def list_protocol_templates(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> list[ProtocolTemplateSummaryRecord]:
+        """Return template metadata for protocol authoring."""
+
+    def get_protocol_authoring_manifest(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolAuthoringManifestRecord:
+        """Return protocol-authoring sections, templates, and option lists."""
+
     def get_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Return one protocol definition with latest validation/version metadata."""
 
@@ -686,6 +703,14 @@ class AbstractRegistryStore(Protocol):
         definition_json: RegistryJsonRecord,
     ) -> ProtocolMutationRecord:
         """Create or update one protocol draft."""
+
+    def create_protocol_draft(
+        self,
+        payload: ProtocolDraftCreateRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolMutationRecord:
+        """Create one persisted draft from a blank starter, template, or existing protocol."""
 
     def validate_protocol(self, protocol_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolMutationRecord:
         """Validate the current draft for one protocol."""

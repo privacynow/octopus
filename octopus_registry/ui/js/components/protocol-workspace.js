@@ -511,6 +511,7 @@ function renderProtocolWorkspace(container) {
                 currentRun = null;
                 currentIssues = [];
                 _setCurrentView('author');
+                renderAuthorSurface();
                 void loadProtocolDetail();
             },
         }));
@@ -539,6 +540,7 @@ function renderProtocolWorkspace(container) {
             onClick: () => {
                 currentRunId = item.protocol_run_id;
                 _setCurrentView('operate');
+                renderOperateSurface();
                 void loadRunDetail();
             },
         }));
@@ -556,6 +558,7 @@ function renderProtocolWorkspace(container) {
             onClick: () => {
                 currentRunId = item.protocol_run_id;
                 _setCurrentView('issues');
+                renderIssuesSurface();
                 void loadRunDetail();
             },
         }));

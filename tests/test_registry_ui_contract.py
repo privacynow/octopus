@@ -159,6 +159,12 @@ def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
     assert "function renderOperateSurface()" in workspace
     assert "function renderIssuesSurface()" in workspace
     assert "function renderLauncherStrip()" in workspace
+    assert "_setCurrentView('author');" in workspace
+    assert "_setCurrentView('operate');" in workspace
+    assert "_setCurrentView('issues');" in workspace
+    assert "renderAuthorSurface();" in workspace
+    assert "renderOperateSurface();" in workspace
+    assert "renderIssuesSurface();" in workspace
     assert "_syncControlValue(workspaceInput, runLauncherWorkspaceRef);" in workspace
     assert "_syncControlValue(problemInput, runLauncherProblemStatement);" in workspace
     assert "const structuredInputDrafts = new Map();" in workspace

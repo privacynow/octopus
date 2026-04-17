@@ -121,10 +121,14 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
 
+    assert "function renderProtocolWorkspace(" in workspace
+    assert "function renderProtocolRuns(" in workspace
     assert "API.parseProtocolDocument(" in workspace
     assert "API.exportProtocolDraft(" in workspace
     assert "API.diffProtocolDraft(" in workspace
     assert "API.listProtocolIssues({" in workspace
+    assert "API.listProtocolRuns({ limit: 50 })" in workspace
+    assert "API.getProtocolRun(currentRunId)" in workspace
     assert "API.actOnProtocolRun(" in workspace
     assert "WS.subscribe(`protocol-run:${currentRunId}`" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
@@ -134,44 +138,37 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Add artifact" in workspace
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
-    assert "Choose a published protocol in Author before starting a run." in workspace
     assert "Select a protocol from Definitions to inspect or edit it, or start a new draft." in workspace
+    assert "Select a run to inspect state, timeline, artifacts, and operator actions." in workspace
     assert "No protocol issues detected for this run." in workspace
-    assert "No blocked runs, lease issues, contract failures, or expired timeouts are visible right now." in workspace
+    assert "No blocked runs, lease issues, contract failures, or expired timeouts match this filter." in workspace
 
 
-def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
+def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_modes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
     ).read_text(encoding="utf-8")
+    app_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "app.js"
+    ).read_text(encoding="utf-8")
+    router_js = (
+        repo_root / "octopus_registry" / "ui" / "js" / "router.js"
+    ).read_text(encoding="utf-8")
 
-    assert "const WORKSPACE_VIEW_OPTIONS = [" in workspace
-    assert "let currentView = _readWorkspaceView();" in workspace
-    assert "const viewControl = UI.createSegmentedControl(" in workspace
-    assert "let runLauncherEntryAgentId = UI.readQueryParam('entry_agent_id', '');" in workspace
-    assert "UI.createAgentManagementDropdown(" in workspace
-    assert "return UI.filterProtocolRunAgents(agents || []);" in workspace
-    assert "function _defaultProtocolSelection(protocolList = protocols) {" in workspace
-    assert "if (currentView !== 'operate') {" in workspace
-    assert "return '';" in workspace
-    assert "function _managedAgents()" not in workspace
-    assert "UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);" in workspace
-    assert "entry_agent_id: runLauncherEntryAgentId," in workspace
-    assert "launcherPanel.hidden = currentView !== 'operate';" not in workspace
-    assert "function renderAuthorSurface()" in workspace
-    assert "function renderOperateSurface()" in workspace
-    assert "function renderIssuesSurface()" in workspace
-    assert "function renderLauncherStrip()" in workspace
-    assert "_setCurrentView('author');" in workspace
-    assert "_setCurrentView('operate');" in workspace
-    assert "_setCurrentView('issues');" in workspace
-    assert "renderAuthorSurface();" in workspace
-    assert "renderOperateSurface();" in workspace
-    assert "renderIssuesSurface();" in workspace
-    assert "_syncControlValue(workspaceInput, runLauncherWorkspaceRef);" in workspace
-    assert "_syncControlValue(problemInput, runLauncherProblemStatement);" in workspace
+    assert "WORKSPACE_VIEW_OPTIONS" not in workspace
+    assert "UI.createAgentManagementDropdown(" not in workspace
+    assert "_setCurrentView(" not in workspace
+    assert "renderOperateSurface" not in workspace
+    assert "renderIssuesSurface" not in workspace
+    assert "renderLauncherStrip" not in workspace
+    assert "UI.readQueryParam('entry_agent_id'" not in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'agents'" not in workspace
     assert "const structuredInputDrafts = new Map();" in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols(), 350);" in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'summary', () => Promise.all([" in workspace
+    assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" in app_js
+    assert "route === '/protocols' && path.startsWith('/ui/protocol-runs')" in router_js
 
 
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
@@ -182,8 +179,6 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
 
     assert ".protocol-route-shell {" in css
     assert ".protocol-surface-shell {" in css
-    assert ".protocol-launcher-panel {" in css
-    assert ".protocol-launcher-fields {" in css
     assert ".protocol-scroll {" in css
     assert ".protocol-workspace-grid {" not in css
     assert "max-height: min(36dvh, 460px);" not in css
@@ -194,10 +189,9 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".dashboard-board," in css
     assert "@media (max-width: 900px)" in css
     assert ".protocol-sticky-actions {" in css
-    assert "position: sticky;" in css
 
 
-def test_protocol_navigation_links_target_author_operate_and_issue_surfaces() -> None:
+def test_protocol_navigation_links_target_authoring_and_run_routes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dashboard = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
@@ -206,11 +200,11 @@ def test_protocol_navigation_links_target_author_operate_and_issue_surfaces() ->
         repo_root / "octopus_registry" / "ui" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "href: '/ui/protocols?view=operate'" in dashboard
-    assert "href: '/ui/protocols?view=author'" in dashboard
-    assert "`/ui/protocols?view=issues&run_id=${encodeURIComponent(item.protocol_run_id)}`" in dashboard
-    assert "'/ui/protocols?view=issues'" in dashboard
-    assert 'href="/ui/protocols?view=operate"' in index_html
+    assert "href: '/ui/protocol-runs'" in dashboard
+    assert "href: '/ui/protocols'" in dashboard
+    assert "`/ui/protocol-runs?run_id=${encodeURIComponent(item.protocol_run_id)}&issue_kind=${encodeURIComponent(item.issue_kind || 'all')}`" in dashboard
+    assert "'/ui/protocol-runs?issue_kind=all'" in dashboard
+    assert 'href="/ui/protocols"' in index_html
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:

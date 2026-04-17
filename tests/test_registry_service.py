@@ -1259,8 +1259,9 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
     client = TestClient(app)
 
     class _Store:
-        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json"):
+        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json", validation_mode: str = "strict"):
             assert format == "yaml"
+            assert validation_mode == "strict"
             assert "schema_version: 1" in definition_text
             return {
                 "format": "yaml",
@@ -1274,8 +1275,11 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
                     "policies": {"single_active_writer": True, "max_review_rounds": 5},
                 },
                 "validation": {
+                    "mode": "strict",
                     "ok": True,
                     "errors": [],
+                    "issues": [],
+                    "next_required_actions": [],
                     "content_hash": "hash-1",
                 },
             }
@@ -1295,8 +1299,11 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
                     "policies": {"single_active_writer": True, "max_review_rounds": 5},
                 },
                 "validation": {
+                    "mode": "draft",
                     "ok": True,
                     "errors": [],
+                    "issues": [],
+                    "next_required_actions": [],
                     "content_hash": "hash-1",
                 },
             }
@@ -1335,6 +1342,71 @@ def test_protocol_document_routes_round_trip_parse_export_and_diff(monkeypatch, 
     assert export_response.json()["text"].startswith("schema_version: 1")
     assert diff_response.status_code == 200
     assert diff_response.json()["left_label"] == "draft"
+
+
+def test_protocol_parse_route_accepts_draft_mode_for_incomplete_protocols(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def parse_protocol_document_text(self, *, access, definition_text: str, format: str = "json", validation_mode: str = "strict"):
+            assert format == "json"
+            assert validation_mode == "draft"
+            return {
+                "format": "json",
+                "text": "{\"schema_version\": 1}",
+                "document": {
+                    "schema_version": 1,
+                    "metadata": {"slug": "draft-protocol", "display_name": "Draft Protocol", "description": ""},
+                    "participants": [],
+                    "artifacts": [],
+                    "stages": [],
+                    "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                },
+                "validation": {
+                    "mode": "draft",
+                    "ok": False,
+                    "errors": ["Add at least one stage before review or publish."],
+                    "issues": [
+                        {
+                            "code": "stages.required",
+                            "message": "Add at least one stage before review or publish.",
+                            "section": "stages",
+                            "entity_kind": "",
+                            "entity_key": "",
+                            "path": "stages",
+                            "blocking": True,
+                        }
+                    ],
+                    "next_required_actions": ["stages.add_first"],
+                    "content_hash": "hash-draft",
+                },
+            }
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocols/parse",
+            json={
+                "definition_text": "{\"schema_version\":1,\"metadata\":{\"slug\":\"draft-protocol\"},\"participants\":[],\"artifacts\":[],\"stages\":[]}",
+                "format": "json",
+                "validation_mode": "draft",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation"]["mode"] == "draft"
+    assert payload["validation"]["next_required_actions"] == ["stages.add_first"]
+    assert payload["document"]["stages"] == []
 
 
 def test_protocol_authoring_manifest_route_returns_templates_and_section_metadata(monkeypatch, tmp_path: Path):

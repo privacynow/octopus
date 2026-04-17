@@ -174,6 +174,7 @@ def build_protocol_router(
                 access=protocol_access(auth),
                 definition_text=str(payload.get("definition_text", "") or ""),
                 format=str(payload.get("format", "") or "json"),
+                validation_mode=str(payload.get("validation_mode", "") or "strict"),
             )
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc

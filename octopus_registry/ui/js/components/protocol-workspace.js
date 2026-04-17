@@ -26,6 +26,13 @@ const PROTOCOL_AUTHORING_SECTION_OPTIONS = [
     { value: 'advanced', label: 'Advanced' },
 ];
 
+const PROTOCOL_CATALOG_STATUS_OPTIONS = [
+    { value: '', label: 'All statuses' },
+    { value: 'draft', label: 'Drafts' },
+    { value: 'published', label: 'Published' },
+    { value: 'archived', label: 'Archived' },
+];
+
 function _downloadProtocolText(filename, text, contentType) {
     const blob = new Blob([text], { type: contentType });
     const url = URL.createObjectURL(blob);
@@ -142,10 +149,13 @@ function renderProtocolWorkspace(container) {
     let authoringManifest = null;
     let editorFormat = 'json';
     let protocolSearch = '';
+    let protocolLifecycleFilter = '';
     let currentSection = '';
     let selectedParticipantKey = '';
     let selectedArtifactKey = '';
     let selectedStageKey = '';
+    let draftSaveState = 'idle';
+    let autosaveTimer = 0;
     const structuredInputDrafts = new Map();
     let draft = {
         protocol_id: '',
@@ -207,6 +217,7 @@ function renderProtocolWorkspace(container) {
     }
 
     function _resetDraftState() {
+        _clearAutosaveTimer();
         currentProtocolId = '';
         currentProtocol = null;
         protocolDetailLoading = false;
@@ -214,6 +225,7 @@ function renderProtocolWorkspace(container) {
         selectedParticipantKey = '';
         selectedArtifactKey = '';
         selectedStageKey = '';
+        draftSaveState = 'idle';
         draft = {
             protocol_id: '',
             slug: '',
@@ -310,6 +322,41 @@ function renderProtocolWorkspace(container) {
         return next;
     }
 
+    function _mergeProtocolMutation(detail) {
+        if (!detail) {
+            return;
+        }
+        currentProtocol = Object.assign({}, currentProtocol || {}, detail, {
+            protocol: detail.protocol || currentProtocol?.protocol || null,
+            version: detail.version || currentProtocol?.version || null,
+            validation: detail.validation || currentProtocol?.validation || null,
+            draft_definition_json: detail.draft_definition_json || currentProtocol?.draft_definition_json || null,
+            draft_document: Object.prototype.hasOwnProperty.call(detail, 'draft_document')
+                ? detail.draft_document
+                : (currentProtocol?.draft_document || null),
+        });
+    }
+
+    function _clearAutosaveTimer() {
+        if (autosaveTimer) {
+            clearTimeout(autosaveTimer);
+            autosaveTimer = 0;
+        }
+    }
+
+    function _savePayloadFromDraft() {
+        if (draft.parse_error) {
+            throw new Error('Fix the Advanced raw editor syntax before saving this draft.');
+        }
+        const document = _applyDraftMetadataToDocument(_draftDocument());
+        return {
+            slug: draft.slug,
+            display_name: draft.display_name,
+            description: draft.description,
+            definition_json: document,
+        };
+    }
+
     async function _serializeProtocolDocument(document, format = editorFormat) {
         const normalized = _applyDraftMetadataToDocument(document);
         if (format === 'json') {
@@ -318,6 +365,7 @@ function renderProtocolWorkspace(container) {
         const parsed = await API.parseProtocolDocument({
             definition_text: JSON.stringify(normalized, null, 2),
             format,
+            validation_mode: 'draft',
         });
         return String(parsed.text || '');
     }
@@ -326,8 +374,9 @@ function renderProtocolWorkspace(container) {
         const result = await API.parseProtocolDocument({
             definition_text: draft.definition_text || '',
             format: editorFormat,
+            validation_mode: 'draft',
         });
-        if (!result.document || !(result.validation && result.validation.ok)) {
+        if (!result.document) {
             const message = (result.validation && result.validation.errors && result.validation.errors.join(' · '))
                 || 'Protocol draft is invalid.';
             draft.parse_error = message;
@@ -340,15 +389,58 @@ function renderProtocolWorkspace(container) {
         draft.document_json = document;
         draft.parse_error = '';
         _syncDraftFieldsFromDocument(document);
+        _mergeProtocolMutation({ validation: result.validation || null });
         return document;
     }
 
-    async function _commitDraftDocument(document, { rerender = true } = {}) {
+    async function _autosaveCurrentDraft() {
+        if (!currentProtocolId) {
+            return;
+        }
+        const payload = _savePayloadFromDraft();
+        draftSaveState = 'saving';
+        renderAuthorRoute();
+        try {
+            const result = await API.saveProtocolDraft(currentProtocolId, payload);
+            _mergeProtocolMutation(result);
+            draftSaveState = 'saved';
+            await loadProtocols();
+            renderAuthorRoute();
+        } catch (err) {
+            draftSaveState = 'error';
+            renderAuthorRoute();
+            UI.reportError('Failed to save the protocol draft', err, {
+                context: 'Protocol autosave failed',
+            });
+        }
+    }
+
+    function _scheduleAutosave() {
+        if (!currentProtocolId || draft.parse_error) {
+            return;
+        }
+        _clearAutosaveTimer();
+        draftSaveState = 'dirty';
+        autosaveTimer = setTimeout(() => {
+            autosaveTimer = 0;
+            void _autosaveCurrentDraft();
+        }, 450);
+    }
+
+    async function _commitDraftDocument(document, { rerender = true, autosave = true } = {}) {
         const normalized = _applyDraftMetadataToDocument(document);
         draft.document_json = normalized;
         draft.parse_error = '';
         _syncDraftFieldsFromDocument(normalized);
         draft.definition_text = await _serializeProtocolDocument(normalized, editorFormat);
+        _mergeProtocolMutation({
+            draft_definition_json: normalized,
+            draft_document: null,
+            validation: currentProtocol?.validation || null,
+        });
+        if (autosave) {
+            _scheduleAutosave();
+        }
         if (rerender) {
             renderAuthorRoute();
         }
@@ -357,8 +449,7 @@ function renderProtocolWorkspace(container) {
 
     async function _applyStructuredChange(mutator) {
         try {
-            const document = await _parseDraftDocument() || _draftDocument();
-            const working = _cloneDocument(document);
+            const working = _draftDocument();
             mutator(working);
             await _commitDraftDocument(working);
         } catch (err) {
@@ -396,6 +487,8 @@ function renderProtocolWorkspace(container) {
             document_json: _cloneDocument(draftDocument),
             parse_error: '',
         };
+        draftSaveState = 'idle';
+        _clearAutosaveTimer();
         _setSelectedEntityDefaults(draft.document_json);
     }
 
@@ -406,6 +499,7 @@ function renderProtocolWorkspace(container) {
                 ? String((await API.parseProtocolDocument({
                     definition_text: JSON.stringify(_defaultProtocolDocument(), null, 2),
                     format: 'yaml',
+                    validation_mode: 'draft',
                 })).text || '')
                 : JSON.stringify(_defaultProtocolDocument(), null, 2);
             return;
@@ -420,6 +514,7 @@ function renderProtocolWorkspace(container) {
         const parsed = await API.parseProtocolDocument({
             definition_text: JSON.stringify(source, null, 2),
             format: editorFormat,
+            validation_mode: 'draft',
         });
         draft.definition_text = String(parsed.text || '');
     }
@@ -431,22 +526,27 @@ function renderProtocolWorkspace(container) {
             return;
         }
         const ok = Boolean(validation && validation.ok && !parseError);
+        const issueMessages = Array.isArray(validation?.issues)
+            ? validation.issues.map((item) => String(item.message || '').trim()).filter(Boolean)
+            : [];
         const gutter = document.createElement('section');
         gutter.className = `protocol-validation-gutter ${ok ? 'is-valid' : 'is-invalid'}`;
         gutter.setAttribute('role', ok ? 'status' : 'alert');
         const title = document.createElement('strong');
-        title.textContent = ok ? 'Validation passed' : 'Validation issues';
+        title.textContent = ok
+            ? (String(validation?.mode || 'strict') === 'draft' ? 'Draft looks healthy' : 'Validation passed')
+            : 'Validation issues';
         gutter.appendChild(title);
         const summary = document.createElement('div');
         summary.className = 'quiet-note';
         summary.textContent = ok
             ? `Draft valid. Content hash: ${validation?.content_hash || 'n/a'}`
-            : parseError || `${validation?.errors.length || 0} issue(s) found.`;
+            : parseError || `${issueMessages.length || validation?.errors.length || 0} issue(s) found.`;
         gutter.appendChild(summary);
-        if (!ok && validation?.errors.length) {
+        if (!ok && (issueMessages.length || validation?.errors.length)) {
             const list = document.createElement('ul');
             list.className = 'protocol-validation-list';
-            validation.errors.forEach((item) => {
+            (issueMessages.length ? issueMessages : validation.errors).forEach((item) => {
                 const li = document.createElement('li');
                 li.textContent = item;
                 list.appendChild(li);
@@ -659,13 +759,10 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _saveCurrentDraft() {
-        const parsed = await _parseDraftDocument({ report: true });
-        const payload = {
-            slug: draft.slug,
-            display_name: draft.display_name,
-            description: draft.description,
-            definition_json: parsed,
-        };
+        _clearAutosaveTimer();
+        draftSaveState = 'saving';
+        renderAuthorRoute();
+        const payload = _savePayloadFromDraft();
         const result = currentProtocolId
             ? await API.saveProtocolDraft(currentProtocolId, payload)
             : await API.createProtocol(payload);
@@ -679,16 +776,22 @@ function renderProtocolWorkspace(container) {
         } else {
             renderAuthorRoute();
         }
+        draftSaveState = 'saved';
         UI.notify('Protocol draft saved.', 'success');
     }
 
     async function _validateCurrentDraft() {
         if (!currentProtocolId) {
             await _saveCurrentDraft();
+        } else if (draftSaveState === 'dirty' || draftSaveState === 'saving') {
+            await _saveCurrentDraft();
         }
+        draftSaveState = 'saving';
+        renderAuthorRoute();
         currentProtocol = await API.validateProtocol(currentProtocolId);
         _applyDraftFromProtocol(currentProtocol);
         await _refreshDraftTextForCurrentFormat();
+        draftSaveState = 'saved';
         renderAuthorRoute();
         UI.notify(
             currentProtocol.validation?.ok ? 'Protocol validated.' : 'Protocol validation found issues.',
@@ -699,20 +802,30 @@ function renderProtocolWorkspace(container) {
     async function _publishCurrentDraft() {
         if (!currentProtocolId) {
             await _saveCurrentDraft();
+        } else if (draftSaveState === 'dirty' || draftSaveState === 'saving') {
+            await _saveCurrentDraft();
         }
+        _clearAutosaveTimer();
+        draftSaveState = 'saving';
+        renderAuthorRoute();
         currentProtocol = await API.publishProtocol(currentProtocolId);
         _applyDraftFromProtocol(currentProtocol);
         await _refreshDraftTextForCurrentFormat();
         await loadProtocols();
+        draftSaveState = 'saved';
         renderAuthorRoute();
         UI.notify('Protocol published.', 'success');
     }
 
     async function _archiveCurrentDraft() {
+        _clearAutosaveTimer();
+        draftSaveState = 'saving';
+        renderAuthorRoute();
         currentProtocol = await API.archiveProtocol(currentProtocolId);
         _applyDraftFromProtocol(currentProtocol);
         await _refreshDraftTextForCurrentFormat();
         await loadProtocols();
+        draftSaveState = 'saved';
         renderAuthorRoute();
         UI.notify('Protocol archived.', 'success');
     }
@@ -726,12 +839,14 @@ function renderProtocolWorkspace(container) {
         _writeState({ push: true });
         await _refreshDraftTextForCurrentFormat();
         await loadProtocols();
+        draftSaveState = 'idle';
         renderAuthorRoute();
         _revealEditorSurface();
         UI.notify('Protocol draft created.', 'success');
     }
 
     async function _discardCurrentDraft() {
+        _clearAutosaveTimer();
         if (!currentProtocolId) {
             _resetDraftState();
             _writeState({ push: true });
@@ -758,9 +873,35 @@ function renderProtocolWorkspace(container) {
         });
     }
 
+    function _validationIssues() {
+        return Array.isArray(currentProtocol?.validation?.issues) ? currentProtocol.validation.issues : [];
+    }
+
+    function _nextRequiredActionLabels() {
+        const actions = Array.isArray(currentProtocol?.validation?.next_required_actions)
+            ? currentProtocol.validation.next_required_actions
+            : [];
+        return actions.map((item) => {
+            if (item === 'overview.complete_slug') return 'Set a protocol slug in Overview.';
+            if (item === 'participants.add_first') return 'Add the first participant.';
+            if (item === 'stages.add_first') return 'Add the first workflow stage.';
+            if (item === 'stages.assign_participant') return 'Assign a participant to each stage.';
+            return String(item || '').trim();
+        }).filter(Boolean);
+    }
+
     function _sectionIssues(section) {
-        const errors = Array.isArray(currentProtocol?.validation?.errors) ? currentProtocol.validation.errors : [];
+        const issues = _validationIssues();
         const parseError = String(draft.parse_error || '').trim();
+        if (issues.length) {
+            const sectionIssues = issues.filter((item) =>
+                section === 'review'
+                    ? true
+                    : String(item.section || '').trim().toLowerCase() === section,
+            ).map((item) => String(item.message || '').trim()).filter(Boolean);
+            return parseError ? [parseError, ...sectionIssues] : sectionIssues;
+        }
+        const errors = Array.isArray(currentProtocol?.validation?.errors) ? currentProtocol.validation.errors : [];
         if (section === 'review') {
             return parseError ? [parseError, ...errors] : errors;
         }
@@ -775,6 +916,10 @@ function renderProtocolWorkspace(container) {
             }
             return false;
         });
+    }
+
+    function _canAddStages(document) {
+        return Boolean(document.participants?.length);
     }
 
     function _sectionSummary(document) {
@@ -794,20 +939,44 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _protocolRows() {
-        const filtered = (protocols || []).filter((item) => {
+    function _filteredProtocols() {
+        return (protocols || []).filter((item) => {
             const haystack = [
                 item.display_name || '',
                 item.slug || '',
                 item.protocol_id || '',
                 item.description || '',
+                item.visibility || '',
+                item.lifecycle_state || '',
             ].join(' ').toLowerCase();
-            return !protocolSearch || haystack.includes(protocolSearch.toLowerCase());
+            if (protocolSearch && !haystack.includes(protocolSearch.toLowerCase())) {
+                return false;
+            }
+            if (protocolLifecycleFilter && String(item.lifecycle_state || '') !== protocolLifecycleFilter) {
+                return false;
+            }
+            return true;
         });
-        return filtered.map((item) => UI.renderListRow({
+    }
+
+    function _protocolCatalogGroups() {
+        const filtered = _filteredProtocols();
+        return {
+            authored: filtered.filter((item) => String(item.visibility || '') !== 'registry_template'),
+            builtin: filtered.filter((item) => String(item.visibility || '') === 'registry_template'),
+        };
+    }
+
+    function _protocolRows(items, { builtin = false } = {}) {
+        return (items || []).map((item) => UI.renderListRow({
             label: item.display_name || item.slug || item.protocol_id,
-            sublabel: item.description || item.slug || item.protocol_id,
-            badgeText: item.lifecycle_state || 'draft',
+            sublabel: [
+                builtin ? 'Built-in example' : '',
+                item.description || '',
+                item.slug || item.protocol_id,
+                item.updated_at ? `updated ${UI.relativeTime(item.updated_at)}` : '',
+            ].filter(Boolean).join(' · '),
+            badgeText: builtin ? 'example' : (item.lifecycle_state || 'draft'),
             className: item.protocol_id === currentProtocolId ? 'is-selected' : '',
             onClick: () => {
                 currentProtocolId = item.protocol_id;
@@ -823,6 +992,23 @@ function renderProtocolWorkspace(container) {
                 void loadProtocolDetail();
             },
         }));
+    }
+
+    function _buildCatalogGroup(titleText, rows, emptyMessage, { tone = '' } = {}) {
+        const section = document.createElement('section');
+        section.className = `protocol-catalog-group${tone ? ` ${tone}` : ''}`;
+        const heading = document.createElement('div');
+        heading.className = 'protocol-catalog-heading';
+        heading.textContent = titleText;
+        section.appendChild(heading);
+        const body = document.createElement('div');
+        body.className = 'protocol-scroll protocol-catalog-list';
+        UI.reconcileChildren(
+            body,
+            rows.length ? rows : [UI.renderEmptyState(emptyMessage, true)],
+        );
+        section.appendChild(body);
+        return section;
     }
 
     function _openImportDialog() {
@@ -856,7 +1042,7 @@ function renderProtocolWorkspace(container) {
 
         const note = document.createElement('p');
         note.className = 'quiet-note';
-        note.textContent = 'Import uses the same canonical validator as save and publish. JSON and YAML both normalize to the shared protocol document model.';
+        note.textContent = 'Import normalizes JSON or YAML into the shared protocol draft model. Incomplete drafts stay editable and Review handles strict publish validation.';
         form.appendChild(note);
 
         const cancelBtn = document.createElement('button');
@@ -888,6 +1074,7 @@ function renderProtocolWorkspace(container) {
                 const parsed = await API.parseProtocolDocument({
                     definition_text: definitionText,
                     format: formatValue,
+                    validation_mode: 'draft',
                 });
                 const document = _applyDraftMetadataToDocument(parsed.document || _defaultProtocolDocument());
                 const result = await API.createProtocol({
@@ -928,13 +1115,29 @@ function renderProtocolWorkspace(container) {
 
         const definitionSearch = document.createElement('input');
         definitionSearch.className = 'search-input';
-        definitionSearch.placeholder = 'Search definitions';
+        definitionSearch.placeholder = 'Search definitions and examples';
         definitionSearch.value = protocolSearch;
         definitionSearch.addEventListener('input', () => {
             protocolSearch = definitionSearch.value;
             renderAuthorRoute();
         });
         definitionPanel.appendChild(definitionSearch);
+
+        const statusControl = UI.createSegmentedControl(
+            PROTOCOL_CATALOG_STATUS_OPTIONS,
+            (value) => {
+                protocolLifecycleFilter = String(value || '');
+                renderAuthorRoute();
+            },
+            {
+                label: 'Protocol lifecycle filter',
+                value: protocolLifecycleFilter,
+            },
+        );
+        const toolbar = document.createElement('div');
+        toolbar.className = 'protocol-catalog-toolbar';
+        toolbar.appendChild(statusControl.element);
+        definitionPanel.appendChild(toolbar);
 
         const definitionActions = document.createElement('div');
         definitionActions.className = 'editor-actions';
@@ -959,16 +1162,23 @@ function renderProtocolWorkspace(container) {
         definitionActions.appendChild(importButton);
         definitionPanel.appendChild(definitionActions);
 
-        const definitionList = document.createElement('div');
-        definitionList.className = 'protocol-scroll';
-        const definitionRows = _protocolRows();
-        UI.reconcileChildren(
-            definitionList,
-            definitionRows.length
-                ? definitionRows
-                : [UI.renderEmptyState('No protocols yet. Create one from scratch, use a template, or import an existing definition.', true)],
-        );
-        definitionPanel.appendChild(definitionList);
+        const groups = _protocolCatalogGroups();
+        const catalogGroups = document.createElement('div');
+        catalogGroups.className = 'protocol-catalog-groups';
+        catalogGroups.appendChild(_buildCatalogGroup(
+            'Your definitions',
+            _protocolRows(groups.authored),
+            'No authored protocols yet. Start a blank draft, use a starter template, or import an existing definition.',
+        ));
+        if (groups.builtin.length) {
+            catalogGroups.appendChild(_buildCatalogGroup(
+                'Built-in examples',
+                _protocolRows(groups.builtin, { builtin: true }),
+                'No built-in protocol examples are available in this registry.',
+                { tone: 'protocol-catalog-group-subtle' },
+            ));
+        }
+        definitionPanel.appendChild(catalogGroups);
         return definitionPanel;
     }
 
@@ -1164,6 +1374,13 @@ function renderProtocolWorkspace(container) {
                 currentProtocol.protocol.lifecycle_state || 'draft',
                 currentProtocol.version ? `version ${currentProtocol.version.version || 0}` : '',
                 currentProtocol.protocol.current_version_id ? 'published version available' : 'not yet published',
+                draftSaveState === 'saving'
+                    ? 'saving'
+                    : draftSaveState === 'dirty'
+                        ? 'unsaved changes'
+                        : draftSaveState === 'error'
+                            ? 'save failed'
+                            : 'saved',
             ].filter(Boolean).join(' · ')
             : 'Edit the workflow progressively. Advanced raw JSON/YAML stays behind the Advanced section.';
         titleWrap.appendChild(note);
@@ -1198,28 +1415,6 @@ function renderProtocolWorkspace(container) {
                 });
             });
             actions.appendChild(duplicateButton);
-        }
-
-        const isDiscardableDraft = Boolean(
-            currentProtocolId
-            && String(currentProtocol?.protocol?.lifecycle_state || '') === 'draft'
-            && !String(currentProtocol?.protocol?.current_version_id || '').trim(),
-        );
-        if (isDiscardableDraft) {
-            const discardButton = document.createElement('button');
-            discardButton.type = 'button';
-            discardButton.className = 'btn';
-            discardButton.textContent = 'Discard draft';
-            discardButton.addEventListener('click', () => {
-                UI.showConfirm(
-                    'Discard protocol draft?',
-                    'This permanently deletes the unpublished draft. Published protocols must be archived instead.',
-                    async () => {
-                        await _discardCurrentDraft();
-                    },
-                );
-            });
-            actions.appendChild(discardButton);
         }
 
         const reviewButton = document.createElement('button');
@@ -1263,6 +1458,7 @@ function renderProtocolWorkspace(container) {
     function _buildOverviewCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        const nextSteps = _nextRequiredActionLabels();
 
         const summaryCard = document.createElement('section');
         summaryCard.className = 'editor-panel protocol-panel';
@@ -1274,12 +1470,38 @@ function renderProtocolWorkspace(container) {
             { label: 'Participants', value: String(protocolDocument.participants?.length || 0) },
             { label: 'Stages', value: String(protocolDocument.stages?.length || 0) },
             { label: 'Artifacts', value: String(protocolDocument.artifacts?.length || 0) },
-            { label: 'Section', value: _sectionLabel(currentSection) },
+            {
+                label: 'Save state',
+                value: draftSaveState === 'saving'
+                    ? 'Saving…'
+                    : draftSaveState === 'dirty'
+                        ? 'Unsaved changes'
+                        : draftSaveState === 'error'
+                            ? 'Save failed'
+                            : 'Saved',
+            },
         ], { compact: true }));
         const summaryNote = document.createElement('p');
         summaryNote.className = 'quiet-note';
         summaryNote.textContent = draft.description || 'Describe the intent of this workflow, then refine the participants, stages, artifacts, and policies in the sections below.';
         summaryCard.appendChild(summaryNote);
+        if (nextSteps.length) {
+            const checklist = document.createElement('div');
+            checklist.className = 'protocol-next-steps';
+            const checklistTitle = document.createElement('div');
+            checklistTitle.className = 'detail-label';
+            checklistTitle.textContent = 'Recommended next steps';
+            checklist.appendChild(checklistTitle);
+            const list = document.createElement('ul');
+            list.className = 'protocol-validation-list';
+            nextSteps.forEach((item) => {
+                const li = document.createElement('li');
+                li.textContent = item;
+                list.appendChild(li);
+            });
+            checklist.appendChild(list);
+            summaryCard.appendChild(checklist);
+        }
         main.appendChild(summaryCard);
 
         const flowCard = document.createElement('section');
@@ -1454,7 +1676,7 @@ function renderProtocolWorkspace(container) {
         }));
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.className = 'btn';
+        remove.className = 'btn btn-sm btn-danger';
         remove.textContent = 'Remove participant';
         remove.addEventListener('click', () => void _applyStructuredChange((next) => {
             next.participants.splice(index, 1);
@@ -1586,7 +1808,7 @@ function renderProtocolWorkspace(container) {
         }));
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.className = 'btn';
+        remove.className = 'btn btn-sm btn-danger';
         remove.textContent = 'Remove artifact';
         remove.addEventListener('click', () => void _applyStructuredChange((next) => {
             next.artifacts.splice(index, 1);
@@ -1599,6 +1821,7 @@ function renderProtocolWorkspace(container) {
     function _buildStagesCanvas(protocolDocument) {
         const main = document.createElement('div');
         main.className = 'protocol-author-main';
+        const canAddStages = _canAddStages(protocolDocument);
         const panel = document.createElement('section');
         panel.className = 'editor-panel protocol-panel';
         const headerRow = document.createElement('div');
@@ -1611,6 +1834,7 @@ function renderProtocolWorkspace(container) {
         addButton.type = 'button';
         addButton.className = 'btn';
         addButton.textContent = 'Add stage';
+        addButton.disabled = !canAddStages;
         addButton.addEventListener('click', () => {
             void _applyStructuredChange((next) => {
                 const index = (next.stages || []).length + 1;
@@ -1634,6 +1858,24 @@ function renderProtocolWorkspace(container) {
         });
         headerRow.appendChild(addButton);
         panel.appendChild(headerRow);
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = canAddStages
+            ? 'Add and order stages here. Each stage should point at one participant and describe its transitions.'
+            : 'Add at least one participant before creating workflow stages.';
+        panel.appendChild(note);
+        if (!canAddStages) {
+            const jumpButton = document.createElement('button');
+            jumpButton.type = 'button';
+            jumpButton.className = 'btn';
+            jumpButton.textContent = 'Go to Participants';
+            jumpButton.addEventListener('click', () => {
+                currentSection = 'participants';
+                _writeState({ push: true });
+                renderAuthorRoute();
+            });
+            panel.appendChild(jumpButton);
+        }
         panel.appendChild(_buildStageFlow(protocolDocument));
         main.appendChild(panel);
         return main;
@@ -1768,7 +2010,7 @@ function renderProtocolWorkspace(container) {
         }));
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.className = 'btn';
+        remove.className = 'btn btn-sm btn-danger';
         remove.textContent = 'Remove stage';
         remove.addEventListener('click', () => void _applyStructuredChange((next) => {
             next.stages.splice(index, 1);
@@ -1850,6 +2092,34 @@ function renderProtocolWorkspace(container) {
         title.textContent = 'Actions';
         inspector.appendChild(title);
 
+        inspector.appendChild(UI.renderMetadataGrid([
+            {
+                label: 'Lifecycle',
+                value: String(currentProtocol?.protocol?.lifecycle_state || 'draft').replace(/_/g, ' '),
+            },
+            {
+                label: 'Save state',
+                value: draftSaveState === 'saving'
+                    ? 'Saving…'
+                    : draftSaveState === 'dirty'
+                        ? 'Unsaved changes'
+                        : draftSaveState === 'error'
+                            ? 'Save failed'
+                            : 'Saved',
+            },
+            {
+                label: 'Validation mode',
+                value: String(currentProtocol?.validation?.mode || 'draft'),
+            },
+        ], { compact: true }));
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = String(currentProtocol?.validation?.mode || 'draft') === 'strict'
+            ? 'Strict validation is active in Review. Save changes in the other sections first, then validate or publish here.'
+            : 'Review uses publish-ready validation. Save the draft, then validate before publishing.';
+        inspector.appendChild(note);
+
         const validateButton = document.createElement('button');
         validateButton.type = 'button';
         validateButton.className = 'btn btn-primary';
@@ -1865,7 +2135,7 @@ function renderProtocolWorkspace(container) {
 
         const publishButton = document.createElement('button');
         publishButton.type = 'button';
-        publishButton.className = 'btn';
+        publishButton.className = 'btn btn-primary';
         publishButton.textContent = 'Publish';
         publishButton.disabled = !currentProtocolId;
         publishButton.addEventListener('click', () => {
@@ -1905,10 +2175,32 @@ function renderProtocolWorkspace(container) {
         });
         inspector.appendChild(exportYamlBtn);
 
+        const isDiscardableDraft = Boolean(
+            currentProtocolId
+            && String(currentProtocol?.protocol?.lifecycle_state || '') === 'draft'
+            && !String(currentProtocol?.protocol?.current_version_id || '').trim(),
+        );
+        if (isDiscardableDraft) {
+            const discardButton = document.createElement('button');
+            discardButton.type = 'button';
+            discardButton.className = 'btn btn-danger';
+            discardButton.textContent = 'Discard draft';
+            discardButton.addEventListener('click', () => {
+                UI.showConfirm(
+                    'Discard protocol draft?',
+                    'This permanently deletes the unpublished draft. Published protocols must be archived instead.',
+                    async () => {
+                        await _discardCurrentDraft();
+                    },
+                );
+            });
+            inspector.appendChild(discardButton);
+        }
+
         if (currentProtocolId) {
             const archiveButton = document.createElement('button');
             archiveButton.type = 'button';
-            archiveButton.className = 'btn';
+            archiveButton.className = 'btn btn-danger';
             archiveButton.textContent = 'Archive';
             archiveButton.disabled = String(currentProtocol?.protocol?.lifecycle_state || '') === 'archived';
             archiveButton.addEventListener('click', () => {
@@ -2072,15 +2364,15 @@ function renderProtocolWorkspace(container) {
         }
         UI.memoizedRender(
             listColumnEl,
-            { protocols, protocolSearch, currentProtocolId },
+            { protocols, protocolSearch, protocolLifecycleFilter, currentProtocolId },
             () => _buildDefinitionPanel(),
-            { signatureFields: ['protocols', 'protocolSearch', 'currentProtocolId'] },
+            { signatureFields: ['protocols', 'protocolSearch', 'protocolLifecycleFilter', 'currentProtocolId'] },
         );
         UI.reconcileChildren(editorColumnEl, [_buildEditorPanel()]);
     }
 
     async function loadProtocols() {
-        const nextProtocols = await API.listProtocols({ limit: 100 });
+        const nextProtocols = await API.listProtocols({ limit: 200 });
         protocols = nextProtocols;
         if (currentProtocolId && !protocols.some((item) => item.protocol_id === currentProtocolId)) {
             currentProtocolId = '';
@@ -2131,6 +2423,7 @@ function renderProtocolWorkspace(container) {
     }
 
     cleanups.add(() => {
+        _clearAutosaveTimer();
         currentProtocol = null;
     });
 

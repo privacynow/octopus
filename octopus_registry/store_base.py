@@ -743,8 +743,9 @@ class AbstractRegistryStore(Protocol):
         access: ProtocolAccessContextRecord,
         definition_text: str,
         format: str = "json",
+        validation_mode: str = "strict",
     ) -> ProtocolTextDocumentRecord:
-        """Parse protocol text into a canonical validated document."""
+        """Parse protocol text into a draft-safe or strict validated document."""
 
     def export_protocol_draft(
         self,

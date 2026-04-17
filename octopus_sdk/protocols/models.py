@@ -28,6 +28,7 @@ ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
 ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
+ProtocolValidationMode = Literal["strict", "draft"]
 
 PROTOCOL_SCHEMA_VERSION = 1
 PROTOCOL_MIN_SCHEMA_VERSION = 1
@@ -334,10 +335,23 @@ class ProtocolDefinitionDocumentRecord(RegistryRecordModel):
 
 
 class ProtocolValidationResultRecord(RegistryRecordModel):
+    mode: ProtocolValidationMode = "strict"
     ok: bool = False
     errors: list[str] = Field(default_factory=list)
+    issues: list["ProtocolValidationIssueRecord"] = Field(default_factory=list)
+    next_required_actions: list[str] = Field(default_factory=list)
     normalized_document: ProtocolDefinitionDocumentRecord | None = None
     content_hash: str = ""
+
+
+class ProtocolValidationIssueRecord(RegistryRecordModel):
+    code: str = ""
+    message: str = ""
+    section: str = ""
+    entity_kind: str = ""
+    entity_key: str = ""
+    path: str = ""
+    blocking: bool = True
 
 
 class ProtocolDefinitionRecord(RegistryRecordModel):
@@ -588,7 +602,7 @@ class ProtocolMaintenanceResultRecord(RegistryRecordModel):
 class ProtocolTextDocumentRecord(RegistryRecordModel):
     format: ProtocolDocumentTextFormat = "json"
     text: str = ""
-    document: ProtocolDefinitionDocumentRecord | None = None
+    document: ProtocolDefinitionDocumentRecord | RegistryJsonRecord | None = None
     validation: ProtocolValidationResultRecord | None = None
 
 

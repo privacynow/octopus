@@ -676,6 +676,11 @@ class ProtocolPostgresAdapter:
     def _draft_protocol_document(self, row: Mapping[str, object]) -> ProtocolDefinitionDocumentRecord:
         return canonical_protocol_document(row.get("draft_definition_json") or {})
 
+    @staticmethod
+    def _strict_protocol_document(value: object) -> ProtocolDefinitionDocumentRecord | None:
+        validation = validate_protocol_document(value, mode="strict")
+        return validation.normalized_document if validation.ok else None
+
     def _protocol_document_for_run(self, conn, run_row: Mapping[str, object]) -> ProtocolDefinitionDocumentRecord:
         version_row = self._protocol_version_row(conn, str(run_row["protocol_definition_version_id"] or ""))
         if version_row is None:
@@ -1396,7 +1401,8 @@ class ProtocolPostgresAdapter:
                     message="Protocol is not visible to this actor.",
                 )
             raw_definition = row.get("draft_definition_json") or {}
-            validation = validate_protocol_document(row.get("draft_definition_json") or {})
+            validation = validate_protocol_document(raw_definition, mode="draft")
+            strict_document = self._strict_protocol_document(raw_definition)
             version_row = None
             current_version_id = str(row.get("current_version_id", "") or "")
             if current_version_id:
@@ -1409,7 +1415,7 @@ class ProtocolPostgresAdapter:
                 message="Protocol loaded.",
                 protocol=self._protocol_record_from_row(row),
                 draft_definition_json=RegistryJsonRecord.model_validate(raw_definition),
-                draft_document=validation.normalized_document if validation.ok else None,
+                draft_document=strict_document,
                 version=self._protocol_version_from_row(version_row) if version_row is not None else None,
                 validation=validation,
             )
@@ -1440,15 +1446,17 @@ class ProtocolPostgresAdapter:
         access: ProtocolAccessContextRecord,
         definition_text: str,
         format: str = "json",
+        validation_mode: str = "strict",
     ) -> ProtocolTextDocumentRecord:
         if not any(self._access_has_role(access, role) for role in ("author", "publisher", "admin")):
             raise PermissionError("Protocol draft writes require author access.")
         normalized_format = normalize_protocol_document_format(format)
-        document = protocol_document_from_text(definition_text, format=normalized_format)
-        validation = validate_protocol_document(document)
+        mode = "draft" if str(validation_mode or "").strip().lower() == "draft" else "strict"
+        document = protocol_document_from_text(definition_text, format=normalized_format, mode=mode)
+        validation = validate_protocol_document(document, mode=mode)
         return ProtocolTextDocumentRecord(
             format=normalized_format,
-            text=protocol_document_to_text(document, format=normalized_format),
+            text=protocol_document_to_text(document, format=normalized_format, mode=mode),
             document=document,
             validation=validation,
         )
@@ -1469,12 +1477,12 @@ class ProtocolPostgresAdapter:
                 raise KeyError(protocol_id)
             if visibility == "not_visible":
                 raise PermissionError("Protocol is not visible to this actor.")
-            document = canonical_protocol_document(row.get("draft_definition_json") or {})
+            document = row.get("draft_definition_json") or {}
             return ProtocolTextDocumentRecord(
                 format=normalized_format,
-                text=protocol_document_to_text(document, format=normalized_format),
+                text=protocol_document_to_text(document, format=normalized_format, mode="draft"),
                 document=document,
-                validation=validate_protocol_document(document),
+                validation=validate_protocol_document(document, mode="draft"),
             )
 
     def diff_protocol_draft(
@@ -1493,7 +1501,6 @@ class ProtocolPostgresAdapter:
                 raise KeyError(protocol_id)
             if visibility == "not_visible":
                 raise PermissionError("Protocol is not visible to this actor.")
-            draft_document = canonical_protocol_document(row.get("draft_definition_json") or {})
             version_row = None
             current_version_id = str(row.get("current_version_id", "") or "")
             if current_version_id:
@@ -1502,16 +1509,17 @@ class ProtocolPostgresAdapter:
                 version_row = self._latest_protocol_version_row(conn, protocol_id)
             if version_row is None:
                 raise KeyError(protocol_id)
-            published_document = canonical_protocol_document(version_row.get("definition_json") or {})
+            published_document = version_row.get("definition_json") or {}
             return ProtocolDefinitionDiffRecord(
                 protocol_id=str(protocol_id or ""),
                 protocol_definition_version_id=str(version_row.get("protocol_definition_version_id", "") or ""),
                 diff=protocol_document_unified_diff(
-                    draft_document,
+                    row.get("draft_definition_json") or {},
                     published_document,
                     left_label="draft",
                     right_label=f"published:v{int(version_row.get('version', 0) or 0)}",
                     format=normalized_format,
+                    mode="draft",
                 ),
                 left_label="draft",
                 right_label=f"published:v{int(version_row.get('version', 0) or 0)}",
@@ -1531,8 +1539,8 @@ class ProtocolPostgresAdapter:
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol draft writes require author access.")
         protocol_key = str(protocol_id or uuid.uuid4().hex).strip()
         raw_definition = definition_json.as_dict()
-        validation = validate_protocol_document(raw_definition)
-        document = validation.normalized_document
+        validation = validate_protocol_document(raw_definition, mode="draft")
+        document = self._strict_protocol_document(raw_definition)
         raw_hash = protocol_definition_content_hash(document) if document is not None else hashlib.sha256(
             json.dumps(raw_definition, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -1737,7 +1745,7 @@ class ProtocolPostgresAdapter:
             draft_definition_json=RegistryJsonRecord.model_validate(deleted_row.get("draft_definition_json") or {}),
             draft_document=None,
             version=None,
-            validation=validate_protocol_document(deleted_row.get("draft_definition_json") or {}),
+            validation=validate_protocol_document(deleted_row.get("draft_definition_json") or {}, mode="draft"),
         )
 
     def validate_protocol(
@@ -1747,17 +1755,18 @@ class ProtocolPostgresAdapter:
         access: ProtocolAccessContextRecord,
     ) -> ProtocolMutationRecord:
         loaded = self.get_protocol(protocol_id, access=access)
-        if not loaded.ok:
+        if not loaded.ok or loaded.protocol is None:
             return loaded
+        strict_validation = validate_protocol_document(loaded.draft_definition_json.as_dict(), mode="strict")
         return ProtocolMutationRecord(
             ok=True,
-            status="validated" if loaded.validation is not None and loaded.validation.ok else "invalid",
-            message="Protocol validated." if loaded.validation is not None and loaded.validation.ok else "Protocol is invalid.",
+            status="validated" if strict_validation.ok else "invalid",
+            message="Protocol validated." if strict_validation.ok else "Protocol is invalid.",
             protocol=loaded.protocol,
             draft_definition_json=loaded.draft_definition_json,
-            draft_document=loaded.draft_document,
+            draft_document=strict_validation.normalized_document if strict_validation.ok else None,
             version=loaded.version,
-            validation=loaded.validation,
+            validation=strict_validation,
         )
 
     def publish_protocol(
@@ -1769,8 +1778,21 @@ class ProtocolPostgresAdapter:
         if not any(self._access_has_role(access, role) for role in ("publisher", "admin")):
             return ProtocolMutationRecord(ok=False, status="forbidden", message="Protocol publish requires publisher access.")
         loaded = self.get_protocol(protocol_id, access=access)
-        if not loaded.ok or loaded.protocol is None or loaded.draft_document is None:
-            return loaded if not loaded.ok else ProtocolMutationRecord(ok=False, status="invalid", message="Protocol draft is invalid.")
+        if not loaded.ok or loaded.protocol is None:
+            return loaded
+        strict_validation = validate_protocol_document(loaded.draft_definition_json.as_dict(), mode="strict")
+        if not strict_validation.ok or strict_validation.normalized_document is None:
+            return ProtocolMutationRecord(
+                ok=False,
+                status="invalid",
+                message="Protocol draft is invalid.",
+                protocol=loaded.protocol,
+                draft_definition_json=loaded.draft_definition_json,
+                draft_document=None,
+                version=loaded.version,
+                validation=strict_validation,
+            )
+        strict_document = strict_validation.normalized_document
         now = utcnow_iso()
         version: ProtocolDefinitionVersionRecord | None = None
         with self._connect() as conn, write_tx(conn):
@@ -1793,8 +1815,8 @@ class ProtocolPostgresAdapter:
                         version_id,
                         protocol_id,
                         next_version,
-                        jsonb(loaded.draft_document.model_dump(mode="json")),
-                        protocol_definition_content_hash(loaded.draft_document),
+                        jsonb(strict_document.model_dump(mode="json")),
+                        protocol_definition_content_hash(strict_document),
                         now,
                         self._access_actor_ref(access),
                         now,
@@ -1824,8 +1846,8 @@ class ProtocolPostgresAdapter:
                         "protocol_definition_version_id": version_id,
                         "protocol_id": protocol_id,
                         "version": next_version,
-                        "definition_json": loaded.draft_document.model_dump(mode="json"),
-                        "content_hash": protocol_definition_content_hash(loaded.draft_document),
+                        "definition_json": strict_document.model_dump(mode="json"),
+                        "content_hash": protocol_definition_content_hash(strict_document),
                         "validation_status": "valid",
                         "published_at": now,
                         "published_by": self._access_actor_ref(access),
@@ -1840,9 +1862,9 @@ class ProtocolPostgresAdapter:
             message="Protocol published.",
             protocol=self._protocol_record_from_row(row),
             draft_definition_json=RegistryJsonRecord.model_validate(row.get("draft_definition_json") or {}),
-            draft_document=loaded.draft_document,
+            draft_document=strict_document,
             version=version,
-            validation=loaded.validation,
+            validation=strict_validation,
         )
 
     def archive_protocol(
@@ -1882,7 +1904,7 @@ class ProtocolPostgresAdapter:
             draft_definition_json=RegistryJsonRecord.model_validate(updated_row.get("draft_definition_json") or {}),
             draft_document=self._draft_protocol_document(updated_row),
             version=None,
-            validation=validate_protocol_document(updated_row.get("draft_definition_json") or {}),
+            validation=validate_protocol_document(updated_row.get("draft_definition_json") or {}, mode="draft"),
         )
 
     def list_protocol_runs(

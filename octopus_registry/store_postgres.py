@@ -1043,11 +1043,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
         access: ProtocolAccessContextRecord,
         definition_text: str,
         format: str = "json",
+        validation_mode: str = "strict",
     ) -> ProtocolTextDocumentRecord:
         return self._protocol_store.parse_protocol_document_text(
             access=access,
             definition_text=definition_text,
             format=format,
+            validation_mode=validation_mode,
         )
 
     def export_protocol_draft(

@@ -148,6 +148,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "Add stage" in workspace
     assert "Raw editor has unsynced errors." in workspace
     assert "Start from a blank workflow, choose a reusable template, or import a definition." in workspace
+    assert "Built-in examples" in workspace
+    assert "Go to Participants" in workspace
+    assert "validation_mode: 'draft'" in workspace
     assert "Select a run to inspect state, timeline, artifacts, and operator actions." in workspace
     assert "No protocol issues detected for this run." in workspace
     assert "No blocked runs, lease issues, contract failures, or expired timeouts match this filter." in workspace
@@ -199,6 +202,9 @@ def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_c
     assert ".protocol-author-board {" in css
     assert ".protocol-author-workspace {" in css
     assert ".protocol-template-grid {" in css
+    assert ".protocol-catalog-groups {" in css
+    assert ".protocol-catalog-list {" in css
+    assert ".protocol-next-steps {" in css
     assert ".protocol-stage-flow {" in css
     assert ".protocol-stage-flow-preview {" in css
     assert ".protocol-stage-preview-node {" in css

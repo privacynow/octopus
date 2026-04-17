@@ -13,6 +13,340 @@ import yaml
 from .models import *  # noqa: F401,F403
 from .models import _DECISION_RE, _SUMMARY_RE, _TERMINAL_STAGE_TARGETS
 
+
+def _coerce_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, dict):
+            return {str(key): item for key, item in dumped.items()}
+    return {}
+
+
+def _coerce_sequence(value: object) -> list[object]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        items = value.split(",")
+    else:
+        items = _coerce_sequence(value)
+    return [str(item or "").strip() for item in items if str(item or "").strip()]
+
+
+def _coerce_slug_list(value: object) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in _coerce_string_list(value):
+        slug = item.lower().strip()
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        ordered.append(slug)
+    return ordered
+
+
+def _coerce_bool(value: object, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = str(value or "").strip().lower()
+    if token in {"true", "1", "yes", "on"}:
+        return True
+    if token in {"false", "0", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_int(value: object, *, default: int = 0, minimum: int = 0) -> int:
+    try:
+        parsed = int(value or default)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, minimum)
+
+
+def _coerce_selector(value: object) -> dict[str, object] | None:
+    raw = _coerce_mapping(value)
+    if not raw:
+        return None
+    selector: dict[str, object] = {
+        key: item
+        for key, item in raw.items()
+        if key not in {"kind", "value"}
+    }
+    kind = str(raw.get("kind", "") or "").strip()
+    selector_value = str(raw.get("value", "") or "").strip()
+    if kind:
+        selector["kind"] = kind
+    if selector_value:
+        selector["value"] = selector_value
+    return selector or None
+
+
+def draft_protocol_document_data(value: object) -> dict[str, object]:
+    migrated = migrate_protocol_document_data(value)
+    metadata = _coerce_mapping(migrated.get("metadata"))
+    metadata["slug"] = str(metadata.get("slug", "") or "").strip()
+    metadata["display_name"] = str(metadata.get("display_name", "") or "").strip()
+    metadata["description"] = str(metadata.get("description", "") or "").strip()
+
+    participants: list[dict[str, object]] = []
+    for item in _coerce_sequence(migrated.get("participants")):
+        raw = _coerce_mapping(item)
+        participants.append({
+            "participant_key": str(raw.get("participant_key", "") or "").strip(),
+            "display_name": str(raw.get("display_name", "") or "").strip(),
+            "required_skills": _coerce_slug_list(raw.get("required_skills")),
+            "selector": _coerce_selector(raw.get("selector")),
+            "instructions": str(raw.get("instructions", "") or ""),
+        })
+
+    artifacts: list[dict[str, object]] = []
+    for item in _coerce_sequence(migrated.get("artifacts")):
+        raw = _coerce_mapping(item)
+        artifacts.append({
+            "artifact_key": str(raw.get("artifact_key", "") or "").strip(),
+            "display_name": str(raw.get("display_name", "") or "").strip(),
+            "description": str(raw.get("description", "") or ""),
+            "kind": str(raw.get("kind", "") or "workspace_file").strip() or "workspace_file",
+            "path": str(raw.get("path", "") or "").strip(),
+            "verify": _coerce_bool(raw.get("verify"), default=True),
+        })
+
+    stages: list[dict[str, object]] = []
+    for item in _coerce_sequence(migrated.get("stages")):
+        raw = _coerce_mapping(item)
+        transitions = {
+            str(decision or "").strip(): str(target or "").strip()
+            for decision, target in _coerce_mapping(raw.get("transitions")).items()
+        }
+        stages.append({
+            "stage_key": str(raw.get("stage_key", "") or "").strip(),
+            "display_name": str(raw.get("display_name", "") or "").strip(),
+            "participant_key": str(raw.get("participant_key", "") or "").strip(),
+            "stage_kind": str(raw.get("stage_kind", "") or "work").strip() or "work",
+            "instructions": str(raw.get("instructions", "") or ""),
+            "inputs": _coerce_string_list(raw.get("inputs")),
+            "outputs": _coerce_string_list(raw.get("outputs")),
+            "transitions": transitions,
+            "write_capable": _coerce_bool(raw.get("write_capable"), default=False),
+            "max_rounds": _coerce_int(raw.get("max_rounds"), default=0, minimum=0),
+            "strict_completion": _coerce_bool(raw.get("strict_completion"), default=False),
+            "require_output_verification": None if raw.get("require_output_verification", None) is None else _coerce_bool(raw.get("require_output_verification"), default=False),
+            "timeout_seconds": _coerce_int(raw.get("timeout_seconds"), default=0, minimum=0),
+        })
+
+    policies = _coerce_mapping(migrated.get("policies"))
+    return {
+        "schema_version": _coerce_int(migrated.get("schema_version"), default=PROTOCOL_SCHEMA_VERSION, minimum=PROTOCOL_MIN_SCHEMA_VERSION),
+        "metadata": metadata,
+        "participants": participants,
+        "artifacts": artifacts,
+        "stages": stages,
+        "policies": {
+            "single_active_writer": _coerce_bool(policies.get("single_active_writer"), default=True),
+            "max_review_rounds": _coerce_int(policies.get("max_review_rounds"), default=5, minimum=1),
+        },
+    }
+
+
+def _validation_issue(
+    code: str,
+    message: str,
+    *,
+    section: str,
+    entity_kind: str = "",
+    entity_key: str = "",
+    path: str = "",
+    blocking: bool = True,
+) -> ProtocolValidationIssueRecord:
+    return ProtocolValidationIssueRecord(
+        code=code,
+        message=message,
+        section=section,
+        entity_kind=entity_kind,
+        entity_key=entity_key,
+        path=path,
+        blocking=blocking,
+    )
+
+
+def _draft_validation_issues(document: dict[str, object]) -> list[ProtocolValidationIssueRecord]:
+    issues: list[ProtocolValidationIssueRecord] = []
+    metadata = _coerce_mapping(document.get("metadata"))
+    participants = [_coerce_mapping(item) for item in _coerce_sequence(document.get("participants"))]
+    artifacts = [_coerce_mapping(item) for item in _coerce_sequence(document.get("artifacts"))]
+    stages = [_coerce_mapping(item) for item in _coerce_sequence(document.get("stages"))]
+
+    if not str(metadata.get("slug", "") or "").strip():
+        issues.append(_validation_issue(
+            "metadata.slug_required",
+            "Add a protocol slug before review or publish.",
+            section="overview",
+            path="metadata.slug",
+        ))
+
+    participant_keys = [str(item.get("participant_key", "") or "").strip() for item in participants]
+    artifact_keys = [str(item.get("artifact_key", "") or "").strip() for item in artifacts]
+    stage_keys = [str(item.get("stage_key", "") or "").strip() for item in stages]
+
+    if not participants:
+        issues.append(_validation_issue(
+            "participants.required",
+            "Add at least one participant before defining workflow stages.",
+            section="participants",
+            path="participants",
+        ))
+    if not stages:
+        issues.append(_validation_issue(
+            "stages.required",
+            "Add at least one stage before review or publish.",
+            section="stages",
+            path="stages",
+        ))
+
+    for values, entity_kind, section in (
+        (participant_keys, "participant", "participants"),
+        (artifact_keys, "artifact", "artifacts"),
+        (stage_keys, "stage", "stages"),
+    ):
+        seen: set[str] = set()
+        for index, key in enumerate(values):
+            if not key:
+                issues.append(_validation_issue(
+                    f"{entity_kind}.key_required",
+                    f"Each {entity_kind} needs a key.",
+                    section=section,
+                    entity_kind=entity_kind,
+                    path=f"{section}.{index}",
+                ))
+                continue
+            if key in seen:
+                issues.append(_validation_issue(
+                    f"{entity_kind}.key_duplicate",
+                    f"{entity_kind.capitalize()} key {key} is duplicated.",
+                    section=section,
+                    entity_kind=entity_kind,
+                    entity_key=key,
+                    path=f"{section}.{index}",
+                ))
+                continue
+            seen.add(key)
+
+    participant_set = {item for item in participant_keys if item}
+    artifact_set = {item for item in artifact_keys if item}
+    stage_set = {item for item in stage_keys if item}
+
+    for index, artifact in enumerate(artifacts):
+        artifact_key = str(artifact.get("artifact_key", "") or "").strip()
+        if str(artifact.get("kind", "") or "").strip() == "workspace_file" and not str(artifact.get("path", "") or "").strip():
+            issues.append(_validation_issue(
+                "artifact.path_required",
+                f"Artifact {artifact_key or index + 1} needs a workspace path.",
+                section="artifacts",
+                entity_kind="artifact",
+                entity_key=artifact_key,
+                path=f"artifacts.{index}.path",
+            ))
+
+    for index, stage in enumerate(stages):
+        stage_key = str(stage.get("stage_key", "") or "").strip()
+        participant_key = str(stage.get("participant_key", "") or "").strip()
+        stage_label = stage_key or f"stage {index + 1}"
+        if not participant_key:
+            issues.append(_validation_issue(
+                "stage.participant_required",
+                f"Assign a participant to {stage_label}.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.participant_key",
+            ))
+        elif participant_key not in participant_set:
+            issues.append(_validation_issue(
+                "stage.participant_missing",
+                f"{stage_label} references participant {participant_key}, which does not exist yet.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.participant_key",
+            ))
+        for artifact_key in [*(_coerce_sequence(stage.get("inputs"))), *(_coerce_sequence(stage.get("outputs")))]:
+            normalized_key = str(artifact_key or "").strip()
+            if normalized_key and normalized_key not in artifact_set:
+                issues.append(_validation_issue(
+                    "stage.artifact_missing",
+                    f"{stage_label} references artifact {normalized_key}, which does not exist yet.",
+                    section="stages",
+                    entity_kind="stage",
+                    entity_key=stage_key,
+                    path=f"stages.{index}",
+                ))
+        transitions = _coerce_mapping(stage.get("transitions"))
+        stage_kind = str(stage.get("stage_kind", "") or "work").strip() or "work"
+        if stage_kind != "work" and not transitions:
+            issues.append(_validation_issue(
+                "stage.transitions_required",
+                f"{stage_label} needs at least one transition.",
+                section="stages",
+                entity_kind="stage",
+                entity_key=stage_key,
+                path=f"stages.{index}.transitions",
+            ))
+        for decision, target in transitions.items():
+            decision_key = str(decision or "").strip().lower()
+            target_key = str(target or "").strip()
+            if not decision_key:
+                issues.append(_validation_issue(
+                    "stage.transition_decision_required",
+                    f"{stage_label} has a transition with no decision label.",
+                    section="stages",
+                    entity_kind="stage",
+                    entity_key=stage_key,
+                    path=f"stages.{index}.transitions",
+                ))
+                continue
+            if not target_key:
+                issues.append(_validation_issue(
+                    "stage.transition_target_required",
+                    f"{stage_label} transition {decision_key} needs a target.",
+                    section="stages",
+                    entity_kind="stage",
+                    entity_key=stage_key,
+                    path=f"stages.{index}.transitions.{decision_key}",
+                ))
+                continue
+            if target_key not in stage_set and target_key not in _TERMINAL_STAGE_TARGETS:
+                issues.append(_validation_issue(
+                    "stage.transition_target_missing",
+                    f"{stage_label} transition {decision_key} points to {target_key}, which does not exist.",
+                    section="stages",
+                    entity_kind="stage",
+                    entity_key=stage_key,
+                    path=f"stages.{index}.transitions.{decision_key}",
+                ))
+    return issues
+
+
+def _next_required_actions(issues: Sequence[ProtocolValidationIssueRecord]) -> list[str]:
+    actions: list[str] = []
+    for issue in issues:
+        if issue.code == "metadata.slug_required" and "overview.complete_slug" not in actions:
+            actions.append("overview.complete_slug")
+        elif issue.code == "participants.required" and "participants.add_first" not in actions:
+            actions.append("participants.add_first")
+        elif issue.code == "stages.required" and "stages.add_first" not in actions:
+            actions.append("stages.add_first")
+        elif issue.code in {"stage.participant_required", "stage.participant_missing"} and "stages.assign_participant" not in actions:
+            actions.append("stages.assign_participant")
+    return actions
+
 def migrate_protocol_document_data(value: object) -> dict[str, object]:
     raw = dict(value) if isinstance(value, dict) else (
         value.model_dump(mode="json")
@@ -73,14 +407,50 @@ def protocol_definition_content_hash(document: ProtocolDefinitionDocumentRecord)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def validate_protocol_document(value: object) -> ProtocolValidationResultRecord:
+def validate_protocol_document(
+    value: object,
+    *,
+    mode: ProtocolValidationMode = "strict",
+) -> ProtocolValidationResultRecord:
+    if mode == "draft":
+        try:
+            document = draft_protocol_document_data(value)
+        except Exception as exc:
+            return ProtocolValidationResultRecord(mode="draft", ok=False, errors=[str(exc)])
+        issues = _draft_validation_issues(document)
+        payload = json.dumps(document, sort_keys=True, separators=(",", ":"))
+        return ProtocolValidationResultRecord(
+            mode="draft",
+            ok=not issues,
+            errors=[item.message for item in issues],
+            issues=issues,
+            next_required_actions=_next_required_actions(issues),
+            normalized_document=None,
+            content_hash=hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        )
     try:
         document = canonical_protocol_document(value)
     except Exception as exc:
-        return ProtocolValidationResultRecord(ok=False, errors=[str(exc)])
+        try:
+            draft_document = draft_protocol_document_data(value)
+        except Exception:
+            return ProtocolValidationResultRecord(mode="strict", ok=False, errors=[str(exc)])
+        issues = _draft_validation_issues(draft_document)
+        if issues:
+            return ProtocolValidationResultRecord(
+                mode="strict",
+                ok=False,
+                errors=[item.message for item in issues],
+                issues=issues,
+                next_required_actions=_next_required_actions(issues),
+            )
+        return ProtocolValidationResultRecord(mode="strict", ok=False, errors=[str(exc)])
     return ProtocolValidationResultRecord(
+        mode="strict",
         ok=True,
         errors=[],
+        issues=[],
+        next_required_actions=[],
         normalized_document=document,
         content_hash=protocol_definition_content_hash(document),
     )
@@ -95,7 +465,12 @@ def normalize_protocol_document_format(value: object, *, default: ProtocolDocume
     return token  # type: ignore[return-value]
 
 
-def protocol_document_from_text(text: str, *, format: ProtocolDocumentTextFormat = "json") -> ProtocolDefinitionDocumentRecord:
+def protocol_document_from_text(
+    text: str,
+    *,
+    format: ProtocolDocumentTextFormat = "json",
+    mode: ProtocolValidationMode = "strict",
+) -> ProtocolDefinitionDocumentRecord | dict[str, object]:
     normalized = normalize_protocol_document_format(format)
     source = str(text or "").strip()
     if not source:
@@ -104,6 +479,8 @@ def protocol_document_from_text(text: str, *, format: ProtocolDocumentTextFormat
         loaded = json.loads(source) if normalized == "json" else yaml.safe_load(source)
     except Exception as exc:
         raise ValueError(f"Protocol {normalized} parse failed: {exc}") from exc
+    if mode == "draft":
+        return draft_protocol_document_data(loaded)
     return canonical_protocol_document(loaded)
 
 
@@ -111,10 +488,13 @@ def protocol_document_to_text(
     value: object,
     *,
     format: ProtocolDocumentTextFormat = "json",
+    mode: ProtocolValidationMode = "strict",
 ) -> str:
     normalized = normalize_protocol_document_format(format)
-    document = canonical_protocol_document(value)
-    payload = document.model_dump(mode="json")
+    if mode == "draft":
+        payload = draft_protocol_document_data(value)
+    else:
+        payload = canonical_protocol_document(value).model_dump(mode="json")
     if normalized == "yaml":
         return str(yaml.safe_dump(payload, sort_keys=False, allow_unicode=False))
     return json.dumps(payload, indent=2, sort_keys=False)
@@ -127,9 +507,10 @@ def protocol_document_unified_diff(
     left_label: str = "draft",
     right_label: str = "published",
     format: ProtocolDocumentTextFormat = "json",
+    mode: ProtocolValidationMode = "strict",
 ) -> str:
-    left_text = protocol_document_to_text(left, format=format).splitlines()
-    right_text = protocol_document_to_text(right, format=format).splitlines()
+    left_text = protocol_document_to_text(left, format=format, mode=mode).splitlines()
+    right_text = protocol_document_to_text(right, format=format, mode=mode).splitlines()
     diff = difflib.unified_diff(
         left_text,
         right_text,

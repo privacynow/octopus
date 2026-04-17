@@ -865,8 +865,11 @@ def test_sdk_client_protocol_document_routes_use_typed_models():
                         "text": "schema_version: 1\nmetadata:\n  slug: demo\n",
                         "document": document_payload,
                         "validation": {
+                            "mode": "strict",
                             "ok": True,
                             "errors": [],
+                            "issues": [],
+                            "next_required_actions": [],
                             "content_hash": "hash-1",
                         },
                     }
@@ -876,8 +879,11 @@ def test_sdk_client_protocol_document_routes_use_typed_models():
                         "text": "{\n  \"schema_version\": 1\n}",
                         "document": document_payload,
                         "validation": {
+                            "mode": "draft",
                             "ok": True,
                             "errors": [],
+                            "issues": [],
+                            "next_required_actions": [],
                             "content_hash": "hash-1",
                         },
                     }
@@ -913,6 +919,69 @@ def test_sdk_client_protocol_document_routes_use_typed_models():
     assert captured[0][1].endswith("/v1/protocols/parse")
     assert captured[1][1].endswith("/v1/protocols/protocol-1/draft/export")
     assert captured[2][1].endswith("/v1/protocols/protocol-1/diff")
+
+
+def test_sdk_client_parse_protocol_document_supports_draft_validation_mode():
+    from unittest.mock import patch
+
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    captured = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = str(url)
+        captured["json"] = kwargs.get("json")
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            content = b"{}"
+
+            def json(self):
+                return {
+                    "format": "json",
+                    "text": "{\"schema_version\":1}",
+                    "document": {
+                        "schema_version": 1,
+                        "metadata": {"slug": "draft-protocol"},
+                        "participants": [],
+                        "artifacts": [],
+                        "stages": [],
+                        "policies": {"single_active_writer": True, "max_review_rounds": 5},
+                    },
+                    "validation": {
+                        "mode": "draft",
+                        "ok": False,
+                        "errors": ["Add at least one stage before review or publish."],
+                        "issues": [],
+                        "next_required_actions": ["stages.add_first"],
+                        "content_hash": "hash-draft",
+                    },
+                }
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        parsed = asyncio.run(
+            client.parse_protocol_document_text(
+                definition_text="{\"schema_version\":1,\"metadata\":{\"slug\":\"draft-protocol\"},\"participants\":[],\"artifacts\":[],\"stages\":[]}",
+                format="json",
+                validation_mode="draft",
+            )
+        )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1/protocols/parse")
+    assert captured["json"]["validation_mode"] == "draft"
+    assert parsed.validation is not None
+    assert parsed.validation.mode == "draft"
+    assert parsed.validation.next_required_actions == ["stages.add_first"]
 
 
 def test_sdk_client_list_protocol_runs_sends_entry_agent_and_origin_channel_filters():

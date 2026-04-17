@@ -403,11 +403,16 @@ class RegistryClient:
         *,
         definition_text: str,
         format: str = "json",
+        validation_mode: str = "strict",
     ) -> ProtocolTextDocumentRecord:
         result = await self._request(
             "POST",
             "/v1/protocols/parse",
-            json={"definition_text": definition_text, "format": format},
+            json={
+                "definition_text": definition_text,
+                "format": format,
+                "validation_mode": validation_mode,
+            },
         )
         return ProtocolTextDocumentRecord.model_validate(result)
 

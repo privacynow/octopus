@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 import string
 import time
@@ -783,7 +784,9 @@ def test_registry_store_create_blank_protocol_draft_creates_persisted_invalid_st
     assert created.draft_definition_json["metadata"]["slug"] == created.protocol.slug
     assert created.draft_definition_json["stages"] == []
     assert created.validation is not None
+    assert created.validation.mode == "draft"
     assert created.validation.ok is False
+    assert "Add at least one stage before review or publish." in created.validation.errors
 
 
 def test_registry_store_create_template_protocol_draft_clones_builtin_template(postgres_registry_truncated: str) -> None:
@@ -1017,6 +1020,50 @@ def test_registry_store_protocol_text_routes_round_trip_json_yaml_and_diff(postg
     assert "--- draft" in diff.diff
     assert "+++ published" in diff.diff
     assert "Updated draft description" in diff.diff
+
+
+def test_registry_store_parse_draft_mode_accepts_incomplete_protocols(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+
+    parsed = store.parse_protocol_document_text(
+        access=operator_access(),
+        definition_text=json.dumps(
+            {
+                "schema_version": 1,
+                "metadata": {"slug": "draft-protocol", "display_name": "Draft Protocol"},
+                "participants": [],
+                "artifacts": [],
+                "stages": [],
+                "policies": {"single_active_writer": True, "max_review_rounds": 5},
+            }
+        ),
+        format="json",
+        validation_mode="draft",
+    )
+
+    assert parsed.format == "json"
+    assert parsed.document is not None
+    assert parsed.validation is not None
+    assert parsed.validation.mode == "draft"
+    assert parsed.validation.ok is False
+    assert parsed.validation.next_required_actions == ["participants.add_first", "stages.add_first"]
+    assert "Add at least one stage before review or publish." in parsed.validation.errors
+
+
+def test_registry_store_validate_protocol_returns_friendly_strict_issues_for_incomplete_drafts(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    created = store.create_protocol_draft(
+        ProtocolDraftCreateRecord.model_validate({"source_kind": "blank"}),
+        access=operator_access(),
+    )
+
+    validated = store.validate_protocol(created.protocol.protocol_id, access=operator_access())
+
+    assert validated.ok is True
+    assert validated.validation is not None
+    assert validated.validation.mode == "strict"
+    assert validated.validation.ok is False
+    assert "Add at least one stage before review or publish." in validated.validation.errors
 
 
 def test_registry_store_list_protocol_runs_filters_by_entry_agent_and_origin_channel(

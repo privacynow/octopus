@@ -70,6 +70,7 @@ test.describe('protocol routes live', () => {
     await expect(page.getByText('Protocol basics')).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/protocols\?protocol_id=/);
     await expect(page.getByText('Advanced raw editor')).toHaveCount(0);
+    await expect(page.getByText('Recommended next steps')).toBeVisible();
 
     const authorColumns = page.locator('.protocol-author-board > .dashboard-column');
     const listBox = await authorColumns.nth(0).boundingBox();
@@ -78,13 +79,31 @@ test.describe('protocol routes live', () => {
     expect(editorBox).toBeTruthy();
     expect(editorBox.y).toBeGreaterThan(listBox.y);
 
+    await page.getByRole('tab', { name: /^Stages/ }).click();
+    await expect(page.getByText('Add at least one participant before creating workflow stages.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add stage' })).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Go to Participants' }).click();
+    await expect(page.getByText('Participants')).toBeVisible();
+    await page.getByRole('button', { name: 'Add participant' }).click();
+    await expect(page.getByText('Participant details')).toBeVisible();
+
+    await page.getByRole('tab', { name: /^Stages/ }).click();
+    await expect(page.getByRole('button', { name: 'Add stage' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Add stage' }).click();
+    await expect(page.getByText('Stage details')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Stage 1/i }).first()).toBeVisible();
+
     await page.getByRole('tab', { name: /^Advanced$/ }).click();
     await expect(page.getByText('Advanced raw editor')).toBeVisible();
 
+    await page.getByRole('tab', { name: /^Review/ }).click();
     await page.getByRole('button', { name: 'Discard draft' }).click();
     await page.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.getByText('Blank protocol')).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/protocols(\?.*)?$/);
+    await expect(page.getByText('Your definitions')).toBeVisible();
+    await expect(page.getByText('Built-in examples')).toBeVisible();
 
     const protocolRow = page.getByRole('button', { name: /software engineering/i }).first();
     await expect(protocolRow).toBeVisible();

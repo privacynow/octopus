@@ -33,7 +33,7 @@ from app.runtime_health import (
 )
 from app.storage import default_session, ensure_data_dirs, load_session, save_session, session_exists
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
-from octopus_sdk.protocols import ProtocolRunMutationRecord
+from octopus_sdk.protocols import ProtocolMutationRecord, ProtocolRunMutationRecord
 from octopus_sdk.registry.management import (
     ListCatalogSkillsRequest,
     ListCatalogSkillsResult,
@@ -1386,6 +1386,89 @@ def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_
 
     assert response.status_code == 403
     assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_definition_route_returns_not_visible_for_hidden_protocol(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def get_protocol(self, protocol_id: str, *, access):
+            return ProtocolMutationRecord(
+                ok=False,
+                status="not_visible",
+                message="Protocol is not visible to this actor.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get("/v1/protocols/protocol-1")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("path", "store_method", "args"),
+    [
+        ("/v1/protocol-templates/software-engineering", "get_protocol_template", ("software-engineering",)),
+        ("/v1/protocols/protocol-1/versions/version-1", "get_protocol_version", ("protocol-1", "version-1")),
+        ("/v1/protocols/protocol-1/draft/export", "export_protocol_draft", ("protocol-1",)),
+        ("/v1/protocols/protocol-1/diff", "diff_protocol_draft", ("protocol-1",)),
+    ],
+)
+def test_protocol_definition_subresources_return_not_visible_for_hidden_protocol(
+    monkeypatch,
+    tmp_path: Path,
+    path: str,
+    store_method: str,
+    args: tuple[str, ...],
+):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __getattr__(self, name: str):
+            if name != store_method:
+                raise AttributeError(name)
+
+            def _handler(*handler_args, **handler_kwargs):
+                assert handler_args == args
+                raise PermissionError("Protocol is not visible to this actor.")
+
+            return _handler
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.get(path)
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -1436,6 +1519,7 @@ def test_protocol_run_subresources_return_not_visible_for_hidden_run(
 
     assert response.status_code == 403
     assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
 
 
 def test_protocol_run_action_route_returns_conflict_for_version_mismatch(monkeypatch, tmp_path: Path):
@@ -1471,6 +1555,73 @@ def test_protocol_run_action_route_returns_conflict_for_version_mismatch(monkeyp
 
     assert response.status_code == 409
     assert response.json()["detail"]["error_code"] == "CONCURRENT_MODIFICATION"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_run_action_route_returns_idempotency_replay(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="idempotency_conflict",
+                message="Idempotency key was already used for a different protocol action.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_code"] == "IDEMPOTENCY_REPLAY"
+    assert "details" in response.json()["detail"]
+
+
+def test_protocol_run_action_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def act_on_protocol_run(self, run_id: str, *, access, action: str, reason: str, idempotency_key: str = "", expected_version=None):
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="not_visible",
+                message="Protocol run is not visible to this actor.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_operator_session] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="foreign-org",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/actions/retry",
+            headers={"Idempotency-Key": "idem-1"},
+            json={"reason": "Retry after fix."},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_operator_session, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_NOT_VISIBLE"
+    assert "details" in response.json()["detail"]
 
 
 def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch, tmp_path: Path):

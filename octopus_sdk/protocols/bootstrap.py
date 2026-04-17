@@ -7,7 +7,7 @@ from typing import Protocol
 
 from psycopg.types.json import Jsonb
 
-from octopus_sdk.protocols import (
+from .core import (
     PROTOCOL_DEFAULT_RUN_ORG_ID,
     builtin_protocol_documents,
     default_protocol_document_slug,

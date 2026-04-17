@@ -1,7 +1,7 @@
 # Protocol System Remediation Plan
 
 Status: implemented
-Last updated: 2026-04-16 (v3.8)
+Last updated: 2026-04-16 (v4.0)
 Audience: engineering, product, operations
 
 ---
@@ -280,11 +280,11 @@ Define **role-based actions** with explicit names: **author**, **publisher**, **
 
 ### 8.1 `schema_version`
 
-Add **`schema_version`** to **`ProtocolDefinitionDocumentRecord`** in **`octopus_sdk/protocols.py`** and **require** it in validation.
+Add **`schema_version`** to **`ProtocolDefinitionDocumentRecord`** in **`octopus_sdk/protocols/`** and **require** it in validation.
 
 ### 8.2 Full DSL (normative)
 
-The following subsections are the **canonical V1 enumerations and rules** unless **§1.6** explicitly defers (e.g. `paused`). They align with **`octopus_sdk/protocols.py`** (`ProtocolStageKind`, `ProtocolRunStatus`, `ProtocolStageExecutionStatus`); implementation and tests must not drift without an amendment here.
+The following subsections are the **canonical V1 enumerations and rules** unless **§1.6** explicitly defers (e.g. `paused`). They align with **`octopus_sdk/protocols/`** (`ProtocolStageKind`, `ProtocolRunStatus`, `ProtocolStageExecutionStatus`); implementation and tests must not drift without an amendment here.
 
 #### 8.2.1 Stage kinds
 
@@ -482,7 +482,7 @@ Add **real** markdown under `docs/` (or extend `docs/ARCHITECTURE.md`) to cover 
 **P11 also updates** (files that already exist)
 
 - **`README.md`** — short protocol feature blurb + link to this remediation plan.
-- **`docs/ARCHITECTURE.md`** — protocol boundaries: SDK engine vs registry store vs runtime, and links to code paths (`store_postgres.py`, `delivery_transport.py`, `octopus_sdk/protocols.py`).
+- **`docs/ARCHITECTURE.md`** — protocol boundaries: SDK engine vs registry store vs runtime, and links to code paths (`store_postgres.py`, `delivery_transport.py`, `octopus_sdk/protocols/`).
 
 ---
 
@@ -604,7 +604,7 @@ Close **§1.6** before writing feature code. No coding affected phases until eac
 
 ### 19.3 Phase E1 — Rebuild the lifecycle seam (one mutation path)
 
-1. **SDK** remains owner of lifecycle **decisions**; collapse the **public** surface in `octopus_sdk/protocols.py` so every stimulus yields **one** decision record shape (or explicit variants documented in one module).
+1. **SDK** remains owner of lifecycle **decisions**; collapse the **public** surface in `octopus_sdk/protocols/` so every stimulus yields **one** decision record shape (or explicit variants documented in one module).
 2. **Stimuli** to cover: dispatch preflight, dispatch resolution result, routed task result, operator action, **deadline expiry** (synthetic).
 3. **Refactor** `_dispatch_protocol_stage_in_tx` in `octopus_registry/store_postgres.py` to **orchestration only**: load snapshot → SDK eval → resolve participant if needed → SDK resolution outcome → **canonical applier** (same as task-result and operator paths).
 4. **Expand** the applier; **do not** add parallel side paths.
@@ -691,6 +691,8 @@ Close **§1.6** before writing feature code. No coding affected phases until eac
 
 ## 20. Implementation status (code vs this plan)
 
+Strict-compliance evidence refresh completed on 2026-04-16 against the current tree. The protocol strict suite now covers the SDK package split, shared routed-task idempotency, route-level `PROTOCOL_NOT_VISIBLE` semantics, review-loop count/cap exposure, property/fuzz/performance checks, UI/Telegram parity, DB schema/bootstrap, and the checked-in OpenAPI/docs surfaces.
+
 Rolling snapshot: **repository `telegram-agent-bot/`** as implemented against this document. **Statuses:** **done** means the current tree and tests satisfy the release intent for this phase. Line numbers drift with edits—use search if they no longer match.
 
 This section reflects the current branch after the remediation acceptance bar in **§18.1** was satisfied locally.
@@ -699,39 +701,39 @@ This section reflects the current branch after the remediation acceptance bar in
 
 | Phase | Status | Evidence / gap |
 |-------|--------|----------------|
-| **P1** Engine extraction | **done** | `octopus_sdk/protocol_engine.py` (`ProtocolRunEngine`) owns dispatch, task-result, operator-action, and timeout evaluation. The store loads snapshots, injects selector resolution as a port, and persists every protocol outcome through `_apply_protocol_engine_decision_in_tx`. Engine-only tests live in `tests/test_protocol_engine.py`. |
-| **P1b** §15 shell | **done** | Builtin protocol seeding runs through `app/db/postgres_init.py` via `octopus_sdk/protocol_bootstrap.py`; `RegistryPostgresStore` no longer seeds definitions on construction. Doctor/init tests cover protocol table bootstrap and additive restore in `tests/test_db_postgres.py`. |
-| **P2** Policies + DSL + migrators | **done** | Leases, max review rounds, `schema_version`, and in-memory migration from legacy schema values are enforced in the shared SDK contract (`octopus_sdk/protocols.py`) with coverage in `tests/test_protocols.py`. |
+| **P1** Engine extraction | **done** | `ProtocolRunEngine` now lives at `octopus_sdk/protocols/engine.py`, with import-boundary enforcement in `tests/test_zero_import_gates.py` and pure engine coverage in `tests/test_protocol_engine.py`. |
+| **P1b** §15 shell | **done** | Builtin bootstrap now lives on the canonical init path via `octopus_sdk/protocols/bootstrap.py`; `tests/test_db_postgres.py` covers seeding, additive restores, and schema contract. |
+| **P2** Policies + DSL + migrators | **done** | Shared SDK protocol contracts now live under `octopus_sdk/protocols/`, with schema migration, lease/review policy enforcement, and generated/fuzzed validation coverage in `tests/test_protocols.py`. |
 | **P3** Artifacts + verification | **done** | Runtime artifact observations, verification-state persistence, output-contract blocking, and release-mode-A waiver enforcement are live in the shared engine/store path. Artifact path traversal and absolute-path rejection are tested in `tests/test_protocols.py`. |
-| **P4** Strict work + timeouts + remediation | **done** | Strict completion, contract-invalid blocking, and synthetic timeout handling are implemented in `octopus_sdk/protocol_engine.py`, with timeout maintenance running through the registry maintenance loop and the same canonical applier. |
-| **P5** Full API + auth + export | **done** | The shipped protocol API includes definitions, versions, parse/export/diff, archive, run creation, run subresources, export, issues, typed actions, `Idempotency-Key`, `If-Match`, `created_after`, and `PROTOCOL_NOT_VISIBLE` semantics, with route/auth/error coverage in `tests/test_registry_service.py` and `tests/test_registry_sdk_contract.py`. |
-| **P5a** Thin UI | **done** | `octopus_registry/ui/js/api.js` and `protocol-workspace.js` consume the shared protocol endpoints directly with no browser-only lifecycle path. |
-| **P6** Realtime + metrics + admin views | **done** | Post-applier protocol events (`protocol_run.updated`, `protocol_run.stage_changed`, `protocol_run.terminal`), summary metrics, dashboard issue panels, and typed protocol issue listings for blocked runs, invalid contracts, expired timeouts, and stuck leases are live over the control plane. |
-| **P7** Full UI | **done** | The protocol workspace ships responsive master-detail layout, first-run onboarding, validation gutter, JSON/YAML import/export, diff, structured participant/artifact/stage/policy forms over the shared parser, issue filters, participant-filtered timelines, artifact/run export, and typed operator dialogs, with UI contract coverage in `tests/test_registry_ui_contract.py`. |
-| **P8** Telegram parity | **done** | Telegram exposes the shared protocol contract through `/protocol` list/start/status/watch/unwatch/cancel/retry/accept/send-back, deep links, destructive-action confirmation, and debounced run notifications persisted in session state, covered by `tests/test_protocol_telegram.py`. |
-| **P9** Security + audit + retention | **done** | Visibility gates, export-role enforcement, path-traversal rejection, `retention_until`, protocol transitions, and compliance-event recording are implemented and tested/documented across the SDK, store, and operator guides. |
-| **P10** §15 completion | **done** | Protocol schema/bootstrap now lives on the canonical init/doctor path with additive recovery tests, builtin seeding on init, and no remaining constructor-only bootstrap dependency. |
-| **P11** Docs + OpenAPI story | **done** | The checked-in OpenAPI artifact (`docs/registry-openapi.json`), generation script, equality test, README, `docs/ARCHITECTURE.md`, Telegram/registry guides, and dedicated protocol operator/author guides all reflect the shipped behavior, with doc contract checks in `tests/test_protocol_docs.py`. |
+| **P4** Strict work + timeouts + remediation | **done** | Strict completion, contract-invalid blocking, maintenance-driven timeouts, duplicate-result idempotency, and late-result-after-timeout behavior are covered across `tests/test_protocol_engine.py`, `tests/test_protocols.py`, and `tests/contracts/test_registry_store_contract.py`. |
+| **P5** Full API + auth + export | **done** | Protocol HTTP now emits stable `{error_code,message,details}` bodies, client/server error-code parity includes `LEASE_HELD`, `MAX_REVIEW_ROUNDS_EXCEEDED`, `ARTIFACT_VERIFICATION_FAILED`, `CONCURRENT_MODIFICATION`, and `IDEMPOTENCY_REPLAY`, and route-level visibility/export/action semantics are covered in `tests/test_registry_service.py` and `tests/test_registry_sdk_contract.py`. |
+| **P5a** Thin UI | **done** | The registry UI consumes the shared protocol API directly and shows first-class review-loop state, with contract coverage in `tests/test_registry_ui_contract.py`. |
+| **P6** Realtime + metrics + admin views | **done** | Realtime/admin surfaces remain on the canonical registry path, and the protocol strict suite plus store contract suite passed against the current tree. |
+| **P7** Full UI | **done** | Protocol UI contract coverage stays green in `tests/test_registry_ui_contract.py`, including the updated shared protocol fields. |
+| **P8** Telegram parity | **done** | Telegram protocol flows remain thin over the registry contract and pass in `tests/test_protocol_telegram.py`. |
+| **P9** Security + audit + retention | **done** | Cross-tenant visibility, export-role enforcement, path traversal rejection, retention fields, and compliance/audit persistence remain covered by `tests/test_protocols.py`, `tests/test_registry_service.py`, and `tests/test_db_postgres.py`. |
+| **P10** §15 completion | **done** | Protocol tables, defaults, bootstrap seeding, and additive recovery are now part of the DB schema contract in `tests/test_db_postgres.py`. |
+| **P11** Docs + OpenAPI story | **done** | `docs/registry-openapi.json`, `README.md`, `docs/ARCHITECTURE.md`, the renamed protocol guides, and doc contract checks now match the package layout and shipped protocol surfaces in `tests/test_protocol_docs.py` and `tests/test_registry_service.py`. |
 
 ### 20.2 Implemented and traceable (strengths)
 
 | Topic | Where |
 |--------|--------|
-| Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` → `ProtocolRunEngine.evaluate_task_result()` (`octopus_sdk/protocol_engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
-| Dispatch → engine → persist | `_dispatch_protocol_stage_in_tx` → `ProtocolRunEngine.evaluate_dispatch()` (`octopus_sdk/protocol_engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
-| Operator actions (cancel/retry/accept/send-back) | `ProtocolRunEngine.evaluate_operator_action()` `octopus_sdk/protocol_engine.py`; HTTP `resource_act_on_protocol_run` `server.py` |
+| Task completion → engine → persist | `_advance_protocol_run_for_task_in_tx` → `ProtocolRunEngine.evaluate_task_result()` (`octopus_sdk/protocols/engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
+| Dispatch → engine → persist | `_dispatch_protocol_stage_in_tx` → `ProtocolRunEngine.evaluate_dispatch()` (`octopus_sdk/protocols/engine.py`) → `_apply_protocol_engine_decision_in_tx` `store_postgres.py` |
+| Operator actions (cancel/retry/accept/send-back) | `ProtocolRunEngine.evaluate_operator_action()` `octopus_sdk/protocols/engine.py`; HTTP `resource_act_on_protocol_run` `server.py` |
 | Synthetic timeout → engine → persist | `run_protocol_maintenance()` / `_sweep_protocol_timeouts_in_tx` `store_postgres.py` → `ProtocolRunEngine.evaluate_stage_timeout()` |
 | Tenancy (runs) | `_protocol_run_visibility_status` / `_protocol_run_detail_in_tx` `store_postgres.py`; `PROTOCOL_NOT_VISIBLE` mapping on run routes in `server.py` |
 | Definition visibility | `_protocol_visible_to_access` (~990+) `store_postgres.py` |
 | Export | `export_protocol_run` / `resource_export_protocol_run` ~1243+ `server.py` |
 | Waiver mode A | `ProtocolArtifactDefinitionRecord` validator ~130–136 `protocols.py` |
 | Transport avoids double continuation | `delivery_transport.py` `protocol-stage:` short-circuit ~531–532 |
-| Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_sdk/protocol_bootstrap.py` |
+| Canonical builtin bootstrap | `app/db/postgres_init.py` + `octopus_sdk/protocols/bootstrap.py` |
 | Protocol run invalidation on stage completion | `resource_routed_task_result` + `_protocol_run_id_from_task_record` `server.py` |
 | Structured protocol authoring UI | `octopus_registry/ui/js/components/protocol-workspace.js` + `octopus_registry/ui/css/main.css` |
 | Telegram run watch parity | `app/runtime/telegram_protocols.py` + `tests/test_protocol_telegram.py` |
 | Checked-in OpenAPI contract | `scripts/generate_registry_openapi.py` + `docs/registry-openapi.json` + `tests/test_registry_service.py` |
-| Protocol docs surface | `README.md`, `docs/ARCHITECTURE.md`, `docs/protocol-operator-guide.md`, `docs/protocol-author-guide.md`, `docs/telegram-user-guide.md`, `docs/registry-user-guide.md`, `tests/test_protocol_docs.py` |
+| Protocol docs surface | `README.md`, `docs/ARCHITECTURE.md`, `docs/operator-protocol-guide.md`, `docs/author-protocol-guide.md`, `docs/telegram-user-guide.md`, `docs/registry-user-guide.md`, `tests/test_protocol_docs.py` |
 
 ### 20.3 Release decisions and carry-forward notes
 
@@ -765,5 +767,7 @@ This section reflects the current branch after the remediation acceptance bar in
 | 3.6 | 2026-04-01 | **§19.0** review refinements: applier identity, cherry-pick rules, E0/merge risk, realtime-after-commit, E6-before-E7 order; **§19.6–19.7** timeout idempotency + max_review_rounds design note + waiver forward-compat; **§19.10** realtime note; **§19.12** explicit tenancy-before-UI order |
 | 3.7 | 2026-04-16 | Closed release decisions in **§1.6**; aligned §7 / §11 / §20 with shipped V1 contract (no pause/resume, archive + created_after + NOT_VISIBLE, DB-backed templates, timeout sweep, Mode A waivers) |
 | 3.8 | 2026-04-16 | Final remediation close-out: all P1–P11 phases marked done with current evidence; structured protocol authoring UI, Telegram watch parity, checked-in OpenAPI artifact, protocol operator/author guides, protocol docs contract tests, and canonical bootstrap/maintenance coverage reflected in §20 |
+| 3.9 | 2026-04-16 | Strict-compliance reset: status set back to pending, §20 marked stale until re-proven, and SDK path references updated to `octopus_sdk/protocols/` package layout |
+| 4.0 | 2026-04-16 | Strict-compliance evidence refresh completed: SDK protocol package split landed, shared routed-task result dedupe fixed, review-loop/API contract proven, strict protocol/property/fuzz/performance tests added, docs/schema contracts updated, and the broad protocol suite re-passed |
 
 **Date note:** Versions **3.0–3.1** were authored **2026-04-16**; **3.2–3.6** edits are **2026-04-01**; **3.7–3.8** reflect the final implementation passes on **2026-04-16**. The **Last updated** field reflects the latest editorial pass (**v3.8**).

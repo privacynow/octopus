@@ -133,7 +133,7 @@ objects:
 
 - definitions are versioned in `agent_registry`
 - runs are persisted in `agent_registry`
-- lifecycle decisions are evaluated by `octopus_sdk/protocol_engine.py`
+- lifecycle decisions are evaluated by `octopus_sdk/protocols/engine.py`
   (`ProtocolRunEngine`) and persisted through one canonical registry applier
   in the Postgres store
 - stage execution is dispatched through the existing routed-task/runtime path
@@ -141,7 +141,7 @@ objects:
 - operator actions are versioned, idempotent registry mutations over the same
   run state (`cancel`, `retry`, `accept`, `send-back` in the current release)
 - built-in protocol templates are seeded by the canonical DB init/bootstrap path
-  (`app/db/postgres_init.py` calling `octopus_sdk/protocol_bootstrap.py`), then
+  (`app/db/postgres_init.py` calling `octopus_sdk/protocols/bootstrap.py`), then
   served from the registry database as the runtime/control-plane source of truth
 - stage timeout enforcement uses a registry maintenance loop and the same
   canonical applier; it does not depend on receiving a late routed-task result
@@ -149,7 +149,7 @@ objects:
   browser and operator tooling observe the same protocol truth the GET/timeline
   APIs expose
 - protocol draft parsing, JSON/YAML export, and draft-vs-published diff use the
-  shared SDK document helpers in `octopus_sdk/protocols.py`; the registry UI and
+  shared SDK document helpers in `octopus_sdk/protocols/`; the registry UI and
   API do not maintain a second protocol text conversion path
 - protocol support/admin visibility is exposed through registry-backed issue
   queries for blocked runs, invalid contracts, expired timeouts, and stuck

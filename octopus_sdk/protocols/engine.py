@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 
-from octopus_sdk.protocols import (
+from .core import (
     ProtocolArtifactRecord,
     ProtocolDefinitionDocumentRecord,
     ProtocolDispatchDecisionRecord,
@@ -20,6 +20,7 @@ from octopus_sdk.protocols import (
     is_protocol_terminal_target,
     parse_protocol_stage_decision,
     protocol_artifact_contract_error,
+    protocol_review_edge_key,
     protocol_participant_session_key,
     protocol_retention_until,
     protocol_stage_internal_context,
@@ -338,7 +339,9 @@ class ProtocolRunEngine:
         stage_execution: ProtocolStageExecutionRecord,
         stage_executions: Sequence[ProtocolStageExecutionRecord],
         result: ProtocolStageTaskResultRecord,
+        review_edge_counts: Mapping[str, int] | None = None,
     ) -> ProtocolEngineDecisionRecord:
+        review_edge_counts = dict(review_edge_counts or {})
         stage = document.stage(stage_execution.stage_key)
         if stage_execution.timeout_at and _iso_expired(stage_execution.timeout_at, reference=result.completed_at):
             return self.evaluate_stage_timeout(
@@ -402,15 +405,29 @@ class ProtocolRunEngine:
                 artifact_observations=list(result.artifacts),
                 retention_until=retention_until,
             )
+        transition_metadata = RegistryJsonRecord.model_validate(
+            {
+                "review_edge_key": "",
+                "current_review_rounds": 0,
+                "max_review_rounds": document.policies.max_review_rounds,
+            }
+        )
+        target = stage_target_for_decision(stage, decision.decision)
+        revise_edge_key = ""
+        revise_count = 0
         if decision.decision == "revise":
-            revise_count = 1 + sum(
-                1
-                for item in stage_executions
-                if item.stage_key == stage.stage_key and item.status == "completed" and item.decision == "revise"
+            revise_edge_key = protocol_review_edge_key(stage.stage_key, target)
+            revise_count = review_edge_counts.get(revise_edge_key, 0) + 1
+            transition_metadata = RegistryJsonRecord.model_validate(
+                {
+                    "review_edge_key": revise_edge_key,
+                    "current_review_rounds": revise_count,
+                    "max_review_rounds": document.policies.max_review_rounds,
+                }
             )
             if revise_count > document.policies.max_review_rounds:
                 detail = (
-                    f"Stage {stage.stage_key} exceeded max review rounds "
+                    f"Review edge {revise_edge_key or stage.stage_key} exceeded max review rounds "
                     f"({revise_count} > {document.policies.max_review_rounds})."
                 )
                 return ProtocolEngineDecisionRecord(
@@ -426,9 +443,9 @@ class ProtocolRunEngine:
                     run_blocked_code="max_review_rounds_exceeded",
                     run_blocked_detail=detail,
                     artifact_observations=list(result.artifacts),
+                    transition_metadata=transition_metadata,
                     retention_until=retention_until,
                 )
-        target = stage_target_for_decision(stage, decision.decision)
         if not target:
             detail = f"Stage {stage.stage_key} has no transition for {decision.decision}"
             return ProtocolEngineDecisionRecord(
@@ -444,6 +461,7 @@ class ProtocolRunEngine:
                 run_blocked_code="protocol_invalid_transition",
                 run_blocked_detail=detail,
                 artifact_observations=list(result.artifacts),
+                transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )
         if is_protocol_terminal_target(target):
@@ -461,6 +479,7 @@ class ProtocolRunEngine:
                 transition_reason=decision.summary,
                 terminal_status=terminal_status,
                 artifact_observations=list(result.artifacts),
+                transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )
         return ProtocolEngineDecisionRecord(
@@ -473,6 +492,7 @@ class ProtocolRunEngine:
             next_stage_key=target,
             create_next_execution=True,
             artifact_observations=list(result.artifacts),
+            transition_metadata=transition_metadata,
             input_snapshot=RegistryJsonRecord.model_validate(
                 {
                     "previous_stage_key": stage.stage_key,
@@ -494,11 +514,20 @@ class ProtocolRunEngine:
         action: ProtocolOperatorAction,
         reason: str,
         now: str,
+        review_edge_counts: Mapping[str, int] | None = None,
     ) -> ProtocolEngineDecisionRecord:
         del stage_executions
+        review_edge_counts = dict(review_edge_counts or {})
         stage = document.stage(stage_execution.stage_key)
         summary = str(reason or "").strip() or f"Operator {action.replace('_', ' ')}."
         retention_until = run.retention_until or protocol_retention_until(run.created_at or now)
+        transition_metadata = RegistryJsonRecord.model_validate(
+            {
+                "review_edge_key": "",
+                "current_review_rounds": 0,
+                "max_review_rounds": document.policies.max_review_rounds,
+            }
+        )
         if action == "cancel":
             return ProtocolEngineDecisionRecord(
                 run_status="cancelled",
@@ -507,6 +536,7 @@ class ProtocolRunEngine:
                 transition_kind="terminal",
                 transition_reason=summary,
                 terminal_status="cancelled",
+                transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )
         if action == "retry":
@@ -559,6 +589,36 @@ class ProtocolRunEngine:
                 retention_until=retention_until,
             )
         target = stage_target_for_decision(stage, forced_decision)
+        if forced_decision == "revise":
+            revise_edge_key = protocol_review_edge_key(stage.stage_key, target)
+            revise_count = review_edge_counts.get(revise_edge_key, 0) + 1
+            transition_metadata = RegistryJsonRecord.model_validate(
+                {
+                    "review_edge_key": revise_edge_key,
+                    "current_review_rounds": revise_count,
+                    "max_review_rounds": document.policies.max_review_rounds,
+                }
+            )
+            if revise_count > document.policies.max_review_rounds:
+                detail = (
+                    f"Review edge {revise_edge_key or stage.stage_key} exceeded max review rounds "
+                    f"({revise_count} > {document.policies.max_review_rounds})."
+                )
+                return ProtocolEngineDecisionRecord(
+                    run_status="blocked",
+                    stage_status="blocked",
+                    decision=forced_decision,
+                    summary=summary,
+                    failure_code="max_review_rounds_exceeded",
+                    failure_detail=detail,
+                    transition_kind="blocked",
+                    transition_reason=detail,
+                    transition_error_code="MAX_REVIEW_ROUNDS_EXCEEDED",
+                    run_blocked_code="max_review_rounds_exceeded",
+                    run_blocked_detail=detail,
+                    transition_metadata=transition_metadata,
+                    retention_until=retention_until,
+                )
         if is_protocol_terminal_target(target):
             terminal_status = {
                 "__complete__": "completed",
@@ -573,6 +633,7 @@ class ProtocolRunEngine:
                 transition_kind="terminal",
                 transition_reason=summary,
                 terminal_status=terminal_status,
+                transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )
         return ProtocolEngineDecisionRecord(
@@ -584,6 +645,7 @@ class ProtocolRunEngine:
             transition_reason=summary,
             next_stage_key=target,
             create_next_execution=True,
+            transition_metadata=transition_metadata,
             input_snapshot=RegistryJsonRecord.model_validate(
                 {
                     "previous_stage_key": stage.stage_key,

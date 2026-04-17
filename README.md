@@ -191,8 +191,8 @@ The protocol implementation is described in
 lives in [protocol_remediation_plan.md](protocol_remediation_plan.md).
 The operator workflow, authoring contract, and checked-in API artifact live in:
 
-- [docs/protocol-operator-guide.md](docs/protocol-operator-guide.md)
-- [docs/protocol-author-guide.md](docs/protocol-author-guide.md)
+- [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
+- [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
 - [docs/registry-openapi.json](docs/registry-openapi.json)
 
 `./octopus` generates `BOT_CREDENTIAL_KEY` for managed bot env files. Keep it:
@@ -227,9 +227,9 @@ fault state.
   SDK-oriented bot development guide
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
   System architecture and runtime boundaries
-- [docs/protocol-operator-guide.md](docs/protocol-operator-guide.md)
+- [docs/operator-protocol-guide.md](docs/operator-protocol-guide.md)
   Protocol run operations, metrics, and runbooks
-- [docs/protocol-author-guide.md](docs/protocol-author-guide.md)
+- [docs/author-protocol-guide.md](docs/author-protocol-guide.md)
   Protocol authoring and validation guide
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)

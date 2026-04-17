@@ -374,6 +374,9 @@ class ProtocolRunRecord(RegistryRecordModel):
     termination_summary: str = ""
     blocked_code: str = ""
     blocked_detail: str = ""
+    current_review_rounds: int = 0
+    max_review_rounds: int = 0
+    current_review_edge_key: str = ""
     run_org_id: str = PROTOCOL_DEFAULT_RUN_ORG_ID
     started_by: str = ""
     version: int = 1
@@ -936,6 +939,50 @@ def stage_target_for_decision(stage: ProtocolStageDefinitionRecord, decision: st
 
 def is_protocol_terminal_target(target: str) -> bool:
     return str(target or "").strip() in _TERMINAL_STAGE_TARGETS
+
+
+def protocol_review_edge_key(from_stage_key: str, to_stage_key: str) -> str:
+    left = str(from_stage_key or "").strip()
+    right = str(to_stage_key or "").strip()
+    if not left or not right:
+        return ""
+    return f"{left}:{right}"
+
+
+def protocol_review_edge_counts(transitions: Sequence[ProtocolTransitionRecord]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in transitions:
+        metadata = item.metadata_json.as_dict()
+        edge_key = str(metadata.get("review_edge_key", "") or "").strip()
+        if not edge_key:
+            continue
+        try:
+            rounds = int(metadata.get("current_review_rounds", 0) or 0)
+        except (TypeError, ValueError):
+            rounds = 0
+        if rounds > counts.get(edge_key, 0):
+            counts[edge_key] = rounds
+    return counts
+
+
+def protocol_current_review_state(
+    transitions: Sequence[ProtocolTransitionRecord],
+    *,
+    max_review_rounds: int,
+) -> tuple[int, int, str]:
+    current_rounds = 0
+    current_edge_key = ""
+    for item in transitions:
+        metadata = item.metadata_json.as_dict()
+        if "current_review_rounds" not in metadata and "review_edge_key" not in metadata:
+            continue
+        try:
+            current_rounds = int(metadata.get("current_review_rounds", 0) or 0)
+        except (TypeError, ValueError):
+            current_rounds = 0
+        current_edge_key = str(metadata.get("review_edge_key", "") or "").strip()
+        break
+    return current_rounds, int(max_review_rounds or 0), current_edge_key
 
 
 def default_protocol_document_slug(document: ProtocolDefinitionDocumentRecord) -> str:

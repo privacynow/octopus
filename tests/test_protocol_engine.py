@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from octopus_sdk.protocol_engine import ProtocolRunEngine
+from octopus_sdk.protocols.engine import ProtocolRunEngine
 from octopus_sdk.protocols import (
     ProtocolArtifactObservationRecord,
     ProtocolRunRecord,
     ProtocolStageExecutionRecord,
     ProtocolStageTaskResultRecord,
     canonical_protocol_document,
+    protocol_review_edge_key,
 )
 from tests.support.protocol_support import protocol_document
 
@@ -251,21 +252,13 @@ def test_protocol_run_engine_blocks_when_review_round_cap_is_exceeded() -> None:
         full_text="Needs more work.\nPROTOCOL_DECISION: revise\nPROTOCOL_SUMMARY: Needs changes.",
         completed_at="2026-04-16T00:10:00+00:00",
     )
-    prior_revise = ProtocolStageExecutionRecord(
-        protocol_stage_execution_id="review-old",
-        protocol_run_id="run-1",
-        stage_key="review",
-        participant_key="reviewer",
-        status="completed",
-        decision="revise",
-    )
-
     decision = _engine().evaluate_task_result(
         document=document,
         run=_run(),
         stage_execution=_stage_execution(stage_key="review", participant_key="reviewer"),
-        stage_executions=[prior_revise],
+        stage_executions=[],
         result=result,
+        review_edge_counts={protocol_review_edge_key("review", "planning"): 1},
     )
 
     assert decision.run_status == "blocked"

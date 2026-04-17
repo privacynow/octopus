@@ -177,6 +177,18 @@ def update_routed_task_status(
     else:
         raise ValueError(f"Unsupported routed task status: {requested_status}")
 
+    primary_event_id = f"task-transition:{routed_task_id}:{validated_payload.transition_id}"
+    duplicate = (
+        dialect.fetchone(
+            conn,
+            f"SELECT 1 FROM {dialect.qualify('events')} WHERE event_id = {dialect.placeholder(1)}",
+            (primary_event_id,),
+        )
+        is not None
+    )
+    if duplicate:
+        return task_snapshot_row(task_row)
+
     decision = apply_task_transition(
         task_snapshot_row(task_row),
         TaskTransitionRequest(
@@ -193,15 +205,6 @@ def update_routed_task_status(
     inserted_events: list[EventRecord] = []
     recipient_inserted_events: list[EventRecord] = []
     recipient_conversation_id = ""
-    primary_event_id = f"task-transition:{routed_task_id}:{validated_payload.transition_id}"
-    duplicate = (
-        dialect.fetchone(
-            conn,
-            f"SELECT 1 FROM {dialect.qualify('events')} WHERE event_id = {dialect.placeholder(1)}",
-            (primary_event_id,),
-        )
-        is not None
-    )
     if not duplicate:
         dialect.execute(
             conn,
@@ -346,6 +349,19 @@ def update_routed_task_result(
     else:
         raise ValueError(f"Unsupported routed task result status: {requested_status}")
     completed_at = validated_payload.completed_at or now
+
+    primary_event_id = f"task-result:{routed_task_id}:{validated_payload.transition_id}"
+    duplicate = (
+        dialect.fetchone(
+            conn,
+            f"SELECT 1 FROM {dialect.qualify('events')} WHERE event_id = {dialect.placeholder(1)}",
+            (primary_event_id,),
+        )
+        is not None
+    )
+    if duplicate:
+        return task_snapshot_row(task)
+
     decision = apply_task_transition(
         task_snapshot_row(task),
         TaskTransitionRequest(
@@ -358,15 +374,6 @@ def update_routed_task_result(
     if not decision.ok:
         raise ValueError(decision.reason or f"Task {routed_task_id} cannot transition to {requested_status}")
 
-    primary_event_id = f"task-result:{routed_task_id}:{validated_payload.transition_id}"
-    duplicate = (
-        dialect.fetchone(
-            conn,
-            f"SELECT 1 FROM {dialect.qualify('events')} WHERE event_id = {dialect.placeholder(1)}",
-            (primary_event_id,),
-        )
-        is not None
-    )
     parent_conversation = dialect.fetchone(
         conn,
         (

@@ -19,7 +19,7 @@ from octopus_sdk.content_models import (
     RuntimeSkillTrackRecord,
     SkillRevisionRecord,
 )
-from octopus_sdk.protocol_engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
+from octopus_sdk.protocols.engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
 from octopus_sdk.protocols import (
     PROTOCOL_DEFAULT_OPERATOR_REF,
     PROTOCOL_DEFAULT_RETENTION_DAYS,
@@ -45,6 +45,8 @@ from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
     canonical_protocol_document,
     normalize_protocol_document_format,
+    protocol_current_review_state,
+    protocol_review_edge_counts,
     protocol_retention_until,
     ProtocolStageTaskResultRecord,
     protocol_document_from_text,
@@ -778,6 +780,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 "termination_summary": row["termination_summary"],
                 "blocked_code": row.get("blocked_code", ""),
                 "blocked_detail": row.get("blocked_detail", ""),
+                "current_review_rounds": row.get("current_review_rounds", 0),
+                "max_review_rounds": row.get("max_review_rounds", 0),
+                "current_review_edge_key": row.get("current_review_edge_key", ""),
                 "run_org_id": row.get("run_org_id", PROTOCOL_DEFAULT_RUN_ORG_ID),
                 "started_by": row.get("started_by", ""),
                 "version": row.get("version", 1),
@@ -1050,6 +1055,33 @@ class RegistryPostgresStore(AbstractRegistryStore):
         )
         return [self._protocol_transition_from_row(row) for row in rows]
 
+    def _decorate_protocol_run_row_with_review_state(
+        self,
+        conn,
+        run_row: Mapping[str, object],
+        *,
+        transitions: Sequence[ProtocolTransitionRecord] | None = None,
+        document: ProtocolDefinitionDocumentRecord | None = None,
+    ) -> dict[str, object]:
+        payload = dict(run_row)
+        transition_records = list(
+            transitions or self._protocol_run_transitions_history(conn, str(run_row.get("protocol_run_id", "") or ""))
+        )
+        document_record = document
+        if document_record is None:
+            version_row = self._protocol_version_row(conn, str(run_row.get("protocol_definition_version_id", "") or ""))
+            if version_row is not None:
+                document_record = canonical_protocol_document(version_row["definition_json"])
+        max_review_rounds = document_record.policies.max_review_rounds if document_record is not None else 0
+        current_review_rounds, max_rounds, current_review_edge_key = protocol_current_review_state(
+            transition_records,
+            max_review_rounds=max_review_rounds,
+        )
+        payload["current_review_rounds"] = current_review_rounds
+        payload["max_review_rounds"] = max_rounds
+        payload["current_review_edge_key"] = current_review_edge_key
+        return payload
+
     def _protocol_run_detail_in_tx(
         self,
         conn,
@@ -1132,6 +1164,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
             """,
             (run_id,),
         )
+        document = canonical_protocol_document(version_row["definition_json"])
+        transition_records = [self._protocol_transition_from_row(row) for row in transition_rows]
+        run_row = self._decorate_protocol_run_row_with_review_state(
+            conn,
+            run_row,
+            transitions=transition_records,
+            document=document,
+        )
         return ProtocolRunDetailRecord(
             run=self._protocol_run_from_row(run_row),
             definition=self._protocol_record_from_row(definition_row),
@@ -1139,7 +1179,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             participants=[self._protocol_run_participant_from_row(row) for row in participant_rows],
             stage_executions=[self._protocol_stage_execution_from_row(row) for row in stage_rows],
             artifacts=[self._protocol_artifact_from_row(row) for row in artifact_rows],
-            transitions=[self._protocol_transition_from_row(row) for row in transition_rows],
+            transitions=transition_records,
         )
 
     def _record_protocol_compliance_event(
@@ -1725,6 +1765,9 @@ class RegistryPostgresStore(AbstractRegistryStore):
             stage_execution=stage_execution,
             stage_executions=self._protocol_stage_executions_for_run(conn, str(run_row["protocol_run_id"] or "")),
             result=self._protocol_stage_task_result_from_task_row(task_row),
+            review_edge_counts=protocol_review_edge_counts(
+                self._protocol_run_transitions_history(conn, str(run_row["protocol_run_id"] or ""))
+            ),
         )
         self._apply_protocol_engine_decision_in_tx(
             conn,
@@ -2596,11 +2639,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 """,
                 tuple(params),
             )
-        visible = [
-            self._protocol_run_from_row(row)
-            for row in rows
-            if self._assert_protocol_run_visible(row, access=access) is not None
-        ]
+        visible = []
+        for row in rows:
+            if self._assert_protocol_run_visible(row, access=access) is None:
+                continue
+            visible.append(self._protocol_run_from_row(self._decorate_protocol_run_row_with_review_state(conn, row)))
         return visible[cursor:cursor + limit]
 
     def _protocol_issues_for_row(
@@ -3134,6 +3177,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 action=normalized_action,
                 reason=reason,
                 now=now,
+                review_edge_counts=protocol_review_edge_counts(self._protocol_run_transitions_history(conn, run_id)),
             )
             self._apply_protocol_engine_decision_in_tx(
                 conn,

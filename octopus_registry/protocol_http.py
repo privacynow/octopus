@@ -34,12 +34,14 @@ def build_protocol_router(
         *,
         error_code: str,
         message: str,
+        details: object | None = None,
     ) -> HTTPException:
         return HTTPException(
             status_code=status_code,
             detail={
                 "error_code": error_code,
                 "message": message,
+                "details": details,
             },
         )
 
@@ -52,8 +54,10 @@ def build_protocol_router(
             return _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message=message)
         if status == "forbidden":
             return _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=message)
-        if status in {"idempotency_conflict", "concurrent_modification"}:
-            return _protocol_http_error(409, error_code=status.upper(), message=message)
+        if status == "idempotency_conflict":
+            return _protocol_http_error(409, error_code="IDEMPOTENCY_REPLAY", message=message)
+        if status == "concurrent_modification":
+            return _protocol_http_error(409, error_code="CONCURRENT_MODIFICATION", message=message)
         if status == "duplicate_slug":
             return _protocol_http_error(409, error_code="PROTOCOL_DUPLICATE_SLUG", message=message)
         if status == "invalid_action":
@@ -73,6 +77,7 @@ def build_protocol_router(
                 400,
                 error_code="PROTOCOL_INVALID_IF_MATCH",
                 message="If-Match must be an integer protocol run version.",
+                details={"if_match": value},
             ) from exc
 
     @router.get("/v1/protocols")
@@ -110,7 +115,7 @@ def build_protocol_router(
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol is not visible to this actor.") from exc
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Protocol template not found") from exc
+            raise _protocol_http_error(404, error_code="PROTOCOL_NOT_FOUND", message="Protocol template not found.") from exc
         return _json_payload(document)
 
     @router.get("/v1/protocols/{protocol_id}")
@@ -147,7 +152,7 @@ def build_protocol_router(
     ) -> dict[str, Any]:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Invalid protocol payload")
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message="Invalid protocol payload.")
         try:
             parsed = store.parse_protocol_document_text(
                 access=protocol_access(auth),
@@ -202,7 +207,7 @@ def build_protocol_router(
     ) -> dict[str, Any]:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Invalid protocol payload")
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message="Invalid protocol payload.")
         result = store.save_protocol_draft(
             access=protocol_access(auth),
             protocol_id=str(payload.get("protocol_id", "") or ""),
@@ -225,7 +230,7 @@ def build_protocol_router(
     ) -> dict[str, Any]:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Invalid protocol payload")
+            raise _protocol_http_error(400, error_code="PROTOCOL_INVALID", message="Invalid protocol payload.")
         result = store.save_protocol_draft(
             access=protocol_access(auth),
             protocol_id=protocol_id,

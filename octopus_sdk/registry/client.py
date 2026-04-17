@@ -67,8 +67,12 @@ ProtocolRegistryErrorCode = Literal[
     "PROTOCOL_RUN_NOT_FOUND",
     "PROTOCOL_VERSION_NOT_FOUND",
     "PROTOCOL_EXPORT_FORBIDDEN",
+    "PROTOCOL_INVALID_TRANSITION",
+    "LEASE_HELD",
+    "MAX_REVIEW_ROUNDS_EXCEEDED",
+    "ARTIFACT_VERIFICATION_FAILED",
     "CONCURRENT_MODIFICATION",
-    "IDEMPOTENCY_CONFLICT",
+    "IDEMPOTENCY_REPLAY",
     "PROTOCOL_REQUEST_FAILED",
 ]
 PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
@@ -84,8 +88,12 @@ PROTOCOL_REGISTRY_ERROR_CODES = frozenset[str]({
     "PROTOCOL_RUN_NOT_FOUND",
     "PROTOCOL_VERSION_NOT_FOUND",
     "PROTOCOL_EXPORT_FORBIDDEN",
+    "PROTOCOL_INVALID_TRANSITION",
+    "LEASE_HELD",
+    "MAX_REVIEW_ROUNDS_EXCEEDED",
+    "ARTIFACT_VERIFICATION_FAILED",
     "CONCURRENT_MODIFICATION",
-    "IDEMPOTENCY_CONFLICT",
+    "IDEMPOTENCY_REPLAY",
     "PROTOCOL_REQUEST_FAILED",
 })
 
@@ -99,10 +107,12 @@ class RegistryClientError(RuntimeError):
         *,
         error_code: str = "registry_request_failed",
         operator_detail: str = "",
+        details: object | None = None,
         status_code: int | None = None,
     ) -> None:
         self.error_code = error_code
         self.operator_detail = operator_detail or message
+        self.details = details
         self.status_code = status_code
         super().__init__(message)
 
@@ -121,13 +131,13 @@ def _registry_http_error_code(status_code: int) -> str:
     return "registry_request_failed"
 
 
-def _detail_error_payload(value: object) -> tuple[str, str]:
+def _detail_error_payload(value: object) -> tuple[str, str, object | None]:
     if isinstance(value, dict):
         error_code = str(value.get("error_code", "") or "").strip()
         message = str(value.get("message", "") or "").strip()
         if error_code or message:
-            return error_code or "registry_request_failed", message or "Registry request failed."
-    return "", ""
+            return error_code or "registry_request_failed", message or "Registry request failed.", value.get("details")
+    return "", "", None
 
 
 def _validated_model(
@@ -209,7 +219,7 @@ class RegistryClient:
                         payload = response.json().get("detail", response.json())
                     except Exception:
                         payload = {}
-                error_code, message = _detail_error_payload(payload)
+                error_code, message, details = _detail_error_payload(payload)
                 raise RegistryClientError(
                     message or f"Registry {method} {path} failed: HTTP {response.status_code}",
                     error_code=error_code or _registry_http_error_code(response.status_code),
@@ -217,6 +227,7 @@ class RegistryClient:
                         message
                         or f"Registry {method} {path} failed with HTTP {response.status_code}."
                     ),
+                    details=details,
                     status_code=response.status_code,
                 )
             if response.status_code == 204 or not response.content:

@@ -1525,6 +1525,10 @@ function renderProtocolWorkspace(container) {
                     { label: 'Status', value: currentRun.run.status },
                     { label: 'Version', value: String(currentRun.run.version || 1) },
                     { label: 'Current stage', value: currentRun.run.current_stage_key || 'n/a' },
+                    {
+                        label: 'Review loop',
+                        value: `${Number(currentRun.run.current_review_rounds || 0)} / ${Number(currentRun.run.max_review_rounds || 0) || 'n/a'}`,
+                    },
                     { label: 'Workspace', value: currentRun.run.workspace_ref || 'default' },
                     { label: 'Root conversation', value: currentRun.run.root_conversation_id || 'n/a' },
                 ]),

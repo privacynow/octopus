@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import random
+import string
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,6 +14,7 @@ from octopus_sdk.protocols import (
     ProtocolStageDefinitionRecord,
     parse_protocol_stage_decision,
     protocol_document_to_text,
+    protocol_review_edge_key,
     validate_protocol_document,
 )
 from octopus_sdk.registry.models import RegistryJsonRecord
@@ -23,6 +28,83 @@ from tests.support.protocol_support import (
     published_protocol,
     running_protocol_run,
 )
+
+
+def _generated_linear_protocol(seed: int) -> dict[str, object]:
+    rng = random.Random(seed)
+    stage_count = rng.randint(2, 6)
+    artifacts: list[dict[str, object]] = []
+    stages: list[dict[str, object]] = []
+    previous_artifact_key = ""
+    for index in range(stage_count):
+        artifact_key = f"artifact-{index}"
+        stage_key = f"stage-{index}"
+        artifacts.append(
+            {
+                "artifact_key": artifact_key,
+                "kind": "workspace_file",
+                "path": f"protocol/{artifact_key}.md",
+            }
+        )
+        transitions: dict[str, str] = {
+            "completed": "__complete__" if index == stage_count - 1 else f"stage-{index + 1}",
+            "fail": "__failed__",
+        }
+        stages.append(
+            {
+                "stage_key": stage_key,
+                "participant_key": "worker",
+                "stage_kind": "work",
+                "write_capable": True,
+                "strict_completion": bool(rng.getrandbits(1)),
+                "timeout_seconds": rng.choice((0, 30, 120)),
+                "inputs": [previous_artifact_key] if previous_artifact_key else [],
+                "outputs": [artifact_key],
+                "transitions": transitions,
+                "instructions": f"Write {artifact_key}.",
+            }
+        )
+        previous_artifact_key = artifact_key
+    return {
+        "schema_version": 1,
+        "metadata": {
+            "slug": f"generated-{seed}",
+            "display_name": f"Generated {seed}",
+            "description": "Generated protocol for validator coverage.",
+        },
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "artifacts": artifacts,
+        "stages": stages,
+        "policies": {
+            "single_active_writer": True,
+            "max_review_rounds": rng.randint(1, 5),
+        },
+    }
+
+
+def _random_jsonish(rng: random.Random, *, depth: int) -> object:
+    if depth <= 0:
+        return rng.choice(
+            (
+                None,
+                True,
+                False,
+                rng.randint(-10, 10),
+                "".join(rng.choice(string.ascii_lowercase) for _ in range(rng.randint(0, 8))),
+            )
+        )
+    kind = rng.choice(("dict", "list", "scalar"))
+    if kind == "dict":
+        return {
+            "".join(rng.choice(string.ascii_lowercase) for _ in range(rng.randint(1, 6))): _random_jsonish(
+                rng,
+                depth=depth - 1,
+            )
+            for _ in range(rng.randint(0, 4))
+        }
+    if kind == "list":
+        return [_random_jsonish(rng, depth=depth - 1) for _ in range(rng.randint(0, 4))]
+    return _random_jsonish(rng, depth=0)
 
 
 def test_validate_protocol_document_accepts_minimal_protocol() -> None:
@@ -73,6 +155,21 @@ def test_validate_protocol_document_rejects_workspace_path_traversal() -> None:
     assert result.ok is False
     assert result.errors
     assert "escape the workspace root" in result.errors[0]
+
+
+def test_validate_protocol_document_accepts_generated_reachable_linear_graphs() -> None:
+    for seed in range(25):
+        result = validate_protocol_document(_generated_linear_protocol(seed))
+        assert result.ok is True, f"generated protocol failed validation for seed={seed}: {result.errors}"
+
+
+def test_validate_protocol_document_fuzz_does_not_raise_uncaught_exceptions() -> None:
+    for seed in range(100):
+        payload = _random_jsonish(random.Random(seed), depth=3)
+        if not isinstance(payload, dict):
+            payload = {"payload": payload}
+        result = validate_protocol_document(payload)
+        assert isinstance(result.ok, bool), f"validator returned invalid result for seed={seed}"
 
 
 def test_protocol_artifact_observation_rejects_absolute_or_traversing_paths() -> None:
@@ -176,6 +273,205 @@ def test_registry_store_protocol_run_advances_from_work_to_review(postgres_regis
     detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
     assert detail.run.status == "completed"
     assert detail.run.termination_summary == "Accepted."
+
+
+def test_registry_store_duplicate_routed_task_result_is_idempotent(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    token = enroll.agent_token
+    stage = detail.stage_executions[0]
+    payload = {
+        "status": "completed",
+        "transition_id": "done-dup",
+        "summary": "Plan updated.",
+        "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+        "artifacts": [
+            {
+                "artifact_key": "plan",
+                "artifact_kind": "workspace_file",
+                "path": "protocol/plan.md",
+                "exists": True,
+                "size_bytes": 128,
+                "content_hash": "abc123",
+                "modified_at": "2026-04-16T00:00:00+00:00",
+                "verification_state": "verified",
+            }
+        ],
+    }
+
+    store.update_routed_task_result(token, stage.routed_task_id, payload)
+    first = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    first_stage_ids = [item.protocol_stage_execution_id for item in first.stage_executions]
+    first_transition_ids = [item.protocol_transition_id for item in first.transitions]
+
+    store.update_routed_task_result(token, stage.routed_task_id, payload)
+    second = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+
+    assert second.run.current_stage_execution_id == first.run.current_stage_execution_id
+    assert [item.protocol_stage_execution_id for item in second.stage_executions] == first_stage_ids
+    assert [item.protocol_transition_id for item in second.transitions] == first_transition_ids
+
+
+def test_registry_store_exposes_review_loop_count_and_cap(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    planning_stage = detail.stage_executions[0]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        planning_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "plan-complete",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "plan123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    review_detail = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    review_stage = next(item for item in review_detail.stage_executions if item.stage_key == "review")
+    store.update_routed_task_result(
+        enroll.agent_token,
+        review_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "review-revise",
+            "summary": "Needs changes.",
+            "full_text": "Needs more work.\nPROTOCOL_DECISION: revise\nPROTOCOL_SUMMARY: Needs changes.",
+        },
+    )
+
+    revised = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    listed = store.list_protocol_runs(access=operator_access())
+    run_summary = next(item for item in listed if item.protocol_run_id == created.run.protocol_run_id)
+
+    assert revised.run.current_review_rounds == 1
+    assert revised.run.max_review_rounds == 3
+    assert revised.run.current_review_edge_key == protocol_review_edge_key("review", "planning")
+    assert run_summary.current_review_rounds == 1
+    assert run_summary.max_review_rounds == 3
+
+
+def test_registry_store_late_result_after_timeout_does_not_reopen_run(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(
+        store,
+        document={
+            **protocol_document(),
+            "stages": [
+                {
+                    **protocol_document()["stages"][0],
+                    "timeout_seconds": 1,
+                },
+                protocol_document()["stages"][1],
+            ],
+        },
+    )
+    stage = detail.stage_executions[0]
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agent_registry.protocol_stage_executions
+                SET timeout_at = %s
+                WHERE protocol_stage_execution_id = %s
+                """,
+                (expired, stage.protocol_stage_execution_id),
+            )
+        conn.commit()
+
+    maintenance = store.run_protocol_maintenance()
+    timed_out = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    transition_ids = [item.protocol_transition_id for item in timed_out.transitions]
+    stage_ids = [item.protocol_stage_execution_id for item in timed_out.stage_executions]
+
+    store.update_routed_task_result(
+        enroll.agent_token,
+        stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "late-1",
+            "summary": "Late completion.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Late completion.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 128,
+                    "content_hash": "late123",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert maintenance.swept_count == 1
+    assert refreshed.run.status == "failed"
+    assert [item.protocol_transition_id for item in refreshed.transitions] == transition_ids
+    assert [item.protocol_stage_execution_id for item in refreshed.stage_executions] == stage_ids
+
+
+def test_registry_store_protocol_timeline_scales_for_large_transition_history(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    _enroll, _published, created, detail = running_protocol_run(store)
+    run_id = created.run.protocol_run_id
+    stage_id = detail.stage_executions[0].protocol_stage_execution_id
+    inserted = 400
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_connection(postgres_registry_truncated) as conn:
+        with conn.cursor() as cur:
+            for index in range(inserted):
+                cur.execute(
+                    """
+                    INSERT INTO agent_registry.protocol_transitions (
+                        protocol_transition_id, protocol_run_id, from_stage_execution_id,
+                        to_stage_execution_id, transition_kind, decision, reason, error_code,
+                        metadata_json, actor_type, actor_ref, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        run_id,
+                        stage_id,
+                        stage_id,
+                        "progress",
+                        "",
+                        f"perf-{index}",
+                        "",
+                        Jsonb({}),
+                        "protocol_engine",
+                        stage_id,
+                        now,
+                    ),
+                )
+        conn.commit()
+
+    store.get_protocol_run_timeline(run_id, access=operator_access())
+    started = time.perf_counter()
+    timeline = store.get_protocol_run_timeline(run_id, access=operator_access())
+    elapsed = time.perf_counter() - started
+
+    assert len(timeline) >= inserted
+    # Generous local threshold to catch regressions in the hot-path timeline query without flaking on CI noise.
+    assert elapsed < 2.0
 
 
 def test_registry_store_loads_legacy_published_protocol_versions_via_in_memory_migration(

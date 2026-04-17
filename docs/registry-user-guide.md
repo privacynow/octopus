@@ -152,7 +152,7 @@ You can:
   timeouts, and stuck leases
 
 For the full workflow and runbook, use
-[protocol-operator-guide.md](protocol-operator-guide.md).
+[operator-protocol-guide.md](operator-protocol-guide.md).
 
 ## Typical Operator Workflows
 
@@ -218,7 +218,7 @@ For the full skills workflow, use
 6. publish when ready
 
 For authoring details, use
-[protocol-author-guide.md](protocol-author-guide.md).
+[author-protocol-guide.md](author-protocol-guide.md).
 
 ## Reading Status Correctly
 

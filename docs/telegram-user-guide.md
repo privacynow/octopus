@@ -161,7 +161,7 @@ Examples:
 ```
 
 For the full operator workflow and runbook, use
-[protocol-operator-guide.md](protocol-operator-guide.md).
+[operator-protocol-guide.md](operator-protocol-guide.md).
 
 ## Routed Work
 

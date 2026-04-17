@@ -107,7 +107,7 @@ diff logic. Do not author a separate browser-only or script-only format.
 
 JSON and YAML are two text views over the same canonical protocol document
 model. The registry UI, API, SDK client, and checked-in OpenAPI contract all
-use the same shared conversion helpers from `octopus_sdk/protocols.py`.
+use the same shared conversion helpers from `octopus_sdk/protocols/`.
 
 ## Software Engineering Template
 

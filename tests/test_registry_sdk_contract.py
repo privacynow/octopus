@@ -963,6 +963,7 @@ def test_registry_client_error_marks_protocol_error_codes():
     protocol_error = RegistryClientError(
         "Protocol not visible.",
         error_code="PROTOCOL_NOT_VISIBLE",
+        details={"scope": "protocol"},
         status_code=403,
     )
     generic_error = RegistryClientError(
@@ -972,4 +973,5 @@ def test_registry_client_error_marks_protocol_error_codes():
     )
 
     assert protocol_error.is_protocol_error is True
+    assert protocol_error.details == {"scope": "protocol"}
     assert generic_error.is_protocol_error is False

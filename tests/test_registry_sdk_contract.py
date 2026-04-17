@@ -984,7 +984,7 @@ def test_sdk_client_parse_protocol_document_supports_draft_validation_mode():
     assert parsed.validation.next_required_actions == ["stages.add_first"]
 
 
-def test_sdk_client_list_protocol_runs_sends_entry_agent_and_origin_channel_filters():
+def test_sdk_client_list_runs_sends_entry_agent_and_origin_channel_filters():
     from unittest.mock import patch
 
     from octopus_sdk.registry.client import RegistryClient
@@ -1044,3 +1044,151 @@ def test_registry_client_error_marks_protocol_error_codes():
     assert protocol_error.is_protocol_error is True
     assert protocol_error.details == {"scope": "protocol"}
     assert generic_error.is_protocol_error is False
+
+
+# ---------------------------------------------------------------------------
+# ProtocolInvocationPort / ProtocolObservationPort contract tests
+#
+# These ensure any implementation on the RegistryClient path (and any other
+# implementation added later) presents the *exact* port surface — same method
+# names, same keyword arguments, same return shapes. This is the conformance
+# harness §10 of protocol_kit_plan.md calls for.
+# ---------------------------------------------------------------------------
+
+_INVOCATION_METHODS = ("invoke_protocol",)
+_OBSERVATION_METHODS = (
+    "list_runs",
+    "get_run",
+    "list_run_issues",
+    "list_run_artifacts",
+    "list_run_timeline",
+    "export_run",
+)
+
+
+def test_registry_client_satisfies_invocation_port():
+    from octopus_sdk.protocols import ProtocolInvocationPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    assert isinstance(client, ProtocolInvocationPort)
+    for name in _INVOCATION_METHODS:
+        assert callable(getattr(client, name))
+
+
+def test_registry_client_satisfies_observation_port():
+    from octopus_sdk.protocols import ProtocolObservationPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client = RegistryClient("http://test:8787", "test-token")
+    assert isinstance(client, ProtocolObservationPort)
+    for name in _OBSERVATION_METHODS:
+        assert callable(getattr(client, name))
+
+
+def test_invocation_port_invoke_protocol_roundtrips_idempotency_and_origin():
+    from unittest.mock import patch
+
+    from octopus_sdk.protocols import ProtocolInvocationPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client: ProtocolInvocationPort = RegistryClient("http://test:8787", "test-token")
+    captured: dict = {}
+
+    async def mock_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        captured["json"] = kwargs.get("json")
+
+        class FakeResp:
+            status_code = 200
+            text = '{"run":null}'
+            content = text.encode()
+
+            def json(self):
+                return {"run": None}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(
+            client.invoke_protocol(
+                {
+                    "protocol_id": "protocol-1",
+                    "entry_agent_id": "agent-1",
+                    "root_conversation_id": "conv-1",
+                    "origin_channel": "telegram",
+                    "workspace_ref": "",
+                    "problem_statement": "ship it",
+                    "constraints_json": {},
+                },
+                idempotency_key="abc-123",
+                origin="telegram",
+            )
+        )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/v1/protocol-runs")
+    assert captured["headers"].get("Idempotency-Key") == "abc-123"
+    assert captured["json"]["protocol_id"] == "protocol-1"
+
+
+def test_observation_port_methods_hit_expected_paths():
+    """Each observation port method maps to its canonical HTTP path.
+
+    Validates the URL/method the client produces rather than the full
+    Pydantic response shape (covered separately).
+    """
+    from unittest.mock import patch
+
+    from octopus_sdk.protocols import ProtocolObservationPort
+    from octopus_sdk.registry.client import RegistryClient
+
+    client: ProtocolObservationPort = RegistryClient("http://test:8787", "test-token")
+    calls: list[tuple[str, str]] = []
+
+    async def mock_request(method, url, **kwargs):
+        calls.append((method, url))
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            content = text.encode()
+
+            def json(self):
+                if url.endswith("/timeline"):
+                    return {"transitions": []}
+                if url.endswith("/artifacts"):
+                    return {"artifacts": []}
+                if url.endswith("/issues"):
+                    return {"issues": []}
+                if url.endswith("/v1/protocol-runs"):
+                    return {"runs": []}
+                return {}
+
+            @property
+            def headers(self):
+                return {"content-type": "application/json"}
+
+        return FakeResp()
+
+    with patch("httpx.AsyncClient.request", side_effect=mock_request):
+        asyncio.run(client.list_runs())
+        asyncio.run(client.list_run_timeline("run-1"))
+        asyncio.run(client.list_run_artifacts("run-1"))
+        asyncio.run(client.list_run_issues(protocol_run_id="run-1"))
+
+    paths = [url.split("http://test:8787")[-1] for _, url in calls]
+    methods = [method for method, _ in calls]
+    assert methods == ["GET", "GET", "GET", "GET"]
+    assert paths == [
+        "/v1/protocol-runs",
+        "/v1/protocol-runs/run-1/timeline",
+        "/v1/protocol-runs/run-1/artifacts",
+        "/v1/protocol-runs/issues",
+    ]

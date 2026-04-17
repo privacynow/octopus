@@ -1097,3 +1097,139 @@ def test_registry_store_list_protocol_runs_filters_by_entry_agent_and_origin_cha
     assert filtered[0].protocol_run_id == telegram_run.run.protocol_run_id
     assert filtered[0].entry_agent_id == m2.agent_id
     assert filtered[0].origin_channel == "telegram"
+
+
+# ---------------------------------------------------------------------------
+# Participation hardening (protocol_kit_plan Step 2)
+#
+# These guard the invariant that protocol stages ride the task framework and
+# that the substrate stays coherent end-to-end: dispatch writes to recipient,
+# completion transitions the execution, and the recipient conversation carries
+# enough context for UI navigation back to the run.
+# ---------------------------------------------------------------------------
+
+
+def _recipient_conversation_id_for_task(store: RegistryPostgresStore, routed_task_id: str, target_agent_id: str) -> str:
+    conversations = store.list_conversations(for_agent_id=target_agent_id, limit=50)
+    expected_ref = f"routed-task:{routed_task_id}"
+    recipient = next(
+        (conv for conv in conversations if conv.external_conversation_ref == expected_ref),
+        None,
+    )
+    assert recipient is not None, f"No recipient task-thread conversation for {routed_task_id}"
+    return str(recipient.conversation_id)
+
+
+def test_protocol_stage_dispatch_writes_events_to_recipient_conversation(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, _created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+    assert first_stage.routed_task_id.startswith("protocol-stage:")
+
+    recipient_conversation_id = _recipient_conversation_id_for_task(
+        store, first_stage.routed_task_id, enroll.agent_id
+    )
+
+    recipient_events = store.list_events(recipient_conversation_id).events
+    stage_events = [event for event in recipient_events if str(event.kind or "") == "task.status"]
+    assert stage_events, "Recipient conversation must receive at least one task.status event"
+
+    queued_event = stage_events[0]
+    metadata = queued_event.metadata.as_dict() if queued_event.metadata is not None else {}
+    assert metadata.get("routed_task_id") == first_stage.routed_task_id
+    assert str(metadata.get("status") or "") == "queued"
+
+
+def test_protocol_stage_completion_via_routed_task_result_updates_both_sides(
+    postgres_registry_truncated: str,
+) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+
+    origin_conv_id = str(created.run.root_conversation_id or "")
+    recipient_conv_id = _recipient_conversation_id_for_task(
+        store, first_stage.routed_task_id, enroll.agent_id
+    )
+    assert origin_conv_id and recipient_conv_id
+
+    origin_before = len(store.list_events(origin_conv_id).events)
+    recipient_before = len(store.list_events(recipient_conv_id).events)
+
+    result = store.update_routed_task_result(
+        enroll.agent_token,
+        first_stage.routed_task_id,
+        {
+            "status": "completed",
+            "transition_id": "done-harden-1",
+            "summary": "Plan updated.",
+            "full_text": "Updated protocol/plan.md.\nPROTOCOL_SUMMARY: Plan updated.",
+            "artifacts": [
+                {
+                    "artifact_key": "plan",
+                    "artifact_kind": "workspace_file",
+                    "path": "protocol/plan.md",
+                    "exists": True,
+                    "size_bytes": 42,
+                    "content_hash": "hash-harden",
+                    "modified_at": "2026-04-16T00:00:00+00:00",
+                    "verification_state": "verified",
+                }
+            ],
+        },
+    )
+    assert result.events_written is True
+    assert result.recipient_conversation_id == recipient_conv_id
+    assert result.recipient_inserted_events, "Completion must write to the recipient conversation"
+
+    origin_after = store.list_events(origin_conv_id).events
+    recipient_after = store.list_events(recipient_conv_id).events
+    assert len(origin_after) > origin_before
+    assert len(recipient_after) > recipient_before
+
+    newest_recipient = recipient_after[-1]
+    metadata = newest_recipient.metadata.as_dict() if newest_recipient.metadata is not None else {}
+    assert metadata.get("status") == "completed"
+    assert metadata.get("routed_task_id") == first_stage.routed_task_id
+
+    refreshed = store.get_protocol_run(created.run.protocol_run_id, access=operator_access())
+    assert refreshed.run.current_stage_key == "review"
+    assert refreshed.stage_executions[0].stage_key == "review"
+
+
+def test_recipient_conversation_event_carries_protocol_stage_navigation_context(
+    postgres_registry_truncated: str,
+) -> None:
+    """UI navigation from recipient conversation back to the run must not rely on
+    out-of-band state. The routed_task_id embedded in each recipient event is
+    the link: it is a ``protocol-stage:<stage_execution_id>`` key that the
+    registry already resolves to a run via ``_protocol_run_id_from_task_record``.
+    """
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    enroll, _published, created, detail = running_protocol_run(store)
+    first_stage = detail.stage_executions[0]
+
+    recipient_conv_id = _recipient_conversation_id_for_task(
+        store, first_stage.routed_task_id, enroll.agent_id
+    )
+
+    events = store.list_events(recipient_conv_id).events
+    task_events = [event for event in events if str(event.kind or "") == "task.status"]
+    assert task_events
+
+    for event in task_events:
+        metadata = event.metadata.as_dict() if event.metadata is not None else {}
+        routed_task_id = str(metadata.get("routed_task_id") or "")
+        assert routed_task_id.startswith("protocol-stage:"), (
+            "Recipient events must carry the protocol-stage routed task id so the UI "
+            "can navigate to the owning run"
+        )
+
+    task = store.get_task(first_stage.routed_task_id)
+    task_request = task.request.as_dict() if task.request is not None else {}
+    context = task_request.get("context") if isinstance(task_request, dict) else None
+    assert isinstance(context, dict)
+    assert context.get("protocol_run_id") == created.run.protocol_run_id
+    assert context.get("stage_key") == "planning"

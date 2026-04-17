@@ -2169,7 +2169,6 @@ function renderProtocolWorkspace(container) {
     function renderShell() {
         viewControl.setActive(currentView);
         viewPanelNote.textContent = WORKSPACE_VIEW_COPY[currentView] || WORKSPACE_VIEW_COPY.author;
-        launcherPanel.hidden = currentView !== 'operate';
         authorSurface.hidden = currentView !== 'author';
         operateSurface.hidden = currentView !== 'operate';
         issuesSurface.hidden = currentView !== 'issues';

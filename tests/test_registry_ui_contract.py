@@ -154,7 +154,7 @@ def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
     assert "function _managedAgents()" not in workspace
     assert "UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);" in workspace
     assert "entry_agent_id: runLauncherEntryAgentId," in workspace
-    assert "launcherPanel.hidden = currentView !== 'operate';" in workspace
+    assert "launcherPanel.hidden = currentView !== 'operate';" not in workspace
     assert "function renderAuthorSurface()" in workspace
     assert "function renderOperateSurface()" in workspace
     assert "function renderIssuesSurface()" in workspace
@@ -192,11 +192,15 @@ def test_protocol_navigation_links_target_author_operate_and_issue_surfaces() ->
     dashboard = (
         repo_root / "octopus_registry" / "ui" / "js" / "components" / "dashboard.js"
     ).read_text(encoding="utf-8")
+    index_html = (
+        repo_root / "octopus_registry" / "ui" / "index.html"
+    ).read_text(encoding="utf-8")
 
     assert "href: '/ui/protocols?view=operate'" in dashboard
     assert "href: '/ui/protocols?view=author'" in dashboard
     assert "`/ui/protocols?view=issues&run_id=${encodeURIComponent(item.protocol_run_id)}`" in dashboard
     assert "'/ui/protocols?view=issues'" in dashboard
+    assert 'href="/ui/protocols?view=operate"' in index_html
 
 
 def test_management_views_use_shared_memory_cache_for_stale_while_revalidate() -> None:

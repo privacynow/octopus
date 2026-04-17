@@ -897,13 +897,14 @@ window.UI = (() => {
         return { element: select, update };
     }
 
-    function filterManagedAgents(agents, capability) {
+    function filterManagedAgents(agents, capability = '') {
         return (agents || []).filter((agent) => {
             const connectivity = String(agent.connectivity_state || '').trim();
             const capabilities = Array.isArray(agent.management_capabilities)
                 ? agent.management_capabilities
                 : [];
-            return ['connected', 'degraded'].includes(connectivity) && capabilities.includes(capability);
+            return ['connected', 'degraded'].includes(connectivity)
+                && (!capability || capabilities.includes(capability));
         });
     }
 

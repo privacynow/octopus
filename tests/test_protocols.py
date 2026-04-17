@@ -775,6 +775,48 @@ def test_registry_store_create_run_returns_not_visible_for_foreign_org(postgres_
     assert result.status == "not_visible"
 
 
+def test_registry_store_create_run_requires_entry_agent_id(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store)
+
+    result = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": "",
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+
+    assert result.ok is False
+    assert result.status == "invalid"
+    assert "entry_agent_id is required" in result.message
+
+
+def test_registry_store_create_run_rejects_unknown_entry_agent_id(postgres_registry_truncated: str) -> None:
+    store = RegistryPostgresStore(postgres_registry_truncated)
+    published = published_protocol(store)
+
+    result = store.create_protocol_run(
+        {
+            "protocol_id": published.protocol.protocol_id,
+            "entry_agent_id": "agent-missing",
+            "origin_channel": "registry",
+            "workspace_ref": "default",
+            "problem_statement": "Build the feature.",
+            "constraints_json": {},
+        },
+        access=operator_access(),
+    )
+
+    assert result.ok is False
+    assert result.status == "invalid"
+    assert "entry_agent_id does not reference a known managed bot" in result.message
+
+
 def test_registry_store_get_run_raises_permission_error_for_foreign_org(postgres_registry_truncated: str) -> None:
     store = RegistryPostgresStore(postgres_registry_truncated)
     _enroll, _published, created, _detail = running_protocol_run(store)

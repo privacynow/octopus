@@ -93,8 +93,25 @@ def list_agents(
                 f"LIMIT {dialect.placeholder(1)} OFFSET {dialect.placeholder(2)}"
             ),
             (fetch_limit, cursor),
-        )
+    )
     return [row_to_agent(row) for row in rows]
+
+
+def agent_exists(
+    conn,
+    *,
+    dialect: StoreDialect,
+    agent_id: str,
+) -> bool:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        return False
+    row = dialect.fetchone(
+        conn,
+        f"SELECT 1 AS ok FROM {dialect.qualify('agents')} WHERE agent_id = {dialect.placeholder(1)}",
+        (normalized_agent_id,),
+    )
+    return row is not None
 
 
 def row_to_agent(row) -> AgentRecord:

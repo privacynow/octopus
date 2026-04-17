@@ -1364,6 +1364,46 @@ def test_protocol_run_list_route_accepts_entry_agent_and_origin_channel_filters(
     assert payload["runs"][0]["origin_channel"] == "telegram"
 
 
+def test_protocol_run_create_route_returns_invalid_for_missing_entry_agent(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def create_protocol_run(self, payload, *, access, idempotency_key=""):
+            assert payload.entry_agent_id == ""
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="invalid",
+                message="entry_agent_id is required to start a protocol run.",
+            )
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-runs",
+            json={
+                "protocol_id": "protocol-1",
+                "entry_agent_id": "",
+                "origin_channel": "registry",
+                "workspace_ref": "workspace-a",
+                "problem_statement": "Build the thing.",
+                "constraints_json": {},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "PROTOCOL_INVALID"
+    assert "entry_agent_id is required" in response.json()["detail"]["message"]
+
+
 def test_protocol_run_route_returns_not_visible_for_hidden_run(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

@@ -58,6 +58,7 @@ from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, 
 from .protocol_runtime import evaluate_protocol_dispatch
 from .store_base import RoutingSkillDisabledError
 from .store_shared.common import json_ready, record
+from .store_shared.agents import agent_exists as shared_agent_exists
 from .store_shared.conversations import create_conversation as shared_create_conversation
 
 log = logging.getLogger(__name__)
@@ -1913,6 +1914,14 @@ class ProtocolPostgresAdapter:
         idempotency_key: str = "",
     ) -> ProtocolRunMutationRecord:
         request = payload if isinstance(payload, ProtocolRunCreateRecord) else ProtocolRunCreateRecord.model_validate(payload)
+        entry_agent_id = str(request.entry_agent_id or "").strip()
+        if not entry_agent_id:
+            return ProtocolRunMutationRecord(
+                ok=False,
+                status="invalid",
+                message="entry_agent_id is required to start a protocol run.",
+            )
+        request = request.model_copy(update={"entry_agent_id": entry_agent_id})
         request_hash = self._request_hash(
             {
                 "payload": request.model_dump(mode="json"),
@@ -1961,6 +1970,16 @@ class ProtocolPostgresAdapter:
                 return ProtocolRunMutationRecord(ok=False, status="not_visible", message="Protocol is not visible to this actor.")
             if str(protocol_row.get("lifecycle_state", "") or "") != "published":
                 return ProtocolRunMutationRecord(ok=False, status="invalid", message="Only published protocols can start runs.")
+            if not shared_agent_exists(
+                conn,
+                dialect=POSTGRES_STORE_DIALECT,
+                agent_id=request.entry_agent_id,
+            ):
+                return ProtocolRunMutationRecord(
+                    ok=False,
+                    status="invalid",
+                    message=f"entry_agent_id does not reference a known managed bot: {request.entry_agent_id}",
+                )
             document = canonical_protocol_document(version_row["definition_json"])
             run_id = uuid.uuid4().hex
             root_conversation_id = str(request.root_conversation_id or "").strip()

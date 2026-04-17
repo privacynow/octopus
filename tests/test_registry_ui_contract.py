@@ -139,6 +139,23 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "No blocked runs, lease issues, contract failures, or expired timeouts are visible right now." in workspace
 
 
+def test_protocol_workspace_reuses_shared_agent_and_refresh_patterns() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    assert "let runLauncherEntryAgentId = UI.readQueryParam('entry_agent_id', '');" in workspace
+    assert "UI.createAgentManagementDropdown(" in workspace
+    assert "UI.filterManagedAgents(agents || [])" in workspace
+    assert "function _managedAgents()" not in workspace
+    assert "UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);" in workspace
+    assert "entry_agent_id: runLauncherEntryAgentId," in workspace
+    assert "workspaceInput.value = runLauncherWorkspaceRef;" in workspace
+    assert "problemInput.value = runLauncherProblemStatement;" in workspace
+    assert "const structuredInputDrafts = new Map();" in workspace
+
+
 def test_protocol_workspace_css_keeps_scroll_contained_and_collapses_to_single_column() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     css = (

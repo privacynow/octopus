@@ -45,6 +45,7 @@ from .config import RegistryConfig, load_registry_config
 from .postgres import get_connection
 from .store_dialect import StoreDialect
 from .store_shared.agents import (
+    agent_exists as shared_agent_exists,
     enroll as shared_enroll,
     get_agent_runtime_health as shared_get_agent_runtime_health,
     get_agent_status as shared_get_agent_status,
@@ -837,12 +838,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def agent_exists(self, agent_id: str) -> bool:
         with self._connect() as conn:
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT 1 FROM {_SCHEMA}.agents WHERE agent_id = %s",
-                    (agent_id,),
-                )
-                return cur.fetchone() is not None
+            return shared_agent_exists(
+                conn,
+                dialect=_POSTGRES_STORE_DIALECT,
+                agent_id=agent_id,
+            )
 
     def create_conversation(
         self,
@@ -983,10 +983,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
         self,
         *,
         access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 50,
         lifecycle_state: str = "",
         slug: str = "",
-        limit: int = 25,
-        cursor: int = 0,
         created_after: str = "",
         include_drafts: bool | None = None,
     ) -> list[ProtocolDefinitionRecord]:

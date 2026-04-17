@@ -39,7 +39,12 @@ function renderProtocolWorkspace(container) {
     let issueKindFilter = '';
     let runStatusFilter = '';
     let timelineParticipantFilter = '';
+    let runLauncherEntryAgentId = UI.readQueryParam('entry_agent_id', '');
+    let runLauncherWorkspaceRef = '';
+    let runLauncherProblemStatement = '';
     let currentRunSubscription = null;
+    let agentListSignature = '';
+    let protocolIssueSignature = '';
     let draft = {
         protocol_id: '',
         slug: '',
@@ -49,6 +54,7 @@ function renderProtocolWorkspace(container) {
         document_json: null,
         parse_error: '',
     };
+    const structuredInputDrafts = new Map();
 
     const header = document.createElement('header');
     header.className = 'page-header page-header-compact';
@@ -67,8 +73,20 @@ function renderProtocolWorkspace(container) {
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
             run_id: currentRunId || '',
+            entry_agent_id: runLauncherEntryAgentId || '',
         });
     }
+
+    const runLauncherAgentDropdown = UI.createAgentManagementDropdown(
+        [],
+        runLauncherEntryAgentId,
+        (nextAgentId) => {
+            runLauncherEntryAgentId = String(nextAgentId || '');
+            _writeState();
+            renderWorkspace();
+        },
+        { label: 'Target bot' },
+    );
 
     function _downloadText(filename, text, contentType) {
         const blob = new Blob([text], { type: contentType });
@@ -91,8 +109,47 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _managedAgents() {
-        return (agents || []).filter((item) => ['connected', 'degraded'].includes(String(item.connectivity_state || '')));
+    function _reconcileRunLauncherSelection() {
+        const eligibleAgents = UI.filterManagedAgents(agents || []);
+        if (!eligibleAgents.length) {
+            runLauncherEntryAgentId = '';
+        } else if (!eligibleAgents.some((agent) => agent.agent_id === runLauncherEntryAgentId)) {
+            runLauncherEntryAgentId = eligibleAgents[0].agent_id || '';
+        }
+        runLauncherAgentDropdown.update(eligibleAgents, runLauncherEntryAgentId);
+        _writeState();
+        return eligibleAgents;
+    }
+
+    function _resolveStructuredDraftValue(draftKey, committedValue, normalize) {
+        if (!draftKey || !structuredInputDrafts.has(draftKey)) {
+            return committedValue;
+        }
+        const pendingValue = structuredInputDrafts.get(draftKey);
+        if (normalize(pendingValue) === normalize(committedValue)) {
+            structuredInputDrafts.delete(draftKey);
+            return committedValue;
+        }
+        return pendingValue;
+    }
+
+    function _rememberStructuredDraftValue(draftKey, value) {
+        if (!draftKey) {
+            return;
+        }
+        structuredInputDrafts.set(draftKey, value);
+    }
+
+    function _clearStructuredDrafts(prefix = '') {
+        if (!prefix) {
+            structuredInputDrafts.clear();
+            return;
+        }
+        Array.from(structuredInputDrafts.keys()).forEach((key) => {
+            if (String(key || '').startsWith(prefix)) {
+                structuredInputDrafts.delete(key);
+            }
+        });
     }
 
     function _defaultProtocolDocument() {
@@ -208,6 +265,7 @@ function renderProtocolWorkspace(container) {
 
     function _applyDraftFromProtocol(detail) {
         currentProtocol = detail;
+        _clearStructuredDrafts();
         const rawDraftDocument = detail && detail.draft_definition_json
             && Object.keys(detail.draft_definition_json).length
             ? detail.draft_definition_json
@@ -472,6 +530,7 @@ function renderProtocolWorkspace(container) {
                 editorFormat = formatValue;
                 draft.definition_text = String(parsed.text || definitionText);
                 draft.parse_error = '';
+                _clearStructuredDrafts();
                 currentProtocol = null;
                 currentProtocolId = '';
                 currentRunId = '';
@@ -621,48 +680,80 @@ function renderProtocolWorkspace(container) {
         });
     }
 
-    function _textInput(value, onCommit, { placeholder = '', ariaLabel = '' } = {}) {
+    function _textInput(value, onCommit, { placeholder = '', ariaLabel = '', draftKey = '' } = {}) {
         const input = document.createElement('input');
         input.className = 'search-input';
         input.placeholder = placeholder;
-        input.value = String(value || '');
+        input.value = String(_resolveStructuredDraftValue(
+            draftKey,
+            String(value || ''),
+            (item) => String(item || ''),
+        ) || '');
         if (ariaLabel) {
             input.setAttribute('aria-label', ariaLabel);
         }
-        input.addEventListener('change', () => onCommit(String(input.value || '')));
+        input.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(input.value || '')));
+        input.addEventListener('change', () => {
+            const nextValue = String(input.value || '');
+            _rememberStructuredDraftValue(draftKey, nextValue);
+            onCommit(nextValue);
+        });
         return input;
     }
 
-    function _numberInput(value, onCommit, { min = 0, placeholder = '', ariaLabel = '' } = {}) {
+    function _numberInput(value, onCommit, { min = 0, placeholder = '', ariaLabel = '', draftKey = '' } = {}) {
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'search-input';
         input.min = String(min);
         input.placeholder = placeholder;
-        input.value = String(value ?? '');
+        input.value = String(_resolveStructuredDraftValue(
+            draftKey,
+            String(value ?? ''),
+            (item) => String(item ?? ''),
+        ) ?? '');
         if (ariaLabel) {
             input.setAttribute('aria-label', ariaLabel);
         }
-        input.addEventListener('change', () => onCommit(Number.parseInt(String(input.value || '0'), 10) || 0));
+        input.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(input.value ?? '')));
+        input.addEventListener('change', () => {
+            const nextValue = String(input.value ?? '');
+            _rememberStructuredDraftValue(draftKey, nextValue);
+            onCommit(Number.parseInt(nextValue || '0', 10) || 0);
+        });
         return input;
     }
 
-    function _textAreaInput(value, onCommit, { placeholder = '', rows = 3, ariaLabel = '' } = {}) {
+    function _textAreaInput(value, onCommit, { placeholder = '', rows = 3, ariaLabel = '', draftKey = '' } = {}) {
         const area = document.createElement('textarea');
         area.className = 'guidance-textarea protocol-structured-textarea';
         area.rows = rows;
         area.placeholder = placeholder;
-        area.value = String(value || '');
+        area.value = String(_resolveStructuredDraftValue(
+            draftKey,
+            String(value || ''),
+            (item) => String(item || ''),
+        ) || '');
         if (ariaLabel) {
             area.setAttribute('aria-label', ariaLabel);
         }
-        area.addEventListener('change', () => onCommit(String(area.value || '')));
+        area.addEventListener('input', () => _rememberStructuredDraftValue(draftKey, String(area.value || '')));
+        area.addEventListener('change', () => {
+            const nextValue = String(area.value || '');
+            _rememberStructuredDraftValue(draftKey, nextValue);
+            onCommit(nextValue);
+        });
         return area;
     }
 
-    function _selectInput(options, value, onCommit, { ariaLabel = '' } = {}) {
+    function _selectInput(options, value, onCommit, { ariaLabel = '', draftKey = '' } = {}) {
         const select = document.createElement('select');
         select.className = 'search-input';
+        const selectedValue = String(_resolveStructuredDraftValue(
+            draftKey,
+            String(value || ''),
+            (item) => String(item || ''),
+        ) || '');
         if (ariaLabel) {
             select.setAttribute('aria-label', ariaLabel);
         }
@@ -670,23 +761,35 @@ function renderProtocolWorkspace(container) {
             const option = document.createElement('option');
             option.value = String(item.value || '');
             option.textContent = String(item.label || item.value || '');
-            option.selected = String(item.value || '') === String(value || '');
+            option.selected = String(item.value || '') === selectedValue;
             select.appendChild(option);
         });
-        select.addEventListener('change', () => onCommit(String(select.value || '')));
+        select.addEventListener('change', () => {
+            const nextValue = String(select.value || '');
+            _rememberStructuredDraftValue(draftKey, nextValue);
+            onCommit(nextValue);
+        });
         return select;
     }
 
-    function _checkboxInput(checked, labelText, onCommit, { ariaLabel = '' } = {}) {
+    function _checkboxInput(checked, labelText, onCommit, { ariaLabel = '', draftKey = '' } = {}) {
         const label = document.createElement('label');
         label.className = 'protocol-inline-checkbox';
         const input = document.createElement('input');
         input.type = 'checkbox';
-        input.checked = Boolean(checked);
+        input.checked = Boolean(_resolveStructuredDraftValue(
+            draftKey,
+            Boolean(checked),
+            (item) => Boolean(item),
+        ));
         if (ariaLabel) {
             input.setAttribute('aria-label', ariaLabel);
         }
-        input.addEventListener('change', () => onCommit(Boolean(input.checked)));
+        input.addEventListener('change', () => {
+            const nextValue = Boolean(input.checked);
+            _rememberStructuredDraftValue(draftKey, nextValue);
+            onCommit(nextValue);
+        });
         const text = document.createElement('span');
         text.textContent = labelText;
         label.appendChild(input);
@@ -703,6 +806,7 @@ function renderProtocolWorkspace(container) {
 
     function _renderStructuredEditor(parent) {
         const protocolDoc = _draftDocument();
+        const fieldKey = (...parts) => parts.join(':');
         const wrapper = document.createElement('section');
         wrapper.className = 'protocol-structured-editor';
         const title = document.createElement('div');
@@ -740,6 +844,7 @@ function renderProtocolWorkspace(container) {
         const participantSection = section('Participants', {
             label: 'Add participant',
             onClick: () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 const index = (next.participants || []).length + 1;
                 next.participants = [...(next.participants || []), {
                     participant_key: `participant_${index}`,
@@ -756,19 +861,19 @@ function renderProtocolWorkspace(container) {
                 label: 'Key',
                 control: _textInput(item.participant_key, (value) => void _applyStructuredChange((next) => {
                     next.participants[index].participant_key = value;
-                }), { placeholder: 'participant_key', ariaLabel: 'Participant key' }),
+                }), { placeholder: 'participant_key', ariaLabel: 'Participant key', draftKey: fieldKey('participant', index, 'participant_key') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Display name',
                 control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
                     next.participants[index].display_name = value;
-                }), { placeholder: 'Display name', ariaLabel: 'Participant display name' }),
+                }), { placeholder: 'Display name', ariaLabel: 'Participant display name', draftKey: fieldKey('participant', index, 'display_name') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Required skills',
                 control: _textInput((item.required_skills || []).join(', '), (value) => void _applyStructuredChange((next) => {
                     next.participants[index].required_skills = _commaList(value);
-                }), { placeholder: 'skill-a, skill-b', ariaLabel: 'Participant required skills' }),
+                }), { placeholder: 'skill-a, skill-b', ariaLabel: 'Participant required skills', draftKey: fieldKey('participant', index, 'required_skills') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Selector kind',
@@ -781,33 +886,34 @@ function renderProtocolWorkspace(container) {
                     next.participants[index].selector = value
                         ? Object.assign({}, next.participants[index].selector || {}, { kind: value })
                         : null;
-                }), { ariaLabel: 'Participant selector kind' }),
+                }), { ariaLabel: 'Participant selector kind', draftKey: fieldKey('participant', index, 'selector_kind') }),
             }));
             if (item.selector?.kind) {
                 card.appendChild(UI.renderSettingsRow({
                     label: 'Selector value',
                     control: _textInput(item.selector?.value || '', (value) => void _applyStructuredChange((next) => {
                         next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { value });
-                    }), { placeholder: 'selector value', ariaLabel: 'Participant selector value' }),
+                    }), { placeholder: 'selector value', ariaLabel: 'Participant selector value', draftKey: fieldKey('participant', index, 'selector_value') }),
                 }));
                 card.appendChild(UI.renderSettingsRow({
                     label: 'Preferred agent',
                     control: _textInput(item.selector?.preferred_agent_id || '', (value) => void _applyStructuredChange((next) => {
                         next.participants[index].selector = Object.assign({}, next.participants[index].selector || {}, { preferred_agent_id: value });
-                    }), { placeholder: 'agent id (optional)', ariaLabel: 'Participant preferred agent' }),
+                    }), { placeholder: 'agent id (optional)', ariaLabel: 'Participant preferred agent', draftKey: fieldKey('participant', index, 'preferred_agent_id') }),
                 }));
             }
             card.appendChild(UI.renderSettingsRow({
                 label: 'Instructions',
                 control: _textAreaInput(item.instructions || '', (value) => void _applyStructuredChange((next) => {
                     next.participants[index].instructions = value;
-                }), { placeholder: 'Participant-specific instructions', rows: 3, ariaLabel: 'Participant instructions' }),
+                }), { placeholder: 'Participant-specific instructions', rows: 3, ariaLabel: 'Participant instructions', draftKey: fieldKey('participant', index, 'instructions') }),
             }));
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'btn';
             remove.textContent = 'Remove participant';
             remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 next.participants.splice(index, 1);
             }));
             card.appendChild(remove);
@@ -821,6 +927,7 @@ function renderProtocolWorkspace(container) {
         const artifactSection = section('Artifacts', {
             label: 'Add artifact',
             onClick: () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 const index = (next.artifacts || []).length + 1;
                 next.artifacts = [...(next.artifacts || []), {
                     artifact_key: `artifact_${index}`,
@@ -839,13 +946,13 @@ function renderProtocolWorkspace(container) {
                 label: 'Key',
                 control: _textInput(item.artifact_key, (value) => void _applyStructuredChange((next) => {
                     next.artifacts[index].artifact_key = value;
-                }), { placeholder: 'artifact_key', ariaLabel: 'Artifact key' }),
+                }), { placeholder: 'artifact_key', ariaLabel: 'Artifact key', draftKey: fieldKey('artifact', index, 'artifact_key') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Display name',
                 control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
                     next.artifacts[index].display_name = value;
-                }), { placeholder: 'Display name', ariaLabel: 'Artifact display name' }),
+                }), { placeholder: 'Display name', ariaLabel: 'Artifact display name', draftKey: fieldKey('artifact', index, 'display_name') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Kind',
@@ -854,31 +961,32 @@ function renderProtocolWorkspace(container) {
                     { value: 'control_plane_text', label: 'Control-plane text' },
                 ], item.kind || 'workspace_file', (value) => void _applyStructuredChange((next) => {
                     next.artifacts[index].kind = value || 'workspace_file';
-                }), { ariaLabel: 'Artifact kind' }),
+                }), { ariaLabel: 'Artifact kind', draftKey: fieldKey('artifact', index, 'kind') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Path',
                 control: _textInput(item.path || '', (value) => void _applyStructuredChange((next) => {
                     next.artifacts[index].path = value;
-                }), { placeholder: 'relative/path.md', ariaLabel: 'Artifact path' }),
+                }), { placeholder: 'relative/path.md', ariaLabel: 'Artifact path', draftKey: fieldKey('artifact', index, 'path') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Description',
                 control: _textAreaInput(item.description || '', (value) => void _applyStructuredChange((next) => {
                     next.artifacts[index].description = value;
-                }), { placeholder: 'Artifact description', rows: 2, ariaLabel: 'Artifact description' }),
+                }), { placeholder: 'Artifact description', rows: 2, ariaLabel: 'Artifact description', draftKey: fieldKey('artifact', index, 'description') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Verification',
                 control: _checkboxInput(Boolean(item.verify !== false), 'Require verification', (checked) => void _applyStructuredChange((next) => {
                     next.artifacts[index].verify = checked;
-                }), { ariaLabel: 'Artifact verification required' }),
+                }), { ariaLabel: 'Artifact verification required', draftKey: fieldKey('artifact', index, 'verify') }),
             }));
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'btn';
             remove.textContent = 'Remove artifact';
             remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 next.artifacts.splice(index, 1);
             }));
             card.appendChild(remove);
@@ -899,6 +1007,7 @@ function renderProtocolWorkspace(container) {
         const stageSection = section('Stages', {
             label: 'Add stage',
             onClick: () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 const index = (next.stages || []).length + 1;
                 next.stages = [...(next.stages || []), {
                     stage_key: `stage_${index}`,
@@ -924,19 +1033,19 @@ function renderProtocolWorkspace(container) {
                 label: 'Key',
                 control: _textInput(item.stage_key, (value) => void _applyStructuredChange((next) => {
                     next.stages[index].stage_key = value;
-                }), { placeholder: 'stage_key', ariaLabel: 'Stage key' }),
+                }), { placeholder: 'stage_key', ariaLabel: 'Stage key', draftKey: fieldKey('stage', index, 'stage_key') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Display name',
                 control: _textInput(item.display_name, (value) => void _applyStructuredChange((next) => {
                     next.stages[index].display_name = value;
-                }), { placeholder: 'Display name', ariaLabel: 'Stage display name' }),
+                }), { placeholder: 'Display name', ariaLabel: 'Stage display name', draftKey: fieldKey('stage', index, 'display_name') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Participant',
                 control: _selectInput(participantOptions, item.participant_key || '', (value) => void _applyStructuredChange((next) => {
                     next.stages[index].participant_key = value;
-                }), { ariaLabel: 'Stage participant' }),
+                }), { ariaLabel: 'Stage participant', draftKey: fieldKey('stage', index, 'participant_key') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Kind',
@@ -946,25 +1055,25 @@ function renderProtocolWorkspace(container) {
                     { value: 'acceptance', label: 'Acceptance' },
                 ], item.stage_kind || 'work', (value) => void _applyStructuredChange((next) => {
                     next.stages[index].stage_kind = value || 'work';
-                }), { ariaLabel: 'Stage kind' }),
+                }), { ariaLabel: 'Stage kind', draftKey: fieldKey('stage', index, 'stage_kind') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Instructions',
                 control: _textAreaInput(item.instructions || '', (value) => void _applyStructuredChange((next) => {
                     next.stages[index].instructions = value;
-                }), { placeholder: 'Stage instructions', rows: 4, ariaLabel: 'Stage instructions' }),
+                }), { placeholder: 'Stage instructions', rows: 4, ariaLabel: 'Stage instructions', draftKey: fieldKey('stage', index, 'instructions') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Inputs',
                 control: _textInput((item.inputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
                     next.stages[index].inputs = _commaList(value);
-                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage inputs' }),
+                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage inputs', draftKey: fieldKey('stage', index, 'inputs') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Outputs',
                 control: _textInput((item.outputs || []).join(', '), (value) => void _applyStructuredChange((next) => {
                     next.stages[index].outputs = _commaList(value);
-                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage outputs' }),
+                }), { placeholder: artifactOptions.join(', ') || 'artifact keys', ariaLabel: 'Stage outputs', draftKey: fieldKey('stage', index, 'outputs') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Transitions',
@@ -979,19 +1088,19 @@ function renderProtocolWorkspace(container) {
                             context: 'Protocol stage transitions invalid',
                         });
                     }
-                }, { placeholder: '{"completed":"next_stage"}', rows: 4, ariaLabel: 'Stage transitions JSON' }),
+                }, { placeholder: '{"completed":"next_stage"}', rows: 4, ariaLabel: 'Stage transitions JSON', draftKey: fieldKey('stage', index, 'transitions') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Write lease',
                 control: _checkboxInput(Boolean(item.write_capable), 'Write-capable stage', (checked) => void _applyStructuredChange((next) => {
                     next.stages[index].write_capable = checked;
-                }), { ariaLabel: 'Stage write capable' }),
+                }), { ariaLabel: 'Stage write capable', draftKey: fieldKey('stage', index, 'write_capable') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Strict completion',
                 control: _checkboxInput(Boolean(item.strict_completion), 'Require protocol control lines', (checked) => void _applyStructuredChange((next) => {
                     next.stages[index].strict_completion = checked;
-                }), { ariaLabel: 'Stage strict completion' }),
+                }), { ariaLabel: 'Stage strict completion', draftKey: fieldKey('stage', index, 'strict_completion') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Output verification',
@@ -1005,25 +1114,26 @@ function renderProtocolWorkspace(container) {
                     next.stages[index].require_output_verification = value === ''
                         ? null
                         : value === 'true';
-                }), { ariaLabel: 'Stage output verification' }),
+                }), { ariaLabel: 'Stage output verification', draftKey: fieldKey('stage', index, 'require_output_verification') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Max rounds',
                 control: _numberInput(item.max_rounds || 0, (value) => void _applyStructuredChange((next) => {
                     next.stages[index].max_rounds = value;
-                }), { min: 0, ariaLabel: 'Stage max rounds' }),
+                }), { min: 0, ariaLabel: 'Stage max rounds', draftKey: fieldKey('stage', index, 'max_rounds') }),
             }));
             card.appendChild(UI.renderSettingsRow({
                 label: 'Timeout seconds',
                 control: _numberInput(item.timeout_seconds || 0, (value) => void _applyStructuredChange((next) => {
                     next.stages[index].timeout_seconds = value;
-                }), { min: 0, ariaLabel: 'Stage timeout seconds' }),
+                }), { min: 0, ariaLabel: 'Stage timeout seconds', draftKey: fieldKey('stage', index, 'timeout_seconds') }),
             }));
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'btn';
             remove.textContent = 'Remove stage';
             remove.addEventListener('click', () => void _applyStructuredChange((next) => {
+                _clearStructuredDrafts();
                 next.stages.splice(index, 1);
             }));
             card.appendChild(remove);
@@ -1041,13 +1151,13 @@ function renderProtocolWorkspace(container) {
             label: 'Single active writer',
             control: _checkboxInput(Boolean(protocolDoc.policies?.single_active_writer !== false), 'Enforce one write lease at a time', (checked) => void _applyStructuredChange((next) => {
                 next.policies.single_active_writer = checked;
-            }), { ariaLabel: 'Single active writer' }),
+            }), { ariaLabel: 'Single active writer', draftKey: fieldKey('policy', 'single_active_writer') }),
         }));
         policyCard.appendChild(UI.renderSettingsRow({
             label: 'Max review rounds',
             control: _numberInput(protocolDoc.policies?.max_review_rounds || 5, (value) => void _applyStructuredChange((next) => {
                 next.policies.max_review_rounds = Math.max(value, 1);
-            }), { min: 1, ariaLabel: 'Max review rounds' }),
+            }), { min: 1, ariaLabel: 'Max review rounds', draftKey: fieldKey('policy', 'max_review_rounds') }),
         }));
         policySection.appendChild(policyCard);
         wrapper.appendChild(policySection);
@@ -1107,6 +1217,7 @@ function renderProtocolWorkspace(container) {
                 currentRunId = '';
                 currentRun = null;
                 lastRunEvent = null;
+                _clearStructuredDrafts();
                 draft = {
                     protocol_id: '',
                     slug: defaultTemplate.metadata?.slug || '',
@@ -1261,6 +1372,7 @@ function renderProtocolWorkspace(container) {
         definitionInput.addEventListener('change', () => {
             void _parseDraftDocument().then((document) => {
                 if (document) {
+                    _clearStructuredDrafts();
                     renderWorkspace();
                 }
             });
@@ -1435,24 +1547,33 @@ function renderProtocolWorkspace(container) {
         runNote.className = 'quiet-note';
         runNote.textContent = 'Only published protocol versions can start runs.';
         runLauncher.appendChild(runNote);
+        const eligibleRunAgents = _reconcileRunLauncherSelection();
 
-        const agentDropdown = UI.createAgentManagementDropdown(
-            _managedAgents(),
-            _managedAgents()[0]?.agent_id || '',
-            () => {},
-            { label: 'Target bot' },
-        );
-        runLauncher.appendChild(UI.renderSettingsRow({ label: 'Target bot', control: agentDropdown.element }));
+        runLauncher.appendChild(UI.renderSettingsRow({ label: 'Target bot', control: runLauncherAgentDropdown.element }));
+        if (!eligibleRunAgents.length) {
+            const emptyNote = document.createElement('div');
+            emptyNote.className = 'quiet-note';
+            emptyNote.textContent = 'No connected bot is currently eligible to host a protocol run.';
+            runLauncher.appendChild(emptyNote);
+        }
 
         const workspaceInput = document.createElement('input');
         workspaceInput.className = 'search-input';
         workspaceInput.placeholder = 'Project name or workspace id';
+        workspaceInput.value = runLauncherWorkspaceRef;
+        workspaceInput.addEventListener('input', () => {
+            runLauncherWorkspaceRef = workspaceInput.value;
+        });
         runLauncher.appendChild(UI.renderSettingsRow({ label: 'Workspace', control: workspaceInput }));
 
         const problemInput = document.createElement('textarea');
         problemInput.className = 'guidance-textarea';
         problemInput.rows = 8;
         problemInput.placeholder = 'Problem statement';
+        problemInput.value = runLauncherProblemStatement;
+        problemInput.addEventListener('input', () => {
+            runLauncherProblemStatement = problemInput.value;
+        });
         runLauncher.appendChild(problemInput);
 
         const startRunButton = document.createElement('button');
@@ -1464,19 +1585,24 @@ function renderProtocolWorkspace(container) {
             && currentProtocol?.protocol?.lifecycle_state === 'published'
             && currentProtocol?.version?.protocol_definition_version_id
         );
-        startRunButton.disabled = !runnableProtocol;
+        const canStartRun = runnableProtocol && eligibleRunAgents.some((agent) => agent.agent_id === runLauncherEntryAgentId);
+        startRunButton.disabled = !canStartRun;
         startRunButton.addEventListener('click', async () => {
             if (!runnableProtocol) {
                 UI.notify('Publish the protocol before starting a run.', 'warning');
                 return;
             }
+            if (!runLauncherEntryAgentId) {
+                UI.notify('Choose a connected target bot before starting a run.', 'warning');
+                return;
+            }
             try {
                 const result = await API.createProtocolRun({
                     protocol_id: currentProtocolId,
-                    entry_agent_id: agentDropdown.element.value,
+                    entry_agent_id: runLauncherEntryAgentId,
                     origin_channel: 'registry',
-                    workspace_ref: workspaceInput.value,
-                    problem_statement: problemInput.value,
+                    workspace_ref: runLauncherWorkspaceRef,
+                    problem_statement: runLauncherProblemStatement,
                     constraints_json: {},
                 }, {
                     idempotencyKey: (window.crypto && typeof window.crypto.randomUUID === 'function')
@@ -1734,27 +1860,50 @@ function renderProtocolWorkspace(container) {
         }
     }
 
-    async function loadIssues() {
+    async function loadIssues({ rerender = true } = {}) {
         const response = await API.listProtocolIssues({
             limit: 50,
             issue_kind: issueKindFilter,
         });
         protocolIssues = response.issues || response || [];
-        renderWorkspace();
+        const nextSignature = UI.dataSignature({
+            issue_kind: issueKindFilter,
+            issues: protocolIssues,
+        });
+        const issuesChanged = nextSignature !== protocolIssueSignature;
+        protocolIssueSignature = nextSignature;
+        if (rerender && issuesChanged) {
+            renderWorkspace();
+        }
     }
 
     async function loadDefaultTemplate() {
         defaultTemplate = await API.getProtocolTemplate('software-engineering');
     }
 
-    async function loadAgents() {
+    async function loadAgents({ rerender = false } = {}) {
         const response = await API.listAgents({ limit: 100 });
-        agents = response.agents || response || [];
+        const nextAgents = response.agents || response || [];
+        const nextSignature = UI.dataSignature(nextAgents);
+        const previousSelection = runLauncherEntryAgentId;
+        agents = nextAgents;
+        const requestedEntryAgentId = UI.readQueryParam('entry_agent_id', '');
+        if (requestedEntryAgentId) {
+            runLauncherEntryAgentId = requestedEntryAgentId;
+        }
+        _reconcileRunLauncherSelection();
+        const agentListChanged = nextSignature !== agentListSignature;
+        const selectionChanged = previousSelection !== runLauncherEntryAgentId;
+        agentListSignature = nextSignature;
+        if (rerender && (agentListChanged || selectionChanged)) {
+            renderWorkspace();
+        }
     }
 
     async function loadProtocolDetail() {
         if (!currentProtocolId) {
             currentProtocol = null;
+            _clearStructuredDrafts();
             if (!draft.definition_text) {
                 draft = {
                     protocol_id: '',
@@ -1813,7 +1962,7 @@ function renderProtocolWorkspace(container) {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
             await Promise.all([loadProtocols(), loadRuns(), loadAgents(), loadDefaultTemplate()]);
-            await loadIssues();
+            await loadIssues({ rerender: false });
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
@@ -1829,7 +1978,12 @@ function renderProtocolWorkspace(container) {
     }
 
     async function refreshWorkspace() {
-        await Promise.all([loadProtocols(), loadRuns(), loadIssues()]);
+        await Promise.all([
+            loadProtocols(),
+            loadRuns(),
+            loadIssues({ rerender: false }),
+            loadAgents(),
+        ]);
         if (currentProtocolId) {
             await loadProtocolDetail();
         } else {
@@ -1853,7 +2007,8 @@ function renderProtocolWorkspace(container) {
     });
 
     UI.subscribeWithRefresh(cleanups, 'protocols', () => refreshWorkspace(), 350);
-    UI.subscribeWithRefresh(cleanups, 'summary', () => loadIssues(), 400);
+    UI.subscribeWithRefresh(cleanups, 'summary', () => loadIssues({ rerender: true }), 400);
+    UI.subscribeWithRefresh(cleanups, 'agents', () => loadAgents({ rerender: true }), 600);
 
     container.__routeReady = bootstrap();
 }

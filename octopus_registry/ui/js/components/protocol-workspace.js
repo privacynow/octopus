@@ -385,12 +385,16 @@ function renderProtocolWorkspace(container) {
             return;
         }
         const source = currentProtocol?.draft_document || currentProtocol?.draft_definition_json || draft.document_json || _defaultProtocolDocument();
+        draft.document_json = _cloneDocument(source);
+        draft.parse_error = '';
+        if (editorFormat === 'json') {
+            draft.definition_text = JSON.stringify(source, null, 2);
+            return;
+        }
         const parsed = await API.parseProtocolDocument({
             definition_text: JSON.stringify(source, null, 2),
             format: editorFormat,
         });
-        draft.document_json = _cloneDocument(source);
-        draft.parse_error = '';
         draft.definition_text = String(parsed.text || '');
     }
 
